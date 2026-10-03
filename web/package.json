@@ -1,0 +1,26 @@
+{
+  "name": "ariel-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run generate:protocol && tsc -b && vite build",
+    "test": "vitest run",
+    "generate:protocol": "json2ts -i ../protocol/v1.schema.json -o src/generated/protocol.d.ts"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "json-schema-to-typescript": "16.0.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.2",
+    "vitest": "5.0.3"
+  }
+}

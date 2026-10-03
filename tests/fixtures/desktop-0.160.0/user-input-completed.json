@@ -1,0 +1,34 @@
+{
+  "pending": {
+    "cwd": "/fixture",
+    "requests": [{
+      "id": 42,
+      "method": "item/tool/requestUserInput",
+      "params": {
+        "threadId": "thread_fixture", "turnId": "turn_fixture", "itemId": "item_fixture", "isBlocking": true,
+        "questions": [
+          {"id": "choice", "header": "Choice", "question": "Choose a fixture color", "options": [{"label": "Blue", "description": "blue"}, {"label": "Green", "description": "green"}]},
+          {"id": "note", "header": "Note", "question": "Enter a fixture note or pick a preset", "options": [{"label": "Preset A", "description": "a"}, {"label": "Preset B", "description": "b"}]}
+        ]
+      }
+    }]
+  },
+  "completed": {
+    "requests": [], "turns": [],
+    "turnHistory": {
+      "kind": "canonical",
+      "history": {
+        "islands": [{"entries": [{"key": "entry_fixture", "value": "entry_fixture"}]}],
+        "entitiesByKey": {
+          "entry_fixture": {
+            "turnId": "turn_fixture",
+            "items": [{
+              "type": "userInputResponse", "requestId": 42, "turnId": "turn_fixture", "completed": true,
+              "answers": {"choice": ["Blue"], "note": ["ariel free text"]}
+            }]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+package desktopagent
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/wu8685/Ariel/internal/probe"
+)
+
+var errDesktopUnavailable = errors.New("Desktop IPC unavailable")
+
+func checkDesktop(ctx context.Context, socket string) error {
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	client, err := probe.Connect(checkCtx, socket)
+	if err != nil {
+		return errDesktopUnavailable
+	}
+	defer client.Close()
+	return nil
+}
+
+func monitorDesktop(ctx context.Context, interval time.Duration, check func(context.Context) error) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if check(ctx) != nil {
+				failures++
+				if failures >= 2 {
+					return errDesktopUnavailable
+				}
+			} else {
+				failures = 0
+			}
+		}
+	}
+}

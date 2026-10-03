@@ -1,0 +1,303 @@
+package relay
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+)
+
+const testOrigin = "http://localhost:5173"
+
+func dialTest(t *testing.T, url, origin string) *websocket.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	opts := &websocket.DialOptions{}
+	if origin != "" {
+		opts.HTTPHeader = http.Header{"Origin": {origin}}
+	}
+	c, _, err := websocket.Dial(ctx, strings.Replace(url, "http://", "ws://", 1)+"/ws", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.CloseNow() })
+	return c
+}
+
+func sendJSON(t *testing.T, c *websocket.Conn, body any) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := wsjson.Write(ctx, c, body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readJSON(t *testing.T, c *websocket.Conn) map[string]any {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var got map[string]any
+	if err := wsjson.Read(ctx, c, &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestRelayAuthenticatesRolesAndListsOnlyOnlineDevice(t *testing.T) {
+	r, err := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, map[string]any{"type": "hello", "v": 1, "role": "agent", "token": "test-token", "deviceId": "mock-mac", "deviceName": "Test Mac", "agentEpoch": "epoch-a", "adapterVersion": "mock-1", "capabilities": map[string]bool{"autoLoad": false, "codexReady": false}})
+	if got := readJSON(t, agent); got["type"] != "hello.ok" || got["relayEpoch"] == "" {
+		t.Fatalf("agent hello: %+v", got)
+	}
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-token"})
+	if got := readJSON(t, web); got["type"] != "hello.ok" {
+		t.Fatalf("web hello: %+v", got)
+	}
+	id := "00000000-0000-4000-8000-000000000001"
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "relay", "method": "device.list", "params": map[string]any{}})
+	got := readJSON(t, web)
+	if got["type"] != "response" || got["requestId"] != id || got["outcome"] != "accepted" {
+		t.Fatalf("device list: %+v", got)
+	}
+	data, _ := got["data"].(map[string]any)
+	devices, _ := data["devices"].([]any)
+	if len(devices) != 1 || devices[0].(map[string]any)["deviceId"] != "mock-mac" || devices[0].(map[string]any)["adapterVersion"] != "mock-1" {
+		t.Fatalf("devices: %+v", data)
+	}
+}
+
+func TestRelayRejectsBadOriginTokenAndDuplicateAgent(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, HelloTimeout: 100 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, resp, err := websocket.Dial(ctx, strings.Replace(s.URL, "http://", "ws://", 1)+"/ws", &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"http://evil.invalid"}}})
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("bad origin accepted: response=%v err=%v", resp, err)
+	}
+	bad := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, bad, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "wrong"})
+	readCtx, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	var denied json.RawMessage
+	if err := wsjson.Read(readCtx, bad, &denied); err == nil {
+		t.Fatal("bad token received a valid reply")
+	}
+	first := dialTest(t, s.URL, "")
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": "test-token", "deviceId": "mock-mac", "deviceName": "Mac", "agentEpoch": "epoch-a", "adapterVersion": "mock-1", "capabilities": map[string]bool{"autoLoad": false, "codexReady": false}}
+	sendJSON(t, first, hello)
+	readJSON(t, first)
+	second := dialTest(t, s.URL, "")
+	sendJSON(t, second, hello)
+	if err := wsjson.Read(readCtx, second, &denied); err == nil {
+		t.Fatal("duplicate agent accepted")
+	}
+}
+
+func TestRelayRequiresNonemptyTokenAndOriginPolicy(t *testing.T) {
+	if _, err := New(Config{}); err == nil {
+		t.Fatal("relay started without credential")
+	}
+	if _, err := New(Config{Token: "secret"}); err == nil {
+		t.Fatal("relay started without origin allowlist")
+	}
+}
+
+func TestRelayHeartbeatRemovesUnresponsiveAgent(t *testing.T) {
+	r, err := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, HeartbeatInterval: 30 * time.Millisecond, HeartbeatTimeout: 30 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a) // From here, no Reader processes the Agent's ping frame.
+	if got := readJSON(t, w); got["event"] != "device.status" || got["agentOnline"] != true {
+		t.Fatalf("missing online status: %v", got["event"])
+	}
+	if got := readJSON(t, w); got["event"] != "device.status" || got["agentOnline"] != false {
+		t.Fatalf("unresponsive Agent remained online: %v", got["event"])
+	}
+}
+
+func agentHello() map[string]any {
+	return map[string]any{"type": "hello", "v": 1, "role": "agent", "token": "test-token", "deviceId": "mock-mac", "deviceName": "Mac", "agentEpoch": "epoch-a", "adapterVersion": "mock-1", "capabilities": map[string]bool{"autoLoad": false, "codexReady": false}}
+}
+
+func webHello() map[string]any {
+	return map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-token"}
+}
+
+func TestRelayCorrelatesSameWebRequestIDAcrossTwoConnections(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	w1, w2 := dialTest(t, s.URL, testOrigin), dialTest(t, s.URL, testOrigin)
+	for _, w := range []*websocket.Conn{w1, w2} {
+		sendJSON(t, w, webHello())
+		readJSON(t, w)
+	}
+	webID := "00000000-0000-4000-8000-000000000001"
+	for _, w := range []*websocket.Conn{w1, w2} {
+		sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": webID, "deviceId": "mock-mac", "method": "thread.list", "params": map[string]any{"limit": 20}})
+	}
+	a, b := readJSON(t, agent), readJSON(t, agent)
+	if a["requestId"] == b["requestId"] || a["requestId"] == webID || a["method"] != "thread.list" || b["method"] != "thread.list" {
+		t.Fatalf("relay IDs not isolated: %+v %+v", a, b)
+	}
+	for _, req := range []map[string]any{b, a} {
+		sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": req["requestId"], "outcome": "accepted", "data": map[string]any{"threads": []any{}, "nextCursor": nil}})
+	}
+	for _, w := range []*websocket.Conn{w1, w2} {
+		got := readJSON(t, w)
+		if got["type"] != "response" || got["requestId"] != webID || got["outcome"] != "accepted" {
+			t.Fatalf("routed response: %+v", got)
+		}
+	}
+}
+
+func TestRelayRejectsOfflineAndTimesOutForwardedRequestAsUnknown(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, RequestTimeout: 80 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	id := "00000000-0000-4000-8000-000000000002"
+	req := map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.list", "params": map[string]any{}}
+	sendJSON(t, w, req)
+	if got := readJSON(t, w); got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "DEVICE_OFFLINE" {
+		t.Fatalf("offline route: %+v", got)
+	}
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	if got := readJSON(t, w); got["event"] != "device.status" {
+		t.Fatalf("missing online event: %+v", got)
+	}
+	sendJSON(t, w, req)
+	readJSON(t, agent)
+	got := readJSON(t, w)
+	if got["outcome"] != "unknown" || got["error"].(map[string]any)["code"] != "OUTCOME_UNKNOWN" {
+		t.Fatalf("forwarded timeout misclassified: %+v", got)
+	}
+}
+
+func TestRelayAllowsBoundedExtraTimeForAutoLoadSubscription(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, SubscriptionTimeout: 300 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	id := "00000000-0000-4000-8000-000000000022"
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	forwarded := readJSON(t, a)
+	time.Sleep(80 * time.Millisecond)
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": "sub-late", "streamId": "stream-late"}})
+	got := readJSON(t, w)
+	if got["outcome"] != "accepted" {
+		t.Fatalf("auto-load timed out early: %v", got)
+	}
+}
+
+func TestRelayAllowsBoundedExtraTimeForForwardedMutation(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, MutationTimeout: 300 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	id := "00000000-0000-4000-8000-000000000023"
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "turn.start", "params": map[string]any{"threadId": "mock-thread-a", "clientMessageId": "00000000-0000-4000-8000-000000000024", "text": "hello"}})
+	forwarded := readJSON(t, a)
+	time.Sleep(80 * time.Millisecond)
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"turnId": "turn-late"}})
+	got := readJSON(t, w)
+	if got["outcome"] != "accepted" {
+		t.Fatalf("mutation timed out early: %v", got)
+	}
+}
+
+func mockThread() map[string]any {
+	return map[string]any{"threadId": "mock-thread-a", "title": "Draft", "cwd": "/mock/workspace", "updatedAt": "2026-10-04T00:00:00Z", "runtime": "idle", "turns": []any{}, "pendingInteractions": []any{}}
+}
+
+func TestRelaySubscriptionResponsePrecedesSnapshotAndIsIsolated(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	w1, w2 := dialTest(t, s.URL, testOrigin), dialTest(t, s.URL, testOrigin)
+	for _, w := range []*websocket.Conn{w1, w2} {
+		sendJSON(t, w, webHello())
+		readJSON(t, w)
+	}
+	for i, w := range []*websocket.Conn{w1, w2} {
+		id := "00000000-0000-4000-8000-00000000000" + string(rune('3'+i))
+		sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+		forwarded := readJSON(t, agent)
+		sub := "sub-one"
+		if i == 1 {
+			sub = "sub-two"
+		}
+		sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": sub, "streamId": "stream-" + sub}})
+		sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": sub, "streamId": "stream-" + sub, "seq": 1, "thread": mockThread()})
+		if got := readJSON(t, w); got["type"] != "response" || got["requestId"] != id {
+			t.Fatalf("snapshot overtook subscribe reply: %+v", got)
+		}
+		if got := readJSON(t, w); got["event"] != "thread.snapshot" || got["subscriptionId"] != sub {
+			t.Fatalf("snapshot routed incorrectly: %+v", got)
+		}
+	}
+	sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.update", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": "sub-two", "streamId": "stream-sub-two", "baseSeq": 1, "seq": 2, "thread": mockThread()})
+	if got := readJSON(t, w2); got["event"] != "thread.update" || got["subscriptionId"] != "sub-two" {
+		t.Fatalf("update not routed to second web: %+v", got)
+	}
+	// First subscriber can unsubscribe without affecting the second.
+	sendJSON(t, w1, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000005", "deviceId": "mock-mac", "method": "thread.unsubscribe", "params": map[string]any{"subscriptionId": "sub-one"}})
+	forwarded := readJSON(t, agent)
+	sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"unsubscribed": true}})
+	if got := readJSON(t, w1); got["outcome"] != "accepted" {
+		t.Fatalf("unsubscribe: %+v", got)
+	}
+	sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.update", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": "sub-two", "streamId": "stream-sub-two", "baseSeq": 2, "seq": 3, "thread": mockThread()})
+	if got := readJSON(t, w2); got["seq"] != float64(3) {
+		t.Fatalf("second subscription lost: %+v", got)
+	}
+	sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.error", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": "sub-two", "streamId": "stream-sub-two", "code": "HISTORY_TOO_LARGE"})
+	if got := readJSON(t, w2); got["event"] != "thread.error" || got["code"] != "HISTORY_TOO_LARGE" {
+		t.Fatalf("stream error not routed: event=%v code=%v", got["event"], got["code"])
+	}
+}

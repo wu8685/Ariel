@@ -1,0 +1,1 @@
+{"type":"response","requestId":"request_fixture_interrupt","resultType":"success","handledByClientId":"owner_fixture","result":{"ok":true,"interruptedTurnId":"turn_fixture_interrupt"}}

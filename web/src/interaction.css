@@ -1,0 +1,11 @@
+.question input {
+  background: #fff;
+  border: 1px solid #d5dbd2;
+  padding: 10px;
+  border-radius: 3px;
+}
+
+.interaction-card p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

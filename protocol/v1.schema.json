@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wu8685/Ariel/protocol/v1.schema.json",
+  "title": "Ariel protocol v1 envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/webHello" },
+    { "$ref": "#/$defs/agentHello" },
+    { "$ref": "#/$defs/helloOK" },
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/deviceStatus" },
+    { "$ref": "#/$defs/threadSnapshot" },
+    { "$ref": "#/$defs/threadUpdate" },
+    { "$ref": "#/$defs/threadError" },
+    { "$ref": "#/$defs/interactionResolved" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "requestId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$" },
+    "capabilities": {
+      "type": "object", "additionalProperties": false,
+      "required": ["autoLoad", "codexReady"],
+      "properties": {
+        "autoLoad": { "type": "boolean" },
+        "codexReady": { "type": "boolean" },
+        "history": { "type": "boolean" },
+        "send": { "type": "boolean" },
+        "interrupt": { "type": "boolean" },
+        "interaction": { "type": "boolean" }
+      }
+    },
+    "webHello": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "role", "token"],
+      "properties": {
+        "type": { "const": "hello" }, "v": { "const": 1 }, "role": { "const": "web" },
+        "token": { "type": "string", "minLength": 1 }
+      }
+    },
+    "agentHello": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "role", "token", "deviceId", "deviceName", "agentEpoch", "adapterVersion", "capabilities"],
+      "properties": {
+        "type": { "const": "hello" }, "v": { "const": 1 }, "role": { "const": "agent" },
+        "token": { "type": "string", "minLength": 1 },
+        "deviceId": { "$ref": "#/$defs/id" }, "deviceName": { "$ref": "#/$defs/id" },
+        "agentEpoch": { "$ref": "#/$defs/id" }, "adapterVersion": { "$ref": "#/$defs/id" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
+      }
+    },
+    "helloOK": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "connectionId", "relayEpoch"],
+      "properties": {
+        "type": { "const": "hello.ok" }, "v": { "const": 1 },
+        "connectionId": { "$ref": "#/$defs/id" }, "relayEpoch": { "$ref": "#/$defs/id" }
+      }
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "requestId", "deviceId", "method", "params"],
+      "properties": {
+        "type": { "const": "request" }, "v": { "const": 1 },
+        "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
+        "method": { "enum": ["device.list", "thread.list", "thread.read", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
+        "params": { "type": "object" }
+      },
+      "allOf": [
+        { "if": { "properties": { "method": { "const": "device.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/emptyParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/listParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
+        { "if": { "properties": { "method": { "const": "turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/startParams" } } } },
+        { "if": { "properties": { "method": { "const": "turn.interrupt" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/interruptParams" } } } },
+        { "if": { "properties": { "method": { "const": "interaction.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/respondParams" } } } }
+      ]
+    },
+    "emptyParams": { "type": "object", "additionalProperties": false },
+    "listParams": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }
+    },
+    "threadParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" } }
+    },
+    "unsubscribeParams": {
+      "type": "object", "additionalProperties": false, "required": ["subscriptionId"],
+      "properties": { "subscriptionId": { "$ref": "#/$defs/id" } }
+    },
+    "startParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "clientMessageId", "text"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/requestId" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 65536 }
+      }
+    },
+    "interruptParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "expectedTurnId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "expectedTurnId": { "$ref": "#/$defs/id" } }
+    },
+    "respondParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "interactionId", "decision"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "interactionId": { "$ref": "#/$defs/id" },
+        "decision": { "enum": ["deny", "deny_and_stop", "accept_once", "answer"] },
+        "answers": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 } }
+      }
+    },
+    "response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "requestId", "outcome"],
+      "properties": {
+        "type": { "const": "response" }, "v": { "const": 1 },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "outcome": { "enum": ["accepted", "rejected", "unknown", "not_submitted"] },
+        "data": { "type": "object" },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "allOf": [
+        { "if": { "properties": { "outcome": { "const": "accepted" } } }, "then": { "required": ["data"], "not": { "required": ["error"] } } },
+        { "if": { "properties": { "outcome": { "enum": ["rejected", "unknown", "not_submitted"] } } }, "then": { "required": ["error"] } }
+      ]
+    },
+    "error": {
+      "type": "object", "additionalProperties": false, "required": ["code", "message"],
+      "properties": {
+        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "thread": {
+      "type": "object", "additionalProperties": false,
+      "required": ["threadId", "title", "cwd", "updatedAt", "runtime", "turns", "pendingInteractions"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" },
+        "cwd": { "type": "string" }, "updatedAt": { "type": "string" },
+        "runtime": { "enum": ["idle", "inProgress", "notLoaded", "unknown"] },
+        "turns": { "type": "array", "items": { "$ref": "#/$defs/turn" } },
+        "pendingInteractions": { "type": "array", "items": { "$ref": "#/$defs/interaction" } }
+      }
+    },
+    "turn": {
+      "type": "object", "additionalProperties": false,
+      "required": ["turnId", "status", "items"],
+      "properties": {
+        "turnId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["inProgress", "completed", "failed", "interrupted"] },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+      }
+    },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["itemId", "role", "text"],
+      "properties": {
+        "itemId": { "$ref": "#/$defs/id" }, "role": { "enum": ["user", "assistant", "system"] },
+        "text": { "type": "string" }
+      }
+    },
+    "interaction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["interactionId", "kind", "prompt", "availableDecisions"],
+      "properties": {
+        "interactionId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["command_approval", "file_approval", "permission_request", "user_input", "unsupported"] },
+        "prompt": { "type": "string" },
+        "availableDecisions": { "type": "array", "uniqueItems": true, "items": { "enum": ["deny", "deny_and_stop", "accept_once", "answer"] } },
+        "questions": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "question"], "properties": { "id": { "$ref": "#/$defs/id" }, "question": { "type": "string" }, "options": { "type": "array", "items": { "type": "string" } } } } }
+      }
+    },
+    "deviceStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "agentOnline", "codexReady"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "device.status" },
+        "deviceId": { "$ref": "#/$defs/id" },
+        "agentOnline": { "type": "boolean" }, "codexReady": { "type": "boolean" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
+      }
+    },
+    "threadSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "subscriptionId", "streamId", "seq", "thread"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.snapshot" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
+        "subscriptionId": { "$ref": "#/$defs/id" }, "streamId": { "$ref": "#/$defs/id" },
+        "seq": { "const": 1 }, "thread": { "$ref": "#/$defs/thread" }
+      }
+    },
+    "threadUpdate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "subscriptionId", "streamId", "baseSeq", "seq", "thread"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.update" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
+        "subscriptionId": { "$ref": "#/$defs/id" }, "streamId": { "$ref": "#/$defs/id" },
+        "baseSeq": { "type": "integer", "minimum": 1 },
+        "seq": { "type": "integer", "minimum": 2 },
+        "thread": { "$ref": "#/$defs/thread" }
+      }
+    },
+    "threadError": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "subscriptionId", "streamId", "code"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.error" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
+        "subscriptionId": { "$ref": "#/$defs/id" }, "streamId": { "$ref": "#/$defs/id" },
+        "code": { "enum": ["HISTORY_TOO_LARGE", "RESYNC_REQUIRED"] }
+      }
+    },
+    "interactionResolved": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "interactionId"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "interaction.resolved" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
+        "interactionId": { "$ref": "#/$defs/id" }
+      }
+    }
+  }
+}

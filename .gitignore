@@ -1,0 +1,11 @@
+/bin/
+/.local/
+/coverage.out
+*.test
+.DS_Store
+.env
+.env.*
+!.env.example
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
