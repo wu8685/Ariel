@@ -13,6 +13,7 @@ func TestV1EnvelopeSchemaAcceptsKnownMessages(t *testing.T) {
 		`{"type":"event","v":1,"event":"device.status","deviceId":"device-a","agentOnline":true,"codexReady":false}`,
 		`{"type":"event","v":1,"event":"thread.error","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","code":"HISTORY_TOO_LARGE"}`,
 		`{"type":"event","v":1,"event":"thread.error","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","code":"RESYNC_REQUIRED"}`,
+		`{"type":"event","v":1,"event":"thread.error","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","code":"NATIVE_STATE_UNCERTAIN"}`,
 	}
 	for _, raw := range valid {
 		if err := Validate([]byte(raw)); err != nil {

@@ -28,3 +28,5 @@ Relay、真实 Desktop Agent、Mock Agent 和响应式 Web 已落地。Web 点�
 断线保留选择与草稿、重新订阅、Desktop IPC 健康检查、会话列表轻量化、超大历史显式错误已实现，真实浏览器中复验了 Relay／Agent 重启后恢复。发送后还会核对原 owner 中 `userMessage.clientId` 与本次提交 ID、turnId、文本一致；这一字段关系已在隔离 fixture 实测。单元／竞态测试与具体限制见 [M1–M4 测试记录](testing/2026-10-04-m1-m4.md)。未完成的验收重点：① 当前 Codex `request_permissions_tool` 为关闭状态，真实权限请求无法在本机生成；② 真正的手机设备访问尚未验收；③ Desktop 进程退出与重启不能在不影响用户业务会话的情况下直接做破坏性实测；④ 外部 Desktop 与 Ariel 精确同时发起 turn 的真实压测仍未做，竞态结果缺证据时按 unknown 处理。所有待办继续保持未勾选，完成须先经用户确认。
 
 同日补充：历史会话快速切换的旧 subscription 事件已被隔离；Web 断开和迟到订阅回执会释放 Agent follower，避免反复刷新耗尽订阅；Agent controller、每 thread 与每 Web 的订阅均设明确上限。桌面浏览器 390×844 视口复验布局与列表关闭，真实历史列表从 50 条加载到 100 条。物理手机与原生权限请求的验收限制不变，详见 [测试记录](testing/2026-10-04-m1-m4.md)。
+
+同日并发实验：两个无工具隔离 fixture 中，Agent 与独立 IPC follower 同时提交均得到 unknown，Desktop owner 出现无 turn ID 的空 `inProgress` 条目，live 与持久化终态不一致。Ariel 已按规格显示 `NATIVE_STATE_UNCERTAIN` 并暂停该会话远程操作；不能将这次实验算作并发成功验收。后续需在可复验的 Desktop 版本或原生修复后重做，同时仍需人工 Desktop UI 与 Ariel 的并发场景。详情见 [测试记录](testing/2026-10-04-m1-m4.md)。

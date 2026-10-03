@@ -9,10 +9,50 @@ import (
 
 var ErrTurnBusy = errors.New("Desktop thread is busy or interaction pending")
 var ErrStaleTurn = errors.New("Desktop turn no longer matches expected turn")
+var ErrNativeStateUncertain = errors.New("NATIVE_STATE_UNCERTAIN")
+
+func nativeCanonicalAddressable(state json.RawMessage) bool {
+	var history struct {
+		TurnHistory struct {
+			Kind    string `json:"kind"`
+			History struct {
+				Islands []struct {
+					Entries []struct {
+						Value string `json:"value"`
+					} `json:"entries"`
+				} `json:"islands"`
+				Entities map[string]struct {
+					TurnID string `json:"turnId"`
+				} `json:"entitiesByKey"`
+			} `json:"history"`
+		} `json:"turnHistory"`
+	}
+	if json.Unmarshal(state, &history) != nil {
+		return false
+	}
+	if history.TurnHistory.Kind == "" {
+		return true
+	}
+	if history.TurnHistory.Kind != "canonical" {
+		return false
+	}
+	for _, island := range history.TurnHistory.History.Islands {
+		for _, entry := range island.Entries {
+			turn, ok := history.TurnHistory.History.Entities[entry.Value]
+			if !ok || turn.TurnID == "" {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 func StartProductionTurn(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string) (string, error) {
 	if owner == "" || threadID == "" || clientMessageID == "" || strings.TrimSpace(text) == "" {
 		return "", ErrProtocol
+	}
+	if !nativeCanonicalAddressable(state) {
+		return "", ErrNativeStateUncertain
 	}
 	if !idleFixture(state, cwd) {
 		return "", ErrTurnBusy

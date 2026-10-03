@@ -89,6 +89,7 @@ export interface Error {
     | "INTERACTION_UNSUPPORTED"
     | "OUTCOME_UNKNOWN"
     | "RESYNC_REQUIRED"
+    | "NATIVE_STATE_UNCERTAIN"
     | "HISTORY_TOO_LARGE"
     | "INVALID_ARGUMENT"
     | "OVERLOADED"
@@ -167,7 +168,7 @@ export interface ThreadError {
   threadId: Id;
   subscriptionId: Id;
   streamId: Id;
-  code: "HISTORY_TOO_LARGE" | "RESYNC_REQUIRED";
+  code: "HISTORY_TOO_LARGE" | "RESYNC_REQUIRED" | "NATIVE_STATE_UNCERTAIN";
 }
 export interface InteractionResolved {
   type: "event";

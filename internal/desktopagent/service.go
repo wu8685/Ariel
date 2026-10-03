@@ -197,13 +197,26 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 	return nil
 }
 
+// Mutation requests may be sent without an active Web subscription. They
+// still need the same fail-closed native-state gate as thread.subscribe.
+func validateLive(c *threadController) error {
+	raw, err := c.live.Current()
+	if err != nil {
+		return err
+	}
+	if _, err := NormalizeLive(c.id, c.title, c.cwd, raw); err != nil {
+		return desktopipc.ErrNativeStateUncertain
+	}
+	return nil
+}
+
 func (s *Service) pump(c *threadController, live Live) {
 	for {
 		select {
 		case <-live.Updates():
 			raw, err := live.Current()
 			if err != nil {
-				s.invalidateLive(c, live)
+				s.invalidateLive(c, live, "RESYNC_REQUIRED")
 				return
 			}
 			c.mu.Lock()
@@ -214,7 +227,7 @@ func (s *Service) pump(c *threadController, live Live) {
 			thread, e := NormalizeLive(c.id, c.title, c.cwd, raw)
 			if e != nil {
 				c.mu.Unlock()
-				s.invalidateLive(c, live)
+				s.invalidateLive(c, live, "NATIVE_STATE_UNCERTAIN")
 				return
 			}
 			tooLarge := checkThreadSize(thread) == ErrHistoryTooLarge
@@ -241,13 +254,13 @@ func (s *Service) pump(c *threadController, live Live) {
 				delivery.emit(delivery.event)
 			}
 		case <-live.Done():
-			s.invalidateLive(c, live)
+			s.invalidateLive(c, live, "RESYNC_REQUIRED")
 			return
 		}
 	}
 }
 
-func (s *Service) invalidateLive(c *threadController, live Live) {
+func (s *Service) invalidateLive(c *threadController, live Live, code string) {
 	type delivery struct {
 		emit  func(map[string]any)
 		event map[string]any
@@ -261,7 +274,7 @@ func (s *Service) invalidateLive(c *threadController, live Live) {
 	out := make([]delivery, 0, len(c.subs))
 	for id, sub := range c.subs {
 		if sub.active {
-			out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "RESYNC_REQUIRED"}})
+			out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": code}})
 		}
 		delete(c.subs, id)
 	}
@@ -298,7 +311,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
 	if err != nil {
 		c.mu.Unlock()
-		return "", "", nil, nil, err
+		return "", "", nil, nil, desktopipc.ErrNativeStateUncertain
 	}
 	if err := checkThreadSize(thread); err != nil {
 		c.mu.Unlock()
@@ -316,7 +329,11 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 			if currentErr != nil || normalizeErr != nil {
 				sub.active = true
 				c.mu.Unlock()
-				s.invalidateLive(c, live)
+				code := "RESYNC_REQUIRED"
+				if normalizeErr != nil {
+					code = "NATIVE_STATE_UNCERTAIN"
+				}
+				s.invalidateLive(c, live, code)
 				return
 			}
 			sub.active = true
@@ -393,6 +410,10 @@ func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (
 		return "", err
 	}
 	live := c.live
+	if err := validateLive(c); err != nil {
+		c.mu.Unlock()
+		return "", err
+	}
 	c.mu.Unlock()
 	turnID, err := live.Start(ctx, messageID, text)
 	if errors.Is(err, desktopipc.ErrTurnBusy) {
@@ -424,6 +445,10 @@ func (s *Service) Interrupt(ctx context.Context, threadID, expectedTurnID string
 		return err
 	}
 	live := c.live
+	if err := validateLive(c); err != nil {
+		c.mu.Unlock()
+		return err
+	}
 	c.mu.Unlock()
 	err = live.Interrupt(ctx, expectedTurnID)
 	if errors.Is(err, desktopipc.ErrStaleTurn) {
@@ -444,6 +469,10 @@ func (s *Service) Respond(ctx context.Context, threadID, interactionID, decision
 		return err
 	}
 	live := c.live
+	if err := validateLive(c); err != nil {
+		c.mu.Unlock()
+		return err
+	}
 	c.mu.Unlock()
 	err = live.Respond(ctx, interactionID, decision, answers)
 	if errors.Is(err, desktopipc.ErrStaleInteraction) {

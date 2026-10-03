@@ -7,7 +7,7 @@ import "./interaction.css";
 
 type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", HISTORY_TOO_LARGE: "会话历史超过安全传输上限，未截断内容。请在电脑端查看。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "会话历史超过安全传输上限，未截断内容。请在电脑端查看。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。" };
 
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
@@ -31,6 +31,7 @@ export function App() {
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
   const expectedSubscription = useRef("");
+  const blockedSelection = useRef("");
   const pendingSelect = useRef(0);
   const resuming = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -58,6 +59,7 @@ export function App() {
 
   async function selectThread(id: string, targetDevice = deviceId) {
     if (!targetDevice) return;
+    blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
     const old = selection.current.view;
     const oldDevice = selection.current.deviceId;
@@ -73,7 +75,10 @@ export function App() {
       if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
       return;
     }
-    if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+    if (response.outcome !== "accepted") {
+      if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
+      setNotice(errorText(response)); return;
+    }
     const subID = response.data?.subscriptionId;
     if (typeof subID !== "string" || !subID) { setNotice("订阅回执缺少 ID，无法确认会话状态。"); return; }
     expectedSubscription.current = subID;
@@ -81,7 +86,7 @@ export function App() {
 
   async function resumeSelected(online: Device[]) {
     const current = selection.current;
-    const target = recoveryTarget(current.deviceId, current.threadId, online);
+    const target = recoveryTarget(current.deviceId, current.threadId, online, blockedSelection.current);
     if (!target || current.view || resuming.current) return;
     resuming.current = true;
     try { await selectThread(target.threadId, target.deviceId); }
@@ -117,6 +122,7 @@ export function App() {
       if (!belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current)) return;
       if (event.event === "thread.error") {
         if (!current.view || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
+          if (event.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${current.deviceId}\u0000${current.threadId}`;
           expectedSubscription.current = "";
           selection.current.view = null;
           setView(null);
@@ -214,7 +220,7 @@ export function App() {
       </aside>
       <main className="conversation">
         <div className="conversation-head"><button className="mobile-list text-button" onClick={() => setShowList(true)}>☰ 会话</button><div><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view?.thread.title || threads.find(t => t.threadId === threadId)?.title || "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || "从左侧选择历史会话，接着工作。"}</span></div><div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div></div>
-        <div className="transcript" aria-live="polite">{!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}{view?.thread.turns.map(turn => <section className="turn" key={turn.turnId}><div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>{turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}</section>)}{view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}<div ref={endRef} /></div>
+        <div className="transcript" aria-live="polite">{!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}{view?.thread.turns.map(turn => <section className="turn" key={turn.turnId}><div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>{turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}</section>)}{view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}<div ref={endRef} /></div>
         <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea aria-label="发送消息" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready"} rows={3} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready"}>■ 停止</button>}<button className="primary send-button" onClick={() => void send()} disabled={!view || status !== "ready" || working || !draft.trim() || view.thread.runtime !== "idle"}>发送 <span aria-hidden="true">↗</span></button></div></div></div></div>
       </main>
     </div>

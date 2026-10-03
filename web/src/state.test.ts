@@ -39,6 +39,7 @@ describe("thread stream state", () => {
     expect(keepOfflineDevice([], previous, "desktop")).toEqual([{ deviceId: "desktop", agentOnline: false, codexReady: false }]);
     expect(recoveryTarget("desktop", "thread", [])).toBeNull();
     expect(recoveryTarget("desktop", "thread", [{ deviceId: "desktop" }])).toEqual({ deviceId: "desktop", threadId: "thread" });
+    expect(recoveryTarget("desktop", "thread", [{ deviceId: "desktop" }], "desktop\u0000thread")).toBeNull();
     expect(recoveryTarget("desktop", "", [{ deviceId: "desktop" }])).toBeNull();
   });
 });

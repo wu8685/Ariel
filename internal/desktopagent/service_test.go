@@ -62,6 +62,10 @@ type observedLive struct {
 }
 
 type largeLive struct{ *fakeLive }
+type malformedLive struct {
+	*fakeLive
+	malformed atomic.Bool
+}
 type growingLive struct {
 	*fakeLive
 	large atomic.Bool
@@ -83,6 +87,60 @@ func (l *growingLive) Current() (json.RawMessage, error) {
 func (l *largeLive) Current() (json.RawMessage, error) {
 	item, _ := json.Marshal(map[string]any{"type": "agentMessage", "id": "large", "text": strings.Repeat("x", 7<<20)})
 	return json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[{"turnId":"one","status":"completed","items":[` + string(item) + `]}]}`), nil
+}
+
+func (l *malformedLive) Current() (json.RawMessage, error) {
+	if l.malformed.Load() {
+		return json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`), nil
+	}
+	return l.fakeLive.Current()
+}
+
+func TestServiceMalformedNativeStateIsTerminalNotResync(t *testing.T) {
+	live := &malformedLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	events := make(chan map[string]any, 1)
+	_, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(event map[string]any) { events <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	live.malformed.Store(true)
+	live.updates <- struct{}{}
+	select {
+	case event := <-events:
+		if event["event"] != "thread.error" || event["code"] != "NATIVE_STATE_UNCERTAIN" {
+			t.Fatalf("native shape must not cause an automatic resync: %v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing native-state error")
+	}
+	_, _, _, _, err = s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" {
+		t.Fatalf("malformed initial snapshot did not fail closed: %v", err)
+	}
+}
+
+func TestServiceRejectsDirectMutationOfMalformedNativeState(t *testing.T) {
+	live := &malformedLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}}
+	live.malformed.Store(true)
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	if _, err := s.Start(context.Background(), "thread", "message-id", "hello"); err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" {
+		t.Fatalf("start not rejected: %v", err)
+	}
+	if err := s.Interrupt(context.Background(), "thread", "turn"); err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" {
+		t.Fatalf("interrupt not rejected: %v", err)
+	}
+	if err := s.Respond(context.Background(), "thread", "interaction", "deny", nil); err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" {
+		t.Fatalf("respond not rejected: %v", err)
+	}
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if live.busy || live.responded != "" {
+		t.Fatal("malformed native state was mutated")
+	}
 }
 
 func (l *observedLive) Current() (json.RawMessage, error) {

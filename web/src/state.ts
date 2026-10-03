@@ -32,6 +32,6 @@ export function keepOfflineDevice<T extends { deviceId: string; agentOnline: boo
   return remembered ? [...online, { ...remembered, agentOnline: false, codexReady: false }] : online;
 }
 
-export function recoveryTarget(deviceId: string, threadId: string, online: { deviceId: string }[]): { deviceId: string; threadId: string } | null {
-  return deviceId && threadId && online.some(device => device.deviceId === deviceId) ? { deviceId, threadId } : null;
+export function recoveryTarget(deviceId: string, threadId: string, online: { deviceId: string }[], blockedSelection = ""): { deviceId: string; threadId: string } | null {
+  return deviceId && threadId && blockedSelection !== `${deviceId}\u0000${threadId}` && online.some(device => device.deviceId === deviceId) ? { deviceId, threadId } : null;
 }

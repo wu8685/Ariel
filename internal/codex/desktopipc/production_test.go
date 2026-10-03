@@ -17,6 +17,24 @@ func TestProductionStartTreatsUnverifiableNativeReceiptAsUnknown(t *testing.T) {
 	}
 }
 
+func TestProductionStartRejectsUnaddressableCanonicalTurn(t *testing.T) {
+	owner := &recordingOwner{}
+	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`)
+	_, err := StartProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", state, "client-id", "hello")
+	if err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" || len(owner.calls) != 0 {
+		t.Fatalf("unaddressable turn reached owner: err=%v calls=%d", err, len(owner.calls))
+	}
+}
+
+func TestProductionStartRejectsUnknownNativeHistoryKind(t *testing.T) {
+	owner := &recordingOwner{}
+	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"futureFormat"}}`)
+	_, err := StartProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", state, "client-id", "hello")
+	if err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" || len(owner.calls) != 0 {
+		t.Fatalf("unsupported history reached owner: err=%v calls=%d", err, len(owner.calls))
+	}
+}
+
 type recordingOwner struct {
 	calls []Request
 	reply Reply

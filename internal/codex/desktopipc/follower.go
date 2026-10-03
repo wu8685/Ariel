@@ -128,6 +128,9 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 			if json.Unmarshal(state, &identity) != nil || identity.CWD != f.cwd {
 				return nil, ErrProtocol
 			}
+			if !nativeCanonicalAddressable(state) {
+				return nil, ErrNativeStateUncertain
+			}
 			return state, nil
 		}
 		select {

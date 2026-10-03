@@ -28,5 +28,6 @@
 3. 先写双 Web start 竞争、busy、重复 ID、stale stop、owner 变更测试，再实现。
 4. 对隔离 fixture 做 Desktop 真机链路：未加载历史由 Web 点选自动载入，真实发送、逐步更新、精确停止、独立持久化核对；不向业务会话发送测试文本。
 5. 隔离 fixture 复验 `clientUserMessageId` 与原 owner 的 userMessage item 身份关联；如果原生回执无法明确关联本次消息，生产端应返回 `unknown` 而非 accepted。
+6. 只在显式测试开关和已验证的无工具 fixture 上，让 Agent Service 与独立 IPC follower 同时尝试向同一原 owner 发消息；两条消息使用不同 clientMessageId。不能把第二客户端的 `ok` 或返回 turnId 直接算作持久化。记录每侧 accepted/busy/unknown、原 owner 中各消息的身份及终态；仅对该 fixture 中实际运行的 exact turn 做清理。该实验不代表人工 Desktop UI 点击被验证。
 
 M2 不是 MVP 完成；审批、补充回答和故障恢复进入后续规格/测试。

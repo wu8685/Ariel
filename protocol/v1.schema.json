@@ -126,7 +126,7 @@
     "error": {
       "type": "object", "additionalProperties": false, "required": ["code", "message"],
       "properties": {
-        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT"] },
+        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT"] },
         "message": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     },
@@ -208,7 +208,7 @@
         "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.error" },
         "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
         "subscriptionId": { "$ref": "#/$defs/id" }, "streamId": { "$ref": "#/$defs/id" },
-        "code": { "enum": ["HISTORY_TOO_LARGE", "RESYNC_REQUIRED"] }
+        "code": { "enum": ["HISTORY_TOO_LARGE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN"] }
       }
     },
     "interactionResolved": {
