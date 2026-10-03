@@ -137,6 +137,7 @@
         "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" },
         "cwd": { "type": "string" }, "updatedAt": { "type": "string" },
         "runtime": { "enum": ["idle", "inProgress", "notLoaded", "unknown"] },
+        "permissions": { "type": "object", "additionalProperties": false, "required": ["sandbox", "approval"], "properties": { "sandbox": { "enum": ["read_only", "workspace_write", "full_access", "unknown"] }, "approval": { "enum": ["on_request", "never", "unknown"] } } },
         "turns": { "type": "array", "items": { "$ref": "#/$defs/turn" } },
         "pendingInteractions": { "type": "array", "items": { "$ref": "#/$defs/interaction" } }
       }

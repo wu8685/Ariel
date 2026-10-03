@@ -23,7 +23,7 @@ go run ./cmd/probe fixture create --manifest .local/fixture.json --write-enabled
 
 创建命令在系统临时目录下创建专属 workspace，设置只读 sandbox 和禁止审批提权的策略，保存权限为 0600 的 manifest，再执行一个禁止使用工具的短回复。manifest 路径不能覆盖已有文件。命令失败时先检查已保存身份及历史，不重复执行未知结果的提交。
 
-随后在 Desktop 打开该测试聊天。当前自动加载尚未实现，这是测试前置操作，不是最终手机用户流程。
+可在 Ariel Web 选择该测试聊天，自动请求 Desktop 打开原会话；若只运行独立 `probe` CLI，则仍需先在 Desktop 打开该聊天，让探针找到原 owner。自动加载是 Web/Agent 能力，不是 `probe` 子命令的副作用。
 
 ```sh
 go run ./cmd/probe fixture exercise --manifest .local/fixture.json --write-enabled

@@ -16,6 +16,7 @@
 - 正文归一化只处理已验证的 text item；未知非文本 item 要以可见占位/错误说明，不能吞成空白。历史太大时显式报容量错误。
 - 已知的内部 `reasoning` 占位不作为历史消息重复展示；已知 command/fileChange 展示命令或路径与状态摘要，补充回答展示“已回答”摘要，不把工具活动伪装成 Codex 普通回复。未知 item 仍保留可见占位。
 - 当前 Desktop 私有协议仅支持已测版本；版本或结构漂移时 fail closed，不把推测当兼容。
+- 订阅真实 owner 后，手机会话头部显示**当前 Desktop owner** 的 sandbox 与审批模式；`thread.list/read` 无历史权限字段时显示“权限未知”，不能把当前值写成“沿用原权限”。识别 `dangerFullAccess` 时醒目说明它允许广泛本机操作；本项仅增加只读可见性，是否限制 Full Access 下的远程发送等待用户选择。
 
 ## 自动加载与焦点
 
@@ -29,5 +30,8 @@
 4. 对隔离 fixture 做 Desktop 真机链路：未加载历史由 Web 点选自动载入，真实发送、逐步更新、精确停止、独立持久化核对；不向业务会话发送测试文本。
 5. 隔离 fixture 复验 `clientUserMessageId` 与原 owner 的 userMessage item 身份关联；如果原生回执无法明确关联本次消息，生产端应返回 `unknown` 而非 accepted。
 6. 只在显式测试开关和已验证的无工具 fixture 上，让 Agent Service 与独立 IPC follower 同时尝试向同一原 owner 发消息；两条消息使用不同 clientMessageId。不能把第二客户端的 `ok` 或返回 turnId 直接算作持久化。记录每侧 accepted/busy/unknown、原 owner 中各消息的身份及终态；仅对该 fixture 中实际运行的 exact turn 做清理。该实验不代表人工 Desktop UI 点击被验证。
+7. 在隔离 fixture 上核对创建时的 sandbox/approval 设置、自动加载后的 Desktop owner 当前设置，以及公共 `thread/read` 是否能提供足以判断权限变化的字段。若当前权限与创建时不一致，不得声称“原权限保持不变”；新增远程权限操作前先确定用户可见的处理语义。
+8. 先写 `latestThreadSettings` 已知、未知与 Full Access 的归一化及 Web 权限提示测试，再把当前权限作为只读 thread 字段放到 Web 会话头部。不得把 `approvalPolicy=on-request` 单独解释成有 sandbox 限制。
+9. 原 owner 在启动 turn 时若短暂发出严格限定的 canonical 占位条目（仅空 `turnId`、`inProgress`、空 items，runtime active 且无 pending request），已订阅 Web 暂不发布该不可寻址快照，等待最多 8 秒后续原生更新；期间所有新变更仍 fail closed，绝不重发原消息。若占位消失，继续原订阅；超时或出现其他结构异常，终止订阅并报 `NATIVE_STATE_UNCERTAIN`。follower 对本次提交的核验同样允许占位短暂存在，但不能仅凭回执认定成功。首次订阅仍不能以占位构造假快照。
 
 M2 不是 MVP 完成；审批、补充回答和故障恢复进入后续规格/测试。

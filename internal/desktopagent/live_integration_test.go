@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +383,74 @@ func TestRealFollowerRepeatedRefresh(t *testing.T) {
 		}
 		t.Logf("refresh %d duration=%s runtime=%s turnStatuses=%v", i, time.Since(started), thread["runtime"], statuses)
 	}
+}
+
+// Read-only diagnostic: determine whether the public App Server history
+// exposes permission settings needed to compare against Desktop's live owner.
+func TestRealFixtureStoredSettingsVisibility(t *testing.T) {
+	path := os.Getenv("ARIEL_TEST_MANIFEST")
+	if path == "" {
+		t.Skip("set ARIEL_TEST_MANIFEST for isolated Desktop fixture")
+	}
+	manifest, err := probe.LoadManifest(path)
+	if err != nil || manifest.Authorize(true, manifest.ThreadID, manifest.Workspace) != nil {
+		t.Fatal("not a verified isolated fixture")
+	}
+	cfg, err := probe.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	rpc, err := appserver.Start(ctx, probe.BundledBinary(cfg.AppPath), os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rpc.Close()
+	var result struct {
+		Thread map[string]json.RawMessage `json:"thread"`
+	}
+	if err := rpc.Call(ctx, "thread/read", map[string]any{"threadId": manifest.ThreadID, "includeTurns": true}, &result); err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(result.Thread))
+	for key := range result.Thread {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var turns []map[string]json.RawMessage
+	if err := json.Unmarshal(result.Thread["turns"], &turns); err != nil {
+		t.Fatal("history turns unavailable")
+	}
+	turnKeys := []string{}
+	if len(turns) > 0 {
+		for key := range turns[len(turns)-1] {
+			turnKeys = append(turnKeys, key)
+		}
+		sort.Strings(turnKeys)
+	}
+	t.Logf("App Server thread fields=%v last turn fields=%v", keys, turnKeys)
+	live, err := OpenFollower(ctx, cfg.Socket, manifest.ThreadID, manifest.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	state, err := live.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner struct {
+		LatestThreadSettings struct {
+			ApprovalPolicy string `json:"approvalPolicy"`
+			SandboxPolicy  struct {
+				Type string `json:"type"`
+			} `json:"sandboxPolicy"`
+		} `json:"latestThreadSettings"`
+	}
+	if json.Unmarshal(state, &owner) != nil {
+		t.Fatal("owner settings unavailable")
+	}
+	t.Logf("owner approvalPolicy=%s sandboxPolicy=%s", owner.LatestThreadSettings.ApprovalPolicy, owner.LatestThreadSettings.SandboxPolicy.Type)
 }
 
 func fixtureNativeShape(state json.RawMessage, expectedCWD string) map[string]any {

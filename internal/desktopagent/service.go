@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
@@ -62,18 +63,19 @@ type threadController struct {
 	lastUsed       uint64
 }
 type Service struct {
-	history   History
-	attach    LiveFactory
-	mu        sync.Mutex
-	threads   map[string]*threadController
-	clock     uint64
-	seen      map[string]struct{}
-	seenOrder []string
-	closed    bool
+	history          History
+	attach           LiveFactory
+	mu               sync.Mutex
+	threads          map[string]*threadController
+	clock            uint64
+	seen             map[string]struct{}
+	seenOrder        []string
+	closed           bool
+	placeholderGrace time.Duration
 }
 
 func NewService(history History, attach LiveFactory) *Service {
-	return &Service{history: history, attach: attach, threads: map[string]*threadController{}, seen: map[string]struct{}{}}
+	return &Service{history: history, attach: attach, threads: map[string]*threadController{}, seen: map[string]struct{}{}, placeholderGrace: 8 * time.Second}
 }
 
 func (s *Service) controller(id string) (*threadController, error) {
@@ -211,6 +213,13 @@ func validateLive(c *threadController) error {
 }
 
 func (s *Service) pump(c *threadController, live Live) {
+	var placeholderTimer *time.Timer
+	var placeholderDeadline <-chan time.Time
+	defer func() {
+		if placeholderTimer != nil {
+			placeholderTimer.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-live.Updates():
@@ -227,8 +236,20 @@ func (s *Service) pump(c *threadController, live Live) {
 			thread, e := NormalizeLive(c.id, c.title, c.cwd, raw)
 			if e != nil {
 				c.mu.Unlock()
+				if desktopipc.TransientCanonicalPlaceholder(raw) {
+					if placeholderTimer == nil {
+						placeholderTimer = time.NewTimer(s.placeholderGrace)
+						placeholderDeadline = placeholderTimer.C
+					}
+					continue
+				}
 				s.invalidateLive(c, live, "NATIVE_STATE_UNCERTAIN")
 				return
+			}
+			if placeholderTimer != nil {
+				placeholderTimer.Stop()
+				placeholderTimer = nil
+				placeholderDeadline = nil
 			}
 			tooLarge := checkThreadSize(thread) == ErrHistoryTooLarge
 			type delivery struct {
@@ -255,6 +276,9 @@ func (s *Service) pump(c *threadController, live Live) {
 			}
 		case <-live.Done():
 			s.invalidateLive(c, live, "RESYNC_REQUIRED")
+			return
+		case <-placeholderDeadline:
+			s.invalidateLive(c, live, "NATIVE_STATE_UNCERTAIN")
 			return
 		}
 	}
@@ -351,7 +375,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 }
 
 func sameThreadContent(a, b map[string]any) bool {
-	return a["runtime"] == b["runtime"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"])
+	return a["runtime"] == b["runtime"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"])
 }
 
 func (s *Service) Unsubscribe(id string) bool {

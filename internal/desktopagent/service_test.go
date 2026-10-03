@@ -64,7 +64,8 @@ type observedLive struct {
 type largeLive struct{ *fakeLive }
 type malformedLive struct {
 	*fakeLive
-	malformed atomic.Bool
+	malformed   atomic.Bool
+	placeholder atomic.Bool
 }
 type growingLive struct {
 	*fakeLive
@@ -91,9 +92,64 @@ func (l *largeLive) Current() (json.RawMessage, error) {
 
 func (l *malformedLive) Current() (json.RawMessage, error) {
 	if l.malformed.Load() {
-		return json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`), nil
+		return json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"completed","items":[]}}}}}`), nil
+	}
+	if l.placeholder.Load() {
+		return json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"active"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`), nil
 	}
 	return l.fakeLive.Current()
+}
+
+func TestServiceWaitsForTransientNativePlaceholderWithoutLosingSubscription(t *testing.T) {
+	live := &malformedLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	events := make(chan map[string]any, 2)
+	_, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(event map[string]any) { events <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	live.placeholder.Store(true)
+	live.updates <- struct{}{}
+	select {
+	case event := <-events:
+		t.Fatalf("transient placeholder must not terminate subscription: %v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+	live.placeholder.Store(false)
+	live.updates <- struct{}{}
+	select {
+	case event := <-events:
+		if event["event"] != "thread.update" {
+			t.Fatalf("healthy state did not resume subscription: %v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing resumed update")
+	}
+}
+
+func TestServicePersistentNativePlaceholderBecomesUncertain(t *testing.T) {
+	live := &malformedLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	s.placeholderGrace = 50 * time.Millisecond
+	defer s.Close()
+	events := make(chan map[string]any, 1)
+	_, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(event map[string]any) { events <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	live.placeholder.Store(true)
+	live.updates <- struct{}{}
+	select {
+	case event := <-events:
+		if event["event"] != "thread.error" || event["code"] != "NATIVE_STATE_UNCERTAIN" {
+			t.Fatalf("persistent placeholder must fail closed: %v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("persistent placeholder did not time out")
+	}
 }
 
 func TestServiceMalformedNativeStateIsTerminalNotResync(t *testing.T) {
@@ -119,6 +175,14 @@ func TestServiceMalformedNativeStateIsTerminalNotResync(t *testing.T) {
 	_, _, _, _, err = s.Subscribe(context.Background(), "thread", func(map[string]any) {})
 	if err == nil || err.Error() != "NATIVE_STATE_UNCERTAIN" {
 		t.Fatalf("malformed initial snapshot did not fail closed: %v", err)
+	}
+}
+
+func TestPermissionChangeRequiresThreadUpdate(t *testing.T) {
+	a := map[string]any{"runtime": "idle", "turns": []any{}, "pendingInteractions": []any{}, "permissions": map[string]any{"sandbox": "read_only", "approval": "on_request"}}
+	b := map[string]any{"runtime": "idle", "turns": []any{}, "pendingInteractions": []any{}, "permissions": map[string]any{"sandbox": "full_access", "approval": "on_request"}}
+	if sameThreadContent(a, b) {
+		t.Fatal("permission mode change was hidden from subscribed Web")
 	}
 }
 

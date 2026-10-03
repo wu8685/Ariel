@@ -112,6 +112,14 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	var placeholderDeadline <-chan time.Time
+	var placeholderTimer *time.Timer
+	defer func() {
+		if placeholderTimer != nil {
+			placeholderTimer.Stop()
+		}
+	}()
+	sawPlaceholder := false
 	for {
 		f.stateMu.Lock()
 		count := f.o.summary.Snapshots
@@ -121,7 +129,7 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 		if stateErr != nil {
 			return nil, stateErr
 		}
-		if count > before && ok {
+		if (count > before || sawPlaceholder) && ok {
 			var identity struct {
 				CWD string `json:"cwd"`
 			}
@@ -129,12 +137,22 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 				return nil, ErrProtocol
 			}
 			if !nativeCanonicalAddressable(state) {
-				return nil, ErrNativeStateUncertain
+				if !TransientCanonicalPlaceholder(state) {
+					return nil, ErrNativeStateUncertain
+				}
+				sawPlaceholder = true
+				if placeholderTimer == nil {
+					placeholderTimer = time.NewTimer(8 * time.Second)
+					placeholderDeadline = placeholderTimer.C
+				}
+			} else {
+				return state, nil
 			}
-			return state, nil
 		}
 		select {
 		case <-f.wake:
+		case <-placeholderDeadline:
+			return nil, ErrNativeStateUncertain
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-f.c.Done():

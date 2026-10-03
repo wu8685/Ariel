@@ -37,7 +37,7 @@ func NormalizeStored(source appserver.Thread) (map[string]any, error) {
 	if source.UpdatedAt == 0 {
 		updated = time.Now().UTC()
 	}
-	return map[string]any{"threadId": source.ID, "title": source.Name, "cwd": source.CWD, "updatedAt": updated.Format(time.RFC3339Nano), "runtime": runtime, "turns": turns, "pendingInteractions": []any{}}, nil
+	return map[string]any{"threadId": source.ID, "title": source.Name, "cwd": source.CWD, "updatedAt": updated.Format(time.RFC3339Nano), "runtime": runtime, "turns": turns, "pendingInteractions": []any{}, "permissions": map[string]any{"sandbox": "unknown", "approval": "unknown"}}, nil
 }
 
 func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[string]any, error) {
@@ -49,8 +49,14 @@ func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[stri
 		Runtime struct {
 			Type string `json:"type"`
 		} `json:"threadRuntimeStatus"`
-		Requests []json.RawMessage `json:"requests"`
-		Turns    []struct {
+		Requests             []json.RawMessage `json:"requests"`
+		LatestThreadSettings struct {
+			ApprovalPolicy string `json:"approvalPolicy"`
+			SandboxPolicy  struct {
+				Type string `json:"type"`
+			} `json:"sandboxPolicy"`
+		} `json:"latestThreadSettings"`
+		Turns []struct {
 			TurnID string            `json:"turnId"`
 			Status string            `json:"status"`
 			Items  []json.RawMessage `json:"items"`
@@ -108,7 +114,28 @@ func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[stri
 		}
 		interactions = append(interactions, card)
 	}
-	return map[string]any{"threadId": threadID, "title": title, "cwd": cwd, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano), "runtime": normalizeRuntime(native.Runtime.Type), "turns": turns, "pendingInteractions": interactions}, nil
+	return map[string]any{"threadId": threadID, "title": title, "cwd": cwd, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano), "runtime": normalizeRuntime(native.Runtime.Type), "turns": turns, "pendingInteractions": interactions, "permissions": normalizePermissions(native.LatestThreadSettings.SandboxPolicy.Type, native.LatestThreadSettings.ApprovalPolicy)}, nil
+}
+
+func normalizePermissions(sandbox, approval string) map[string]any {
+	switch sandbox {
+	case "readOnly", "read-only":
+		sandbox = "read_only"
+	case "workspaceWrite", "workspace-write":
+		sandbox = "workspace_write"
+	case "dangerFullAccess", "danger-full-access":
+		sandbox = "full_access"
+	default:
+		sandbox = "unknown"
+	}
+	switch approval {
+	case "on-request":
+		approval = "on_request"
+	case "never":
+	default:
+		approval = "unknown"
+	}
+	return map[string]any{"sandbox": sandbox, "approval": approval}
 }
 
 func normalizeRuntime(native string) string {

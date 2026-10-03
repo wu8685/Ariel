@@ -30,3 +30,5 @@ Relay、真实 Desktop Agent、Mock Agent 和响应式 Web 已落地。Web 点�
 同日补充：历史会话快速切换的旧 subscription 事件已被隔离；Web 断开和迟到订阅回执会释放 Agent follower，避免反复刷新耗尽订阅；Agent controller、每 thread 与每 Web 的订阅均设明确上限。桌面浏览器 390×844 视口复验布局与列表关闭，真实历史列表从 50 条加载到 100 条。物理手机与原生权限请求的验收限制不变，详见 [测试记录](testing/2026-10-04-m1-m4.md)。
 
 同日并发实验：两个无工具隔离 fixture 中，Agent 与独立 IPC follower 同时提交均得到 unknown，Desktop owner 出现无 turn ID 的空 `inProgress` 条目，live 与持久化终态不一致。Ariel 已按规格显示 `NATIVE_STATE_UNCERTAIN` 并暂停该会话远程操作；不能将这次实验算作并发成功验收。后续需在可复验的 Desktop 版本或原生修复后重做，同时仍需人工 Desktop UI 与 Ariel 的并发场景。详情见 [测试记录](testing/2026-10-04-m1-m4.md)。
+
+同日权限复核：自动加载的隔离 fixture 创建时为 Read Only，当前 Desktop owner 却为 Full Access；公共历史接口无原权限字段。Web 已显示当前权限与警示，但“Full Access 下继续允许远程发送还是阻止”尚待用户决定，不把只读展示视为权限策略已完成。普通发送还曾遇到短暂无 ID 占位导致 `unknown`；已针对严格占位补有界等待和自动测试，待权限策略确定后在真实 Desktop 隔离 fixture 重验。详见 [测试记录](testing/2026-10-04-m1-m4.md)。

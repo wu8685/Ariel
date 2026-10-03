@@ -17,10 +17,35 @@ func TestNormalizeStoredThreadPreservesIdentityAndText(t *testing.T) {
 	if thread["threadId"] != "thread-1" || thread["cwd"] != "/project/a" || thread["runtime"] != "notLoaded" {
 		t.Fatalf("identity: %v", thread)
 	}
+	permissions, ok := thread["permissions"].(map[string]any)
+	if !ok || permissions["sandbox"] != "unknown" || permissions["approval"] != "unknown" {
+		t.Fatalf("stored history incorrectly inferred permissions: %v", thread["permissions"])
+	}
 	turns := thread["turns"].([]any)
 	items := turns[0].(map[string]any)["items"].([]any)
 	if len(items) != 2 || items[0].(map[string]any)["text"] != "hello" || items[1].(map[string]any)["text"] != "world" {
 		t.Fatalf("items: %v", items)
+	}
+}
+
+func TestNormalizeLiveExposesCurrentOwnerPermissions(t *testing.T) {
+	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[],"latestThreadSettings":{"approvalPolicy":"on-request","sandboxPolicy":{"type":"dangerFullAccess"}}}`)
+	thread, err := NormalizeLive("thread", "Title", "/fixture", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions, ok := thread["permissions"].(map[string]any)
+	if !ok || permissions["sandbox"] != "full_access" || permissions["approval"] != "on_request" {
+		t.Fatalf("current owner permission mode lost: %v", thread["permissions"])
+	}
+	unknown := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[]}`)
+	thread, err = NormalizeLive("thread", "Title", "/fixture", unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions, ok = thread["permissions"].(map[string]any)
+	if !ok || permissions["sandbox"] != "unknown" || permissions["approval"] != "unknown" {
+		t.Fatalf("missing settings must remain unknown: %v", thread["permissions"])
 	}
 }
 

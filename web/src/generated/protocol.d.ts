@@ -124,6 +124,10 @@ export interface Thread {
   cwd: string;
   updatedAt: string;
   runtime: "idle" | "inProgress" | "notLoaded" | "unknown";
+  permissions?: {
+    sandbox: "read_only" | "workspace_write" | "full_access" | "unknown";
+    approval: "on_request" | "never" | "unknown";
+  };
   turns: Turn[];
   pendingInteractions: Interaction[];
 }

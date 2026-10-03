@@ -35,3 +35,12 @@ export function keepOfflineDevice<T extends { deviceId: string; agentOnline: boo
 export function recoveryTarget(deviceId: string, threadId: string, online: { deviceId: string }[], blockedSelection = ""): { deviceId: string; threadId: string } | null {
   return deviceId && threadId && blockedSelection !== `${deviceId}\u0000${threadId}` && online.some(device => device.deviceId === deviceId) ? { deviceId, threadId } : null;
 }
+
+export function permissionSummary(permissions?: { sandbox: string; approval: string }): { label: string; warning?: string } {
+  if (!permissions || permissions.sandbox === "unknown") return { label: "当前 Desktop 权限未知" };
+  const sandbox = ({ read_only: "Read Only", workspace_write: "Workspace Write", full_access: "Full Access" } as Record<string, string>)[permissions.sandbox];
+  if (!sandbox) return { label: "当前 Desktop 权限未知" };
+  const approval = ({ on_request: "on-request", never: "never" } as Record<string, string>)[permissions.approval] || "未知";
+  const label = `当前 Desktop：${sandbox} · 审批策略 ${approval}`;
+  return permissions.sandbox === "full_access" ? { label, warning: "可访问本机更多文件和网络；on-request 不代表受 sandbox 限制。" } : { label };
+}

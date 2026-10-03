@@ -53,6 +53,49 @@ func TestFollowerReceivesSnapshotAndRejectsBusyStart(t *testing.T) {
 	}
 }
 
+func TestFollowerWaitsForAddressableStateAfterCanonicalPlaceholder(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	client := NewClient(local, Options{ThreadID: "thread", RequestTimeout: time.Second})
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		readMessage(t, peer) // following changed
+		request := readMessage(t, peer)
+		if stringField(request, "method") != "thread-follower-load-complete-history" {
+			done <- ErrProtocol
+			return
+		}
+		sendReply(t, peer, stringField(request, "requestId"), "success", map[string]any{})
+		for rev, id := range []string{"", "native-turn"} {
+			state := map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "active"}, "requests": []any{}, "turnHistory": map[string]any{"kind": "canonical", "history": map[string]any{"islands": []any{map[string]any{"entries": []any{map[string]any{"value": "entry"}}}}, "entitiesByKey": map[string]any{"entry": map[string]any{"turnId": id, "status": "inProgress", "items": []any{}}}}}}
+			body, _ := json.Marshal(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": rev + 1, "conversationState": state}}})
+			if err := WriteFrame(peer, body, DefaultMaxFrameBytes); err != nil {
+				done <- err
+				return
+			}
+			if rev == 0 {
+				time.Sleep(40 * time.Millisecond)
+			}
+		}
+		done <- nil
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	f, err := Follow(ctx, client, "thread", "owner", "/fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	state, err := f.Current()
+	if err != nil || !nativeCanonicalAddressable(state) {
+		t.Fatalf("did not recover addressable state: %v", err)
+	}
+}
+
 func TestFollowerInterruptCanProceedWhileStartReceiptIsPending(t *testing.T) {
 	local, peer := net.Pipe()
 	defer peer.Close()
