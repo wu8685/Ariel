@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,15 @@ import (
 )
 
 type fakeHistory struct{}
+type anyThreadHistory struct{}
+
+func (anyThreadHistory) List(context.Context, string, int) (appserver.Page, error) {
+	return appserver.Page{}, nil
+}
+func (anyThreadHistory) Read(_ context.Context, id string) (appserver.Thread, error) {
+	return appserver.Thread{ID: id, Name: "Fixture", CWD: "/fixture", Status: json.RawMessage(`{"type":"idle"}`)}, nil
+}
+
 type heavyListHistory struct{ fakeHistory }
 
 func (heavyListHistory) List(context.Context, string, int) (appserver.Page, error) {
@@ -34,6 +44,7 @@ type fakeLive struct {
 	closed    bool
 	responded string
 	updates   chan struct{}
+	done      chan struct{}
 }
 
 type slowLive struct {
@@ -131,8 +142,100 @@ func (l *fakeLive) Respond(_ context.Context, id, decision string, _ map[string]
 	return nil
 }
 func (l *fakeLive) Updates() <-chan struct{} { return l.updates }
-func (l *fakeLive) Done() <-chan struct{}    { return make(chan struct{}) }
-func (l *fakeLive) Close() error             { l.mu.Lock(); l.closed = true; l.mu.Unlock(); return nil }
+func (l *fakeLive) Done() <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.done == nil {
+		l.done = make(chan struct{})
+		if l.closed {
+			close(l.done)
+		}
+	}
+	return l.done
+}
+func (l *fakeLive) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.closed {
+		l.closed = true
+		if l.done != nil {
+			close(l.done)
+		}
+	}
+	return nil
+}
+
+func TestServiceBoundsControllersAndRetiresIdleFollower(t *testing.T) {
+	var first *fakeLive
+	s := NewService(anyThreadHistory{}, func(_ context.Context, id, _ string) (Live, error) {
+		live := &fakeLive{updates: make(chan struct{}, 1)}
+		if id == "thread-0" {
+			first = live
+		}
+		return live, nil
+	})
+	defer s.Close()
+	var subscriptions []string
+	for i := range 64 {
+		id, _, _, _, err := s.Subscribe(context.Background(), fmt.Sprintf("thread-%d", i), func(map[string]any) {})
+		if err != nil {
+			t.Fatalf("subscribe %d: %v", i, err)
+		}
+		subscriptions = append(subscriptions, id)
+	}
+	if _, _, _, _, err := s.Subscribe(context.Background(), "thread-overflow", func(map[string]any) {}); err == nil || err.Error() != "OVERLOADED" {
+		t.Fatalf("active controllers exceeded cap: %v", err)
+	}
+	if !s.Unsubscribe(subscriptions[0]) {
+		t.Fatal("unsubscribe first")
+	}
+	first.mu.Lock()
+	closed := first.closed
+	first.mu.Unlock()
+	if !closed {
+		t.Fatal("idle follower remained open")
+	}
+	if _, _, _, _, err := s.Subscribe(context.Background(), "thread-after-retire", func(map[string]any) {}); err != nil {
+		t.Fatalf("idle controller was not evicted: %v", err)
+	}
+}
+
+func TestServiceBoundsSubscriptionsPerThread(t *testing.T) {
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) {
+		return &fakeLive{updates: make(chan struct{}, 1)}, nil
+	})
+	defer s.Close()
+	for range 16 {
+		if _, _, _, _, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, _, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {}); err == nil || err.Error() != "OVERLOADED" {
+		t.Fatalf("subscriptions exceeded cap: %v", err)
+	}
+}
+
+func TestServiceDeduplicatesMessageAfterControllerEviction(t *testing.T) {
+	s := NewService(anyThreadHistory{}, func(context.Context, string, string) (Live, error) {
+		return &fakeLive{updates: make(chan struct{}, 1)}, nil
+	})
+	defer s.Close()
+	if _, err := s.Start(context.Background(), "thread-original", "message-once", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 64 {
+		id, _, _, _, err := s.Subscribe(context.Background(), fmt.Sprintf("thread-%d", i), func(map[string]any) {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !s.Unsubscribe(id) {
+			t.Fatal("unsubscribe fixture")
+		}
+	}
+	if _, err := s.Start(context.Background(), "thread-original", "message-once", "hello"); err == nil || err.Error() != "INVALID_ARGUMENT" {
+		t.Fatalf("message replayed after controller eviction: %v", err)
+	}
+}
 
 func TestServiceSerializesConcurrentStartsAndRejectsDuplicateID(t *testing.T) {
 	var mu sync.Mutex

@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,6 +147,111 @@ func agentHello() map[string]any {
 
 func webHello() map[string]any {
 	return map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-token"}
+}
+
+func TestRelayBoundsActiveWebSubscriptionsBeforeForwarding(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	for i := range 32 {
+		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1)
+		sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+		forwarded := readJSON(t, a)
+		sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": fmt.Sprintf("sub-%d", i), "streamId": fmt.Sprintf("stream-%d", i)}})
+		if got := readJSON(t, w); got["outcome"] != "accepted" {
+			t.Fatalf("subscribe %d: %v", i, got)
+		}
+	}
+	moreID := "00000000-0000-4000-8000-000000000033"
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": moreID, "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	if got := readJSON(t, w); got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "OVERLOADED" {
+		t.Fatalf("extra subscription was not rejected locally: %v", got)
+	}
+	unsubID := "00000000-0000-4000-8000-000000000034"
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": unsubID, "deviceId": "mock-mac", "method": "thread.unsubscribe", "params": map[string]any{"subscriptionId": "sub-0"}})
+	forwarded := readJSON(t, a)
+	if forwarded["method"] != "thread.unsubscribe" {
+		t.Fatalf("overflow request reached Agent: %v", forwarded["method"])
+	}
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"unsubscribed": true}})
+	if got := readJSON(t, w); got["outcome"] != "accepted" {
+		t.Fatalf("unsubscribe: %v", got)
+	}
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000035", "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	if got := readJSON(t, a); got["method"] != "thread.subscribe" {
+		t.Fatalf("capacity did not recover: %v", got)
+	}
+}
+
+func TestRelayReleasesAgentSubscriptionWhenWebDisconnects(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000041", "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	forwarded := readJSON(t, a)
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": "orphan-sub", "streamId": "orphan-stream"}})
+	if got := readJSON(t, w); got["outcome"] != "accepted" {
+		t.Fatalf("subscribe: %v", got)
+	}
+	w.CloseNow()
+	cleanup := readJSON(t, a)
+	if cleanup["method"] != "thread.unsubscribe" || cleanup["params"].(map[string]any)["subscriptionId"] != "orphan-sub" {
+		t.Fatalf("missing Agent cleanup: %v", cleanup)
+	}
+}
+
+func TestRelayReleasesLateAcceptedSubscriptionAfterWebDisconnect(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000042", "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	forwarded := readJSON(t, a)
+	w.CloseNow()
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": "late-sub", "streamId": "late-stream"}})
+	cleanup := readJSON(t, a)
+	if cleanup["method"] != "thread.unsubscribe" || cleanup["params"].(map[string]any)["subscriptionId"] != "late-sub" {
+		t.Fatalf("late accepted subscription not cleaned: %v", cleanup)
+	}
+}
+
+func TestRelayReleasesLateAcceptedSubscriptionAfterTimeout(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, SubscriptionTimeout: 60 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000043", "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	forwarded := readJSON(t, a)
+	if got := readJSON(t, w); got["outcome"] != "unknown" {
+		t.Fatalf("subscription did not time out: %v", got)
+	}
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": "timeout-sub", "streamId": "timeout-stream"}})
+	cleanup := readJSON(t, a)
+	if cleanup["method"] != "thread.unsubscribe" || cleanup["params"].(map[string]any)["subscriptionId"] != "timeout-sub" {
+		t.Fatalf("timed-out accepted subscription not cleaned: %v", cleanup)
+	}
 }
 
 func TestRelayCorrelatesSameWebRequestIDAcrossTwoConnections(t *testing.T) {

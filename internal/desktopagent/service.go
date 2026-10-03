@@ -20,6 +20,9 @@ type History interface {
 var ErrHistoryTooLarge = errors.New("HISTORY_TOO_LARGE")
 
 const maxThreadPayloadBytes = 7 << 20
+const maxThreadControllers = 64
+const maxSubscriptionsPerThread = 16
+const maxRecentMessageIDs = 4096
 
 func checkThreadSize(thread map[string]any) error {
 	body, err := json.Marshal(thread)
@@ -55,30 +58,80 @@ type threadController struct {
 	id, title, cwd string
 	live           Live
 	subs           map[string]*subscription
-	seen           map[string]struct{}
-	seenOrder      []string
+	leases         int
+	lastUsed       uint64
 }
 type Service struct {
-	history History
-	attach  LiveFactory
-	mu      sync.Mutex
-	threads map[string]*threadController
-	closed  bool
+	history   History
+	attach    LiveFactory
+	mu        sync.Mutex
+	threads   map[string]*threadController
+	clock     uint64
+	seen      map[string]struct{}
+	seenOrder []string
+	closed    bool
 }
 
 func NewService(history History, attach LiveFactory) *Service {
-	return &Service{history: history, attach: attach, threads: map[string]*threadController{}}
+	return &Service{history: history, attach: attach, threads: map[string]*threadController{}, seen: map[string]struct{}{}}
 }
 
-func (s *Service) controller(id string) *threadController {
+func (s *Service) controller(id string) (*threadController, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, errors.New("DEVICE_OFFLINE")
+	}
 	c := s.threads[id]
 	if c == nil {
-		c = &threadController{id: id, subs: map[string]*subscription{}, seen: map[string]struct{}{}}
+		var retired Live
+		if len(s.threads) >= maxThreadControllers {
+			var victim *threadController
+			for _, candidate := range s.threads {
+				candidate.mu.Lock()
+				idle := candidate.leases == 0 && len(candidate.subs) == 0
+				candidate.mu.Unlock()
+				if idle && (victim == nil || candidate.lastUsed < victim.lastUsed) {
+					victim = candidate
+				}
+			}
+			if victim == nil {
+				s.mu.Unlock()
+				return nil, errors.New("OVERLOADED")
+			}
+			victim.mu.Lock()
+			retired = victim.live
+			victim.live = nil
+			victim.mu.Unlock()
+			delete(s.threads, victim.id)
+		}
+		c = &threadController{id: id, subs: map[string]*subscription{}}
 		s.threads[id] = c
+		if retired != nil {
+			defer retired.Close()
+		}
 	}
-	return c
+	s.clock++
+	c.lastUsed = s.clock
+	c.leases++
+	s.mu.Unlock()
+	return c, nil
+}
+
+func (s *Service) releaseController(c *threadController) {
+	s.mu.Lock()
+	c.leases--
+	c.mu.Lock()
+	var retired Live
+	if c.leases == 0 && len(c.subs) == 0 {
+		retired = c.live
+		c.live = nil
+	}
+	c.mu.Unlock()
+	s.mu.Unlock()
+	if retired != nil {
+		_ = retired.Close()
+	}
 }
 
 func (s *Service) List(ctx context.Context, limit int, cursor string) ([]map[string]any, string, error) {
@@ -223,8 +276,16 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 	if emit == nil {
 		return "", "", nil, nil, errors.New("INVALID_ARGUMENT")
 	}
-	c := s.controller(id)
+	c, err := s.controller(id)
+	if err != nil {
+		return "", "", nil, nil, err
+	}
+	defer s.releaseController(c)
 	c.mu.Lock()
+	if len(c.subs) >= maxSubscriptionsPerThread {
+		c.mu.Unlock()
+		return "", "", nil, nil, errors.New("OVERLOADED")
+	}
 	if err := s.ensureLive(ctx, c); err != nil {
 		c.mu.Unlock()
 		return "", "", nil, nil, err
@@ -288,6 +349,7 @@ func (s *Service) Unsubscribe(id string) bool {
 		if _, ok := c.subs[id]; ok {
 			delete(c.subs, id)
 			c.mu.Unlock()
+			s.retireIdle(c)
 			return true
 		}
 		c.mu.Unlock()
@@ -295,15 +357,37 @@ func (s *Service) Unsubscribe(id string) bool {
 	return false
 }
 
+func (s *Service) retireIdle(c *threadController) {
+	s.mu.Lock()
+	c.mu.Lock()
+	var retired Live
+	if c.leases == 0 && len(c.subs) == 0 {
+		retired = c.live
+		c.live = nil
+	}
+	c.mu.Unlock()
+	s.mu.Unlock()
+	if retired != nil {
+		_ = retired.Close()
+	}
+}
+
 func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (string, error) {
-	c := s.controller(threadID)
+	c, err := s.controller(threadID)
+	if err != nil {
+		return "", err
+	}
+	defer s.releaseController(c)
 	c.startMu.Lock()
 	defer c.startMu.Unlock()
-	c.mu.Lock()
-	if _, seen := c.seen[messageID]; seen {
-		c.mu.Unlock()
+	key := threadID + "\x00" + messageID
+	s.mu.Lock()
+	_, seen := s.seen[key]
+	s.mu.Unlock()
+	if seen {
 		return "", errors.New("INVALID_ARGUMENT")
 	}
+	c.mu.Lock()
 	if err := s.ensureLive(ctx, c); err != nil {
 		c.mu.Unlock()
 		return "", err
@@ -316,20 +400,24 @@ func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (
 	}
 	var callErr *desktopipc.CallError
 	if err == nil || (errors.As(err, &callErr) && callErr.Outcome == "unknown") {
-		c.mu.Lock()
-		c.seen[messageID] = struct{}{}
-		c.seenOrder = append(c.seenOrder, messageID)
-		if len(c.seenOrder) > 128 {
-			delete(c.seen, c.seenOrder[0])
-			c.seenOrder = c.seenOrder[1:]
+		s.mu.Lock()
+		s.seen[key] = struct{}{}
+		s.seenOrder = append(s.seenOrder, key)
+		if len(s.seenOrder) > maxRecentMessageIDs {
+			delete(s.seen, s.seenOrder[0])
+			s.seenOrder = s.seenOrder[1:]
 		}
-		c.mu.Unlock()
+		s.mu.Unlock()
 	}
 	return turnID, err
 }
 
 func (s *Service) Interrupt(ctx context.Context, threadID, expectedTurnID string) error {
-	c := s.controller(threadID)
+	c, err := s.controller(threadID)
+	if err != nil {
+		return err
+	}
+	defer s.releaseController(c)
 	c.mu.Lock()
 	if err := s.ensureLive(ctx, c); err != nil {
 		c.mu.Unlock()
@@ -337,7 +425,7 @@ func (s *Service) Interrupt(ctx context.Context, threadID, expectedTurnID string
 	}
 	live := c.live
 	c.mu.Unlock()
-	err := live.Interrupt(ctx, expectedTurnID)
+	err = live.Interrupt(ctx, expectedTurnID)
 	if errors.Is(err, desktopipc.ErrStaleTurn) {
 		return errors.New("STALE_TURN")
 	}
@@ -345,7 +433,11 @@ func (s *Service) Interrupt(ctx context.Context, threadID, expectedTurnID string
 }
 
 func (s *Service) Respond(ctx context.Context, threadID, interactionID, decision string, answers map[string][]string) error {
-	c := s.controller(threadID)
+	c, err := s.controller(threadID)
+	if err != nil {
+		return err
+	}
+	defer s.releaseController(c)
 	c.mu.Lock()
 	if err := s.ensureLive(ctx, c); err != nil {
 		c.mu.Unlock()
@@ -353,7 +445,7 @@ func (s *Service) Respond(ctx context.Context, threadID, interactionID, decision
 	}
 	live := c.live
 	c.mu.Unlock()
-	err := live.Respond(ctx, interactionID, decision, answers)
+	err = live.Respond(ctx, interactionID, decision, answers)
 	if errors.Is(err, desktopipc.ErrStaleInteraction) {
 		return errors.New("STALE_INTERACTION")
 	}

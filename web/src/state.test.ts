@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyThreadEvent, preserveDraftAfterSend, recoveryTarget, keepOfflineDevice, type ThreadView } from "./state";
+import { applyThreadEvent, belongsToSubscription, preserveDraftAfterSend, recoveryTarget, keepOfflineDevice, type ThreadView } from "./state";
 
 const thread = { threadId: "t", title: "Same", cwd: "/a", updatedAt: "2026-10-04T00:00:00Z", runtime: "inProgress" as const, turns: [{ turnId: "turn", status: "inProgress" as const, items: [{ itemId: "assistant", role: "assistant" as const, text: "A" }] }], pendingInteractions: [] };
 const snapshot = { type: "event" as const, v: 1 as const, event: "thread.snapshot" as const, deviceId: "d", threadId: "t", subscriptionId: "sub", streamId: "stream", seq: 1 as const, thread };
@@ -18,6 +18,14 @@ describe("thread stream state", () => {
     const first = applyThreadEvent(null, snapshot) as ThreadView;
     expect(applyThreadEvent(first, { ...snapshot, event: "thread.update", baseSeq: 1, seq: 3 })).toBeNull();
     expect(applyThreadEvent(first, { ...snapshot, event: "thread.update", streamId: "other", baseSeq: 1, seq: 2 })).toBeNull();
+  });
+
+  it("ignores late events from an old subscription after resubscribing the same thread", () => {
+    expect(belongsToSubscription(snapshot, "d", "t", "new-sub")).toBe(false);
+    expect(belongsToSubscription({ ...snapshot, event: "thread.update", baseSeq: 1, seq: 2 }, "d", "t", "new-sub")).toBe(false);
+    expect(belongsToSubscription({ ...snapshot, subscriptionId: "new-sub" }, "d", "t", "new-sub")).toBe(true);
+    expect(belongsToSubscription({ ...snapshot, subscriptionId: "new-sub", deviceId: "other" }, "d", "t", "new-sub")).toBe(false);
+    expect(belongsToSubscription({ ...snapshot, subscriptionId: "new-sub" }, "d", "t", "")).toBe(false);
   });
 
   it("retains a draft unless the executor accepted the send", () => {

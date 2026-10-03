@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArielSocket, type ConnectionStatus } from "./client";
-import { applyThreadEvent, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, type ThreadView } from "./state";
+import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
 import type { ArielProtocolV1Envelope, Thread, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
@@ -30,6 +30,7 @@ export function App() {
   const [showList, setShowList] = useState(true);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
+  const expectedSubscription = useRef("");
   const pendingSelect = useRef(0);
   const resuming = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -59,12 +60,23 @@ export function App() {
     if (!targetDevice) return;
     const epoch = ++pendingSelect.current;
     const old = selection.current.view;
+    const oldDevice = selection.current.deviceId;
+    const oldSubscription = expectedSubscription.current;
+    expectedSubscription.current = "";
     selection.current = { deviceId: targetDevice, threadId: id, view: null };
     setThreadId(id); setView(null); setNotice(""); setShowList(false);
-    if (old && old.deviceId === targetDevice) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
+    if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
     const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
-    if (epoch !== pendingSelect.current) return;
+    if (epoch !== pendingSelect.current) {
+      const staleID = response.data?.subscriptionId;
+      if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
+      return;
+    }
     if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+    const subID = response.data?.subscriptionId;
+    if (typeof subID !== "string" || !subID) { setNotice("订阅回执缺少 ID，无法确认会话状态。"); return; }
+    expectedSubscription.current = subID;
   }
 
   async function resumeSelected(online: Device[]) {
@@ -84,8 +96,8 @@ export function App() {
   }
 
   useEffect(() => {
-    client.onStatus = next => { setStatus(next); if (next !== "ready") { selection.current.view = null; setView(null); } };
-    client.onReady = () => { selection.current.view = null; setView(null); void refreshDevices().then(online => void resumeSelected(online)); };
+    client.onStatus = next => { setStatus(next); if (next !== "ready") { pendingSelect.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); } };
+    client.onReady = () => { expectedSubscription.current = ""; selection.current.view = null; setView(null); void refreshDevices().then(online => void resumeSelected(online)); };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
       if (event.type !== "event") return;
       if (event.event === "device.status") {
@@ -102,9 +114,10 @@ export function App() {
         return;
       }
       const current = selection.current;
-      if (event.deviceId !== current.deviceId || event.threadId !== current.threadId) return;
+      if (!belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current)) return;
       if (event.event === "thread.error") {
-        if (current.view?.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId) {
+        if (!current.view || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
+          expectedSubscription.current = "";
           selection.current.view = null;
           setView(null);
           if (event.code === "RESYNC_REQUIRED") void selectThread(current.threadId, current.deviceId);
@@ -127,6 +140,10 @@ export function App() {
 
   useEffect(() => {
     pendingSelect.current++;
+    const oldDevice = selection.current.deviceId;
+    const oldSubscription = expectedSubscription.current;
+    if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
     setThreadId(""); setView(null); setThreads([]); setCursor("");
   }, [deviceId]);
@@ -187,7 +204,7 @@ export function App() {
     {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入本机 Relay token。它只保存在当前页面内存，不会写入浏览器存储。</p></div><form onSubmit={e => { e.preventDefault(); client.connect(token.trim()); }}><label htmlFor="token">连接口令</label><div className="connect-row"><input id="token" type="password" value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 Relay token" required /><button className="primary" type="submit">连接 <span aria-hidden="true">↗</span></button></div><small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
     <div className="workspace">
       <aside className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
-        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId)} disabled={!deviceId}>↻</button></div>
+        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId)} disabled={!deviceId}>↻</button></div>
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
         <div className="list-caption"><span>最近会话</span><span>{threads.length}</span></div>

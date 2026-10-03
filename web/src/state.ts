@@ -9,6 +9,10 @@ export type ThreadView = {
   thread: Thread;
 };
 
+export function belongsToSubscription<T extends { deviceId: string; threadId: string; subscriptionId: string }>(event: T, deviceId: string, threadId: string, subscriptionId: string): boolean {
+  return Boolean(subscriptionId) && event.deviceId === deviceId && event.threadId === threadId && event.subscriptionId === subscriptionId;
+}
+
 export function applyThreadEvent(current: ThreadView | null, event: ThreadSnapshot | ThreadUpdate): ThreadView | null {
   if (event.event === "thread.snapshot") {
     if (event.seq !== 1) return null;

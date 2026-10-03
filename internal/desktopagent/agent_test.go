@@ -18,9 +18,11 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	live := &fakeLive{updates: make(chan struct{}, 1)}
 	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) {
-		return &fakeLive{updates: make(chan struct{}, 1)}, nil
+		return live, nil
 	})
+	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go RunWithService(ctx, Config{URL: url, Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac"}, s)
@@ -78,6 +80,21 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	}
 	if got["event"] != "thread.snapshot" || got["seq"] != float64(1) {
 		t.Fatalf("snapshot: %v", got)
+	}
+	w.CloseNow()
+	deadline := time.After(2 * time.Second)
+	for {
+		live.mu.Lock()
+		closed := live.closed
+		live.mu.Unlock()
+		if closed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Web disconnect left Agent follower subscribed")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

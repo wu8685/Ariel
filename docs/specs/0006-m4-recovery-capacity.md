@@ -13,10 +13,14 @@
 - Agent 建立 Relay 会话前须对当前 Desktop IPC 做有界 initialize 探测；运行中连续两次探测失败则主动断开 Relay，令设备变为离线。Desktop 恢复后按原连接策略重试，不投递离线请求。仅测试探针与状态机，不为测试退出真实业务 Desktop。
 - Web 从后台回到前台时若可能错过事件，应放弃旧 subscription 并从 owner 重新获取全量快照；若 WebSocket 已半开则先重建连接。未完成变更统一标为结果未知，不自动重发。
 - Relay 每 Web 未完成请求最多 32；IPC 有界事件缓冲。慢 Web 写超时即关闭其连接，让客户端重取完整快照，不能让一个慢连接无限阻塞其它会话。
+- Agent 至多缓存 64 个 thread controller，每个 thread 至多接受 16 个订阅。到达上限时只能回明确的 `OVERLOADED`；有空闲、无订阅的 controller 时可先释放其 follower 并淘汰最久未用者，不能淘汰正在请求或仍被订阅的 thread。即使 controller 被淘汰，最近 4096 个已受理／结果未知的 `threadId + clientMessageId` 仍在本进程内有界去重，不能因导航历史会话而允许同一消息 ID 重放。
+- Relay 至多保留每个 Web 的 32 个活跃订阅；超限 `thread.subscribe` 须在转发到 Agent 之前拒绝，以免 Relay 和 Agent 之间留下无主订阅。Web 切换会话应主动退订旧 subscription。
+- Web 断开时 Relay 必须通知仍在线的 Agent 释放该 Web 的每个 subscription；已转发的订阅若在 Web 断开或超时后才返回 accepted，也须在确认其不属于现有活跃路由后释放，不能让页面刷新逐次占满 Agent 的订阅上限。清理请求不代表业务操作重试，也不向其他 Web 广播正文。
 - 单帧限 8 MiB。历史/快照超过安全发送容量时，在“订阅已受理”前返回明确的 `HISTORY_TOO_LARGE`；绝不静默截断。交互上下文超限时不能提供可点击审批。
 - `thread.list` 仅返回列表所需的会话身份、标题、cwd、时间与状态，不把每条历史塞进列表；历史只由选中后的读取／订阅获取。
 - 已订阅会话若后续增长越过容量，Agent 发送有界的 `thread.error`（`HISTORY_TOO_LARGE`）并停止该 stream；Web 清除过期快照、显示明确错误。Relay 只向绑定的订阅者转发，不生成截断的 `thread.update`。
 - 响应式 Web 在窄屏、软键盘、切后台回来后可选会话、可看状态、可输入；无后台通知承诺。
+- 窄屏会话列表打开后可不切换会话直接关闭；长标题和工作目录在会话头部收束显示，不把输入框挤出可视宽度。
 
 ## TDD / 验收
 

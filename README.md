@@ -16,13 +16,16 @@ Ariel 不建立另一份聊天记录。原会话、工作目录和执行权限�
 
 需要 Go 1.26+、Node.js/npm，以及已启动且版本匹配的 Codex Desktop。以下命令在项目根目录运行；把 `<Mac-LAN-IP>` 换成 Mac 在局域网中的地址，`<long-random-token>` 换成仅自己知道的随机口令。
 
-先构建 Web：
+先构建 Web 和稳定路径的本地可执行文件（便于 macOS 防火墙按程序放行）：
 
 ```sh
 cd web
 npm ci
 npm run build
 cd ..
+mkdir -p .local/bin
+go build -o .local/bin/ariel-relay ./cmd/relay
+go build -o .local/bin/ariel-desktop-agent ./cmd/desktop-agent
 ```
 
 终端 1 启动 Relay：
@@ -30,8 +33,8 @@ cd ..
 ```sh
 ARIEL_TOKEN='<long-random-token>' \
 ARIEL_ORIGINS='http://<Mac-LAN-IP>:8080' \
-ARIEL_LISTEN='0.0.0.0:8080' \
-go run ./cmd/relay
+ARIEL_LISTEN='<Mac-LAN-IP>:8080' \
+./.local/bin/ariel-relay
 ```
 
 终端 2 启动 Desktop Agent：
@@ -41,10 +44,14 @@ ARIEL_TOKEN='<long-random-token>' \
 ARIEL_RELAY_URL='ws://127.0.0.1:8080/ws' \
 ARIEL_DEVICE_ID='my-mac' \
 ARIEL_DEVICE_NAME='我的 Mac' \
-go run ./cmd/desktop-agent
+./.local/bin/ariel-desktop-agent
 ```
 
 手机连接同一局域网，打开 `http://<Mac-LAN-IP>:8080`，输入同一口令。Relay 的 HTTP/WS 通信未加密；不要在不可信网络或公网直接暴露端口。页面口令只保留在当前页面内存，刷新页面后需重新输入。
+
+运行前可用 `openssl rand -hex 32` 生成一次随机口令。确认 Mac 的局域网 IP 后，优先把 `ARIEL_LISTEN` 设为该 IP 的 `:8080`，只监听当前可信网卡；若用 `0.0.0.0`，也应确认没有接入不可信网络。macOS 防火墙开启时，应仅允许 Relay 可执行文件的入站连接，不要为了测试关闭整个防火墙。`lsof -nP -iTCP:8080 -sTCP:LISTEN` 可检查监听地址；手机与 Mac 需在可互访的局域网，访客 Wi-Fi 或 AP 隔离可能阻断访问。
+
+若页面可打开但显示“Relay 未连接”，检查 token 与 `ARIEL_ORIGINS` 是否精确等于手机地址栏的 Origin（协议、IP、端口均一致）。若 Relay 已连接但 Agent 离线，检查第二个终端与 `ARIEL_RELAY_URL`；若 Codex 未就绪，先检查 Desktop 正在运行以及 [兼容性版本](docs/compatibility/2026-10-03-m0.md)。两个进程都可在各自终端按 `Ctrl+C` 停止；Ariel 不安装后台常驻服务。
 
 第二台 Mac 也可运行 Agent，但本阶段未做跨设备调度；每台设备要使用不同的 `ARIEL_DEVICE_ID`。当前版本对 Desktop 与 Codex CLI 采用明确的兼容性放行，升级后应先跑兼容性探针。
 

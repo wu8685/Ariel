@@ -27,6 +27,8 @@ type Config struct {
 	HeartbeatTimeout    time.Duration
 }
 
+const maxWebSubscriptions = 32
+
 type Server struct {
 	cfg     Config
 	epoch   string
@@ -225,6 +227,11 @@ func (p *peer) send(ctx context.Context, msg any) error {
 func (s *Server) removePeer(p *peer) {
 	s.mu.Lock()
 	failed := make([]*route, 0)
+	type orphan struct {
+		agent *peer
+		id    string
+	}
+	orphans := make([]orphan, 0)
 	for id, pending := range s.routes {
 		if pending.web == p || pending.agent == p {
 			delete(s.routes, id)
@@ -238,6 +245,9 @@ func (s *Server) removePeer(p *peer) {
 	for agent, byID := range s.subs {
 		for id, sub := range byID {
 			if sub.web == p || sub.agent == p {
+				if sub.web == p && sub.agent != p && s.agents[sub.agent.deviceID] == sub.agent {
+					orphans = append(orphans, orphan{agent: sub.agent, id: id})
+				}
 				delete(byID, id)
 			}
 		}
@@ -254,12 +264,21 @@ func (s *Server) removePeer(p *peer) {
 		delete(s.byWeb, p)
 	}
 	s.mu.Unlock()
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCleanup()
+	for _, sub := range orphans {
+		_ = sendUnsubscribe(cleanupCtx, sub.agent, sub.id)
+	}
 	for _, pending := range failed {
 		pending.web.send(context.Background(), responseError(pending.webID, "unknown", "OUTCOME_UNKNOWN", "agent disconnected after forwarding"))
 	}
 	if p.role == "agent" {
 		s.broadcastDevice(p, false)
 	}
+}
+
+func sendUnsubscribe(ctx context.Context, agent *peer, subscriptionID string) error {
+	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": newRequestID(), "deviceId": agent.deviceID, "method": "thread.unsubscribe", "params": map[string]string{"subscriptionId": subscriptionID}})
 }
 
 func (s *Server) broadcastDevice(agent *peer, online bool) {
@@ -343,6 +362,26 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 			return true
 		}
 	}
+	if method == "thread.subscribe" {
+		count := 0
+		for _, byID := range s.subs {
+			for _, sub := range byID {
+				if sub.web == web {
+					count++
+				}
+			}
+		}
+		for _, pending := range s.routes {
+			if pending.web == web && pending.method == "thread.subscribe" {
+				count++
+			}
+		}
+		if count >= maxWebSubscriptions {
+			s.mu.Unlock()
+			web.send(ctx, responseError(webID, "rejected", "OVERLOADED", "too many active subscriptions"))
+			return true
+		}
+	}
 	if s.byWeb[web] == nil {
 		s.byWeb[web] = map[string]string{}
 	}
@@ -385,7 +424,13 @@ func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []by
 	s.mu.Lock()
 	entry := s.routes[relayID]
 	if entry == nil || entry.agent != agent {
+		data, _ := reply["data"].(map[string]any)
+		subID, _ := data["subscriptionId"].(string)
+		orphan := reply["outcome"] == "accepted" && subID != "" && s.subs[agent][subID] == nil && s.agents[agent.deviceID] == agent
 		s.mu.Unlock()
+		if orphan {
+			_ = sendUnsubscribe(ctx, agent, subID)
+		}
 		return
 	}
 	reply["requestId"] = entry.webID
