@@ -236,7 +236,7 @@ func (s *Service) pump(c *threadController, live Live) {
 			thread, e := NormalizeLive(c.id, c.title, c.cwd, raw)
 			if e != nil {
 				c.mu.Unlock()
-				if desktopipc.TransientCanonicalPlaceholder(raw) {
+				if desktopipc.TransientCanonicalPlaceholder(raw, c.cwd) {
 					if placeholderTimer == nil {
 						placeholderTimer = time.NewTimer(s.placeholderGrace)
 						placeholderDeadline = placeholderTimer.C

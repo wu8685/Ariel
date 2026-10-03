@@ -15,10 +15,12 @@ func TestTransientCanonicalPlaceholderIsStrict(t *testing.T) {
 		{"pending request", `{"threadRuntimeStatus":{"type":"active"},"requests":[{}],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`, false},
 		{"ghost has item", `{"threadRuntimeStatus":{"type":"active"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[{}]}}}}}`, false},
 		{"ghost completed", `{"threadRuntimeStatus":{"type":"active"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"completed","items":[]}}}}}`, false},
+		{"other turn malformed", `{"cwd":"/fixture","threadRuntimeStatus":{"type":"active"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"past"},{"value":"ghost"}]}],"entitiesByKey":{"past":{"turnId":"past-id","status":"completed","items":[{"id":"","type":"userMessage"}]},"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`, false},
+		{"wrong workspace", `{"cwd":"/other","threadRuntimeStatus":{"type":"active"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`, false},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := TransientCanonicalPlaceholder(json.RawMessage(tt.state)); got != tt.want {
+			if got := TransientCanonicalPlaceholder(json.RawMessage(tt.state), "/fixture"); got != tt.want {
 				t.Fatalf("placeholder=%t, want %t", got, tt.want)
 			}
 		})

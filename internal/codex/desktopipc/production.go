@@ -13,6 +13,9 @@ var ErrNativeStateUncertain = errors.New("NATIVE_STATE_UNCERTAIN")
 
 func nativeCanonicalAddressable(state json.RawMessage) bool {
 	var history struct {
+		Turns []struct {
+			TurnID string `json:"turnId"`
+		} `json:"turns"`
 		TurnHistory struct {
 			Kind    string `json:"kind"`
 			History struct {
@@ -31,9 +34,20 @@ func nativeCanonicalAddressable(state json.RawMessage) bool {
 		return false
 	}
 	if history.TurnHistory.Kind == "" {
+		if history.Turns == nil {
+			return false
+		}
+		for _, turn := range history.Turns {
+			if turn.TurnID == "" {
+				return false
+			}
+		}
 		return true
 	}
 	if history.TurnHistory.Kind != "canonical" {
+		return false
+	}
+	if history.TurnHistory.History.Islands == nil || history.TurnHistory.History.Entities == nil {
 		return false
 	}
 	for _, island := range history.TurnHistory.History.Islands {
@@ -51,8 +65,9 @@ func nativeCanonicalAddressable(state json.RawMessage) bool {
 // emitted while the Desktop owner is assigning a native turn identity. It is
 // never safe to publish or mutate this state; callers may only wait briefly
 // for a subsequent addressable owner update.
-func TransientCanonicalPlaceholder(state json.RawMessage) bool {
+func TransientCanonicalPlaceholder(state json.RawMessage, expectedCWD string) bool {
 	var s struct {
+		CWD     string `json:"cwd"`
 		Runtime struct {
 			Type string `json:"type"`
 		} `json:"threadRuntimeStatus"`
@@ -73,7 +88,7 @@ func TransientCanonicalPlaceholder(state json.RawMessage) bool {
 			} `json:"history"`
 		} `json:"turnHistory"`
 	}
-	if json.Unmarshal(state, &s) != nil || (s.Runtime.Type != "active" && s.Runtime.Type != "inProgress") || s.Requests == nil || len(s.Requests) != 0 || s.TurnHistory.Kind != "canonical" {
+	if expectedCWD == "" || json.Unmarshal(state, &s) != nil || s.CWD != expectedCWD || (s.Runtime.Type != "active" && s.Runtime.Type != "inProgress") || s.Requests == nil || len(s.Requests) != 0 || s.TurnHistory.Kind != "canonical" {
 		return false
 	}
 	ghosts := 0
@@ -88,6 +103,22 @@ func TransientCanonicalPlaceholder(state json.RawMessage) bool {
 					return false
 				}
 				ghosts++
+			} else {
+				if turn.Status != "inProgress" && turn.Status != "completed" && turn.Status != "failed" && turn.Status != "interrupted" {
+					return false
+				}
+				if turn.Items == nil {
+					return false
+				}
+				for _, raw := range turn.Items {
+					var item struct {
+						ID   string `json:"id"`
+						Type string `json:"type"`
+					}
+					if json.Unmarshal(raw, &item) != nil || item.ID == "" || item.Type == "" {
+						return false
+					}
+				}
 			}
 		}
 	}

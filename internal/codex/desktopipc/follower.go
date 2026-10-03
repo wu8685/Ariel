@@ -137,7 +137,7 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 				return nil, ErrProtocol
 			}
 			if !nativeCanonicalAddressable(state) {
-				if !TransientCanonicalPlaceholder(state) {
+				if !TransientCanonicalPlaceholder(state, f.cwd) {
 					return nil, ErrNativeStateUncertain
 				}
 				sawPlaceholder = true

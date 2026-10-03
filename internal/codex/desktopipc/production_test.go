@@ -35,6 +35,21 @@ func TestProductionStartRejectsUnknownNativeHistoryKind(t *testing.T) {
 	}
 }
 
+func TestProductionStartRejectsIncompleteNativeHistoryBeforeOwnerCall(t *testing.T) {
+	for _, state := range []string{
+		`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical"}}`,
+		`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[],"entitiesByKey":null}}}`,
+		`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[{"turnId":"","status":"completed","items":[]}]}`,
+		`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[]}`,
+	} {
+		owner := &recordingOwner{}
+		_, err := StartProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", json.RawMessage(state), "client-id", "hello")
+		if !errors.Is(err, ErrNativeStateUncertain) || len(owner.calls) != 0 {
+			t.Fatalf("incomplete history reached owner: %s err=%v calls=%d", state, err, len(owner.calls))
+		}
+	}
+}
+
 type recordingOwner struct {
 	calls []Request
 	reply Reply
