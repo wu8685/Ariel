@@ -34,4 +34,5 @@
 
 - 仓库：`github.com/wu8685/Ariel`。
 - 提交身份：`wuke <optimuswu8685@gmail.com>`。
-- 未经用户明确要求不 push。
+- Ariel 的后续本地 commit 在验证通过后同步 push 到对应远端分支；push 失败时保留本地 commit，报告原因，不使用 force push 覆盖远端历史。
+- 此约定只适用于 Ariel，不改变其他仓库（尤其私人知识库）的远端策略。
