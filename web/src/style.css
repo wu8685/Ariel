@@ -54,7 +54,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   letter-spacing: -1px;
   color: var(--color-text);
 }
-.brand-mark { font-family: Arial, sans-serif; color: var(--color-logo); font-size: 29px; line-height: 1; }
+.brand-mark { width: 29px; height: 29px; flex: none; color: var(--color-logo); stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; fill: none; }
 .brand small { font-family: inherit; font-size: 12px; letter-spacing: 2px; color: var(--color-subtle); margin: 4px 0 0 12px; }
 .mast-actions { display: flex; align-items: center; gap: 22px; }
 .connection { font-size: 12px; color: var(--color-muted); display: flex; align-items: center; gap: 9px; }

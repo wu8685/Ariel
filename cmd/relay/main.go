@@ -63,7 +63,13 @@ func buildHandler(cfg config) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/", http.FileServer(http.Dir(cfg.dist)))
+	files := http.FileServer(http.Dir(cfg.dist))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/" || req.URL.Path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		files.ServeHTTP(w, req)
+	}))
 	return mux, nil
 }
 

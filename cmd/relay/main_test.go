@@ -41,6 +41,28 @@ func TestHandlerServesWebWithoutExposingToken(t *testing.T) {
 	}
 }
 
+func TestHTMLIsNotCachedAcrossWebBuilds(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>Ariel</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := configFrom("secret", "012345", "http://localhost:8080", dir, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := buildHandler(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/index.html"} {
+		r := httptest.NewRecorder()
+		handler.ServeHTTP(r, httptest.NewRequest("GET", path, nil))
+		if got := r.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want no-store", path, got)
+		}
+	}
+}
+
 func TestConfigurationRequiresSixASCIIDigitWebPIN(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0644); err != nil {

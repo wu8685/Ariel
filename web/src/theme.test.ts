@@ -55,6 +55,7 @@ describe("fixed Night appearance", () => {
   it("uses a neutral gray logo and a mobile-only dismissible sidebar backdrop", () => {
     expect(token("color-logo")).toBe("#b4c0cf");
     expect(style).toMatch(/\.brand-mark\s*\{[^}]*color:\s*var\(--color-logo\)/s);
+    expect(style).toMatch(/\.brand-mark\s*\{[^}]*stroke:\s*currentColor/s);
     expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*none/s);
     expect(style).toMatch(/@media\s*\(max-width:\s*800px\)[\s\S]*\.sidebar-backdrop\s*\{[^}]*display:\s*block/s);
     expect(app).toMatch(/aria-label="关闭会话列表遮罩"[^>]*onClick=\{\(\) => setShowList\(false\)\}/);

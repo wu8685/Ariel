@@ -62,6 +62,17 @@ async function openFixture(thread: Thread = fixtureThread) {
 }
 
 describe("Ariel app interactions", () => {
+  it("renders every brand mark as a monochrome vector instead of an emoji glyph", async () => {
+    await openFixture();
+    const marks = [...document.querySelectorAll(".brand-mark")];
+    expect(marks).toHaveLength(2);
+    for (const mark of marks) {
+      expect(mark.tagName.toLowerCase()).toBe("svg");
+      expect(mark.querySelectorAll("path").length).toBeGreaterThan(0);
+      expect(mark.textContent).toBe("");
+    }
+  });
+
   it("keeps connected brand, status and disconnect in the drawer while the compact menu exposes status", async () => {
     await openFixture();
     const shell = document.querySelector(".app-shell")!;
