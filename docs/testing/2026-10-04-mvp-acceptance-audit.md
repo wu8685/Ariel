@@ -8,7 +8,7 @@
 | A02 会话列表 | 通过（本机浏览器） | 真实列表从 50 条加载至 100 条；同名 fixture 行同时显示 cwd 和时间。 |
 | A03 原会话续聊 | 通过（隔离 fixture） | 同一 threadId 的历史、发送及原持久化结果已核对。 |
 | A04 未加载自动接续 | 通过（隔离 fixture） | Web 点选后 deep link 自动加载原 owner；不需电脑端手动打开。 |
-| A05 双向同步 | 部分 | Web→Desktop 已实测。用户在 Desktop UI 向隔离 fixture 发送 A05 标记；原始历史含该用户消息与完成回复，重启后的 Ariel Web 在同一 fixture 显示回复。发送当时 Relay／Agent 已停止，不能把事后读取当作 Web 实时推送；需 Web 已订阅时再观察一条 Desktop UI 消息。 |
+| A05 双向同步 | 部分 | Web→Desktop 已实测。Desktop UI 向隔离 fixture 发送的 A05 标记事后出现在原始历史和 Web，但发送时 Relay／Agent 未运行，不能算实时推送。新增 [2026-10-05 loopback 回归](2026-10-05-mvp-followup.md)证明模拟 owner 主动更新可经 Agent／Relay 到已订阅 Web；仍需 Web 已订阅时观察一条真实 Desktop UI 消息。 |
 | A06 渐进回复 | 通过（隔离 fixture） | Web 看到运行中到完成／停止变化；稳定 item ID 与无重复段落有回归测试。 |
 | A07 发送确认 | 通过（隔离 fixture） | 原 owner 中精确核对 turnId、clientId 和文本；缺证据时返回 unknown。 |
 | A08 忙时草稿／无隐形队列 | 部分 | 两个 WebSocket 客户端经测试 Relay／Agent 同时启动，严格一次 accepted、一次 `TURN_BUSY`；真实 Desktop 双客户端并发实验出现不可寻址占位，仍缺原生成功路径证据。 |

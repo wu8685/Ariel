@@ -81,6 +81,24 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	if got["event"] != "thread.snapshot" || got["seq"] != float64(1) {
 		t.Fatalf("snapshot: %v", got)
 	}
+	// A change originating at the owner, with no Web mutation request, must
+	// reach the already subscribed browser through Agent and Relay.
+	live.mu.Lock()
+	live.busy = true
+	live.mu.Unlock()
+	live.updates <- struct{}{}
+	for {
+		if err := wsjson.Read(wctx, w, &got); err != nil {
+			t.Fatalf("owner update did not reach Web: %v", err)
+		}
+		if got["event"] == "thread.update" {
+			break
+		}
+	}
+	thread := got["thread"].(map[string]any)
+	if got["seq"] != float64(2) || got["baseSeq"] != float64(1) || thread["runtime"] != "inProgress" {
+		t.Fatalf("owner update: %v", got)
+	}
 	w.CloseNow()
 	deadline := time.After(2 * time.Second)
 	for {
