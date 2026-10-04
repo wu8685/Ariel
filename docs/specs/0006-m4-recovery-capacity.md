@@ -2,6 +2,7 @@
 
 - 状态：实施中。遵循用户授权的连续开发范围；不改变无离线投递、原 owner 为权威、未知结果不自动重发的产品约束。
 - 依据：[MVP 验收矩阵](baseline/2026-10-03-codex-remote-delivery.md)、[M1 链路](0003-m1-relay-mock-web.md)、[M2 Agent](0004-m2-real-desktop-agent.md)。
+- 后续规格优先：[0013 大会话有界同步](0013-paged-history-and-large-owner.md)已将本规格中“App Server 子进程退出即取消 Relay 会话”改为**只重启只读子进程**，并将“大历史超 8 MiB 即整会话失败”改为**本机最多 64 MiB、Web 最近 10 turn 与旧历史按需分页**；Relay→Web 单帧 8 MiB 与原 owner 失效时 fail closed 的边界仍保持。
 
 ## 行为
 
