@@ -38,6 +38,8 @@ export function App() {
   const expectedSubscription = useRef("");
   const blockedSelection = useRef("");
   const pendingSelect = useRef(0);
+  const deviceListGeneration = useRef(0);
+  const threadListGeneration = useRef(0);
   const resuming = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
   const device = devices.find(d => d.deviceId === deviceId);
@@ -46,7 +48,9 @@ export function App() {
   const currentPermissions = view && !mock ? permissionSummary(view.thread.permissions) : null;
 
   async function refreshDevices(): Promise<Device[]> {
+    const generation = ++deviceListGeneration.current;
     const response = await client.request("device.list", "relay", {});
+    if (generation !== deviceListGeneration.current) return [];
     if (response.outcome !== "accepted") { setNotice(errorText(response)); return []; }
     const found = (response.data?.devices as Device[] | undefined) || [];
     setDevices(previous => keepOfflineDevice(found, previous, selection.current.deviceId));
@@ -55,8 +59,10 @@ export function App() {
   }
 
   async function loadThreads(id: string, next = "") {
+    const generation = ++threadListGeneration.current;
     if (!id) { setThreads([]); return; }
     const response = await client.request("thread.list", id, { limit: 50, ...(next ? { cursor: next } : {}) });
+    if (generation !== threadListGeneration.current || selection.current.deviceId !== id) return;
     if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
     const page = (response.data?.threads as Thread[] | undefined) || [];
     setThreads(current => next ? [...current, ...page] : page);
@@ -114,7 +120,7 @@ export function App() {
         if (savedSessionAttempt.current) setSessionExpired(true);
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { pendingSelect.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); }
+      if (next !== "ready") { pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); }
     };
     client.onReady = (_epoch, sessionToken) => {
       if (sessionToken) webSession.accepted(sessionToken);
@@ -168,6 +174,7 @@ export function App() {
 
   useEffect(() => {
     pendingSelect.current++;
+    threadListGeneration.current++;
     const oldDevice = selection.current.deviceId;
     const oldSubscription = expectedSubscription.current;
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
