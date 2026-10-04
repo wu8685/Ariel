@@ -206,10 +206,11 @@ func validateLive(c *threadController) error {
 	if err != nil {
 		return err
 	}
-	if _, err := NormalizeLive(c.id, c.title, c.cwd, raw); err != nil {
+	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
+	if err != nil {
 		return desktopipc.ErrNativeStateUncertain
 	}
-	return nil
+	return checkThreadSize(thread)
 }
 
 func (s *Service) pump(c *threadController, live Live) {

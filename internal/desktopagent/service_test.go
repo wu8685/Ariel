@@ -62,6 +62,13 @@ type observedLive struct {
 }
 
 type largeLive struct{ *fakeLive }
+type staticLive struct {
+	*fakeLive
+	state json.RawMessage
+}
+
+func (l *staticLive) Current() (json.RawMessage, error) { return l.state, nil }
+
 type malformedLive struct {
 	*fakeLive
 	malformed   atomic.Bool
@@ -528,6 +535,31 @@ func TestServiceRejectsOversizeSnapshotBeforeAcceptingSubscription(t *testing.T)
 	_, _, _, _, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
 	if err != ErrHistoryTooLarge {
 		t.Fatalf("oversize history was not rejected: %v", err)
+	}
+}
+
+func TestServiceRejectsDirectApprovalWhenFileDiffExceedsSafeSnapshot(t *testing.T) {
+	state, err := json.Marshal(map[string]any{
+		"cwd": "/fixture", "threadRuntimeStatus": map[string]string{"type": "inProgress"},
+		"requests": []any{map[string]any{"id": 9, "method": "item/fileChange/requestApproval", "params": map[string]any{"threadId": "thread", "turnId": "turn", "itemId": "file", "grantRoot": nil}}},
+		"turns":    []any{map[string]any{"turnId": "turn", "status": "inProgress", "items": []any{map[string]any{"id": "file", "type": "fileChange", "status": "inProgress", "changes": []any{map[string]any{"path": "/fixture/note.txt", "kind": map[string]string{"type": "add"}, "diff": strings.Repeat("x", 7<<20)}}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := &staticLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}, state: state}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	if _, _, _, _, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {}); err != ErrHistoryTooLarge {
+		t.Fatalf("oversize file context was offered to Web: %v", err)
+	}
+	if err := s.Respond(context.Background(), "thread", "old-card-id", "accept_once", nil); err != ErrHistoryTooLarge {
+		t.Fatalf("direct approval bypassed oversize context gate: %v", err)
+	}
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if live.responded != "" {
+		t.Fatal("oversize file request reached the owner")
 	}
 }
 
