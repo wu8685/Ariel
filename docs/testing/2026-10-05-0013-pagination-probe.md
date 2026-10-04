@@ -24,3 +24,4 @@
 - 已将构建后的 0013 Relay／Desktop Agent 更新到原手机访问入口（原 6 位连接码未变，Relay 重启使此前的浏览器 session 失效）。升级入口的浏览器实测显示 Relay 已连接、Agent 在线、目标大会话首屏 10 turn，继续加载后达到 20 turn；独立测试入口已关闭。
 - 本次真实大会话的那个原始 1,628-item turn 在排除 reasoning 并规范化后没有超过 Web 单页预算，因此**未触发真实 item 子分页**；其逻辑已通过合成的巨型 turn 单测。物理手机与真实单 turn 超页仍需复验，不能宣称已实测。
 - 异常 App Server 子进程现在由只读 RPC 层独立重启；Relay Agent 不再因该子进程退出而主动断线。合成故障测试分别验证请求中的异常可自动重试、空闲时异常可主动重启、变更方法不会穿过只读层；真实内置 binary 的人为崩溃测试未执行，以免影响当前业务会话。
+- 该恢复修正随后只重启 Desktop Agent 部署到原 Relay；Relay 未重启、6 位连接码及既有 Web session 未作废。新 Agent 与原 Relay 的 TCP 连接已确认建立。
