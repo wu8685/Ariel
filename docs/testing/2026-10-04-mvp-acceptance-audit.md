@@ -11,7 +11,7 @@
 | A05 双向同步 | 部分 | 手机路径的 Web→Desktop 已实测；Desktop UI 直接发送→Web 尚无实际 UI 操作证据。 |
 | A06 渐进回复 | 通过（隔离 fixture） | Web 看到运行中到完成／停止变化；稳定 item ID 与无重复段落有回归测试。 |
 | A07 发送确认 | 通过（隔离 fixture） | 原 owner 中精确核对 turnId、clientId 和文本；缺证据时返回 unknown。 |
-| A08 忙时草稿／无隐形队列 | 部分 | Web 与 Service 测试覆盖 busy 和不自动重发；双原生客户端并发实验出现不可寻址占位，不能证明两个 Web 的真实竞态结果。 |
+| A08 忙时草稿／无隐形队列 | 部分 | 两个 WebSocket 客户端经测试 Relay／Agent 同时启动，严格一次 accepted、一次 `TURN_BUSY`；真实 Desktop 双客户端并发实验出现不可寻址占位，仍缺原生成功路径证据。 |
 | A09 精确停止 | 通过（隔离 fixture） | Web 发 expectedTurnId，Desktop 原 turn 中断；旧 turn 拒绝的测试存在。 |
 | A10 命令／文件审批 | 通过（隔离 fixture） | 允许与拒绝已走真实 owner；文件字节与拒绝后不存在均独立核对。 |
 | A11 权限请求 | 未完成真实验收 | 协议、Adapter 和 UI 测试存在；当前 Desktop 的 `request_permissions_tool` 未启用，无原生待审批样例。 |

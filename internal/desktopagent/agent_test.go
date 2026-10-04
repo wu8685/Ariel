@@ -210,3 +210,99 @@ func TestAgentAcceptsInterruptWhileStartReceiptPending(t *testing.T) {
 	}
 	close(live.release)
 }
+
+func TestTwoWebClientsCannotQueueStartsThroughRelayAndAgent(t *testing.T) {
+	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	live := &fakeLive{updates: make(chan struct{}, 1)}
+	service := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+	// A selected history thread retains one follower, as it does in the Web UI.
+	if _, _, _, _, err := service.Subscribe(context.Background(), "thread", func(map[string]any) {}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunWithService(ctx, Config{URL: url, Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac"}, service)
+	wctx, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	openWeb := func() *websocket.Conn {
+		t.Helper()
+		web, _, err := websocket.Dial(wctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"http://localhost:5173"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = web.CloseNow() })
+		if err := wsjson.Write(wctx, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"}); err != nil {
+			t.Fatal(err)
+		}
+		var ack map[string]any
+		if err := wsjson.Read(wctx, web, &ack); err != nil || ack["type"] != "hello.ok" {
+			t.Fatalf("web hello: %+v %v", ack, err)
+		}
+		return web
+	}
+	web1, web2 := openWeb(), openWeb()
+	readReply := func(web *websocket.Conn, id string) map[string]any {
+		t.Helper()
+		for {
+			var got map[string]any
+			if err := wsjson.Read(wctx, web, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got["requestId"] == id {
+				return got
+			}
+		}
+	}
+	for ready := false; !ready; {
+		constID := "00000000-0000-4000-8000-000000000070"
+		if err := wsjson.Write(wctx, web1, map[string]any{"type": "request", "v": 1, "requestId": constID, "deviceId": "relay", "method": "device.list", "params": map[string]any{}}); err != nil {
+			t.Fatal(err)
+		}
+		list := readReply(web1, constID)
+		for _, item := range list["data"].(map[string]any)["devices"].([]any) {
+			if item.(map[string]any)["deviceId"] == "real-mac" {
+				ready = true
+			}
+		}
+		if !ready {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	clients := []struct {
+		web *websocket.Conn
+		id  string
+		mid string
+	}{{web1, "00000000-0000-4000-8000-000000000071", "00000000-0000-4000-8000-000000000073"}, {web2, "00000000-0000-4000-8000-000000000072", "00000000-0000-4000-8000-000000000074"}}
+	start := make(chan struct{})
+	writeErrors := make(chan error, 2)
+	for _, client := range clients {
+		go func() {
+			<-start
+			writeErrors <- wsjson.Write(wctx, client.web, map[string]any{"type": "request", "v": 1, "requestId": client.id, "deviceId": "real-mac", "method": "turn.start", "params": map[string]any{"threadId": "thread", "clientMessageId": client.mid, "text": "isolated fixture"}})
+		}()
+	}
+	close(start)
+	for range clients {
+		if err := <-writeErrors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	accepted, busy := 0, 0
+	for _, client := range clients {
+		reply := readReply(client.web, client.id)
+		if reply["outcome"] == "accepted" {
+			accepted++
+		} else if reply["outcome"] == "rejected" && reply["error"].(map[string]any)["code"] == "TURN_BUSY" {
+			busy++
+		} else {
+			t.Fatalf("unexpected concurrent start result: %+v", reply)
+		}
+	}
+	if accepted != 1 || busy != 1 {
+		t.Fatalf("two Web starts accepted=%d busy=%d", accepted, busy)
+	}
+}
