@@ -16,13 +16,19 @@ import (
 )
 
 type config struct {
-	token, dist, listen string
-	origins             []string
+	token, webPIN, dist, listen string
+	origins                     []string
 }
 
-func configFrom(token, origins, dist, listen string) (config, error) {
+func configFrom(token, webPIN, origins, dist, listen string) (config, error) {
 	if token == "" {
 		return config{}, errors.New("ARIEL_TOKEN is required")
+	}
+	if !relay.ValidWebPIN(webPIN) {
+		return config{}, errors.New("ARIEL_WEB_PIN must be exactly 6 ASCII digits")
+	}
+	if token == webPIN {
+		return config{}, errors.New("ARIEL_TOKEN and ARIEL_WEB_PIN must differ")
 	}
 	if origins == "" {
 		return config{}, errors.New("ARIEL_ORIGINS is required")
@@ -43,11 +49,11 @@ func configFrom(token, origins, dist, listen string) (config, error) {
 			return config{}, errors.New("invalid ARIEL_ORIGINS")
 		}
 	}
-	return config{token: token, dist: dist, listen: listen, origins: list}, nil
+	return config{token: token, webPIN: webPIN, dist: dist, listen: listen, origins: list}, nil
 }
 
 func buildHandler(cfg config) (http.Handler, error) {
-	r, err := relay.New(relay.Config{Token: cfg.token, AllowedOrigins: cfg.origins})
+	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, AllowedOrigins: cfg.origins})
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +68,7 @@ func buildHandler(cfg config) (http.Handler, error) {
 }
 
 func main() {
-	cfg, err := configFrom(os.Getenv("ARIEL_TOKEN"), os.Getenv("ARIEL_ORIGINS"), os.Getenv("ARIEL_WEB_DIST"), os.Getenv("ARIEL_LISTEN"))
+	cfg, err := configFrom(os.Getenv("ARIEL_TOKEN"), os.Getenv("ARIEL_WEB_PIN"), os.Getenv("ARIEL_ORIGINS"), os.Getenv("ARIEL_WEB_DIST"), os.Getenv("ARIEL_LISTEN"))
 	if err != nil {
 		log.Fatal(err)
 	}

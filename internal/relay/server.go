@@ -17,6 +17,7 @@ import (
 
 type Config struct {
 	Token               string
+	WebPIN              string
 	AllowedOrigins      []string
 	HelloTimeout        time.Duration
 	MaxFrameBytes       int64
@@ -30,15 +31,16 @@ type Config struct {
 const maxWebSubscriptions = 32
 
 type Server struct {
-	cfg     Config
-	epoch   string
-	origins map[string]struct{}
-	mu      sync.Mutex
-	agents  map[string]*peer
-	webs    map[*peer]struct{}
-	routes  map[string]*route
-	byWeb   map[*peer]map[string]string
-	subs    map[*peer]map[string]*subscription
+	cfg            Config
+	epoch          string
+	origins        map[string]struct{}
+	mu             sync.Mutex
+	webPINFailures int
+	agents         map[string]*peer
+	webs           map[*peer]struct{}
+	routes         map[string]*route
+	byWeb          map[*peer]map[string]string
+	subs           map[*peer]map[string]*subscription
 }
 
 type route struct {
@@ -76,6 +78,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Token == "" || len(cfg.AllowedOrigins) == 0 {
 		return nil, errors.New("relay requires token and web origin allowlist")
 	}
+	if !ValidWebPIN(cfg.WebPIN) {
+		return nil, errors.New("ARIEL_WEB_PIN must be exactly 6 ASCII digits")
+	}
+	if cfg.Token == cfg.WebPIN {
+		return nil, errors.New("Agent token and Web PIN must differ")
+	}
 	origins := make(map[string]struct{}, len(cfg.AllowedOrigins))
 	for _, origin := range cfg.AllowedOrigins {
 		if origin == "" {
@@ -105,6 +113,37 @@ func New(cfg Config) (*Server, error) {
 		cfg.HeartbeatTimeout = 5 * time.Second
 	}
 	return &Server{cfg: cfg, epoch: rand.Text(), origins: origins, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
+}
+
+func ValidWebPIN(pin string) bool {
+	if len(pin) != 6 {
+		return false
+	}
+	for i := 0; i < len(pin); i++ {
+		if pin[i] < '0' || pin[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) authorize(role, token string) bool {
+	if role == "agent" {
+		return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
+	}
+	if role != "web" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.webPINFailures >= 10 {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.WebPIN)) == 1 {
+		return true
+	}
+	s.webPINFailures++
+	return false
 }
 
 func (s *Server) Handler() http.Handler {
@@ -146,7 +185,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		AdapterVersion string          `json:"adapterVersion"`
 		Capabilities   map[string]bool `json:"capabilities"`
 	}
-	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || subtle.ConstantTimeCompare([]byte(hello.Token), []byte(s.cfg.Token)) != 1 || (hello.Role == "web" && origin == "") {
+	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || (hello.Role == "web" && origin == "") || !s.authorize(hello.Role, hello.Token) {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}

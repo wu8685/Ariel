@@ -13,7 +13,7 @@ import (
 )
 
 func TestAgentRelayEndToEnd(t *testing.T) {
-	r, err := relay.New(relay.Config{Token: "test-secret", AllowedOrigins: []string{"http://localhost:5173"}})
+	r, err := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestAgentRelayEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer web.CloseNow()
-	writeJSON(t, wctx, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-secret"})
+	writeJSON(t, wctx, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"})
 	if m := readJSON(t, wctx, web); m["type"] != "hello.ok" {
 		t.Fatalf("hello: %v", m)
 	}

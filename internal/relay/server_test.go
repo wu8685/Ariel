@@ -53,7 +53,7 @@ func readJSON(t *testing.T, c *websocket.Conn) map[string]any {
 }
 
 func TestRelayAuthenticatesRolesAndListsOnlyOnlineDevice(t *testing.T) {
-	r, err := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestRelayAuthenticatesRolesAndListsOnlyOnlineDevice(t *testing.T) {
 		t.Fatalf("agent hello: %+v", got)
 	}
 	web := dialTest(t, s.URL, testOrigin)
-	sendJSON(t, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-token"})
+	sendJSON(t, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"})
 	if got := readJSON(t, web); got["type"] != "hello.ok" {
 		t.Fatalf("web hello: %+v", got)
 	}
@@ -83,7 +83,7 @@ func TestRelayAuthenticatesRolesAndListsOnlyOnlineDevice(t *testing.T) {
 }
 
 func TestRelayRejectsBadOriginTokenAndDuplicateAgent(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, HelloTimeout: 100 * time.Millisecond})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, HelloTimeout: 100 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -121,7 +121,7 @@ func TestRelayRequiresNonemptyTokenAndOriginPolicy(t *testing.T) {
 }
 
 func TestRelayHeartbeatRemovesUnresponsiveAgent(t *testing.T) {
-	r, err := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, HeartbeatInterval: 30 * time.Millisecond, HeartbeatTimeout: 30 * time.Millisecond})
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, HeartbeatInterval: 30 * time.Millisecond, HeartbeatTimeout: 30 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,11 +146,11 @@ func agentHello() map[string]any {
 }
 
 func webHello() map[string]any {
-	return map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-token"}
+	return map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"}
 }
 
 func TestRelayBoundsActiveWebSubscriptionsBeforeForwarding(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	a := dialTest(t, s.URL, "")
@@ -190,7 +190,7 @@ func TestRelayBoundsActiveWebSubscriptionsBeforeForwarding(t *testing.T) {
 }
 
 func TestRelayReleasesAgentSubscriptionWhenWebDisconnects(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	a := dialTest(t, s.URL, "")
@@ -213,7 +213,7 @@ func TestRelayReleasesAgentSubscriptionWhenWebDisconnects(t *testing.T) {
 }
 
 func TestRelayReleasesLateAcceptedSubscriptionAfterWebDisconnect(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	a := dialTest(t, s.URL, "")
@@ -233,7 +233,7 @@ func TestRelayReleasesLateAcceptedSubscriptionAfterWebDisconnect(t *testing.T) {
 }
 
 func TestRelayReleasesLateAcceptedSubscriptionAfterTimeout(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, SubscriptionTimeout: 60 * time.Millisecond})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, SubscriptionTimeout: 60 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	a := dialTest(t, s.URL, "")
@@ -255,7 +255,7 @@ func TestRelayReleasesLateAcceptedSubscriptionAfterTimeout(t *testing.T) {
 }
 
 func TestRelayCorrelatesSameWebRequestIDAcrossTwoConnections(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	agent := dialTest(t, s.URL, "")
@@ -286,7 +286,7 @@ func TestRelayCorrelatesSameWebRequestIDAcrossTwoConnections(t *testing.T) {
 }
 
 func TestRelayRejectsOfflineAndTimesOutForwardedRequestAsUnknown(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, RequestTimeout: 80 * time.Millisecond})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 80 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	w := dialTest(t, s.URL, testOrigin)
@@ -313,7 +313,7 @@ func TestRelayRejectsOfflineAndTimesOutForwardedRequestAsUnknown(t *testing.T) {
 }
 
 func TestRelayAllowsBoundedExtraTimeForAutoLoadSubscription(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, SubscriptionTimeout: 300 * time.Millisecond})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, SubscriptionTimeout: 300 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	a := dialTest(t, s.URL, "")
@@ -334,7 +334,7 @@ func TestRelayAllowsBoundedExtraTimeForAutoLoadSubscription(t *testing.T) {
 }
 
 func TestRelayAllowsBoundedExtraTimeForForwardedMutation(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, MutationTimeout: 300 * time.Millisecond})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, MutationTimeout: 300 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	a := dialTest(t, s.URL, "")
@@ -359,7 +359,7 @@ func mockThread() map[string]any {
 }
 
 func TestRelaySubscriptionResponsePrecedesSnapshotAndIsIsolated(t *testing.T) {
-	r, _ := New(Config{Token: "test-token", AllowedOrigins: []string{testOrigin}})
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
 	agent := dialTest(t, s.URL, "")

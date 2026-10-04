@@ -2,6 +2,7 @@ import { validateEnvelope } from "./protocol";
 import type { ArielProtocolV1Envelope, Response } from "./generated/protocol";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
+export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
 type Method = "device.list" | "thread.list" | "thread.read" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
@@ -111,12 +112,17 @@ export class ArielSocket {
       } else if (value.type === "event") this.onEvent(value);
       else { this.onStatus("invalid"); ws.close(); }
     };
-    ws.onclose = () => {
+    ws.onclose = event => {
       if (this.ws !== ws) return;
       this.ws = null;
       this.ready = false;
       if (this.helloTimer) clearTimeout(this.helloTimer);
       this.failPending();
+      if (event.code === 1008) {
+        this.token = "";
+        this.onStatus("invalid");
+        return;
+      }
       this.onStatus("disconnected");
       if (this.token) this.scheduleReconnect();
     };

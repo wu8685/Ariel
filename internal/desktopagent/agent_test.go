@@ -14,7 +14,7 @@ import (
 )
 
 func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
-	r, _ := relay.New(relay.Config{Token: "test-secret", AllowedOrigins: []string{"http://localhost:5173"}})
+	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
@@ -33,7 +33,7 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.CloseNow()
-	if err := wsjson.Write(wctx, w, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-secret"}); err != nil {
+	if err := wsjson.Write(wctx, w, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"}); err != nil {
 		t.Fatal(err)
 	}
 	var got map[string]any
@@ -124,7 +124,7 @@ func TestAgentHeartbeatDropsSilentRelay(t *testing.T) {
 }
 
 func TestAgentAcceptsInterruptWhileStartReceiptPending(t *testing.T) {
-	r, _ := relay.New(relay.Config{Token: "test-secret", AllowedOrigins: []string{"http://localhost:5173"}})
+	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
@@ -147,7 +147,7 @@ func TestAgentAcceptsInterruptWhileStartReceiptPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.CloseNow()
-	if err := wsjson.Write(wctx, w, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "test-secret"}); err != nil {
+	if err := wsjson.Write(wctx, w, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"}); err != nil {
 		t.Fatal(err)
 	}
 	var got map[string]any

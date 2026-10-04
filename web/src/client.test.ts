@@ -1,18 +1,45 @@
 import { describe, expect, it, vi } from "vitest";
-import { ArielSocket, timeoutFor } from "./client";
+import { ArielSocket, isWebPIN, timeoutFor } from "./client";
 
 class FakeSocket {
   readyState = 1;
   sent: string[] = [];
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number }) => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   send(text: string) { this.sent.push(text); }
-  close() { this.readyState = 3; this.onclose?.(); }
+  close(code = 1000) { this.readyState = 3; this.onclose?.({ code }); }
   message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
 }
 
 describe("Ariel WebSocket client", () => {
+  it("accepts exactly six ASCII digits including a leading zero", () => {
+    expect(isWebPIN("012345")).toBe(true);
+    for (const value of ["", "12345", "1234567", "12a456", "１２３４５６"]) expect(isWebPIN(value)).toBe(false);
+  });
+
+  it("does not retry a rejected PIN and asks for correction", () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeSocket[] = [];
+      const client = new ArielSocket("ws://localhost/ws", () => {
+        const socket = new FakeSocket(); sockets.push(socket);
+        return socket as unknown as WebSocket;
+      });
+      const statuses: string[] = [];
+      client.onStatus = status => statuses.push(status);
+      client.connect("012345"); sockets[0].onopen?.();
+      sockets[0].close(1008);
+      vi.advanceTimersByTime(60000);
+      expect(sockets).toHaveLength(1);
+      expect(statuses.at(-1)).toBe("invalid");
+      client.wake();
+      expect(sockets).toHaveLength(1);
+      client.connect("654321");
+      expect(sockets).toHaveLength(2);
+      client.disconnect();
+    } finally { vi.useRealTimers(); }
+  });
   it("waits longer for auto-load and owner mutations than ordinary reads", () => {
     expect(timeoutFor("thread.subscribe")).toBeGreaterThan(timeoutFor("thread.list"));
     expect(timeoutFor("turn.start")).toBeGreaterThan(timeoutFor("thread.list"));

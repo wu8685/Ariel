@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArielSocket, type ConnectionStatus } from "./client";
+import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
 import type { ArielProtocolV1Envelope, Thread, Response, Interaction } from "./generated/protocol";
@@ -206,9 +206,9 @@ export function App() {
   return <div className="app-shell">
     <header className="masthead">
       <div className="brand"><span className="brand-mark" aria-hidden="true">✳</span><span>Ariel</span><small>Codex 随身工作台</small></div>
-      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : "Relay 未连接"}</span><button className="text-button" onClick={() => client.disconnect()}>断开</button></div>
+      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接码未通过" : "Relay 未连接"}</span><button className="text-button" onClick={() => client.disconnect()}>断开</button></div>
     </header>
-    {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入本机 Relay token。它只保存在当前页面内存，不会写入浏览器存储。</p></div><form onSubmit={e => { e.preventDefault(); client.connect(token.trim()); }}><label htmlFor="token">连接口令</label><div className="connect-row"><input id="token" type="password" value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 Relay token" required /><button className="primary" type="submit">连接 <span aria-hidden="true">↗</span></button></div><small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
+    {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。它只保存在当前页面内存；刷新后需重新输入。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) client.connect(token); }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
     <div className="workspace">
       <aside className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
         <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId)} disabled={!deviceId}>↻</button></div>
