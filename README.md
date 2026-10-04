@@ -48,11 +48,13 @@ ARIEL_LISTEN='<Mac-LAN-IP>:8080' \
 
 ```sh
 ARIEL_TOKEN='<long-random-token>' \
-ARIEL_RELAY_URL='ws://127.0.0.1:8080/ws' \
+ARIEL_RELAY_URL='ws://<Mac-LAN-IP>:8080/ws' \
 ARIEL_DEVICE_ID='my-mac' \
 ARIEL_DEVICE_NAME='我的 Mac' \
 ./.local/bin/ariel-desktop-agent
 ```
+
+`ARIEL_RELAY_URL` 必须指向 Relay 实际监听的地址；按上面的局域网 IP 绑定方式运行时，不能改用 `127.0.0.1:8080`。
 
 手机连接同一局域网，打开 `http://<Mac-LAN-IP>:8080`，输入 6 位连接码。连接码长期有效，但不会存入浏览器；Relay 会签发随机 session 凭据，保存在当前标签页的 `sessionStorage` 中，因此刷新可自动连接。新标签页、主动断开、Relay 重启或 session 超过 24 小时后需重新输入。累计 10 次连接码错误会锁定新的 Web 连接，需重启 Relay 才能解锁；已连接的会话不受影响。Relay 的 HTTP/WS 通信未加密，6 位数字也不能抵御同网段窃听；不要在不可信网络或公网直接暴露端口。
 
