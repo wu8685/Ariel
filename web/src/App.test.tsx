@@ -298,4 +298,18 @@ describe("Ariel app interactions", () => {
     expect(screen.getByRole("alert").textContent).toContain("执行结果不确定");
     expect(requests("turn.start")).toHaveLength(1);
   });
+
+  it("does not retry an approval with an unknown result and waits for the owner update", async () => {
+    const thread: Thread = { ...fixtureThread, runtime: "inProgress", pendingInteractions: [{ interactionId: "command-1", kind: "command_approval", prompt: "在隔离目录运行 /usr/bin/true", availableDecisions: ["deny"] }] };
+    const { socket, requests } = await openFixture(thread);
+    fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
+    expect(requests("interaction.respond")).toHaveLength(1);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("interaction.respond")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "approval receipt lost" } }));
+    expect(screen.getByRole("alert").textContent).toContain("执行结果不确定");
+    expect(screen.getByRole("heading", { name: "等待命令审批" })).toBeTruthy();
+    expect(requests("interaction.respond")).toHaveLength(1);
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: { ...thread, runtime: "idle", pendingInteractions: [] } }));
+    expect(screen.queryByRole("heading", { name: "等待命令审批" })).toBeNull();
+    expect(requests("interaction.respond")).toHaveLength(1);
+  });
 });

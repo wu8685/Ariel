@@ -19,6 +19,35 @@ import (
 
 type singleFixtureHistory struct{ thread appserver.Thread }
 
+type droppedStartReceipt struct {
+	Live
+	acceptedTurn string
+	calls        int
+}
+
+type droppedApprovalReceipt struct {
+	Live
+	calls int
+}
+
+func (l *droppedStartReceipt) Start(ctx context.Context, messageID, text string) (string, error) {
+	l.calls++
+	turnID, err := l.Live.Start(ctx, messageID, text)
+	if err != nil {
+		return turnID, err
+	}
+	l.acceptedTurn = turnID
+	return "", &desktopipc.CallError{Cause: errors.New("injected lost start receipt"), Outcome: "unknown"}
+}
+
+func (l *droppedApprovalReceipt) Respond(ctx context.Context, interactionID, decision string, answers map[string][]string) error {
+	l.calls++
+	if err := l.Live.Respond(ctx, interactionID, decision, answers); err != nil {
+		return err
+	}
+	return &desktopipc.CallError{Cause: errors.New("injected lost approval receipt"), Outcome: "unknown"}
+}
+
 func (h singleFixtureHistory) List(context.Context, string, int) (appserver.Page, error) {
 	return appserver.Page{Data: []appserver.Thread{h.thread}}, nil
 }
@@ -35,6 +64,151 @@ func fixtureMessageID(t *testing.T) string {
 	bits[6] = (bits[6] & 0x0f) | 0x40
 	bits[8] = (bits[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", bits[:4], bits[4:6], bits[6:8], bits[8:10], bits[10:])
+}
+
+// Opt-in real-owner fault injection. The owner receives and verifies the
+// message; only the result delivered back to Agent Service is discarded.
+func TestRealAcceptedStartWithLostReceiptIsNotReplayed(t *testing.T) {
+	path := os.Getenv("ARIEL_TEST_MANIFEST")
+	if path == "" || os.Getenv("ARIEL_TEST_WRITE_ENABLED") != "1" || os.Getenv("ARIEL_TEST_LOST_RECEIPT") != "1" {
+		t.Skip("requires a fresh no-tools fixture and explicit lost-receipt fault injection")
+	}
+	manifest, err := probe.LoadManifest(path)
+	if err != nil || manifest.Purpose != "" || manifest.Authorize(true, manifest.ThreadID, manifest.Workspace) != nil {
+		t.Fatal("not a verified no-tools fixture")
+	}
+	cfg, err := probe.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	first, err := OpenFollower(ctx, cfg.Socket, manifest.ThreadID, manifest.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenFollower(ctx, cfg.Socket, manifest.ThreadID, manifest.Workspace)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer second.Close()
+	defer cleanupConcurrentFixture(t, second.(*desktopipc.Follower), manifest.ThreadID, manifest.Workspace)
+	live := &droppedStartReceipt{Live: first}
+	service := NewService(singleFixtureHistory{thread: appserver.Thread{ID: manifest.ThreadID, Name: "isolated fixture", CWD: manifest.Workspace}}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+
+	state, err := second.(*desktopipc.Follower).Refresh(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := NormalizeLive(manifest.ThreadID, "isolated fixture", manifest.Workspace, state)
+	if err != nil || before["runtime"] != "idle" || len(before["pendingInteractions"].([]any)) != 0 {
+		t.Fatal("fixture is not idle before lost-receipt test")
+	}
+	messageID := fixtureMessageID(t)
+	prompt := "Ariel isolated lost-receipt check. Do not use tools or inspect files. Reply exactly ARIEL_A15_OK."
+	_, err = service.Start(ctx, manifest.ThreadID, messageID, prompt)
+	var callErr *desktopipc.CallError
+	if !errors.As(err, &callErr) || callErr.Outcome != "unknown" || live.acceptedTurn == "" || live.calls != 1 {
+		t.Fatalf("accepted owner start was not reported unknown after receipt drop: err=%v calls=%d", err, live.calls)
+	}
+	if _, err := service.Start(ctx, manifest.ThreadID, messageID, prompt); err == nil || err.Error() != "INVALID_ARGUMENT" || live.calls != 1 {
+		t.Fatalf("same message ID was replayed after unknown: err=%v calls=%d", err, live.calls)
+	}
+	for ctx.Err() == nil {
+		state, err = refreshFixtureState(ctx, second.(*desktopipc.Follower))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if desktopipc.TurnContainsClientMessage(state, live.acceptedTurn, messageID, prompt) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("original Desktop owner never showed the accepted message identity")
+}
+
+// Opt-in real-owner approval fault injection. Only a verified fixture with
+// a pending /usr/bin/true request may be denied; the command is never allowed.
+func TestRealDeniedApprovalWithLostReceiptIsNotReplayed(t *testing.T) {
+	path := os.Getenv("ARIEL_TEST_MANIFEST")
+	if path == "" || os.Getenv("ARIEL_TEST_WRITE_ENABLED") != "1" || os.Getenv("ARIEL_TEST_LOST_APPROVAL") != "1" {
+		t.Skip("requires a pending command fixture and explicit lost-approval fault injection")
+	}
+	manifest, err := probe.LoadManifest(path)
+	if err != nil || manifest.Purpose != "command-accept" || manifest.Authorize(true, manifest.ThreadID, manifest.Workspace) != nil {
+		t.Fatal("not a verified command-approval fixture")
+	}
+	cfg, err := probe.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	first, err := OpenFollower(ctx, cfg.Socket, manifest.ThreadID, manifest.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenFollower(ctx, cfg.Socket, manifest.ThreadID, manifest.Workspace)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer second.Close()
+	defer cleanupConcurrentFixture(t, second.(*desktopipc.Follower), manifest.ThreadID, manifest.Workspace)
+	live := &droppedApprovalReceipt{Live: first}
+	service := NewService(singleFixtureHistory{thread: appserver.Thread{ID: manifest.ThreadID, Name: "isolated fixture", CWD: manifest.Workspace}}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+
+	state, err := second.(*desktopipc.Follower).Refresh(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := NormalizeLive(manifest.ThreadID, "isolated fixture", manifest.Workspace, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := before["pendingInteractions"].([]any)
+	if len(cards) != 1 {
+		t.Fatalf("expected exactly one pending approval, got %d", len(cards))
+	}
+	card := cards[0].(map[string]any)
+	prompt, _ := card["prompt"].(string)
+	if card["kind"] != "command_approval" || !strings.Contains(prompt, "/usr/bin/true") {
+		t.Fatal("fixture does not contain the exact harmless command approval")
+	}
+	decisions := card["availableDecisions"].([]string)
+	decision := ""
+	for _, offered := range decisions {
+		if offered == "deny" || (offered == "deny_and_stop" && decision == "") {
+			decision = offered
+		}
+	}
+	if decision == "" {
+		t.Fatal("native request did not offer a safe denial")
+	}
+	interactionID := card["interactionId"].(string)
+	err = service.Respond(ctx, manifest.ThreadID, interactionID, decision, nil)
+	var callErr *desktopipc.CallError
+	if !errors.As(err, &callErr) || callErr.Outcome != "unknown" || live.calls != 1 {
+		t.Fatalf("owner-confirmed denial was not reported unknown after receipt drop: err=%v calls=%d", err, live.calls)
+	}
+	for ctx.Err() == nil {
+		state, err = refreshFixtureState(ctx, second.(*desktopipc.Follower))
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, normalizeErr := NormalizeLive(manifest.ThreadID, "isolated fixture", manifest.Workspace, state)
+		if normalizeErr == nil && len(after["pendingInteractions"].([]any)) == 0 {
+			if live.calls != 1 {
+				t.Fatal("approval was replayed after unknown result")
+			}
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("original Desktop owner kept the approval pending after confirmed denial")
 }
 
 // Opt-in real-owner race against a separate IPC client. Only a verified,

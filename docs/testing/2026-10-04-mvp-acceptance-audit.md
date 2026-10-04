@@ -18,7 +18,7 @@
 | A12 补充回答 | 通过（隔离 fixture） | 两问题、选项／自由文本、原 owner 回显和持久化终态已核对。 |
 | A13 请求竞争与过期 | 部分 | 双 IPC 客户端竞争和本地 stale 判定已实测；Desktop UI 与手机同时处理未实测。 |
 | A14 待处理时断线 | 通过（隔离 fixture） | 真实 user-input 在 Agent、Relay 分别重启后仍可提交；命令与文件待审批卡片也分别经过独立 Relay／Agent 重启，从 owner live request 恢复。拒绝后卡片消失，独立历史确认终态；文件拒绝后目标文件不存在。 |
-| A15 丢失响应 | 部分 | 真实 WebSocket 转发测试在 Agent 收到 mutation 后断线，Web 得到 unknown，替代 Agent 上线后路由不重放；真实 Desktop 接受后的定点丢回执尚未实测。 |
+| A15 丢失响应 | 通过（分层故障注入） | 真实 Desktop 隔离 fixture 中，发送与命令拒绝均在 owner 已确认后注入丢回执，Agent 报 unknown 且不重放；独立 follower 核对消息身份或请求消失。真实 WebSocket 测试覆盖 Agent 断线后 Relay 报 unknown、不重放；Web 测试覆盖草稿／审批卡片保留至 owner 更新。不是物理手机单次端到端定点丢包实验。 |
 | A16 Relay／Agent 重启 | 通过（隔离 fixture） | 同页保留选择并重订阅，旧视图清空；待回答问题恢复有真实证据。 |
 | A17 Desktop 退出／重启 | 部分 | 健康检查和子 App Server 退出已测；承载业务会话的 Desktop 未做破坏性退出实验。 |
 | A18 patch 缺口／慢消费者 | 通过（自动／loopback） | IPC revision 缺口与 Web stream 序号缺口均触发重同步，不沿用旧视图；Follower 失效、缓冲容量和超时有自动回归。真实 loopback WebSocket 背压注入中，慢 Web 被写超时关闭并释放订阅，另一个订阅者仍收到快照。未把该测试称为物理弱网验收。 |
