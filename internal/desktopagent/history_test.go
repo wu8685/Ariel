@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -198,6 +199,35 @@ func TestItemPageLeavesRoomForOwnerMetadata(t *testing.T) {
 	}
 	if len(page.Data) != 5 || len(calls) != 2 || calls[0] != 10 || calls[1] != 5 {
 		t.Fatalf("item page failed to reserve metadata space: calls=%v count=%d", calls, len(page.Data))
+	}
+}
+
+func TestOversizedSingleHistoryItemFailsOnlyThatPage(t *testing.T) {
+	item := json.RawMessage(fmt.Sprintf(`{"id":"oversized","type":"agentMessage","text":%q}`, strings.Repeat("x", 7<<20)))
+	itemCalls := 0
+	h := &historyStub{
+		items: func(turnID, cursor string, limit int) (appserver.ItemPage, error) {
+			itemCalls++
+			if turnID != "giant" || cursor != "" {
+				return appserver.ItemPage{}, fmt.Errorf("unexpected item request")
+			}
+			return appserver.ItemPage{Data: []json.RawMessage{item}}, nil
+		},
+		turns: func(limit int, cursor, view string) (appserver.TurnPage, error) {
+			return appserver.TurnPage{Data: []appserver.Turn{{ID: "small", Status: "completed", Items: []json.RawMessage{json.RawMessage(`{"id":"reply","type":"agentMessage","text":"ok"}`)}}}}, nil
+		},
+	}
+	s := NewService(h, nil)
+	defer s.Close()
+	if _, err := s.HistoryItems(context.Background(), "thread", "giant", "", 100); !errors.Is(err, ErrHistoryTooLarge) {
+		t.Fatalf("single oversized item must fail explicitly: %v", err)
+	}
+	if itemCalls != 7 {
+		t.Fatalf("item page must shrink through limit 1 before rejecting: calls=%d", itemCalls)
+	}
+	page, err := s.History(context.Background(), "thread", "", 1)
+	if err != nil || len(page["turns"].([]any)) != 1 {
+		t.Fatalf("oversized item poisoned later history reads: page=%+v err=%v", page, err)
 	}
 }
 

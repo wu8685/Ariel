@@ -22,3 +22,7 @@
 - 对既有 A05 隔离 fixture 做三次只读 Desktop follower 刷新，均在当前原 owner 中得到可归一化的 idle 状态及两个 completed turn；未向 fixture 或业务会话发送消息。该 fixture 当前可用于下一步 Desktop UI 主动发送后的实时订阅验收。
 - [验收矩阵](2026-10-04-mvp-acceptance-audit.md)已补入 0013 真实 47-turn 大会话、0014 隔离浏览器输入区的证据，保留物理手机、真实 Desktop UI→Web 推送、原生权限请求和真实 Desktop 退出／重启等缺口，不将局部通过外推为 MVP 完成。
 - 运行中的 0013 Relay 与 Desktop Agent 进程仍存在；本次 `lsof` 只读抽样统计二者可写普通文件 FD 为 0。它支持 A23 的**当前进程**结论，不替代源代码审查，也不保证其他启动方式或未来版本。
+
+## A19：单个历史 item 超页的边界
+
+新增 `TestOversizedSingleHistoryItemFailsOnlyThatPage`：模拟一个超过 Web 历史页预算的 7 MiB `agentMessage` item。`thread.history.items` 的页面限制从 100 逐步缩至 1，最终明确返回 `HISTORY_TOO_LARGE`；随后同一 Agent Service 仍能读取普通历史页。这是单 item 超限隔离的自动回归，不是当前 Desktop 原生大 diff 或物理手机的端到端验收。

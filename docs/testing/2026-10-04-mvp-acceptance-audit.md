@@ -22,7 +22,7 @@
 | A16 Relay／Agent 重启 | 通过（隔离 fixture） | 同页保留选择并重订阅，旧视图清空；待回答问题恢复有真实证据。 |
 | A17 Desktop 退出／重启 | 部分 | 健康检查和子 App Server 退出已测；承载业务会话的 Desktop 未做破坏性退出实验。 |
 | A18 patch 缺口／慢消费者 | 通过（自动／loopback） | IPC revision 缺口与 Web stream 序号缺口均触发重同步，不沿用旧视图；Follower 失效、缓冲容量和超时有自动回归。真实 loopback WebSocket 背压注入中，慢 Web 被写超时关闭并释放订阅，另一个订阅者仍收到快照。未把该测试称为物理弱网验收。 |
-| A19 大历史／大 diff | 部分 | [0013 的真实大会话回归](2026-10-05-0013-pagination-probe.md)已通过：47 个 turn、约 47 MB 原 owner 快照、浏览器默认最近 10 turn 并按需翻到全部 47 turn，Agent 保持在线。合成超大 diff 被容量门禁拦截、普通真实文件 diff 已验；真实单 item 超页和极大 diff 的完整端到端路径仍未复现，不能概括为 A19 全通过。 |
+| A19 大历史／大 diff | 部分 | [0013 的真实大会话回归](2026-10-05-0013-pagination-probe.md)已通过：47 个 turn、约 47 MB 原 owner 快照、浏览器默认最近 10 turn 并按需翻到全部 47 turn，Agent 保持在线。合成超大 diff 被容量门禁拦截，单个 7 MiB 历史 item 明确报错且后续普通历史页可读，普通真实文件 diff 已验；真实单 item 超页和极大 diff 的完整端到端路径仍未复现，不能概括为 A19 全通过。 |
 | A20 未支持交互／协议升级 | 部分 | 除 Schema／未知决定测试外，真 WebSocket 证明未来版本 Agent 握手被拒且不假在线；Web 证明未支持交互有说明而无决定按钮。跨真实 Codex Desktop 版本升级未做。 |
 | A21 基础连接鉴别 | 通过（本机及自动测试） | PIN／Agent 口令隔离、Origin、重复 Agent、帧上限和锁定均有测试；浏览器连接真实 Relay。 |
 | A22 物理手机 | 部分 | 用户已确认同 LAN、手机 PIN 登录和设备出现；[0011](2026-10-04-0011-mobile-layout.md) 与 [0014](2026-10-05-0014-mobile-composer.md) 在 390×844 真实桌面浏览器视口已验，不能替代手机。完整历史、侧栏、软键盘输入、审批和后台恢复仍待物理手机复验。 |
