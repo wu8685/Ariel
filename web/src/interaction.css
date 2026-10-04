@@ -1,9 +1,12 @@
 .question input {
-  background: #fff;
-  border: 1px solid #d5dbd2;
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
   padding: 10px;
   border-radius: 3px;
 }
+
+.question input::placeholder { color: var(--color-subtle); }
 
 .interaction-card p {
   white-space: pre-wrap;
