@@ -140,6 +140,46 @@ describe("Ariel app interactions", () => {
       else delete (HTMLTextAreaElement.prototype as unknown as Record<string, unknown>).scrollHeight;
     }
   });
+
+  it("keeps the mobile composer inside a keyboard-shrunken visual viewport", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    const originalHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    const originalViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 844 });
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+      await openFixture();
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      const shell = document.querySelector(".app-shell") as HTMLElement;
+      input.focus();
+      viewport.height = 500;
+      act(() => viewport.dispatchEvent(new Event("resize")));
+      expect(shell.style.height).toBe("500px");
+      viewport.offsetTop = 18;
+      act(() => viewport.dispatchEvent(new Event("scroll")));
+      expect(shell.style.height).toBe("518px");
+      viewport.height = 844;
+      viewport.offsetTop = 0;
+      act(() => viewport.dispatchEvent(new Event("resize")));
+      expect(shell.style.height).toBe("");
+      viewport.height = 500;
+      act(() => viewport.dispatchEvent(new Event("resize")));
+      expect(shell.style.height).toBe("500px");
+      act(() => input.blur());
+      expect(shell.style.height).toBe("");
+      viewport.height = 500;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+      act(() => window.dispatchEvent(new Event("resize")));
+      expect(shell.style.height).toBe("");
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+      if (originalHeight) Object.defineProperty(window, "innerHeight", originalHeight);
+      if (originalViewport) Object.defineProperty(window, "visualViewport", originalViewport);
+      else delete (window as unknown as Record<string, unknown>).visualViewport;
+    }
+  });
   it("dismisses the mobile sidebar on backdrop or Escape, but not inside the sidebar", () => {
     render(<App />);
     const sidebar = screen.getByLabelText("会话列表");

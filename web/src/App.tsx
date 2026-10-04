@@ -34,6 +34,7 @@ export function App() {
   const [stopping, setStopping] = useState(false);
   const [showList, setShowList] = useState(true);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
+  const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
   const expectedSubscription = useRef("");
@@ -248,6 +249,30 @@ export function App() {
     return () => window.removeEventListener("resize", resize);
   }, [draft, view]);
 
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const input = composerInputRef.current;
+    if (!viewport || !input) return;
+    const sync = () => {
+      const visibleBottom = viewport.offsetTop + viewport.height;
+      const keyboardVisible = window.innerWidth <= 800 && document.activeElement === input && visibleBottom < window.innerHeight - 80;
+      setVisualViewportHeight(keyboardVisible ? Math.round(visibleBottom) : null);
+    };
+    const onBlur = () => setVisualViewportHeight(null);
+    viewport.addEventListener("resize", sync);
+    viewport.addEventListener("scroll", sync);
+    window.addEventListener("resize", sync);
+    input.addEventListener("focus", sync);
+    input.addEventListener("blur", onBlur);
+    return () => {
+      viewport.removeEventListener("resize", sync);
+      viewport.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+      input.removeEventListener("focus", sync);
+      input.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [view?.seq]);
 
   async function send() {
@@ -279,7 +304,7 @@ export function App() {
     if (response.outcome !== "accepted") setNotice(errorText(response));
   }
 
-  return <div className={`app-shell ${status === "ready" ? "connected" : ""}`}>
+  return <div className={`app-shell ${status === "ready" ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><span className="brand-mark" aria-hidden="true">✳</span><span>Ariel</span><small>Codex 随身工作台</small></div>
       <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="text-button" onClick={disconnect}>断开</button></div>
