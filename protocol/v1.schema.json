@@ -63,13 +63,15 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["device.list", "thread.list", "thread.read", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
+        "method": { "enum": ["device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
         { "if": { "properties": { "method": { "const": "device.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/emptyParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/listParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.history" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.history.items" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyItemsParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/startParams" } } } },
@@ -85,6 +87,14 @@
     "threadParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
       "properties": { "threadId": { "$ref": "#/$defs/id" } }
+    },
+    "historyParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 10 } }
+    },
+    "historyItemsParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "turnId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }
     },
     "unsubscribeParams": {
       "type": "object", "additionalProperties": false, "required": ["subscriptionId"],
@@ -138,6 +148,8 @@
         "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" },
         "cwd": { "type": "string" }, "updatedAt": { "type": "string" },
         "runtime": { "enum": ["idle", "inProgress", "notLoaded", "unknown"] },
+        "historyComplete": { "type": "boolean" },
+        "recentComplete": { "type": "boolean" },
         "permissions": { "type": "object", "additionalProperties": false, "required": ["sandbox", "approval"], "properties": { "sandbox": { "enum": ["read_only", "workspace_write", "full_access", "unknown"] }, "approval": { "enum": ["on_request", "never", "unknown"] } } },
         "turns": { "type": "array", "items": { "$ref": "#/$defs/turn" } },
         "pendingInteractions": { "type": "array", "items": { "$ref": "#/$defs/interaction" } }
@@ -149,7 +161,9 @@
       "properties": {
         "turnId": { "$ref": "#/$defs/id" },
         "status": { "enum": ["inProgress", "completed", "failed", "interrupted"] },
-        "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+        "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+        "itemsComplete": { "type": "boolean" },
+        "nextItemCursor": { "type": "string" }
       }
     },
     "item": {

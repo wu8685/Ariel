@@ -28,7 +28,7 @@ func Follow(ctx context.Context, c *Client, threadID, owner, cwd string) (*Follo
 	if c == nil || threadID == "" || owner == "" || cwd == "" {
 		return nil, ErrProtocol
 	}
-	f := &Follower{c: c, o: newObservationState(threadID, owner), cwd: cwd, updates: make(chan struct{}, 1), wake: make(chan struct{}, 1), closed: make(chan struct{})}
+	f := &Follower{c: c, o: newObservationStateWithLimit(threadID, owner, int(c.opts.MaxFrameBytes)), cwd: cwd, updates: make(chan struct{}, 1), wake: make(chan struct{}, 1), closed: make(chan struct{})}
 	if err := c.Broadcast(ctx, "thread-stream-following-changed", 1, map[string]any{"hostId": "local", "conversationId": threadID, "following": true}, []string{owner}); err != nil {
 		return nil, err
 	}

@@ -4,9 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestLargeFollowerReducerAcceptsStateAboveEightMiB(t *testing.T) {
+	event := json.RawMessage(`{"type":"broadcast","sourceClientId":"owner","method":"thread-stream-state-changed","version":11,"params":{"hostId":"local","conversationId":"fixture","change":{"type":"snapshot","revision":1,"conversationState":{"requests":[],"large":"` + strings.Repeat("x", 9<<20) + `"}}}}`)
+	if err := newObservationState("fixture", "owner").apply(event); err == nil {
+		t.Fatal("ordinary follower unexpectedly accepted a large state")
+	}
+	large := newObservationStateWithLimit("fixture", "owner", 64<<20)
+	if err := large.apply(event); err != nil || large.summary.StateBytes <= 8<<20 {
+		t.Fatalf("large follower rejected bounded state: bytes=%d err=%v", large.summary.StateBytes, err)
+	}
+}
 
 func TestObserveFollowsExactOwnerAndUnsubscribes(t *testing.T) {
 	a, b := net.Pipe()

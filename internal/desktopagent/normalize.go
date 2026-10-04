@@ -14,6 +14,8 @@ import (
 
 var ErrNativeShape = errors.New("Desktop history or live state has unsupported structure")
 
+const recentTurnLimit = 10
+
 func NormalizeStored(source appserver.Thread) (map[string]any, error) {
 	if source.ID == "" || source.CWD == "" {
 		return nil, ErrNativeShape
@@ -80,31 +82,39 @@ func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[stri
 	if json.Unmarshal(state, &native) != nil || native.CWD != cwd || native.Requests == nil || native.Runtime.Type == "" {
 		return nil, ErrNativeShape
 	}
-	turns := make([]any, 0)
+	type nativeTurn struct {
+		id, status string
+		items      []json.RawMessage
+	}
+	allTurns := make([]nativeTurn, 0)
 	if native.TurnHistory.Kind == "canonical" {
 		for _, island := range native.TurnHistory.History.Islands {
 			for _, entry := range island.Entries {
 				t, ok := native.TurnHistory.History.Entities[entry.Value]
-				if !ok {
+				if !ok || t.TurnID == "" {
 					return nil, ErrNativeShape
 				}
-				turn, err := normalizeTurn(t.TurnID, t.Status, t.Items)
-				if err != nil {
-					return nil, err
-				}
-				turns = append(turns, turn)
+				allTurns = append(allTurns, nativeTurn{t.TurnID, t.Status, t.Items})
 			}
 		}
 	} else if native.TurnHistory.Kind == "" {
 		for _, t := range native.Turns {
-			turn, err := normalizeTurn(t.TurnID, t.Status, t.Items)
-			if err != nil {
-				return nil, err
+			if t.TurnID == "" {
+				return nil, ErrNativeShape
 			}
-			turns = append(turns, turn)
+			allTurns = append(allTurns, nativeTurn{t.TurnID, t.Status, t.Items})
 		}
 	} else {
 		return nil, ErrNativeShape
+	}
+	start := max(0, len(allTurns)-recentTurnLimit)
+	turns := make([]any, 0, len(allTurns)-start)
+	for _, t := range allTurns[start:] {
+		turn, err := normalizeTurn(t.id, t.status, t.items)
+		if err != nil {
+			return nil, err
+		}
+		turns = append(turns, turn)
 	}
 	interactions := make([]any, 0, len(native.Requests))
 	for _, raw := range native.Requests {
@@ -114,7 +124,7 @@ func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[stri
 		}
 		interactions = append(interactions, card)
 	}
-	return map[string]any{"threadId": threadID, "title": title, "cwd": cwd, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano), "runtime": normalizeRuntime(native.Runtime.Type), "turns": turns, "pendingInteractions": interactions, "permissions": normalizePermissions(native.LatestThreadSettings.SandboxPolicy.Type, native.LatestThreadSettings.ApprovalPolicy)}, nil
+	return map[string]any{"threadId": threadID, "title": title, "cwd": cwd, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano), "runtime": normalizeRuntime(native.Runtime.Type), "turns": turns, "pendingInteractions": interactions, "permissions": normalizePermissions(native.LatestThreadSettings.SandboxPolicy.Type, native.LatestThreadSettings.ApprovalPolicy), "historyComplete": start == 0, "recentComplete": true}, nil
 }
 
 func normalizePermissions(sandbox, approval string) map[string]any {

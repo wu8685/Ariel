@@ -155,7 +155,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 	}
 	defer history.Close()
 	reader := appserver.HistoryReader{RPC: history}
-	thread, err := reader.Read(ctx, m.ThreadID)
+	thread, err := reader.ReadFull(ctx, m.ThreadID)
 	if err != nil {
 		fmt.Fprintln(errout, err)
 		return 1
@@ -218,7 +218,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		result, e := c.ProbeUserInputRace(ctx, m.ThreadID, m.Workspace, second)
 		verified := false
 		if e == nil && result.Completed {
-			t, readErr := reader.Read(ctx, m.ThreadID)
+			t, readErr := reader.ReadFull(ctx, m.ThreadID)
 			if readErr != nil {
 				e = readErr
 			} else {
@@ -239,7 +239,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		result, e := c.ProbeUserInputInterrupted(ctx, m.ThreadID, m.Workspace)
 		verified := false
 		if e == nil && result.Interrupted {
-			t, readErr := reader.Read(ctx, m.ThreadID)
+			t, readErr := reader.ReadFull(ctx, m.ThreadID)
 			if readErr != nil {
 				e = readErr
 			} else {
@@ -264,7 +264,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 			verifyCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 			defer stop()
 			for {
-				t, e := reader.Read(verifyCtx, m.ThreadID)
+				t, e := reader.ReadFull(verifyCtx, m.ThreadID)
 				if e != nil {
 					err = e
 					break
@@ -299,7 +299,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 			verifyCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 			defer stop()
 			for {
-				t, e := reader.Read(verifyCtx, m.ThreadID)
+				t, e := reader.ReadFull(verifyCtx, m.ThreadID)
 				if e != nil {
 					err = e
 					break
@@ -333,7 +333,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 			verifyCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 			defer stop()
 			for {
-				t, e := reader.Read(verifyCtx, m.ThreadID)
+				t, e := reader.ReadFull(verifyCtx, m.ThreadID)
 				if e != nil {
 					err = e
 					break
@@ -379,7 +379,7 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			thread, readErr := reader.Read(verifyCtx, m.ThreadID)
+			thread, readErr := reader.ReadFull(verifyCtx, m.ThreadID)
 			if readErr != nil {
 				err = readErr
 				break

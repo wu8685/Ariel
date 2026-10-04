@@ -4,12 +4,14 @@ import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDra
 import { answersForSubmission } from "./interaction";
 import { newRequestID } from "./ids";
 import { WebSession } from "./session";
-import type { ArielProtocolV1Envelope, Thread, Response, Interaction } from "./generated/protocol";
+import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
+import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
 
 type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "会话历史超过安全传输上限，未截断内容。请在电脑端查看。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。" };
+const recentTurnLimit = 10;
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持历史分页。" };
 
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
@@ -34,6 +36,14 @@ export function App() {
   const [cursor, setCursor] = useState("");
   const [threadId, setThreadId] = useState("");
   const [view, setView] = useState<ThreadView | null>(null);
+  const [readOnlyHistory, setReadOnlyHistory] = useState(false);
+  const [history, setHistory] = useState<HistoryState>(emptyHistoryState);
+  const historyRef = useRef<HistoryState>(emptyHistoryState());
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const historyLoadingRef = useRef(false);
+  const [itemLoading, setItemLoading] = useState("");
+  const itemLoadingRef = useRef("");
+  const [itemOverrides, setItemOverrides] = useState<Record<string, Turn>>({});
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
@@ -59,6 +69,23 @@ export function App() {
   const currentPermissions = view && !mock ? permissionSummary(view.thread.permissions) : null;
   const connectionLabel = status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接";
   const permissionWarning = Boolean(currentPermissions?.warning || currentPermissions?.label.includes("未知"));
+  const displayedTurns = [...history.older, ...(view?.thread.turns || [])].map(turn => {
+    const override = itemOverrides[turn.turnId];
+    if (!override || turn.itemsComplete !== false) return turn;
+    const known = new Set(override.items.map(item => item.itemId));
+    return { ...turn, items: [...override.items, ...turn.items.filter(item => !known.has(item.itemId))], itemsComplete: override.itemsComplete, nextItemCursor: override.nextItemCursor };
+  });
+
+  function resetHistory() {
+    const empty = emptyHistoryState();
+    historyRef.current = empty;
+    historyLoadingRef.current = false;
+    setHistory(empty);
+    setHistoryLoading(false);
+    setItemLoading("");
+    itemLoadingRef.current = "";
+    setItemOverrides({});
+  }
 
   function disconnect() {
     webSession.disconnect(); savedSessionAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
@@ -86,6 +113,23 @@ export function App() {
     setCursor(String(response.data?.nextCursor || ""));
   }
 
+  async function showReadOnlyHistory(id: string, targetDevice: string, epoch: number): Promise<boolean> {
+    const stored = await client.request("thread.read", targetDevice, { threadId: id });
+    if (epoch !== pendingSelect.current || selection.current.threadId !== id || selection.current.deviceId !== targetDevice) return false;
+    const thread = stored.data?.thread as Thread | undefined;
+    if (stored.outcome !== "accepted" || thread?.threadId !== id) {
+      setNotice(stored.outcome === "accepted" ? "历史页身份无法确认。" : errorText(stored));
+      return false;
+    }
+    const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
+    const readOnlyView: ThreadView = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: readOnlyThread };
+    selection.current.view = readOnlyView;
+    setView(readOnlyView);
+    setReadOnlyHistory(true);
+    setNotice("");
+    return true;
+  }
+
   async function selectThread(id: string, targetDevice = deviceId) {
     if (!targetDevice) return;
     blockedSelection.current = "";
@@ -95,7 +139,7 @@ export function App() {
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
     selection.current = { deviceId: targetDevice, threadId: id, view: null };
-    setThreadId(id); setView(null); setNotice(""); setShowList(false);
+    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); resetHistory();
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
     const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
@@ -105,6 +149,13 @@ export function App() {
       return;
     }
     if (response.outcome !== "accepted") {
+      if (response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED") {
+        setReadOnlyHistory(true);
+        if (await showReadOnlyHistory(id, targetDevice, epoch)) return;
+        blockedSelection.current = `${targetDevice}\u0000${id}`;
+        setNotice("原 owner 状态无法确认，历史分页也未能加载。可稍后手动重新选择此会话。");
+        return;
+      }
       if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
       setNotice(errorText(response)); return;
     }
@@ -137,13 +188,13 @@ export function App() {
         if (savedSessionAttempt.current) setSessionExpired(true);
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); }
+      if (next !== "ready") { pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory(); }
     };
     client.onReady = (_epoch, sessionToken) => {
       if (sessionToken) webSession.accepted(sessionToken);
       savedSessionAttempt.current = Boolean(sessionToken);
       setSessionExpired(false);
-      expectedSubscription.current = ""; selection.current.view = null; setView(null);
+      expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory();
       void refreshDevices().then(online => void resumeSelected(online));
     };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
@@ -165,6 +216,12 @@ export function App() {
       if (!belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current)) return;
       if (event.event === "thread.error") {
         if (!current.view || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
+          if (event.code === "HISTORY_TOO_LARGE") {
+            expectedSubscription.current = "";
+            setReadOnlyHistory(true);
+            void showReadOnlyHistory(current.threadId, current.deviceId, pendingSelect.current);
+            return;
+          }
           if (event.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${current.deviceId}\u0000${current.threadId}`;
           expectedSubscription.current = "";
           selection.current.view = null;
@@ -176,7 +233,7 @@ export function App() {
       }
       if (event.event === "thread.snapshot") {
         const next = applyThreadEvent(null, event);
-        selection.current.view = next; setView(next); setNotice("");
+        resetHistory(); selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice("");
       } else if (event.event === "thread.update") {
         const next = applyThreadEvent(current.view, event);
         if (!next) { void resync(); return; }
@@ -197,7 +254,7 @@ export function App() {
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    setThreadId(""); setView(null); setThreads([]); setCursor("");
+    setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -281,8 +338,64 @@ export function App() {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [view?.seq]);
 
+  async function loadOlder(additionalTurns = 1) {
+    if (!view || !deviceId || historyLoadingRef.current || historyRef.current.exhausted) return;
+    const epoch = pendingSelect.current;
+    const targetThread = view.threadId;
+    const targetCount = historyRef.current.older.length + additionalTurns;
+    historyLoadingRef.current = true;
+    setHistoryLoading(true);
+    try {
+      for (let pageNumber = 0; pageNumber < 20; pageNumber++) {
+        const current = historyRef.current;
+        const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: 10, ...(current.cursor ? { cursor: current.cursor } : {}) });
+        if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
+        if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+        const turns = response.data?.turns as Turn[] | undefined;
+        const nextCursor = response.data?.nextCursor;
+        if (!Array.isArray(turns) || typeof nextCursor !== "string") { setNotice("历史页格式无法识别，已保留当前会话。"); return; }
+        const next = appendOlderPage(current, selection.current.view?.thread.turns || view.thread.turns, { turns, nextCursor });
+        if (next.cursor === current.cursor && !next.exhausted && next.older.length === current.older.length) { setNotice("历史页没有继续前进，请稍后重试。"); return; }
+        historyRef.current = next;
+        setHistory(next);
+        if (next.older.length >= targetCount || next.exhausted) return;
+      }
+      setNotice("历史变化过快，请稍后重新加载更早消息。");
+    } finally {
+      historyLoadingRef.current = false;
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!view || view.thread.recentComplete !== false || history.exhausted || historyLoadingRef.current) return;
+    const missing = recentTurnLimit - view.thread.turns.length - history.older.length;
+    if (missing > 0) void loadOlder(missing);
+  }, [view?.seq, history.older.length, history.exhausted]);
+
+  async function loadOlderItems(turn: Turn) {
+    if (!view || !deviceId || itemLoadingRef.current || turn.itemsComplete !== false || !turn.nextItemCursor) return;
+    const epoch = pendingSelect.current;
+    const targetThread = view.threadId;
+    itemLoadingRef.current = turn.turnId;
+    setItemLoading(turn.turnId);
+    try {
+      const response = await client.request("thread.history.items", deviceId, { threadId: targetThread, turnId: turn.turnId, cursor: turn.nextItemCursor, limit: 100 });
+      if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
+      if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+      const items = response.data?.items as Item[] | undefined;
+      const nextItemCursor = response.data?.nextItemCursor;
+      const itemsComplete = response.data?.itemsComplete;
+      if (response.data?.turnId !== turn.turnId || !Array.isArray(items) || typeof nextItemCursor !== "string" || typeof itemsComplete !== "boolean") { setNotice("消息页格式无法识别，已保留当前内容。"); return; }
+      setItemOverrides(current => ({ ...current, [turn.turnId]: prependOlderItems(current[turn.turnId] || turn, items, nextItemCursor, itemsComplete) }));
+    } finally {
+      itemLoadingRef.current = "";
+      setItemLoading("");
+    }
+  }
+
   async function send() {
-    if (!view || !deviceId || !canSend(view.thread, status === "ready", working, draft)) return;
+    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, status === "ready", working, draft)) return;
     const text = draft;
     setWorking(true); setNotice("");
     const response = await client.request("turn.start", deviceId, { threadId: view.threadId, clientMessageId: newRequestID(), text });
@@ -292,7 +405,7 @@ export function App() {
   }
 
   async function stop() {
-    if (!view || !activeTurn || stopping) return;
+    if (!view || !activeTurn || stopping || readOnlyHistory) return;
     setStopping(true);
     const response = await client.request("turn.interrupt", deviceId, { threadId: view.threadId, expectedTurnId: activeTurn.turnId });
     setStopping(false);
@@ -300,7 +413,7 @@ export function App() {
   }
 
   async function respond(interaction: Interaction, decision: string) {
-    if (!view || working) return;
+    if (!view || working || readOnlyHistory) return;
     const raw = answers[interaction.interactionId] || {};
     const mapped = decision === "answer" ? answersForSubmission(interaction, raw) : null;
     if (decision === "answer" && !mapped) return;
@@ -336,11 +449,28 @@ export function App() {
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
-        <div className="transcript" aria-live="polite">{!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}{view?.thread.turns.map(turn => <section className="turn" key={turn.turnId}><div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>{turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}</section>)}{view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}<div ref={endRef} /></div>
-        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready"} rows={1} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready"}>■ 停止</button>}<button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={!canSend(view?.thread || null, status === "ready", working, draft)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button></div></div></div></div>
+        {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
+        <div className="transcript" aria-live="polite">
+          {!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
+          {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={turn.turnId} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} />)}
+          {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={turn.turnId} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} />)}
+          {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}
+          <div ref={endRef} />
+        </div>
+        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}>■ 停止</button>}<button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working, draft)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button></div></div></div></div>
       </main>
     </div>
   </div>;
+}
+
+function ConversationTurn({ turn, loading, onLoadOlderItems }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void }) {
+  return <section className="turn">
+    <div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>
+    {turn.itemsComplete === false && <button className="history-action item-history-action" type="button" onClick={() => onLoadOlderItems(turn)} disabled={loading}>{loading ? "正在加载…" : "加载此回合更早内容"}</button>}
+    {turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}
+  </section>;
 }
 
 export function InteractionCard({ card, values, onChange, onRespond, disabled }: { card: Interaction; values: Record<string, string>; onChange: (id: string, value: string) => void; onRespond: (decision: string) => void; disabled: boolean }) {

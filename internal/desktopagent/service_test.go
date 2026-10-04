@@ -17,6 +17,146 @@ import (
 type fakeHistory struct{}
 type anyThreadHistory struct{}
 
+type pagedHistory struct{ fakeHistory }
+type wideMetadataHistory struct{ historyStub }
+
+func (*wideMetadataHistory) Read(_ context.Context, id string) (appserver.Thread, error) {
+	return appserver.Thread{ID: id, Name: strings.Repeat("T", 700<<10), CWD: "/fixture", Status: json.RawMessage(`{"type":"idle"}`)}, nil
+}
+
+func (pagedHistory) Turns(_ context.Context, id, cursor string, limit int, view string) (appserver.TurnPage, error) {
+	if id != "thread" || cursor != "" || limit != 10 || view != appserver.TurnItemsFull {
+		return appserver.TurnPage{}, fmt.Errorf("unexpected recent page request")
+	}
+	turns := make([]appserver.Turn, 10)
+	for i := range turns {
+		turns[i] = appserver.Turn{ID: fmt.Sprintf("turn-%02d", 12-i), Status: "completed", Items: []json.RawMessage{}}
+	}
+	next := "older"
+	return appserver.TurnPage{Data: turns, NextCursor: &next}, nil
+}
+
+func (pagedHistory) Items(context.Context, string, string, string, int) (appserver.ItemPage, error) {
+	return appserver.ItemPage{}, fmt.Errorf("unexpected item request")
+}
+
+func TestServiceReadReturnsLatestTenFromPagedHistory(t *testing.T) {
+	s := NewService(pagedHistory{}, nil)
+	defer s.Close()
+	thread, err := s.Read(context.Background(), "thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := thread["turns"].([]any)
+	if len(turns) != 10 || turns[0].(map[string]any)["turnId"] != "turn-03" || turns[9].(map[string]any)["turnId"] != "turn-12" || thread["historyComplete"] != false {
+		t.Fatalf("recent stored history: %+v", thread)
+	}
+}
+
+func TestServiceReadSegmentsLatestTenWhenWebPageWouldOverflow(t *testing.T) {
+	large := strings.Repeat("x", 800<<10)
+	h := &historyStub{turns: func(limit int, cursor, view string) (appserver.TurnPage, error) {
+		if cursor != "" || view != appserver.TurnItemsFull {
+			return appserver.TurnPage{}, fmt.Errorf("unexpected cursor or view")
+		}
+		turns := make([]appserver.Turn, limit)
+		for i := range turns {
+			turns[i] = appserver.Turn{ID: fmt.Sprintf("turn-%02d", 10-i), Status: "completed", Items: []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"id":"item-%d","type":"agentMessage","text":%q}`, i, large))}}
+		}
+		next := fmt.Sprintf("after-%d", limit)
+		return appserver.TurnPage{Data: turns, NextCursor: &next}, nil
+	}}
+	s := NewService(h, nil)
+	defer s.Close()
+	thread, err := s.Read(context.Background(), "thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := thread["turns"].([]any)
+	if len(turns) != 5 || thread["recentComplete"] != false || thread["historyComplete"] != false || turns[len(turns)-1].(map[string]any)["turnId"] != "turn-10" {
+		t.Fatalf("recent window was not segmented without losing newest turn: count=%d recent=%v history=%v", len(turns), thread["recentComplete"], thread["historyComplete"])
+	}
+}
+
+func TestServiceReadLeavesEnvelopeRoomForLargeMetadata(t *testing.T) {
+	large := strings.Repeat("x", 700<<10)
+	h := &wideMetadataHistory{}
+	h.turns = func(limit int, cursor, view string) (appserver.TurnPage, error) {
+		turns := make([]appserver.Turn, limit)
+		for i := range turns {
+			turns[i] = appserver.Turn{ID: fmt.Sprintf("turn-%02d", 10-i), Status: "completed", Items: []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"id":"item-%d","type":"agentMessage","text":%q}`, i, large))}}
+		}
+		next := fmt.Sprintf("after-%d", limit)
+		return appserver.TurnPage{Data: turns, NextCursor: &next}, nil
+	}
+	s := NewService(h, nil)
+	defer s.Close()
+	thread, err := s.Read(context.Background(), "thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkThreadSize(thread); err != nil {
+		t.Fatal(err)
+	}
+	if len(thread["turns"].([]any)) >= recentTurnLimit || thread["recentComplete"] != false {
+		t.Fatal("oversized metadata did not trigger bounded recent page")
+	}
+}
+
+func TestServiceSubscribeSegmentsLatestTenWithoutDisconnecting(t *testing.T) {
+	item, _ := json.Marshal(map[string]any{"id": "one", "type": "agentMessage", "text": strings.Repeat("x", 800<<10)})
+	turns := make([]map[string]any, 10)
+	for i := range turns {
+		turns[i] = map[string]any{"turnId": fmt.Sprintf("turn-%02d", i+1), "status": "completed", "items": []json.RawMessage{item}}
+	}
+	state, _ := json.Marshal(map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "idle"}, "requests": []any{}, "turns": turns})
+	live := &staticLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}, state: state}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	_, _, thread, activate, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	got := thread["turns"].([]any)
+	if len(got) >= 10 || len(got) == 0 || thread["recentComplete"] != false || got[len(got)-1].(map[string]any)["turnId"] != "turn-10" {
+		t.Fatalf("live recent segment is not newest complete turns: count=%d recent=%v", len(got), thread["recentComplete"])
+	}
+}
+
+func TestServiceSubscribeShowsNewestItemsOfGiantCompletedTurn(t *testing.T) {
+	large, _ := json.Marshal(map[string]any{"id": "one", "type": "agentMessage", "text": strings.Repeat("x", 800<<10)})
+	items := make([]json.RawMessage, 10)
+	for i := range items {
+		items[i] = large
+	}
+	state, _ := json.Marshal(map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "idle"}, "requests": []any{}, "turns": []any{map[string]any{"turnId": "giant", "status": "completed", "items": items}}})
+	next := "older-items"
+	h := &historyStub{
+		turns: func(limit int, cursor, view string) (appserver.TurnPage, error) {
+			if view == appserver.TurnItemsNotLoaded {
+				return appserver.TurnPage{Data: []appserver.Turn{{ID: "giant", Status: "completed"}}}, nil
+			}
+			return appserver.TurnPage{Data: []appserver.Turn{{ID: "giant", Status: "completed", Items: items}}}, nil
+		},
+		items: func(turnID, cursor string, limit int) (appserver.ItemPage, error) {
+			return appserver.ItemPage{Data: []json.RawMessage{json.RawMessage(`{"id":"latest","type":"agentMessage","text":"visible"}`)}, NextCursor: &next}, nil
+		},
+	}
+	live := &staticLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}, state: state}
+	s := NewService(h, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	_, _, thread, activate, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	turn := thread["turns"].([]any)[0].(map[string]any)
+	if turn["itemsComplete"] != false || turn["nextItemCursor"] != next || turn["items"].([]any)[0].(map[string]any)["text"] != "visible" {
+		t.Fatalf("giant turn latest page not visible: %+v", turn)
+	}
+}
+
 func (anyThreadHistory) List(context.Context, string, int) (appserver.Page, error) {
 	return appserver.Page{}, nil
 }

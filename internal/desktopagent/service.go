@@ -18,19 +18,29 @@ type History interface {
 	Read(context.Context, string) (appserver.Thread, error)
 }
 
+type PagedHistory interface {
+	Turns(context.Context, string, string, int, string) (appserver.TurnPage, error)
+	Items(context.Context, string, string, string, int) (appserver.ItemPage, error)
+}
+
 var ErrHistoryTooLarge = errors.New("HISTORY_TOO_LARGE")
 
 const maxThreadPayloadBytes = 7 << 20
+const maxHistoryPageBytes = 6 << 20
 const maxThreadControllers = 64
 const maxSubscriptionsPerThread = 16
 const maxRecentMessageIDs = 4096
 
 func checkThreadSize(thread map[string]any) error {
+	return checkPayloadSize(thread, maxThreadPayloadBytes)
+}
+
+func checkPayloadSize(thread map[string]any, limit int) error {
 	body, err := json.Marshal(thread)
 	if err != nil {
 		return ErrNativeShape
 	}
-	if len(body) > maxThreadPayloadBytes {
+	if len(body) > limit {
 		return ErrHistoryTooLarge
 	}
 	return nil
@@ -174,7 +184,244 @@ func (s *Service) Read(ctx context.Context, id string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return thread, checkThreadSize(thread)
+	if _, ok := s.history.(PagedHistory); !ok {
+		thread["historyComplete"] = true
+		thread["recentComplete"] = true
+		return thread, checkThreadSize(thread)
+	}
+	for limit := recentTurnLimit; ; limit = max(1, limit/2) {
+		page, err := s.History(ctx, id, "", limit)
+		if err != nil {
+			return nil, err
+		}
+		descending := page["turns"].([]any)
+		recent := make([]any, len(descending))
+		for i, turn := range descending {
+			recent[len(descending)-1-i] = turn
+		}
+		historyComplete := page["nextCursor"] == ""
+		thread["turns"] = recent
+		thread["historyComplete"] = historyComplete
+		thread["recentComplete"] = historyComplete || len(recent) >= recentTurnLimit
+		if err := checkThreadSize(thread); err != nil {
+			if errors.Is(err, ErrHistoryTooLarge) && limit > 1 {
+				continue
+			}
+			return nil, err
+		}
+		return thread, nil
+	}
+}
+
+// Keep every item in each transmitted turn. If the latest complete turn alone
+// cannot fit, obtain its newest native item page instead of truncating text.
+func (s *Service) boundLiveThread(ctx context.Context, thread map[string]any) error {
+	turns, ok := thread["turns"].([]any)
+	if !ok {
+		return ErrNativeShape
+	}
+	for checkThreadSize(thread) == ErrHistoryTooLarge && len(turns) > 1 {
+		turns = turns[1:]
+		thread["turns"] = turns
+		thread["historyComplete"] = false
+		thread["recentComplete"] = false
+	}
+	if checkThreadSize(thread) != ErrHistoryTooLarge {
+		return checkThreadSize(thread)
+	}
+	if len(turns) != 1 {
+		return ErrHistoryTooLarge
+	}
+	last := turns[0].(map[string]any)
+	if last["status"] == "inProgress" {
+		return ErrHistoryTooLarge
+	}
+	page, err := s.History(ctx, thread["threadId"].(string), "", 1)
+	if err != nil {
+		return ErrHistoryTooLarge
+	}
+	pagedTurns := page["turns"].([]any)
+	if len(pagedTurns) != 1 || pagedTurns[0].(map[string]any)["turnId"] != last["turnId"] {
+		return ErrHistoryTooLarge
+	}
+	partial := pagedTurns[0].(map[string]any)
+	if partial["itemsComplete"] != false {
+		return ErrHistoryTooLarge
+	}
+	thread["turns"] = []any{partial}
+	thread["recentComplete"] = false
+	thread["historyComplete"] = false
+	return checkThreadSize(thread)
+}
+
+func (s *Service) History(ctx context.Context, id, cursor string, limit int) (map[string]any, error) {
+	if id == "" || limit < 1 || limit > recentTurnLimit {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	paged, ok := s.history.(PagedHistory)
+	if !ok {
+		return nil, errors.New("PROTOCOL_UNSUPPORTED")
+	}
+	source, err := s.history.Read(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if source.ID != id || source.CWD == "" {
+		return nil, ErrNativeShape
+	}
+	for {
+		page, err := paged.Turns(ctx, id, cursor, limit, appserver.TurnItemsFull)
+		if err != nil {
+			if errors.Is(err, appserver.ErrResponseTooLarge) {
+				if limit > 1 {
+					limit = max(1, limit/2)
+					continue
+				}
+				return s.giantHistory(ctx, paged, id, cursor)
+			}
+			return nil, err
+		}
+		if len(page.Data) > limit || (len(page.Data) == 0 && page.NextCursor != nil) || (page.NextCursor != nil && *page.NextCursor == cursor) {
+			return nil, ErrNativeShape
+		}
+		turns := make([]any, 0, len(page.Data))
+		seen := make(map[string]struct{}, len(page.Data))
+		for _, native := range page.Data {
+			if _, duplicate := seen[native.ID]; duplicate {
+				return nil, ErrNativeShape
+			}
+			seen[native.ID] = struct{}{}
+			turn, err := normalizeTurn(native.ID, native.Status, native.Items)
+			if err != nil {
+				return nil, err
+			}
+			turns = append(turns, turn)
+		}
+		next := ""
+		if page.NextCursor != nil {
+			next = *page.NextCursor
+		}
+		result := map[string]any{"turns": turns, "nextCursor": next}
+		if err := checkPayloadSize(result, maxHistoryPageBytes); err != nil {
+			if errors.Is(err, ErrHistoryTooLarge) && limit > 1 {
+				limit = max(1, limit/2)
+				continue
+			}
+			if errors.Is(err, ErrHistoryTooLarge) {
+				return s.giantHistory(ctx, paged, id, cursor)
+			}
+			return nil, err
+		}
+		return result, nil
+	}
+}
+
+func (s *Service) giantHistory(ctx context.Context, paged PagedHistory, id, cursor string) (map[string]any, error) {
+	page, err := paged.Turns(ctx, id, cursor, 1, appserver.TurnItemsNotLoaded)
+	if err != nil {
+		return nil, err
+	}
+	if len(page.Data) != 1 || page.Data[0].ID == "" || (page.NextCursor != nil && *page.NextCursor == cursor) {
+		return nil, ErrNativeShape
+	}
+	native := page.Data[0]
+	items, err := boundedItems(ctx, paged, id, native.ID, "", 100)
+	if err != nil {
+		return nil, err
+	}
+	turn, err := normalizeTurn(native.ID, native.Status, items.Data)
+	if err != nil {
+		return nil, err
+	}
+	turn["itemsComplete"] = items.NextCursor == nil
+	nextItem := ""
+	if items.NextCursor != nil {
+		nextItem = *items.NextCursor
+	}
+	turn["nextItemCursor"] = nextItem
+	nextTurn := ""
+	if page.NextCursor != nil {
+		nextTurn = *page.NextCursor
+	}
+	result := map[string]any{"turns": []any{turn}, "nextCursor": nextTurn}
+	return result, checkPayloadSize(result, maxHistoryPageBytes)
+}
+
+func boundedItems(ctx context.Context, paged PagedHistory, threadID, turnID, cursor string, limit int) (appserver.ItemPage, error) {
+	for {
+		page, err := paged.Items(ctx, threadID, turnID, cursor, limit)
+		if err != nil {
+			if errors.Is(err, appserver.ErrResponseTooLarge) && limit > 1 {
+				limit = max(1, limit/2)
+				continue
+			}
+			return appserver.ItemPage{}, err
+		}
+		if len(page.Data) > limit || (len(page.Data) == 0 && page.NextCursor != nil) || (page.NextCursor != nil && *page.NextCursor == cursor) {
+			return appserver.ItemPage{}, ErrNativeShape
+		}
+		seen := make(map[string]struct{}, len(page.Data))
+		for _, raw := range page.Data {
+			var identity struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(raw, &identity) != nil || identity.ID == "" {
+				return appserver.ItemPage{}, ErrNativeShape
+			}
+			if _, duplicate := seen[identity.ID]; duplicate {
+				return appserver.ItemPage{}, ErrNativeShape
+			}
+			seen[identity.ID] = struct{}{}
+		}
+		chronological := make([]json.RawMessage, len(page.Data))
+		for i, item := range page.Data {
+			chronological[len(page.Data)-1-i] = item
+		}
+		page.Data = chronological
+		turn, err := normalizeTurn(turnID, "completed", page.Data)
+		if err != nil {
+			return appserver.ItemPage{}, err
+		}
+		if err := checkPayloadSize(map[string]any{"items": turn["items"], "nextItemCursor": page.NextCursor}, maxHistoryPageBytes); err != nil {
+			if errors.Is(err, ErrHistoryTooLarge) && limit > 1 {
+				limit = max(1, limit/2)
+				continue
+			}
+			return appserver.ItemPage{}, err
+		}
+		return page, nil
+	}
+}
+
+func (s *Service) HistoryItems(ctx context.Context, threadID, turnID, cursor string, limit int) (map[string]any, error) {
+	if threadID == "" || turnID == "" || limit < 1 || limit > 100 {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	paged, ok := s.history.(PagedHistory)
+	if !ok {
+		return nil, errors.New("PROTOCOL_UNSUPPORTED")
+	}
+	source, err := s.history.Read(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if source.ID != threadID || source.CWD == "" {
+		return nil, ErrNativeShape
+	}
+	page, err := boundedItems(ctx, paged, threadID, turnID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	turn, err := normalizeTurn(turnID, "completed", page.Data)
+	if err != nil {
+		return nil, err
+	}
+	next := ""
+	if page.NextCursor != nil {
+		next = *page.NextCursor
+	}
+	result := map[string]any{"turnId": turnID, "items": turn["items"], "nextItemCursor": next, "itemsComplete": page.NextCursor == nil}
+	return result, checkPayloadSize(result, maxHistoryPageBytes)
 }
 
 func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
@@ -201,7 +448,7 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 
 // Mutation requests may be sent without an active Web subscription. They
 // still need the same fail-closed native-state gate as thread.subscribe.
-func validateLive(c *threadController) error {
+func (s *Service) validateLive(c *threadController) error {
 	raw, err := c.live.Current()
 	if err != nil {
 		return err
@@ -210,7 +457,7 @@ func validateLive(c *threadController) error {
 	if err != nil {
 		return desktopipc.ErrNativeStateUncertain
 	}
-	return checkThreadSize(thread)
+	return s.boundLiveThread(context.Background(), thread)
 }
 
 func (s *Service) pump(c *threadController, live Live) {
@@ -252,7 +499,8 @@ func (s *Service) pump(c *threadController, live Live) {
 				placeholderTimer = nil
 				placeholderDeadline = nil
 			}
-			tooLarge := checkThreadSize(thread) == ErrHistoryTooLarge
+			boundErr := s.boundLiveThread(context.Background(), thread)
+			tooLarge := boundErr != nil
 			type delivery struct {
 				emit  func(map[string]any)
 				event map[string]any
@@ -338,7 +586,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 		c.mu.Unlock()
 		return "", "", nil, nil, desktopipc.ErrNativeStateUncertain
 	}
-	if err := checkThreadSize(thread); err != nil {
+	if err := s.boundLiveThread(ctx, thread); err != nil {
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
@@ -362,7 +610,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 				return
 			}
 			sub.active = true
-			if currentErr == nil && normalizeErr == nil && checkThreadSize(latest) == ErrHistoryTooLarge {
+			if currentErr == nil && normalizeErr == nil && s.boundLiveThread(context.Background(), latest) != nil {
 				delete(c.subs, sub.id)
 				sub.emit(map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "HISTORY_TOO_LARGE"})
 			} else if currentErr == nil && normalizeErr == nil && !sameThreadContent(latest, thread) {
@@ -376,7 +624,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 }
 
 func sameThreadContent(a, b map[string]any) bool {
-	return a["runtime"] == b["runtime"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"])
+	return a["runtime"] == b["runtime"] && a["historyComplete"] == b["historyComplete"] && a["recentComplete"] == b["recentComplete"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"])
 }
 
 func (s *Service) Unsubscribe(id string) bool {
@@ -435,7 +683,7 @@ func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (
 		return "", err
 	}
 	live := c.live
-	if err := validateLive(c); err != nil {
+	if err := s.validateLive(c); err != nil {
 		c.mu.Unlock()
 		return "", err
 	}
@@ -470,7 +718,7 @@ func (s *Service) Interrupt(ctx context.Context, threadID, expectedTurnID string
 		return err
 	}
 	live := c.live
-	if err := validateLive(c); err != nil {
+	if err := s.validateLive(c); err != nil {
 		c.mu.Unlock()
 		return err
 	}
@@ -494,7 +742,7 @@ func (s *Service) Respond(ctx context.Context, threadID, interactionID, decision
 		return err
 	}
 	live := c.live
-	if err := validateLive(c); err != nil {
+	if err := s.validateLive(c); err != nil {
 		c.mu.Unlock()
 		return err
 	}

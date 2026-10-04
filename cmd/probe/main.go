@@ -158,7 +158,7 @@ func history(ctx context.Context, cfg probe.Config, threadID string) (any, error
 		summary["crossPageDuplicates"] = duplicates
 	}
 	if threadID != "" {
-		thread, err := h.Read(ctx, threadID)
+		thread, err := h.ReadFull(ctx, threadID)
 		if err != nil {
 			return summary, err
 		}

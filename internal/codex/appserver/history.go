@@ -27,6 +27,21 @@ type Page struct {
 	NextCursor *string  `json:"nextCursor"`
 }
 
+type TurnPage struct {
+	Data       []Turn  `json:"data"`
+	NextCursor *string `json:"nextCursor"`
+}
+
+type ItemPage struct {
+	Data       []json.RawMessage `json:"data"`
+	NextCursor *string           `json:"nextCursor"`
+}
+
+const (
+	TurnItemsFull      = "full"
+	TurnItemsNotLoaded = "notLoaded"
+)
+
 func (h HistoryReader) List(ctx context.Context, cursor string, limit int) (Page, error) {
 	var out Page
 	if limit < 1 || limit > 100 {
@@ -40,15 +55,51 @@ func (h HistoryReader) List(ctx context.Context, cursor string, limit int) (Page
 	return out, err
 }
 func (h HistoryReader) Read(ctx context.Context, threadID string) (Thread, error) {
+	return h.read(ctx, threadID, false)
+}
+
+// ReadFull is reserved for explicit compatibility probes. Production session
+// selection uses Read so one oversized history cannot block other sessions.
+func (h HistoryReader) ReadFull(ctx context.Context, threadID string) (Thread, error) {
+	return h.read(ctx, threadID, true)
+}
+
+func (h HistoryReader) read(ctx context.Context, threadID string, includeTurns bool) (Thread, error) {
 	var out struct {
 		Thread Thread `json:"thread"`
 	}
 	if threadID == "" {
 		return out.Thread, ErrProtocol
 	}
-	err := h.RPC.Call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &out)
+	err := h.RPC.Call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": includeTurns}, &out)
 	if err == nil && out.Thread.ID != threadID {
 		err = ErrProtocol
 	}
 	return out.Thread, err
+}
+
+func (h HistoryReader) Turns(ctx context.Context, threadID, cursor string, limit int, itemsView string) (TurnPage, error) {
+	var out TurnPage
+	if threadID == "" || limit < 1 || limit > 10 || (itemsView != TurnItemsFull && itemsView != TurnItemsNotLoaded) {
+		return out, ErrProtocol
+	}
+	params := map[string]any{"threadId": threadID, "limit": limit, "sortDirection": "desc", "itemsView": itemsView}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	err := h.RPC.Call(ctx, "thread/turns/list", params, &out)
+	return out, err
+}
+
+func (h HistoryReader) Items(ctx context.Context, threadID, turnID, cursor string, limit int) (ItemPage, error) {
+	var out ItemPage
+	if threadID == "" || turnID == "" || limit < 1 || limit > 100 {
+		return out, ErrProtocol
+	}
+	params := map[string]any{"threadId": threadID, "turnId": turnID, "limit": limit, "sortDirection": "desc"}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	err := h.RPC.Call(ctx, "thread/items/list", params, &out)
+	return out, err
 }

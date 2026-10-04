@@ -184,6 +184,7 @@ func (a *agent) send(ctx context.Context, value any) error {
 func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage) {
 	var p struct {
 		ThreadID        string              `json:"threadId"`
+		TurnID          string              `json:"turnId"`
 		SubscriptionID  string              `json:"subscriptionId"`
 		Cursor          string              `json:"cursor"`
 		Limit           int                 `json:"limit"`
@@ -213,6 +214,16 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var thread map[string]any
 		thread, err = a.service.Read(ctx, p.ThreadID)
 		data = map[string]any{"thread": thread}
+	case "thread.history":
+		if p.Limit == 0 {
+			p.Limit = 10
+		}
+		data, err = a.service.History(ctx, p.ThreadID, p.Cursor, p.Limit)
+	case "thread.history.items":
+		if p.Limit == 0 {
+			p.Limit = 100
+		}
+		data, err = a.service.HistoryItems(ctx, p.ThreadID, p.TurnID, p.Cursor, p.Limit)
 	case "thread.subscribe":
 		loadCtx, cancel := context.WithTimeout(ctx, 28*time.Second)
 		defer cancel()
@@ -260,7 +271,7 @@ func (a *agent) reply(ctx context.Context, id string, data map[string]any, err e
 		msg["outcome"] = "accepted"
 		msg["data"] = data
 	} else {
-		outcome, code := "rejected", err.Error()
+		outcome, code := "rejected", requestErrorCode(err)
 		var callErr *desktopipc.CallError
 		if errors.As(err, &callErr) {
 			outcome = callErr.Outcome
@@ -272,13 +283,23 @@ func (a *agent) reply(ctx context.Context, id string, data map[string]any, err e
 				code = "INVALID_ARGUMENT"
 			}
 		}
-		switch code {
-		case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED":
-		default:
-			code = "RESYNC_REQUIRED"
-		}
 		msg["outcome"] = outcome
 		msg["error"] = map[string]string{"code": code, "message": code}
 	}
 	_ = a.send(ctx, msg)
+}
+
+func requestErrorCode(err error) string {
+	switch {
+	case errors.Is(err, desktopipc.ErrFrameTooLarge), errors.Is(err, appserver.ErrResponseTooLarge):
+		return "HISTORY_TOO_LARGE"
+	case errors.Is(err, desktopipc.ErrOverloaded):
+		return "OVERLOADED"
+	}
+	switch code := err.Error(); code {
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED":
+		return code
+	default:
+		return "RESYNC_REQUIRED"
+	}
 }

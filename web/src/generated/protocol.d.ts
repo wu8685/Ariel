@@ -26,6 +26,8 @@ export type Request = {
     | "device.list"
     | "thread.list"
     | "thread.read"
+    | "thread.history"
+    | "thread.history.items"
     | "thread.subscribe"
     | "thread.unsubscribe"
     | "turn.start"
@@ -125,6 +127,8 @@ export interface Thread {
   cwd: string;
   updatedAt: string;
   runtime: "idle" | "inProgress" | "notLoaded" | "unknown";
+  historyComplete?: boolean;
+  recentComplete?: boolean;
   permissions?: {
     sandbox: "read_only" | "workspace_write" | "full_access" | "unknown";
     approval: "on_request" | "never" | "unknown";
@@ -136,6 +140,8 @@ export interface Turn {
   turnId: Id;
   status: "inProgress" | "completed" | "failed" | "interrupted";
   items: Item[];
+  itemsComplete?: boolean;
+  nextItemCursor?: string;
 }
 export interface Item {
   itemId: Id;

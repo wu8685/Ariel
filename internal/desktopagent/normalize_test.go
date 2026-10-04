@@ -2,11 +2,34 @@ package desktopagent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
+
+func TestNormalizeLiveKeepsOnlyLatestTenNativeTurns(t *testing.T) {
+	turns := make([]map[string]any, 12)
+	for i := range turns {
+		turns[i] = map[string]any{"turnId": fmt.Sprintf("turn-%02d", i+1), "status": "completed", "items": []any{}}
+	}
+	raw, err := json.Marshal(map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "idle"}, "requests": []any{}, "turns": turns})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := NormalizeLive("thread", "Title", "/fixture", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := thread["turns"].([]any)
+	if len(window) != 10 || window[0].(map[string]any)["turnId"] != "turn-03" || window[9].(map[string]any)["turnId"] != "turn-12" {
+		t.Fatalf("recent window: %+v", window)
+	}
+	if thread["historyComplete"] != false || thread["recentComplete"] != true {
+		t.Fatalf("window completion flags: %+v", thread)
+	}
+}
 
 func TestNormalizeStoredThreadPreservesIdentityAndText(t *testing.T) {
 	stored := appserver.Thread{ID: "thread-1", Name: "Same title", CWD: "/project/a", UpdatedAt: 1730000000, Status: json.RawMessage(`{"type":"notLoaded"}`), Turns: []appserver.Turn{{ID: "turn-1", Status: "completed", Items: []json.RawMessage{json.RawMessage(`{"type":"userMessage","id":"u1","content":[{"type":"text","text":"hello"}]}`), json.RawMessage(`{"type":"agentMessage","id":"a1","text":"world"}`)}}}}

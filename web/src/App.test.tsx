@@ -62,6 +62,97 @@ async function openFixture(thread: Thread = fixtureThread) {
 }
 
 describe("Ariel app interactions", () => {
+  it("falls back to explicitly read-only paged history when owner snapshot is oversized", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "HISTORY_TOO_LARGE", message: "HISTORY_TOO_LARGE" } }));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: { ...fixtureThread, runtime: "idle", historyComplete: false, turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "可读历史" }] }] } } }));
+    expect(await screen.findByText("可读历史")).toBeTruthy();
+    expect(screen.getByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "do not send" } });
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(requests("turn.start")).toHaveLength(0);
+  });
+
+  it("stops the sync spinner if both owner and stored history cannot be loaded", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "HISTORY_TOO_LARGE", message: "HISTORY_TOO_LARGE" } }));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "PROTOCOL_UNSUPPORTED" } }));
+    expect(screen.getByRole("heading", { name: "会话状态无法确认" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("历史分页");
+  });
+
+  it("keeps visible history and becomes read-only when a live update exceeds the frame limit", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "one", status: "completed", items: [{ itemId: "item", role: "assistant", text: "已可见内容" }] }] };
+    const { socket, requests } = await openFixture(recent);
+    act(() => socket.message({ type: "event", v: 1, event: "thread.error", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", code: "HISTORY_TOO_LARGE" }));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    expect(screen.getByText("已可见内容")).toBeTruthy();
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: recent } }));
+    expect(await screen.findByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(screen.getByText("已可见内容")).toBeTruthy();
+  });
+
+  it("automatically fills a segmented recent window without a tap", async () => {
+    const recent: Thread = { ...fixtureThread, historyComplete: false, recentComplete: false, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "最新内容" }] }] };
+    const { socket, requests } = await openFixture(recent);
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    const sent = requests("thread.history")[0];
+    await act(async () => socket.message({ type: "response", v: 1, requestId: sent.requestId, outcome: "accepted", data: { turns: [recent.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "补齐内容" }] }], nextCursor: "" } }));
+    expect(await screen.findByText("补齐内容")).toBeTruthy();
+    expect(screen.getByText("最新内容")).toBeTruthy();
+  });
+
+  it("loads older turns on demand after walking past the ten-turn live overlap", async () => {
+    const recent: Thread = { ...fixtureThread, historyComplete: false, recentComplete: true, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "最新内容" }] }] };
+    const { socket, requests } = await openFixture(recent);
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [recent.turns[0]], nextCursor: "after-latest" } }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[1].requestId, outcome: "accepted", data: { turns: [{ turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "更早内容" }] }], nextCursor: "" } }));
+    expect(await screen.findByText("更早内容")).toBeTruthy();
+    expect(screen.getByText("最新内容")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加载更早消息" })).toBeNull();
+  });
+
+  it("loads older items inside a giant turn without replacing visible newest items", async () => {
+    const partial: Thread = { ...fixtureThread, turns: [{ turnId: "giant", status: "completed", items: [{ itemId: "new-item", role: "assistant", text: "本回合最新" }], itemsComplete: false, nextItemCursor: "before-new" }] };
+    const { socket, requests } = await openFixture(partial);
+    fireEvent.click(screen.getByRole("button", { name: "加载此回合更早内容" }));
+    await waitFor(() => expect(requests("thread.history.items")).toHaveLength(1));
+    const sent = requests("thread.history.items")[0];
+    expect(sent.params).toMatchObject({ threadId: "fixture", turnId: "giant", cursor: "before-new" });
+    await act(async () => socket.message({ type: "response", v: 1, requestId: sent.requestId, outcome: "accepted", data: { turnId: "giant", items: [{ itemId: "old-item", role: "assistant", text: "本回合更早" }], nextItemCursor: "", itemsComplete: true } }));
+    expect(await screen.findByText("本回合更早")).toBeTruthy();
+    expect(screen.getByText("本回合最新")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加载此回合更早内容" })).toBeNull();
+  });
+
   it("renders every brand mark as a monochrome vector instead of an emoji glyph", async () => {
     await openFixture();
     const marks = [...document.querySelectorAll(".brand-mark")];

@@ -4,11 +4,11 @@ import type { ArielProtocolV1Envelope, Response } from "./generated/protocol";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
-type Method = "device.list" | "thread.list" | "thread.read" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "interaction.respond";
+type Method = "device.list" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 export function timeoutFor(method: Method): number {
-  if (method === "thread.subscribe") return 35000;
+  if (method === "thread.subscribe" || method === "thread.history" || method === "thread.history.items") return 35000;
   if (method === "turn.start" || method === "turn.interrupt" || method === "interaction.respond") return 50000;
   return 12000;
 }

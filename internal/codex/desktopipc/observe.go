@@ -30,7 +30,11 @@ type observationState struct {
 }
 
 func newObservationState(threadID, owner string) *observationState {
-	return &observationState{threadID: threadID, owner: owner, reducer: NewReducer(int(DefaultMaxFrameBytes)), summary: Observation{OwnerFound: true}}
+	return newObservationStateWithLimit(threadID, owner, int(DefaultMaxFrameBytes))
+}
+
+func newObservationStateWithLimit(threadID, owner string, limit int) *observationState {
+	return &observationState{threadID: threadID, owner: owner, reducer: NewReducer(limit), summary: Observation{OwnerFound: true}}
 }
 func (o *observationState) apply(body json.RawMessage) error {
 	var event struct {

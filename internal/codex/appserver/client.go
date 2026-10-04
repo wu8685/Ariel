@@ -3,29 +3,39 @@ package appserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 var (
-	ErrClosed   = errors.New("App Server connection closed")
-	ErrProtocol = errors.New("App Server protocol invalid or response too large")
-	ErrRemote   = errors.New("App Server rejected request")
-	ErrCapacity = errors.New("App Server pending request limit reached")
+	ErrClosed            = errors.New("App Server connection closed")
+	ErrProtocol          = errors.New("App Server protocol invalid or response too large")
+	ErrRemote            = errors.New("App Server rejected request")
+	ErrMethodUnavailable = errors.New("PROTOCOL_UNSUPPORTED")
+	ErrInvalidArgument   = errors.New("INVALID_ARGUMENT")
+	ErrCapacity          = errors.New("App Server pending request limit reached")
+	ErrResponseTooLarge  = errors.New("HISTORY_TOO_LARGE")
 )
 
+const DefaultMaxResponseBytes = 64 << 20
+
+var oversizedResponseID = regexp.MustCompile(`^\s*\{\s*"id"\s*:\s*([0-9]+)\s*[,}]`)
+
 type response struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Result json.RawMessage `json:"result"`
-	Error  json.RawMessage `json:"error"`
+	ID       json.RawMessage `json:"id"`
+	Method   string          `json:"method"`
+	Result   json.RawMessage `json:"result"`
+	Error    json.RawMessage `json:"error"`
+	TooLarge bool            `json:"-"`
 }
 
 // Session is deliberately read-oriented: unsolicited interactive requests are
@@ -43,7 +53,7 @@ type Session struct {
 
 func NewSession(rw io.ReadWriteCloser, limit int) *Session {
 	if limit <= 0 {
-		limit = 8 << 20
+		limit = DefaultMaxResponseBytes
 	}
 	s := &Session{rw: rw, limit: limit, pending: make(map[string]chan response), done: make(chan struct{}), writer: make(chan struct{}, 1)}
 	go s.readLoop()
@@ -92,7 +102,22 @@ func (s *Session) Call(ctx context.Context, method string, params any, result an
 	}
 	select {
 	case r := <-ch:
+		if r.TooLarge {
+			return ErrResponseTooLarge
+		}
 		if len(r.Error) > 0 && string(r.Error) != "null" {
+			var remote struct {
+				Code int `json:"code"`
+			}
+			if json.Unmarshal(r.Error, &remote) != nil {
+				return ErrProtocol
+			}
+			switch remote.Code {
+			case -32601:
+				return ErrMethodUnavailable
+			case -32602:
+				return ErrInvalidArgument
+			}
 			return ErrRemote
 		}
 		if len(r.Result) == 0 {
@@ -109,7 +134,7 @@ func (s *Session) Call(ctx context.Context, method string, params any, result an
 	}
 }
 func (s *Session) Initialize(ctx context.Context) error {
-	if err := s.Call(ctx, "initialize", map[string]any{"clientInfo": map[string]string{"name": "ariel_probe", "title": "Ariel compatibility probe", "version": "0.1.0"}}, nil); err != nil {
+	if err := s.Call(ctx, "initialize", map[string]any{"clientInfo": map[string]string{"name": "ariel_probe", "title": "Ariel compatibility probe", "version": "0.1.0"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		return err
 	}
 	return s.send(ctx, map[string]any{"method": "initialized", "params": map[string]any{}})
@@ -144,12 +169,38 @@ func (s *Session) send(ctx context.Context, msg any) error {
 	return nil
 }
 func (s *Session) readLoop() {
-	scanner := bufio.NewScanner(s.rw)
-	scanner.Buffer(make([]byte, min(4096, s.limit+1)), s.limit+1)
-	for scanner.Scan() {
-		body := scanner.Bytes()
+	reader := bufio.NewReaderSize(s.rw, 32<<10)
+	for {
+		body, prefix, tooLarge, readErr := readBoundedLine(reader, s.limit)
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				s.fail(ErrClosed)
+			} else {
+				s.fail(ErrProtocol)
+			}
+			return
+		}
+		if tooLarge {
+			match := oversizedResponseID.FindSubmatch(prefix)
+			if len(match) != 2 {
+				s.fail(ErrProtocol)
+				return
+			}
+			s.mu.Lock()
+			ch := s.pending[string(match[1])]
+			s.mu.Unlock()
+			if ch == nil {
+				s.fail(ErrProtocol)
+				return
+			}
+			select {
+			case ch <- response{TooLarge: true}:
+			default:
+			}
+			continue
+		}
 		var r response
-		if len(body) > s.limit || !utf8.Valid(body) || json.Unmarshal(body, &r) != nil {
+		if !utf8.Valid(body) || json.Unmarshal(body, &r) != nil {
 			s.fail(ErrProtocol)
 			return
 		}
@@ -178,10 +229,36 @@ func (s *Session) readLoop() {
 			}
 		}
 	}
-	if scanner.Err() != nil {
-		s.fail(ErrProtocol)
-	} else {
-		s.fail(ErrClosed)
+}
+
+// readBoundedLine drains oversize JSONL without retaining the whole response.
+// The prefix is only used to correlate a response whose numeric id is first.
+func readBoundedLine(reader *bufio.Reader, limit int) ([]byte, []byte, bool, error) {
+	var body, prefix []byte
+	tooLarge := false
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(prefix) < 256 {
+			prefix = append(prefix, fragment[:min(len(fragment), 256-len(prefix))]...)
+		}
+		if !tooLarge {
+			withoutNewline := fragment
+			if err == nil {
+				withoutNewline = bytes.TrimSuffix(fragment, []byte{'\n'})
+			}
+			if len(withoutNewline) > limit-len(body) {
+				tooLarge = true
+				body = nil
+			} else {
+				body = append(body, withoutNewline...)
+			}
+		}
+		if err == nil || (errors.Is(err, io.EOF) && len(fragment) > 0) {
+			return body, prefix, tooLarge, nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return nil, prefix, tooLarge, err
+		}
 	}
 }
 
@@ -218,7 +295,7 @@ func Start(ctx context.Context, binary, cwd string) (*Process, error) {
 		stdout.Close()
 		return nil, errors.New("failed to start configured Codex binary")
 	}
-	p := &Process{Session: NewSession(pipes{stdout, stdin}, 8<<20), cmd: cmd, exited: make(chan struct{})}
+	p := &Process{Session: NewSession(pipes{stdout, stdin}, 0), cmd: cmd, exited: make(chan struct{})}
 	go func() { cmd.Wait(); p.Session.fail(ErrClosed); close(p.exited) }()
 	if err := p.Initialize(ctx); err != nil {
 		p.Close()

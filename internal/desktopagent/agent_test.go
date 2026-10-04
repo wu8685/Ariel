@@ -19,7 +19,7 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
 	live := &fakeLive{updates: make(chan struct{}, 1)}
-	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) {
+	s := NewService(pagedHistory{}, func(context.Context, string, string) (Live, error) {
 		return live, nil
 	})
 	defer s.Close()
@@ -64,6 +64,16 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	data := got["data"].(map[string]any)
 	if len(data["threads"].([]any)) != 1 {
 		t.Fatalf("history: %v", data)
+	}
+	requestID = "00000000-0000-4000-8000-000000000004"
+	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.history", "params": map[string]any{"threadId": "thread", "limit": 10}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wsjson.Read(wctx, w, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["type"] != "response" || got["outcome"] != "accepted" || len(got["data"].(map[string]any)["turns"].([]any)) != 10 {
+		t.Fatalf("paged history response: %v", got)
 	}
 	requestID = "00000000-0000-4000-8000-000000000002"
 	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "thread"}}); err != nil {
