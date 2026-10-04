@@ -1,6 +1,6 @@
 # 0011：手机会话紧凑布局与 Night 视觉
 
-- 状态：Draft，待用户确认后进入 TDD。
+- 状态：Approved（2026-10-04，用户确认 0011；Web 实现与浏览器验证通过，物理手机待验）。
 - 来源：2026-10-04 用户希望手机 UI 上方文字和区域缩小，将 Read Only／Permission 等提示收成点击后查看的 icon，并把 Ariel logo 所在的整行 header 收进左侧菜单；随后提供 Codex 手机版截图作为对话 UI 的视觉参考。
 - 范围：宽度不超过 800px 的会话工作台顶部、对话区域及输入区；沿用 [Night 配色](0007-night-appearance.md) 和 [移动侧栏](0009-mobile-drawer-and-logo.md)。不改变 Relay／Agent 协议或宽屏布局。
 

@@ -23,14 +23,20 @@ func serveWithAppServer(ctx context.Context, done <-chan struct{}, run func(cont
 		}
 	}()
 	err := run(runCtx)
-	cancel()
-	<-stopped
+	// Inspect the child before canceling runCtx: cancellation itself closes
+	// the CommandContext process, and must not mask a Relay failure.
+	childExited := false
 	select {
 	case <-done:
-		return errAppServerUnavailable
+		childExited = true
 	default:
-		return err
 	}
+	cancel()
+	<-stopped
+	if childExited {
+		return errAppServerUnavailable
+	}
+	return err
 }
 
 func checkDesktop(ctx context.Context, socket string) error {

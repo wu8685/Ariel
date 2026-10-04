@@ -60,3 +60,15 @@ func TestAppServerExitCancelsRelaySessionForRestart(t *testing.T) {
 		t.Fatal("Agent remained online after App Server exit")
 	}
 }
+
+func TestRelayFailureIsNotMisreportedAsAppServerExit(t *testing.T) {
+	done := make(chan struct{})
+	relayFailure := errors.New("Relay WebSocket closed")
+	err := serveWithAppServer(context.Background(), done, func(ctx context.Context) error {
+		go func() { <-ctx.Done(); close(done) }()
+		return relayFailure
+	})
+	if !errors.Is(err, relayFailure) {
+		t.Fatalf("Relay failure misreported as %v", err)
+	}
+}

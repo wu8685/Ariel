@@ -61,4 +61,24 @@ describe("fixed Night appearance", () => {
     expect(app).toMatch(/aria-expanded=\{showList\}/);
     expect(app).toMatch(/key === "Escape"[^}]*setShowList\(false\)/);
   });
+
+  it("compacts only connected mobile conversation chrome and keeps touch targets", () => {
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(mobile).toMatch(/\.app-shell\.connected\s+\.masthead\s*\{[^}]*display:\s*none/s);
+    expect(mobile).toMatch(/\.conversation-head\s*\{[^}]*height:\s*6[4-8]px/s);
+    expect(mobile).toMatch(/\.mobile-list\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.permission-info-button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.sidebar-disconnect\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.permission-strip\s*\{[^}]*display:\s*none/s);
+    expect(mobile).toMatch(/\.composer\s*\{[^}]*border-radius:\s*\d+px/s);
+    expect(mobile).toMatch(/\.composer textarea\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
+    expect(mobile).toMatch(/\.send-button[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/safe-area-inset-bottom/);
+  });
+
+  it("wraps long messages and approval prompts without horizontal scrolling", () => {
+    expect(style).toMatch(/\.message-text\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(style).toMatch(/\.interaction-card p\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(style).toMatch(/\.question\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  });
 });

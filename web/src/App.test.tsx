@@ -62,13 +62,91 @@ async function openFixture(thread: Thread = fixtureThread) {
 }
 
 describe("Ariel app interactions", () => {
+  it("keeps connected brand, status and disconnect in the drawer while the compact menu exposes status", async () => {
+    await openFixture();
+    const shell = document.querySelector(".app-shell")!;
+    expect(shell.classList.contains("connected")).toBe(true);
+    const sidebar = screen.getByLabelText("会话列表");
+    expect(sidebar.querySelector(".brand")?.textContent).toContain("Ariel");
+    expect(sidebar.querySelector(".connection")?.textContent).toContain("Relay 已连接");
+    expect(sidebar.querySelector("button[aria-label='断开']")).toBeTruthy();
+    const menu = screen.getByRole("button", { name: /打开会话列表.*Relay 已连接/ });
+    expect(menu.querySelector(".menu-glyph")?.textContent).toBe("☰");
+    expect(menu.querySelector(".status-dot")).toBeTruthy();
+    expect(menu.getAttribute("aria-controls")).toBe("session-sidebar");
+    expect(sidebar.classList.contains("open")).toBe(false);
+  });
+
+  it("opens compact permissions details and closes them by toggling, outside click and Escape", async () => {
+    const thread: Thread = { ...fixtureThread, permissions: { sandbox: "full_access", approval: "on_request" } };
+    await openFixture(thread);
+    const info = screen.getByRole("button", { name: /Full Access.*on-request/ });
+    expect(info.classList.contains("danger")).toBe(true);
+    expect(info.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(info);
+    const details = screen.getByRole("dialog", { name: "当前 Desktop 权限详情" });
+    expect(details.textContent).toContain("Full Access");
+    expect(details.textContent).toContain("审批策略 on-request");
+    expect(details.textContent).toContain("允许访问本机其他文件和网络");
+    expect(info.getAttribute("aria-controls")).toBe(details.id);
+    expect(info.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(info);
+    expect(screen.queryByRole("dialog", { name: "当前 Desktop 权限详情" })).toBeNull();
+    fireEvent.click(info);
+    fireEvent.mouseDown(screen.getByRole("main"));
+    expect(screen.queryByRole("dialog", { name: "当前 Desktop 权限详情" })).toBeNull();
+    fireEvent.click(info);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "当前 Desktop 权限详情" })).toBeNull();
+  });
+
+  it("keeps an unknown Desktop permission visibly cautionary", async () => {
+    await openFixture({ ...fixtureThread, permissions: { sandbox: "unknown", approval: "unknown" } });
+    const info = screen.getByRole("button", { name: "当前 Desktop 权限未知" });
+    expect(info.classList.contains("danger")).toBe(true);
+    fireEvent.click(info);
+    expect(screen.getByRole("dialog", { name: "当前 Desktop 权限详情" }).textContent).toContain("当前 Desktop 权限未知");
+  });
+
+  it("preserves approval cards, message text and an editable compact composer", async () => {
+    const thread: Thread = { ...fixtureThread, permissions: { sandbox: "read_only", approval: "never" }, turns: [{ turnId: "t1", status: "completed", items: [{ itemId: "u1", role: "user", text: "test long/path/here" }] }], pendingInteractions: [{ interactionId: "a1", kind: "command_approval", prompt: "Approve test command", availableDecisions: ["deny"] }] };
+    await openFixture(thread);
+    expect(screen.getByText("test long/path/here")).toBeTruthy();
+    expect(screen.getByText("Approve test command")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    expect(input.rows).toBe(1);
+    fireEvent.change(input, { target: { value: "draft\nsecond line" } });
+    expect(input.value).toBe("draft\nsecond line");
+    expect((screen.getByRole("button", { name: /发送/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("grows a mobile draft to four lines and clears the inline height on desktop resize", async () => {
+    const originalWidth = window.innerWidth;
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => 140 });
+      await openFixture();
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: "one\ntwo\nthree\nfour\nfive" } });
+      expect(input.style.height).toBe("116px");
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+      fireEvent(window, new Event("resize"));
+      expect(input.style.height).toBe("");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+      if (originalScrollHeight) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", originalScrollHeight);
+      else delete (HTMLTextAreaElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    }
+  });
   it("dismisses the mobile sidebar on backdrop or Escape, but not inside the sidebar", () => {
     render(<App />);
     const sidebar = screen.getByLabelText("会话列表");
     expect(sidebar.classList.contains("open")).toBe(true);
     fireEvent.click(screen.getByLabelText("关闭会话列表遮罩"));
     expect(sidebar.classList.contains("open")).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "☰ 会话" }));
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
     expect(sidebar.classList.contains("open")).toBe(true);
     fireEvent.click(sidebar);
     expect(sidebar.classList.contains("open")).toBe(true);
@@ -107,7 +185,7 @@ describe("Ariel app interactions", () => {
     BrowserSocket.sockets[1].onopen?.(new Event("open"));
     BrowserSocket.sockets[1].message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession });
     await waitFor(() => expect(sessionStorage.getItem("ariel.web-session.v1")).toBe(relaySession));
-    fireEvent.click(screen.getByRole("button", { name: "断开" }));
+    fireEvent.click(screen.getByLabelText("会话列表").querySelector("button[aria-label='断开']")!);
     expect(sessionStorage.getItem("ariel.web-session.v1")).toBeNull();
   });
 
@@ -153,6 +231,7 @@ describe("Ariel app interactions", () => {
     act(() => socket.message({ type: "response", v: 1, requestId: requestFor("thread.list").requestId, outcome: "accepted", data: { threads: [thread] } }));
     fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
     expect(screen.getByLabelText("会话列表").classList.contains("open")).toBe(false);
+    expect(document.querySelector(".conversation-head .head-path")?.textContent).toBe("/tmp/fixture");
     await waitFor(() => expect(requestFor("thread.subscribe")).toBeTruthy());
     await act(async () => socket.message({ type: "response", v: 1, requestId: requestFor("thread.subscribe").requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
     act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread }));

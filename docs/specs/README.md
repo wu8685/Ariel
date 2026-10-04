@@ -25,7 +25,7 @@
 | 0008 | [固定 6 位 Web 连接码](0008-fixed-six-digit-web-pin.md) | Approved（用户已确认） | 手机短码与 Agent 长口令分离，错误次数上限 |
 | 0009 | [手机侧栏收起与灰色 logo](0009-mobile-drawer-and-logo.md) | Approved（用户已确认） | 手机侧栏点空白处收起，logo 用中性灰 |
 | 0010 | [刷新页面复用 Web session](0010-browser-relay-session.md) | Approved（用户已确认） | 浏览器与 Relay 内存 session 免刷新重输连接码 |
-| 0011 | [手机会话紧凑布局与 Night 视觉](0011-compact-mobile-conversation-header.md) | Draft（待确认） | 缩小顶部区域，参考 Codex 手机版的视觉层级优化对话与输入区 |
+| 0011 | [手机会话紧凑布局与 Night 视觉](0011-compact-mobile-conversation-header.md) | Approved（Web／浏览器已验；物理手机待验） | 缩小顶部区域，参考 Codex 手机版的视觉层级优化对话与输入区 |
 
 ## 设计基线
 
@@ -33,6 +33,7 @@
 
 M1–M4 当前实测与未验边界见 [2026-10-04 测试记录](../testing/2026-10-04-m1-m4.md)。
 [MVP 验收矩阵逐项审计](../testing/2026-10-04-mvp-acceptance-audit.md)区分自动测试、真实 Desktop 与物理手机的证据边界。
+[0011 手机布局专项验收](../testing/2026-10-04-0011-mobile-layout.md)记录 390×844 实际浏览器测量和物理手机待验项目。
 
 ## 规格拆分顺序
 

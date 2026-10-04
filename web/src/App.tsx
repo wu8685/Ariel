@@ -33,6 +33,7 @@ export function App() {
   const [working, setWorking] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [showList, setShowList] = useState(true);
+  const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
   const expectedSubscription = useRef("");
@@ -42,10 +43,19 @@ export function App() {
   const threadListGeneration = useRef(0);
   const resuming = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const permissionInfoRef = useRef<HTMLDivElement>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const device = devices.find(d => d.deviceId === deviceId);
+  const selectedThread = threads.find(t => t.threadId === threadId);
   const mock = device?.adapterVersion?.startsWith("mock-") ?? false;
   const activeTurn = view?.thread.turns.findLast(t => t.status === "inProgress");
   const currentPermissions = view && !mock ? permissionSummary(view.thread.permissions) : null;
+  const connectionLabel = status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接";
+  const permissionWarning = Boolean(currentPermissions?.warning || currentPermissions?.label.includes("未知"));
+
+  function disconnect() {
+    webSession.disconnect(); savedSessionAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
+  }
 
   async function refreshDevices(): Promise<Device[]> {
     const generation = ++deviceListGeneration.current;
@@ -209,6 +219,35 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showList]);
 
+  useEffect(() => {
+    if (!permissionInfoOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!permissionInfoRef.current?.contains(event.target as Node)) setPermissionInfoOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPermissionInfoOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("mousedown", onPointerDown); window.removeEventListener("keydown", onKeyDown); };
+  }, [permissionInfoOpen]);
+
+  useEffect(() => { setPermissionInfoOpen(false); }, [deviceId, threadId]);
+
+  useEffect(() => {
+    const input = composerInputRef.current;
+    if (!input) return;
+    const resize = () => {
+      input.style.height = "";
+      if (window.innerWidth > 800) return;
+      input.style.height = "auto";
+      input.style.height = `${Math.min(input.scrollHeight, 116)}px`;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [draft, view]);
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [view?.seq]);
 
   async function send() {
@@ -240,15 +279,16 @@ export function App() {
     if (response.outcome !== "accepted") setNotice(errorText(response));
   }
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${status === "ready" ? "connected" : ""}`}>
     <header className="masthead">
       <div className="brand"><span className="brand-mark" aria-hidden="true">✳</span><span>Ariel</span><small>Codex 随身工作台</small></div>
-      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接"}</span><button className="text-button" onClick={() => { webSession.disconnect(); savedSessionAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect(); }}>断开</button></div>
+      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="text-button" onClick={disconnect}>断开</button></div>
     </header>
     {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
+        <div className="sidebar-identity"><div className="brand"><span className="brand-mark" aria-hidden="true">✳</span><span>Ariel</span></div><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="sidebar-disconnect text-button" aria-label="断开" onClick={disconnect}>断开</button></div>
         <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId)} disabled={!deviceId}>↻</button></div>
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
@@ -258,10 +298,15 @@ export function App() {
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
       <main className="conversation">
-        <div className="conversation-head"><button className="mobile-list text-button" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}>☰ 会话</button><div><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view?.thread.title || threads.find(t => t.threadId === threadId)?.title || "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || "从左侧选择历史会话，接着工作。"}</span></div><div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div></div>
+        <div className="conversation-head">
+          <button className="mobile-list text-button" aria-label={`打开会话列表，${connectionLabel}`} aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><span className="menu-glyph" aria-hidden="true">☰</span><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
+          <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view?.thread.title || selectedThread?.title || "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
+          <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
+          {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
+        </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         <div className="transcript" aria-live="polite">{!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}{view?.thread.turns.map(turn => <section className="turn" key={turn.turnId}><div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>{turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}</section>)}{view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}<div ref={endRef} /></div>
-        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea aria-label="发送消息" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready"} rows={3} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready"}>■ 停止</button>}<button className="primary send-button" onClick={() => void send()} disabled={!canSend(view?.thread || null, status === "ready", working, draft)}>发送 <span aria-hidden="true">↗</span></button></div></div></div></div>
+        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready"} rows={1} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready"}>■ 停止</button>}<button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={!canSend(view?.thread || null, status === "ready", working, draft)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button></div></div></div></div>
       </main>
     </div>
   </div>;
