@@ -21,4 +21,5 @@
 - 当前 Desktop 内置 Codex 0.160.0 上，目标大会话的原 owner 快照为 47,173,884 字节，大 follower 只读订阅成功；规范化首屏恰为最新 10 个 turn，Web 页面小于 7 MiB。没有发送、停止或审批。
 - 独立 App Server 对同一会话做只读交叉校验：47 个原 turn 全部按 `thread.history` 取回；规范化后的 item 逐项与原 `thread/read(includeTurns:true)` 相同（本次共 3,728 个可展示 item）。原 item 总数还含 Ariel 既有规范化规则不展示的 reasoning，不能把两种计数混为“丢失”。
 - 在独立的 localhost 测试 Relay 与 Desktop Agent 上，电脑浏览器实测首屏 10 turn；点击“加载更早消息”可继续到全部 47 turn，期间 Agent 与 Relay 始终在线。390×844 视口下无横向溢出、侧栏可收起、会话区域从约 66 px 开始且输入框贴近视口底部；刷新后同一标签页免输连接码。
+- 已将构建后的 0013 Relay／Desktop Agent 更新到原手机访问入口（原 6 位连接码未变，Relay 重启使此前的浏览器 session 失效）。升级入口的浏览器实测显示 Relay 已连接、Agent 在线、目标大会话首屏 10 turn，继续加载后达到 20 turn；独立测试入口已关闭。
 - 本次真实大会话的那个原始 1,628-item turn 在排除 reasoning 并规范化后没有超过 Web 单页预算，因此**未触发真实 item 子分页**；其逻辑已通过合成的巨型 turn 单测。物理手机与真实单 turn 超页仍需复验，不能宣称已实测。
