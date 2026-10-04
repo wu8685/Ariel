@@ -18,7 +18,7 @@
 | A12 补充回答 | 通过（隔离 fixture） | 两问题、选项／自由文本、原 owner 回显和持久化终态已核对。 |
 | A13 请求竞争与过期 | 部分 | 双 IPC 客户端竞争和本地 stale 判定已实测；Desktop UI 与手机同时处理未实测。 |
 | A14 待处理时断线 | 部分 | 真实 user-input 在 Agent、Relay 分别重启后仍可提交；命令／文件待审批恢复未逐类实测。 |
-| A15 丢失响应 | 部分 | Web／Relay／IPC 自动测试确认 unknown 且不自动重发；真实链路定点丢回执尚未实测。 |
+| A15 丢失响应 | 部分 | 真实 WebSocket 转发测试在 Agent 收到 mutation 后断线，Web 得到 unknown，替代 Agent 上线后路由不重放；真实 Desktop 接受后的定点丢回执尚未实测。 |
 | A16 Relay／Agent 重启 | 通过（隔离 fixture） | 同页保留选择并重订阅，旧视图清空；待回答问题恢复有真实证据。 |
 | A17 Desktop 退出／重启 | 部分 | 健康检查和子 App Server 退出已测；承载业务会话的 Desktop 未做破坏性退出实验。 |
 | A18 patch 缺口／慢消费者 | 部分 | 序号缺口、Follower 失效、容量和超时有自动回归；真实慢网络故障注入未做。 |

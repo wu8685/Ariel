@@ -312,6 +312,44 @@ func TestRelayRejectsOfflineAndTimesOutForwardedRequestAsUnknown(t *testing.T) {
 	}
 }
 
+func TestRelayDoesNotReplayForwardedMutationAfterAgentDisconnect(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+	id := "00000000-0000-4000-8000-000000000061"
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "turn.start", "params": map[string]any{"threadId": "mock-thread-a", "clientMessageId": "00000000-0000-4000-8000-000000000062", "text": "isolated fixture"}})
+	forwarded := readJSON(t, agent)
+	if forwarded["method"] != "turn.start" {
+		t.Fatalf("mutation not forwarded once: %+v", forwarded)
+	}
+	// The owner may have accepted the mutation before this transport failed.
+	agent.CloseNow()
+	if got := readJSON(t, web); got["requestId"] != id || got["outcome"] != "unknown" || got["error"].(map[string]any)["code"] != "OUTCOME_UNKNOWN" {
+		t.Fatalf("disconnected mutation was not marked unknown: %+v", got)
+	}
+	if got := readJSON(t, web); got["event"] != "device.status" || got["agentOnline"] != false {
+		t.Fatalf("missing offline status: %+v", got)
+	}
+	replacement := dialTest(t, s.URL, "")
+	sendJSON(t, replacement, agentHello())
+	readJSON(t, replacement)
+	if got := readJSON(t, web); got["event"] != "device.status" || got["agentOnline"] != true {
+		t.Fatalf("missing replacement online status: %+v", got)
+	}
+	r.mu.Lock()
+	remaining := len(r.routes)
+	r.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("mutation route survived agent replacement: %d", remaining)
+	}
+}
+
 func TestRelayAllowsBoundedExtraTimeForAutoLoadSubscription(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, SubscriptionTimeout: 300 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
