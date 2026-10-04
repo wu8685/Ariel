@@ -1,6 +1,6 @@
 # 0013：大会话最近十回合与 64 MiB 有界同步
 
-- 状态：Draft；用户于 2026-10-05 确认本机原会话容量 64 MiB、手机默认最新 10 个 turn，并保留按需加载更早消息；本版文字待确认后进入 TDD。
+- 状态：Approved；用户于 2026-10-05 确认本机原会话容量 64 MiB、手机默认最新 10 个 turn、按需加载更早消息及本版完整规格，进入 TDD。
 - 来源：2026-10-04 手机／Web 反馈：部分会话一直显示“正在同步会话”，同时 Agent 反复离线。
 - 依据：[0004 原 Desktop Agent](0004-m2-real-desktop-agent.md)、[0006 断线恢复与有界容量](0006-m4-recovery-capacity.md)、[分页 API 只读复核](../testing/2026-10-05-0013-pagination-probe.md)、[OpenAI App Server 文档](https://learn.chatgpt.com/docs/app-server)。本规格只放宽本机原会话读取／同步容量，不放宽 0006 的 Relay→Web 8 MiB 单帧上限；原 owner 权威、无第二套会话数据库和不自动重发变更继续有效。本文的 64 MiB 指 67,108,864 字节。
 
