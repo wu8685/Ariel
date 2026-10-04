@@ -103,7 +103,7 @@ export function App() {
     const current = selection.current;
     if (!current.threadId) return;
     setNotice("事件顺序中断，正在重新同步会话…");
-    await selectThread(current.threadId);
+    await selectThread(current.threadId, current.deviceId);
   }
 
   useEffect(() => {

@@ -109,4 +109,38 @@ describe("Ariel app interactions", () => {
     act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread }));
     await waitFor(() => expect(screen.getAllByText("/tmp/fixture").length).toBeGreaterThan(1));
   });
+
+  it("resubscribes the selected device after a stream sequence gap", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: {
+      devices: [{ deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }],
+    } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    const thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    expect(requests("thread.subscribe")[0].deviceId).toBe("mac");
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub-1" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-1", streamId: "stream-1", seq: 1, thread }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy());
+
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-1", streamId: "stream-1", baseSeq: 1, seq: 3, thread }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect(requests("thread.subscribe")[1]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture" } });
+    expect(requests("thread.unsubscribe")).toContainEqual(expect.objectContaining({ deviceId: "mac", params: { subscriptionId: "sub-1" } }));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-2" } }));
+    const recovered = { ...thread, title: "Recovered" };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-2", streamId: "stream-2", seq: 1, thread: recovered }));
+    expect(await screen.findByRole("heading", { name: "Recovered" })).toBeTruthy();
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-1", streamId: "stream-1", baseSeq: 1, seq: 2, thread }));
+    expect(screen.getByRole("heading", { name: "Recovered" })).toBeTruthy();
+    expect(requests("thread.subscribe")).toHaveLength(2);
+  });
 });
