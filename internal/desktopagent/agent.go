@@ -43,12 +43,14 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 	}
-	process, err := appserver.Start(ctx, cfg.Binary, cwd)
+	readOnlyRPC, err := appserver.NewRestartingRPC(ctx, func(parent context.Context) (appserver.ReadOnlyEndpoint, error) {
+		return appserver.Start(parent, cfg.Binary, cwd)
+	})
 	if err != nil {
 		return err
 	}
-	defer process.Close()
-	service := NewService(appserver.HistoryReader{RPC: process.Session}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) })
+	defer readOnlyRPC.Close()
+	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) })
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -60,9 +62,7 @@ func Run(ctx context.Context, cfg Config) error {
 			cancel()
 		}
 	}()
-	err = serveWithAppServer(runCtx, process.Session.Done(), func(ctx context.Context) error {
-		return RunWithService(ctx, cfg, service)
-	})
+	err = RunWithService(runCtx, cfg, service)
 	cancel()
 	select {
 	case healthErr := <-healthResult:

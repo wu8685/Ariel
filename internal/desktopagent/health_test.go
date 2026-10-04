@@ -37,38 +37,3 @@ func TestMonitorDesktopResetsFailureCountAfterSuccess(t *testing.T) {
 		t.Fatalf("failure counter not reset: %v checks=%d", err, checks.Load())
 	}
 }
-
-func TestAppServerExitCancelsRelaySessionForRestart(t *testing.T) {
-	done := make(chan struct{})
-	entered := make(chan struct{})
-	result := make(chan error, 1)
-	go func() {
-		result <- serveWithAppServer(context.Background(), done, func(ctx context.Context) error {
-			close(entered)
-			<-ctx.Done()
-			return ctx.Err()
-		})
-	}()
-	<-entered
-	close(done)
-	select {
-	case err := <-result:
-		if !errors.Is(err, errAppServerUnavailable) {
-			t.Fatalf("App Server exit must reconnect Agent: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Agent remained online after App Server exit")
-	}
-}
-
-func TestRelayFailureIsNotMisreportedAsAppServerExit(t *testing.T) {
-	done := make(chan struct{})
-	relayFailure := errors.New("Relay WebSocket closed")
-	err := serveWithAppServer(context.Background(), done, func(ctx context.Context) error {
-		go func() { <-ctx.Done(); close(done) }()
-		return relayFailure
-	})
-	if !errors.Is(err, relayFailure) {
-		t.Fatalf("Relay failure misreported as %v", err)
-	}
-}
