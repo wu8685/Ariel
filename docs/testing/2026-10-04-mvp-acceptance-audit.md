@@ -8,7 +8,7 @@
 | A02 会话列表 | 通过（本机浏览器） | 真实列表从 50 条加载至 100 条；同名 fixture 行同时显示 cwd 和时间。 |
 | A03 原会话续聊 | 通过（隔离 fixture） | 同一 threadId 的历史、发送及原持久化结果已核对。 |
 | A04 未加载自动接续 | 通过（隔离 fixture） | Web 点选后 deep link 自动加载原 owner；不需电脑端手动打开。 |
-| A05 双向同步 | 部分 | 手机路径的 Web→Desktop 已实测；Desktop UI 直接发送→Web 尚无实际 UI 操作证据。 |
+| A05 双向同步 | 部分 | 手机路径的 Web→Desktop 已实测；Desktop UI 直接发送→Web 尚无实际 UI 操作证据。本任务尝试读取 Codex Desktop 界面时，Computer Use 明确拒绝操作 `com.openai.codex`，因此不能代替用户完成该 UI 动作。 |
 | A06 渐进回复 | 通过（隔离 fixture） | Web 看到运行中到完成／停止变化；稳定 item ID 与无重复段落有回归测试。 |
 | A07 发送确认 | 通过（隔离 fixture） | 原 owner 中精确核对 turnId、clientId 和文本；缺证据时返回 unknown。 |
 | A08 忙时草稿／无隐形队列 | 部分 | 两个 WebSocket 客户端经测试 Relay／Agent 同时启动，严格一次 accepted、一次 `TURN_BUSY`；真实 Desktop 双客户端并发实验出现不可寻址占位，仍缺原生成功路径证据。 |
@@ -32,7 +32,7 @@
 
 1. [0011 手机 UI 规格](../specs/0011-compact-mobile-conversation-header.md)仍是 Draft。用户确认后才能按 SDD/TDD 实施，随后需浏览器与物理手机复验。
 2. 物理手机完整操作需要用户在手机上执行或提供可操作的设备会话；不能用 390×844 桌面视口替代。
-3. Desktop UI 主动消息、双端竞争和 Desktop 重启需要隔离 fixture 与不影响业务会话的操作窗口。当前不能把双 IPC 客户端异常实验当成成功证据。
+3. Desktop UI 主动消息、双端竞争和 Desktop 重启需要隔离 fixture 与不影响业务会话的操作窗口。当前不能把双 IPC 客户端异常实验当成成功证据；Codex Desktop UI 控制在本任务被工具安全边界拒绝，A05 的 UI 主动消息需用户在隔离 fixture 中手动发送并观察 Web。
 4. 原生权限请求需要可用的 Desktop 能力或版本；不擅自开启全局 feature，不把协议测试当成真实审批通过。
 
 其余 `部分` 项仍可用有界故障注入、自动测试及隔离 fixture 继续推进；每次须记录具体输入与可核对结果。
