@@ -28,6 +28,7 @@
 | 0011 | [手机会话紧凑布局与 Night 视觉](0011-compact-mobile-conversation-header.md) | Approved（Web／浏览器已验；物理手机待验） | 缩小顶部区域，参考 Codex 手机版的视觉层级优化对话与输入区 |
 | 0012 | [电脑浏览器紧凑会话布局](0012-compact-desktop-conversation.md) | Draft（待用户确认） | 沿用手机紧凑布局，缩小桌面顶部与输入区，侧栏按需展开 |
 | 0013 | [大会话分页历史与原 owner 隔离](0013-paged-history-and-large-owner.md) | Draft（待用户确认） | 分段读取历史，单会话大快照有界适配，避免拖垮 Agent |
+| 0014 | [手机输入框回车换行与八行自适应](0014-mobile-composer-newline-and-eight-lines.md) | Draft（待用户确认） | 手机 Enter 仅换行，按钮发送；输入框一至八行增长并在超出后内部滚动 |
 
 ## 设计基线
 
