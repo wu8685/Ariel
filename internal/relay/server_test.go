@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -394,6 +395,64 @@ func TestRelayAllowsBoundedExtraTimeForForwardedMutation(t *testing.T) {
 
 func mockThread() map[string]any {
 	return map[string]any{"threadId": "mock-thread-a", "title": "Draft", "cwd": "/mock/workspace", "updatedAt": "2026-10-04T00:00:00Z", "runtime": "idle", "turns": []any{}, "pendingInteractions": []any{}}
+}
+
+// Opt-in because it deliberately fills a loopback TCP receive buffer and waits
+// for the production 5-second WebSocket write deadline. It exercises actual
+// socket backpressure, not a mocked writer.
+func TestRelaySlowWebSocketDoesNotRetainSubscription(t *testing.T) {
+	if os.Getenv("ARIEL_TEST_SLOW_SOCKET") != "1" {
+		t.Skip("set ARIEL_TEST_SLOW_SOCKET=1 for loopback backpressure test")
+	}
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, HeartbeatInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	slow := dialTest(t, s.URL, testOrigin)
+	fast := dialTest(t, s.URL, testOrigin)
+	for _, web := range []*websocket.Conn{slow, fast} {
+		sendJSON(t, web, webHello())
+		readJSON(t, web)
+	}
+	for i, target := range []struct {
+		web *websocket.Conn
+		sub string
+	}{{slow, "slow-sub"}, {fast, "fast-sub"}} {
+		requestID := fmt.Sprintf("00000000-0000-4000-8000-%012d", i+71)
+		sendJSON(t, target.web, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]string{"threadId": "mock-thread-a"}})
+		forwarded := readJSON(t, agent)
+		sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]string{"subscriptionId": target.sub, "streamId": "stream-" + target.sub}})
+		if got := readJSON(t, target.web); got["outcome"] != "accepted" {
+			t.Fatalf("subscribe %d: %v", i, got["outcome"])
+		}
+	}
+	large := mockThread()
+	large["turns"] = []any{map[string]any{"turnId": "large-turn", "status": "inProgress", "items": []any{map[string]any{"itemId": "large-item", "role": "assistant", "text": strings.Repeat("x", (8<<20)-4096)}}}}
+	sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": "slow-sub", "streamId": "stream-slow-sub", "seq": 1, "thread": large})
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		r.mu.Lock()
+		remainingWebs := len(r.webs)
+		_, slowSubscribed := r.subs[r.agents["mock-mac"]]["slow-sub"]
+		_, fastSubscribed := r.subs[r.agents["mock-mac"]]["fast-sub"]
+		r.mu.Unlock()
+		if remainingWebs == 1 && !slowSubscribed && fastSubscribed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("slow consumer retained: webs=%d slow=%t fast=%t", remainingWebs, slowSubscribed, fastSubscribed)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": "fast-sub", "streamId": "stream-fast-sub", "seq": 1, "thread": mockThread()})
+	if got := readJSON(t, fast); got["event"] != "thread.snapshot" || got["subscriptionId"] != "fast-sub" {
+		t.Fatalf("fast subscriber lost update after slow peer closed: event=%v sub=%v", got["event"], got["subscriptionId"])
+	}
 }
 
 func TestRelaySubscriptionResponsePrecedesSnapshotAndIsIsolated(t *testing.T) {
