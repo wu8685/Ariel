@@ -12,6 +12,7 @@
 - 决定只按原生 `availableDecisions` 映射：`decline` → `deny`，`cancel` → `deny_and_stop`。`accept_once` 仅在原生 `accept` 经隔离实测为单次允许后启用；结构化或永久授权不映射。
 - 回答前重新获取 owner 状态，核对 thread/cwd/turn/request ID、完整请求内容、决定集合以及 turn 仍在运行。提交后再次读取 owner：user_input 必须精确回显本次 answers；审批至少核对原 request 消失及预期 turn 终态。仅收到 `ok` 不表示成功。
 - 多端竞争或请求已被电脑处理时，不以 request 消失推断本次成功。响应中途断线/超时为结果未知，旧卡片失效。
+- 原生历史中的 `userInputResponse` item 只有在 `completed=true` 时可显示“已回答补充问题”；等待中的占位或缺少完成证据时，不能提前声称已回答。待处理卡片仍以当前 owner 的 `requests` 为准。
 - 命令、文件变更、权限请求按类型分别验证。缺少原生样例或上下文时不能提供允许按钮；不为通过测试而扩大 sandbox 或执行非 fixture 操作。
 
 ## 权限请求细化

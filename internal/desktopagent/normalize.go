@@ -170,9 +170,10 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
-			Command string `json:"command"`
-			Status  string `json:"status"`
-			Changes []struct {
+			Command   string `json:"command"`
+			Status    string `json:"status"`
+			Completed *bool  `json:"completed"`
+			Changes   []struct {
 				Path string `json:"path"`
 				Kind struct {
 					Type string `json:"type"`
@@ -219,7 +220,14 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 				text += "\n状态: " + item.Status
 			}
 		case "userInputResponse":
-			text = "已回答补充问题"
+			switch {
+			case item.Completed == nil:
+				text = "补充回答状态未知"
+			case *item.Completed:
+				text = "已回答补充问题"
+			default:
+				text = "等待补充回答"
+			}
 		default:
 			text = "[" + item.Type + " 项目]"
 		}

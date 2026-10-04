@@ -453,6 +453,71 @@ func TestRealFixtureStoredSettingsVisibility(t *testing.T) {
 	t.Logf("owner approvalPolicy=%s sandboxPolicy=%s", owner.LatestThreadSettings.ApprovalPolicy, owner.LatestThreadSettings.SandboxPolicy.Type)
 }
 
+// Opt-in, read-only persistence check after a Web send. It never prints chat
+// contents or sends a turn; the caller supplies a unique fixture-only marker.
+func TestRealFixturePersistedNoToolExchange(t *testing.T) {
+	path, marker := os.Getenv("ARIEL_TEST_MANIFEST"), os.Getenv("ARIEL_TEST_EXPECT_MARKER")
+	if path == "" || marker == "" {
+		t.Skip("set an isolated fixture manifest and expected marker")
+	}
+	manifest, err := probe.LoadManifest(path)
+	if err != nil || manifest.Authorize(true, manifest.ThreadID, manifest.Workspace) != nil {
+		t.Fatal("not a verified isolated fixture")
+	}
+	cfg, err := probe.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	rpc, err := appserver.Start(ctx, probe.BundledBinary(cfg.AppPath), os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rpc.Close()
+	thread, err := (appserver.HistoryReader{RPC: rpc.Session}).Read(ctx, manifest.ThreadID)
+	if err != nil || thread.CWD != manifest.Workspace {
+		t.Fatal("stored fixture identity mismatch")
+	}
+	matches := 0
+	for _, turn := range thread.Turns {
+		user, answer, usedTool := false, false, false
+		for _, raw := range turn.Items {
+			var item struct {
+				Type, Text string
+				Content    []struct{ Type, Text string }
+			}
+			if json.Unmarshal(raw, &item) != nil {
+				t.Fatal("stored item malformed")
+			}
+			switch item.Type {
+			case "userMessage":
+				for _, part := range item.Content {
+					if part.Type == "text" && strings.Contains(part.Text, marker) {
+						user = true
+					}
+				}
+			case "agentMessage":
+				if strings.TrimSpace(item.Text) == marker {
+					answer = true
+				}
+			case "commandExecution", "fileChange":
+				usedTool = true
+			}
+		}
+		if user {
+			if turn.Status != "completed" || !answer || usedTool {
+				t.Fatalf("marker turn was not a completed no-tool exchange: status=%s answer=%t tool=%t", turn.Status, answer, usedTool)
+			}
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("expected one exact persisted exchange, found %d", matches)
+	}
+	t.Log("one matching completed, no-tool exchange persisted in the original fixture thread")
+}
+
 func fixtureNativeShape(state json.RawMessage, expectedCWD string) map[string]any {
 	var native struct {
 		CWD                 string `json:"cwd"`

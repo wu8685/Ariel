@@ -42,5 +42,11 @@ export function permissionSummary(permissions?: { sandbox: string; approval: str
   if (!sandbox) return { label: "当前 Desktop 权限未知" };
   const approval = ({ on_request: "on-request", never: "never" } as Record<string, string>)[permissions.approval] || "未知";
   const label = `当前 Desktop：${sandbox} · 审批策略 ${approval}`;
-  return permissions.sandbox === "full_access" ? { label, warning: "可访问本机更多文件和网络；on-request 不代表受 sandbox 限制。" } : { label };
+  return permissions.sandbox === "full_access" ? { label, warning: "Full Access 允许访问本机其他文件和网络；请确认这是当前 Desktop 允许的范围。" } : { label };
+}
+
+// Current Desktop permissions are visible context, not an additional send
+// gate. The original owner still decides whether a turn or tool may run.
+export function canSend(thread: { runtime: string; pendingInteractions: readonly unknown[] } | null, ready: boolean, working: boolean, draft: string): boolean {
+  return !!thread && ready && !working && thread.runtime === "idle" && thread.pendingInteractions.length === 0 && !!draft.trim();
 }

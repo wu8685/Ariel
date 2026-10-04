@@ -54,7 +54,7 @@ func TestNormalizeKnownToolItemsWithoutNoisyReasoningPlaceholders(t *testing.T) 
 		json.RawMessage(`{"id":"r","type":"reasoning"}`),
 		json.RawMessage(`{"id":"c","type":"commandExecution","command":"/usr/bin/true","status":"completed"}`),
 		json.RawMessage(`{"id":"f","type":"fileChange","status":"completed","changes":[{"path":"/fixture/note.txt","kind":{"type":"add"},"diff":"approved\\n"}]}`),
-		json.RawMessage(`{"id":"q","type":"userInputResponse","answers":{"secret":["do-not-show"]}}`),
+		json.RawMessage(`{"id":"q","type":"userInputResponse","completed":true,"answers":{"secret":["do-not-show"]}}`),
 	}
 	turn, err := normalizeTurn("turn", "completed", items)
 	if err != nil {
@@ -69,6 +69,27 @@ func TestNormalizeKnownToolItemsWithoutNoisyReasoningPlaceholders(t *testing.T) 
 	answer := normalized[2].(map[string]any)["text"].(string)
 	if !strings.Contains(command, "/usr/bin/true") || !strings.Contains(command, "completed") || !strings.Contains(file, "/fixture/note.txt") || !strings.Contains(file, "completed") || strings.Contains(answer, "do-not-show") {
 		t.Fatalf("incorrect tool summary: command=%q file=%q answer=%q", command, file, answer)
+	}
+}
+
+func TestNormalizePendingUserInputResponseDoesNotClaimAnswered(t *testing.T) {
+	for _, tc := range []struct {
+		name, item, want string
+	}{
+		{"pending", `{"id":"q","type":"userInputResponse","completed":false}`, "等待补充回答"},
+		{"missing completion", `{"id":"q","type":"userInputResponse"}`, "补充回答状态未知"},
+		{"completed", `{"id":"q","type":"userInputResponse","completed":true}`, "已回答补充问题"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			turn, err := normalizeTurn("turn", "inProgress", []json.RawMessage{json.RawMessage(tc.item)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := turn["items"].([]any)
+			if len(items) != 1 || items[0].(map[string]any)["text"] != tc.want {
+				t.Fatalf("status summary: %v", items)
+			}
+		})
 	}
 }
 

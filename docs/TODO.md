@@ -31,4 +31,4 @@ Relay、真实 Desktop Agent、Mock Agent 和响应式 Web 已落地。Web 点�
 
 同日并发实验：两个无工具隔离 fixture 中，Agent 与独立 IPC follower 同时提交均得到 unknown，Desktop owner 出现无 turn ID 的空 `inProgress` 条目，live 与持久化终态不一致。Ariel 已按规格显示 `NATIVE_STATE_UNCERTAIN` 并暂停该会话远程操作；不能将这次实验算作并发成功验收。后续需在可复验的 Desktop 版本或原生修复后重做，同时仍需人工 Desktop UI 与 Ariel 的并发场景。详情见 [测试记录](testing/2026-10-04-m1-m4.md)。
 
-同日权限复核：自动加载的隔离 fixture 创建时为 Read Only，当前 Desktop owner 却为 Full Access；公共历史接口无原权限字段。Web 已显示当前权限与警示，但“Full Access 下继续允许远程发送还是阻止”尚待用户决定，不把只读展示视为权限策略已完成。普通发送还曾遇到短暂无 ID 占位导致 `unknown`；已针对严格占位补有界等待和自动测试，待权限策略确定后在真实 Desktop 隔离 fixture 重验。详见 [测试记录](testing/2026-10-04-m1-m4.md)。
+同日权限复核：自动加载的隔离 fixture 创建时为 Read Only，当前 Desktop owner 却为 Full Access；公共历史接口无原权限字段。用户已决定显示当前权限警示并允许发送，不擅自改 Desktop 权限。新隔离 fixture 已在 `Full Access / never` 下走通 Web 自动加载、警示、一次无工具发送与实时完成；独立 App Server 核对同一原 thread 的 exact 消息和回复均持久化，且该 turn 无命令或文件工具 item。先前普通发送曾遇到短暂无 ID 占位导致 `unknown`；已补有界等待和自动测试，但不能因这次成功就宣称并发原生异常已消失。物理手机仍待验收，详见 [测试记录](testing/2026-10-04-m1-m4.md)。
