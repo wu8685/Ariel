@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "./App";
+import type { Thread } from "./generated/protocol";
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];
@@ -36,6 +37,29 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
 });
+
+const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
+
+async function openFixture(thread: Thread = fixtureThread) {
+  sessionStorage.setItem("ariel.web-session.v1", relaySession);
+  render(<App />);
+  const socket = BrowserSocket.sockets[0];
+  const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+  socket.onopen?.(new Event("open"));
+  act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+  await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+  await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } },
+  ] } }));
+  await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+  await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
+  fireEvent.click((await screen.findByText(thread.title)).closest("button")!);
+  await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+  await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
+  act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub", streamId: "stream", seq: 1, thread }));
+  await waitFor(() => expect(screen.getByRole("heading", { name: thread.title })).toBeTruthy());
+  return { socket, requests };
+}
 
 describe("Ariel app interactions", () => {
   it("dismisses the mobile sidebar on backdrop or Escape, but not inside the sidebar", () => {
@@ -185,5 +209,68 @@ describe("Ariel app interactions", () => {
     expect(screen.getByLabelText("会话列表").querySelector(".device-meta")?.textContent).toContain("Agent 离线");
     await act(async () => socket.message({ type: "response", v: 1, requestId: updatedRequests[0].requestId, outcome: "accepted", data: { devices: [device(true)] } }));
     expect(screen.getByLabelText("会话列表").querySelector(".device-meta")?.textContent).toContain("Agent 离线");
+  });
+
+  it("sends a message only after a selected owner snapshot and stops the exact active turn", async () => {
+    const { socket, requests } = await openFixture();
+    fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "fixture message" } });
+    fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+    expect(requests("turn.start")).toHaveLength(1);
+    expect(requests("turn.start")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", text: "fixture message" } });
+    expect(requests("turn.start")[0].params.clientMessageId).toMatch(/^[0-9a-f-]{36}$/);
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("fixture message");
+    expect((screen.getByRole("button", { name: /发送/ }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "accepted", data: { turnId: "turn-1" } }));
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("");
+
+    const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "turn-1", status: "inProgress", items: [{ itemId: "reply", role: "assistant", text: "Working" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
+    expect(await screen.findByText("Working")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /停止/ }));
+    expect(requests("turn.interrupt")).toHaveLength(1);
+    expect(requests("turn.interrupt")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", expectedTurnId: "turn-1" } });
+    expect(requests("turn.start")).toHaveLength(1);
+  });
+
+  it("sends an exact multi-question answer without optimistic card removal", async () => {
+    const thread: Thread = { ...fixtureThread, runtime: "inProgress", pendingInteractions: [{ interactionId: "req-1", kind: "user_input", prompt: "Answer both", availableDecisions: ["answer"], questions: [
+      { id: "choice", question: "选择颜色", options: ["Blue", "Green"] },
+      { id: "note", question: "说明" },
+    ] }] };
+    const { socket, requests } = await openFixture(thread);
+    expect((screen.getByRole("button", { name: "提交回答" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText("选择建议或自行输入"), { target: { value: "Blue" } });
+    fireEvent.change(screen.getByPlaceholderText("输入回答"), { target: { value: "自由文本" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
+    expect(requests("interaction.respond")).toHaveLength(1);
+    expect(requests("interaction.respond")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", interactionId: "req-1", decision: "answer", answers: { choice: ["Blue"], note: ["自由文本"] } } });
+    expect(screen.getByRole("heading", { name: "Codex 有一个问题" })).toBeTruthy();
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("interaction.respond")[0].requestId, outcome: "accepted", data: {} }));
+    expect(screen.getByRole("heading", { name: "Codex 有一个问题" })).toBeTruthy();
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: { ...thread, runtime: "idle", pendingInteractions: [] } }));
+    expect(screen.queryByRole("heading", { name: "Codex 有一个问题" })).toBeNull();
+  });
+
+  it("routes only an offered command decision to the exact pending interaction", async () => {
+    const thread: Thread = { ...fixtureThread, runtime: "inProgress", pendingInteractions: [{ interactionId: "command-1", kind: "command_approval", prompt: "在 /tmp/fixture 运行 /usr/bin/true", availableDecisions: ["accept_once", "deny_and_stop"] }] };
+    const { requests } = await openFixture(thread);
+    expect(screen.getByText("在 /tmp/fixture 运行 /usr/bin/true")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "拒绝并停止" }));
+    expect(requests("interaction.respond")).toHaveLength(1);
+    expect(requests("interaction.respond")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", interactionId: "command-1", decision: "deny_and_stop" } });
+    expect(requests("interaction.respond")[0].params.answers).toBeUndefined();
+    expect(requests("turn.interrupt")).toHaveLength(0);
+  });
+
+  it("keeps an unconfirmed send draft and never retries an unknown outcome", async () => {
+    const { socket, requests } = await openFixture();
+    fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "do not replay" } });
+    fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+    expect(requests("turn.start")).toHaveLength(1);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "owner receipt lost" } }));
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("do not replay");
+    expect(screen.getByRole("alert").textContent).toContain("执行结果不确定");
+    expect(requests("turn.start")).toHaveLength(1);
   });
 });
