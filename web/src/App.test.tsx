@@ -223,16 +223,84 @@ describe("Ariel app interactions", () => {
     expect((screen.getByRole("button", { name: /发送/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("grows a mobile draft to four lines and clears the inline height on desktop resize", async () => {
-    const originalWidth = window.innerWidth;
-    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+  it("uses Enter only for mobile newlines and requires the send button", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
     try {
       Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
-      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => 140 });
+      const { socket, requests } = await openFixture();
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      const send = screen.getByRole("button", { name: "发送" }) as HTMLButtonElement;
+      expect(input.getAttribute("enterkeyhint")).toBe("enter");
+      fireEvent.change(input, { target: { value: "first" } });
+      expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(true);
+      expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
+      expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
+      expect(requests("turn.start")).toHaveLength(0);
+      fireEvent.change(input, { target: { value: "first\nsecond" } });
+      expect(input.value).toBe("first\nsecond");
+      fireEvent.click(send);
+      await waitFor(() => expect(requests("turn.start")).toHaveLength(1));
+      expect(requests("turn.start")[0].params.text).toBe("first\nsecond");
+      expect(send.disabled).toBe(true);
+      fireEvent.click(send);
+      expect(requests("turn.start")).toHaveLength(1);
+      await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "rejected", error: { code: "TURN_BUSY", message: "busy" } }));
+      expect(input.value).toBe("first\nsecond");
+      fireEvent.click(send);
+      await waitFor(() => expect(requests("turn.start")).toHaveLength(2));
+      await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[1].requestId, outcome: "accepted", data: { turnId: "new" } }));
+      expect(input.value).toBe("");
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+    }
+  });
+
+  it("retains desktop Enter to send and Shift+Enter to insert a newline", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+      const { requests } = await openFixture();
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: "desktop draft" } });
+      expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
+      expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
+      expect(requests("turn.start")).toHaveLength(0);
+      expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
+      await waitFor(() => expect(requests("turn.start")).toHaveLength(1));
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+    }
+  });
+
+  it("grows a mobile draft from one to eight visual lines, then scrolls internally and shrinks", async () => {
+    const originalWidth = window.innerWidth;
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+    let measuredHeight = 44;
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => measuredHeight });
       await openFixture();
       const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
-      fireEvent.change(input, { target: { value: "one\ntwo\nthree\nfour\nfive" } });
-      expect(input.style.height).toBe("116px");
+      expect(input.rows).toBe(1);
+      expect(input.style.height).toBe("44px");
+      measuredHeight = 92;
+      fireEvent.change(input, { target: { value: "one\ntwo\nthree" } });
+      expect(input.style.height).toBe("92px");
+      measuredHeight = 140;
+      fireEvent.change(input, { target: { value: "one long line that wraps automatically inside the narrow composer" } });
+      expect(input.style.height).toBe("140px");
+      measuredHeight = 212;
+      fireEvent.change(input, { target: { value: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight" } });
+      expect(input.style.height).toBe("212px");
+      measuredHeight = 260;
+      fireEvent.change(input, { target: { value: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten" } });
+      expect(input.style.height).toBe("212px");
+      expect(input.value).toContain("nine\nten");
+      expect(input.scrollTop).toBeGreaterThan(0);
+      measuredHeight = 44;
+      fireEvent.change(input, { target: { value: "short" } });
+      expect(input.style.height).toBe("44px");
+      expect(input.scrollTop).toBe(0);
       Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
       fireEvent(window, new Event("resize"));
       expect(input.style.height).toBe("");
