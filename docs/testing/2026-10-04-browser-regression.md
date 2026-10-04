@@ -13,7 +13,7 @@
 | Agent 子 App Server 退出后假在线 | `internal/desktopagent/health_test.go` 注入子进程退出，验证当前 Relay 会话取消并进入外层重连。 |
 | 待审批与补充回答 UI | `web/src/InteractionCard.test.tsx` 点击测试原 owner 提供的命令、文件、权限决策；`interaction.test.ts` 覆盖选项和自由文本、缺项禁用。Relay/Agent 既有 Go 测试覆盖回执与状态核对。 |
 
-`go test -race ./...`、Web 42 项测试、`npm run build` 均通过（2026-10-04 A15 回归后）。测试只在仓库的测试和隔离 fixture 上写数据，不操作业务会话。
+`go test -race ./...`、Web 43 项测试、`npm run build` 均通过（2026-10-04 A20 回归后）。测试只在仓库的测试和隔离 fixture 上写数据，不操作业务会话。
 
 ## 真实浏览器与 Desktop fixture
 

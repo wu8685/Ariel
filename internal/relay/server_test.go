@@ -112,6 +112,32 @@ func TestRelayRejectsBadOriginTokenAndDuplicateAgent(t *testing.T) {
 	}
 }
 
+func TestRelayRejectsFutureProtocolAgentBeforeItAppearsOnline(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	future := dialTest(t, s.URL, "")
+	hello := agentHello()
+	hello["v"] = 2
+	sendJSON(t, future, hello)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var reply json.RawMessage
+	if err := wsjson.Read(ctx, future, &reply); err == nil {
+		t.Fatal("future protocol Agent received a successful hello")
+	}
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000072", "deviceId": "relay", "method": "device.list", "params": map[string]any{}})
+	got := readJSON(t, web)
+	data, _ := got["data"].(map[string]any)
+	devices, _ := data["devices"].([]any)
+	if got["outcome"] != "accepted" || len(devices) != 0 {
+		t.Fatalf("future protocol Agent appeared online: %+v", got)
+	}
+}
+
 func TestRelayRequiresNonemptyTokenAndOriginPolicy(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("relay started without credential")

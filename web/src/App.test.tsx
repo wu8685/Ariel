@@ -288,6 +288,15 @@ describe("Ariel app interactions", () => {
     expect(requests("turn.interrupt")).toHaveLength(0);
   });
 
+  it("shows a future interaction without offering an unverified decision", async () => {
+    const thread: Thread = { ...fixtureThread, runtime: "inProgress", pendingInteractions: [{ interactionId: "future-1", kind: "unsupported", prompt: "Desktop 正在等待 Ariel 尚未支持的交互，请回电脑端处理。", availableDecisions: [] }] };
+    const { requests } = await openFixture(thread);
+    const card = screen.getByRole("heading", { name: "暂不支持的交互" }).closest("section");
+    expect(card?.textContent).toContain("请回电脑端处理");
+    expect(card?.querySelectorAll("button")).toHaveLength(0);
+    expect(requests("interaction.respond")).toHaveLength(0);
+  });
+
   it("keeps an unconfirmed send draft and never retries an unknown outcome", async () => {
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "do not replay" } });
