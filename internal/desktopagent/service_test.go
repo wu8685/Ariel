@@ -368,6 +368,13 @@ func TestServiceSerializesConcurrentStartsAndRejectsDuplicateID(t *testing.T) {
 		mu.Unlock()
 		return &fakeLive{updates: make(chan struct{}, 1)}, nil
 	})
+	defer s.Close()
+	// Keep one owner follower attached. Otherwise the first Start can finish and
+	// retire its fake owner before the second goroutine runs; a newly constructed
+	// fake owner then forgets the real owner's busy state.
+	if _, _, _, _, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {}); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	results := make(chan string, 2)
 	for _, id := range []string{"id-1", "id-2"} {
