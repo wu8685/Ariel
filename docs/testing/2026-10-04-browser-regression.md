@@ -13,7 +13,7 @@
 | Agent 子 App Server 退出后假在线 | `internal/desktopagent/health_test.go` 注入子进程退出，验证当前 Relay 会话取消并进入外层重连。 |
 | 待审批与补充回答 UI | `web/src/InteractionCard.test.tsx` 点击测试原 owner 提供的命令、文件、权限决策；`interaction.test.ts` 覆盖选项和自由文本、缺项禁用。Relay/Agent 既有 Go 测试覆盖回执与状态核对。 |
 
-`go test -race ./...`、Web 33 项测试、`npm run build` 均通过。测试只在仓库的测试和隔离 fixture 上写数据，不操作业务会话。
+`go test -race ./...`、Web 42 项测试、`npm run build` 均通过（2026-10-04 A15 回归后）。测试只在仓库的测试和隔离 fixture 上写数据，不操作业务会话。
 
 ## 真实浏览器与 Desktop fixture
 
@@ -23,6 +23,12 @@
 - 隔离文件审批：真实卡片显示只在 fixture 目录创建 `fixture-note.txt`，浏览器批准后文件字节为 `61 70 70 72 6f 76 65 64 0a`，与预期一致。
 - 用户补充回答、消息发送与精确停止此前已在同一 390×844 浏览器视口的隔离 fixture 中验收，记录见 [M1–M4 验证](2026-10-04-m1-m4.md)；手机实际只确认 PIN 登录与设备出现，其他路径仍需物理手机复验。
 - 权限请求：本次专用 fixture 仍未出现原生 `item/permissions/requestApproval` 卡片，turn 直接结束。当前环境的 `request_permissions_tool` 未启用，和既有兼容性结论一致；只可称协议、Agent 与组件测试覆盖，不可称真实端到端通过。未修改 Desktop feature 配置。
+
+## A15 后的浏览器复验（2026-10-04）
+
+- 通过当前本机浏览器入口连接仍在运行的手机测试 Relay／Agent：6 位 PIN 登录后可见设备在线与真实 50 条会话索引；点选新建的无工具隔离 fixture，Web 显示原 owner 中的 seed 和丢回执注入留下的原始用户消息。该消息的 turn 在测试清理时停止，不将其误记为已完成回复。
+- 同一标签页刷新后自动恢复 Relay 连接与设备列表，不再输入 PIN；新标签页仍要求 PIN。测试没有读取浏览器存储内容，也没有在浏览器中向业务会话发送消息。测试标签页已关闭。
+- 本轮浏览器窗口为桌面视口；此前的 390×844 回归仍是当前手机尺寸证据，不能由本轮结果外推为新手机 UI 或物理手机验收。0011 仍为 Draft，未开始实现。
 
 ## 仍需物理手机确认
 
