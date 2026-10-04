@@ -23,6 +23,8 @@
 | 0006 | [M4 断线恢复与有界容量](0006-m4-recovery-capacity.md) | 实施中（用户授权连续推进） | 重连、权威状态重建、慢消费者与大历史 |
 | 0007 | [Night 界面配色](0007-night-appearance.md) | Implemented（桌面已验；手机待验） | 深色背景、白色正文、蓝色高亮与各状态可读性 |
 | 0008 | [固定 6 位 Web 连接码](0008-fixed-six-digit-web-pin.md) | Approved（用户已确认） | 手机短码与 Agent 长口令分离，错误次数上限 |
+| 0009 | [手机侧栏收起与灰色 logo](0009-mobile-drawer-and-logo.md) | Approved（用户已确认） | 手机侧栏点空白处收起，logo 用中性灰 |
+| 0010 | [刷新页面复用 Web session](0010-browser-relay-session.md) | Approved（用户已确认） | 浏览器与 Relay 内存 session 免刷新重输连接码 |
 
 ## 设计基线
 

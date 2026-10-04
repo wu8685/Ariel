@@ -3,11 +3,14 @@ package relay
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,13 +32,18 @@ type Config struct {
 }
 
 const maxWebSubscriptions = 32
+const maxWebSessions = 32
+const webSessionLifetime = 24 * time.Hour
 
 type Server struct {
 	cfg            Config
 	epoch          string
+	now            func() time.Time
 	origins        map[string]struct{}
 	mu             sync.Mutex
 	webPINFailures int
+	webSessions    map[[32]byte]time.Time
+	sessionOrder   [][32]byte
 	agents         map[string]*peer
 	webs           map[*peer]struct{}
 	routes         map[string]*route
@@ -112,7 +120,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = 5 * time.Second
 	}
-	return &Server{cfg: cfg, epoch: rand.Text(), origins: origins, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
+	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
 }
 
 func ValidWebPIN(pin string) bool {
@@ -127,23 +135,57 @@ func ValidWebPIN(pin string) bool {
 	return true
 }
 
-func (s *Server) authorize(role, token string) bool {
+func (s *Server) authorize(role, token string) (string, bool) {
 	if role == "agent" {
-		return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
+		return "", subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
 	}
 	if role != "web" {
-		return false
+		return "", false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.webPINFailures >= 10 {
-		return false
+		return "", false
+	}
+	if strings.HasPrefix(token, "s_") {
+		if len(token) != 66 {
+			return "", false
+		}
+		if _, err := hex.DecodeString(token[2:]); err != nil {
+			return "", false
+		}
+		key := sha256.Sum256([]byte(token))
+		if expiry, ok := s.webSessions[key]; ok && s.now().Before(expiry) {
+			return token, true
+		}
+		delete(s.webSessions, key)
+		return "", false
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.WebPIN)) == 1 {
-		return true
+		bytes := make([]byte, 32)
+		if _, err := rand.Read(bytes); err != nil {
+			return "", false
+		}
+		sessionToken := "s_" + hex.EncodeToString(bytes)
+		key := sha256.Sum256([]byte(sessionToken))
+		active := s.sessionOrder[:0]
+		for _, prior := range s.sessionOrder {
+			if _, ok := s.webSessions[prior]; ok {
+				active = append(active, prior)
+			}
+		}
+		s.sessionOrder = active
+		s.webSessions[key] = s.now().Add(webSessionLifetime)
+		s.sessionOrder = append(s.sessionOrder, key)
+		for len(s.webSessions) > maxWebSessions {
+			oldest := s.sessionOrder[0]
+			s.sessionOrder = s.sessionOrder[1:]
+			delete(s.webSessions, oldest)
+		}
+		return sessionToken, true
 	}
 	s.webPINFailures++
-	return false
+	return "", false
 }
 
 func (s *Server) Handler() http.Handler {
@@ -185,7 +227,12 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		AdapterVersion string          `json:"adapterVersion"`
 		Capabilities   map[string]bool `json:"capabilities"`
 	}
-	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || (hello.Role == "web" && origin == "") || !s.authorize(hello.Role, hello.Token) {
+	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || (hello.Role == "web" && origin == "") {
+		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
+		return
+	}
+	sessionToken, authorized := s.authorize(hello.Role, hello.Token)
+	if !authorized {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
@@ -203,7 +250,11 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	defer s.removePeer(p)
-	if err := p.send(ctx, map[string]any{"type": "hello.ok", "v": 1, "connectionId": p.id, "relayEpoch": s.epoch}); err != nil {
+	ack := map[string]any{"type": "hello.ok", "v": 1, "connectionId": p.id, "relayEpoch": s.epoch}
+	if p.role == "web" {
+		ack["sessionToken"] = sessionToken
+	}
+	if err := p.send(ctx, ack); err != nil {
 		return
 	}
 	if p.role == "agent" {

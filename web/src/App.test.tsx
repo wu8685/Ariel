@@ -1,0 +1,112 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { App } from "./App";
+
+class BrowserSocket {
+  static sockets: BrowserSocket[] = [];
+  readyState = 1;
+  sent: string[] = [];
+  onopen: ((event: Event) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  constructor(_url: string) { BrowserSocket.sockets.push(this); }
+  send(value: string) { this.sent.push(value); }
+  close(code = 1000) {
+    this.readyState = 3;
+    this.onclose?.({ code } as CloseEvent);
+  }
+  message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) } as MessageEvent); }
+}
+
+const relaySession = `s_${"a".repeat(64)}`;
+let originalWebSocket: typeof WebSocket;
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  originalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
+  BrowserSocket.sockets = [];
+  sessionStorage.clear();
+});
+
+afterEach(() => {
+  cleanup();
+  globalThis.WebSocket = originalWebSocket;
+  vi.restoreAllMocks();
+  delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
+});
+
+describe("Ariel app interactions", () => {
+  it("dismisses the mobile sidebar on backdrop or Escape, but not inside the sidebar", () => {
+    render(<App />);
+    const sidebar = screen.getByLabelText("会话列表");
+    expect(sidebar.classList.contains("open")).toBe(true);
+    fireEvent.click(screen.getByLabelText("关闭会话列表遮罩"));
+    expect(sidebar.classList.contains("open")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "☰ 会话" }));
+    expect(sidebar.classList.contains("open")).toBe(true);
+    fireEvent.click(sidebar);
+    expect(sidebar.classList.contains("open")).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(sidebar.classList.contains("open")).toBe(false);
+  });
+
+  it("stores a Relay session after PIN login and reconnects after reload without storing the PIN", async () => {
+    const first = render(<App />);
+    fireEvent.change(screen.getByLabelText("6 位连接码"), { target: { value: "012345" } });
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    expect(BrowserSocket.sockets).toHaveLength(1);
+    BrowserSocket.sockets[0].onopen?.(new Event("open"));
+    expect(JSON.parse(BrowserSocket.sockets[0].sent[0]).token).toBe("012345");
+    BrowserSocket.sockets[0].message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession });
+    await waitFor(() => expect(sessionStorage.getItem("ariel.web-session.v1")).toBe(relaySession));
+    expect(sessionStorage.getItem("ariel.web-session.v1")).not.toBe("012345");
+    first.unmount();
+
+    render(<App />);
+    expect(BrowserSocket.sockets).toHaveLength(2);
+    BrowserSocket.sockets[1].onopen?.(new Event("open"));
+    expect(JSON.parse(BrowserSocket.sockets[1].sent[0]).token).toBe(relaySession);
+  });
+
+  it("clears a rejected saved session and explicit disconnect", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    expect(BrowserSocket.sockets).toHaveLength(1);
+    BrowserSocket.sockets[0].close(1008);
+    expect(await screen.findByText("保存的会话已失效，请重新输入连接码。")).toBeTruthy();
+    expect(sessionStorage.getItem("ariel.web-session.v1")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("6 位连接码"), { target: { value: "012345" } });
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    BrowserSocket.sockets[1].onopen?.(new Event("open"));
+    BrowserSocket.sockets[1].message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession });
+    await waitFor(() => expect(sessionStorage.getItem("ariel.web-session.v1")).toBe(relaySession));
+    fireEvent.click(screen.getByRole("button", { name: "断开" }));
+    expect(sessionStorage.getItem("ariel.web-session.v1")).toBeNull();
+  });
+
+  it("loads online devices and closes the drawer when a history thread is selected", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    const requestFor = (method: string) => socket.sent.map(value => JSON.parse(value)).find(value => value.method === method);
+    await waitFor(() => expect(requestFor("device.list")).toBeTruthy());
+    act(() => socket.message({ type: "response", v: 1, requestId: requestFor("device.list").requestId, outcome: "accepted", data: {
+      devices: [{ deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, adapterVersion: "desktop", capabilities: { autoLoad: true } }],
+    } }));
+    expect(await screen.findByRole("option", { name: "昊天的 Mac" })).toBeTruthy();
+    await waitFor(() => expect(requestFor("thread.list")).toBeTruthy());
+    const thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
+    act(() => socket.message({ type: "response", v: 1, requestId: requestFor("thread.list").requestId, outcome: "accepted", data: { threads: [thread] } }));
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    expect(screen.getByLabelText("会话列表").classList.contains("open")).toBe(false);
+    await waitFor(() => expect(requestFor("thread.subscribe")).toBeTruthy());
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requestFor("thread.subscribe").requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread }));
+    await waitFor(() => expect(screen.getAllByText("/tmp/fixture").length).toBeGreaterThan(1));
+  });
+});

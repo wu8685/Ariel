@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const style = readFileSync(fileURLToPath(new URL("./style.css", import.meta.url)), "utf8");
 const interaction = readFileSync(fileURLToPath(new URL("./interaction.css", import.meta.url)), "utf8");
 const html = readFileSync(fileURLToPath(new URL("../index.html", import.meta.url)), "utf8");
+const app = readFileSync(fileURLToPath(new URL("./App.tsx", import.meta.url)), "utf8");
 
 function token(name: string): string {
   return style.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1]?.toLowerCase() || "";
@@ -49,5 +50,15 @@ describe("fixed Night appearance", () => {
     expect(interaction).toMatch(/\.question input\s*\{[^}]*background:\s*var\(--color-/s);
     expect(style).toMatch(/@media\s*\(max-width:\s*800px\)/);
     expect(style).toMatch(/prefers-reduced-motion/);
+  });
+
+  it("uses a neutral gray logo and a mobile-only dismissible sidebar backdrop", () => {
+    expect(token("color-logo")).toBe("#b4c0cf");
+    expect(style).toMatch(/\.brand-mark\s*\{[^}]*color:\s*var\(--color-logo\)/s);
+    expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*none/s);
+    expect(style).toMatch(/@media\s*\(max-width:\s*800px\)[\s\S]*\.sidebar-backdrop\s*\{[^}]*display:\s*block/s);
+    expect(app).toMatch(/aria-label="关闭会话列表遮罩"[^>]*onClick=\{\(\) => setShowList\(false\)\}/);
+    expect(app).toMatch(/aria-expanded=\{showList\}/);
+    expect(app).toMatch(/key === "Escape"[^}]*setShowList\(false\)/);
   });
 });

@@ -1,4 +1,5 @@
 import { validateEnvelope } from "./protocol";
+import { newRequestID } from "./ids";
 import type { ArielProtocolV1Envelope, Response } from "./generated/protocol";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
@@ -15,7 +16,7 @@ export function timeoutFor(method: Method): number {
 export class ArielSocket {
   onStatus: (status: ConnectionStatus) => void = () => {};
   onEvent: (event: ArielProtocolV1Envelope) => void = () => {};
-  onReady: (relayEpoch: string) => void = () => {};
+  onReady: (relayEpoch: string, sessionToken?: string) => void = () => {};
   private ws: WebSocket | null = null;
   private token = "";
   private ready = false;
@@ -61,7 +62,7 @@ export class ArielSocket {
   }
 
   request(method: Method, deviceId: string, params: Record<string, unknown>): Promise<Response> {
-    const requestId = crypto.randomUUID();
+    const requestId = newRequestID();
     if (!this.ready || !this.ws || this.ws.readyState !== 1) return Promise.resolve(this.localFailure(requestId, "not_submitted", "DEVICE_OFFLINE"));
     if (this.pending.size >= 32) return Promise.resolve(this.localFailure(requestId, "not_submitted", "OVERLOADED"));
     const message = { type: "request", v: 1, requestId, deviceId, method, params };
@@ -101,8 +102,9 @@ export class ArielSocket {
         if (this.helloTimer) clearTimeout(this.helloTimer);
         this.ready = true;
         this.retry = 0;
+        if (value.sessionToken) this.token = value.sessionToken;
         this.onStatus("ready");
-        this.onReady(value.relayEpoch);
+        this.onReady(value.relayEpoch, value.sessionToken);
         return;
       }
       if (!this.ready) { this.onStatus("invalid"); ws.close(); return; }

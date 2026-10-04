@@ -60,7 +60,9 @@ func Run(ctx context.Context, cfg Config) error {
 			cancel()
 		}
 	}()
-	err = RunWithService(runCtx, cfg, service)
+	err = serveWithAppServer(runCtx, process.Session.Done(), func(ctx context.Context) error {
+		return RunWithService(ctx, cfg, service)
+	})
 	cancel()
 	select {
 	case healthErr := <-healthResult:

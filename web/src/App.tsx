@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
+import { newRequestID } from "./ids";
+import { WebSession } from "./session";
 import type { ArielProtocolV1Envelope, Thread, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
 
@@ -15,7 +17,10 @@ function errorText(response: Response): string {
 
 export function App() {
   const client = useMemo(() => new ArielSocket(wsURL), []);
+  const webSession = useMemo(() => new WebSession(() => window.sessionStorage), []);
   const [token, setToken] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const savedSessionAttempt = useRef(false);
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceId, setDeviceId] = useState("");
@@ -102,8 +107,22 @@ export function App() {
   }
 
   useEffect(() => {
-    client.onStatus = next => { setStatus(next); if (next !== "ready") { pendingSelect.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); } };
-    client.onReady = () => { expectedSubscription.current = ""; selection.current.view = null; setView(null); void refreshDevices().then(online => void resumeSelected(online)); };
+    client.onStatus = next => {
+      setStatus(next);
+      if (next === "invalid") {
+        webSession.rejected();
+        if (savedSessionAttempt.current) setSessionExpired(true);
+        savedSessionAttempt.current = false;
+      }
+      if (next !== "ready") { pendingSelect.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); }
+    };
+    client.onReady = (_epoch, sessionToken) => {
+      if (sessionToken) webSession.accepted(sessionToken);
+      savedSessionAttempt.current = false;
+      setSessionExpired(false);
+      expectedSubscription.current = ""; selection.current.view = null; setView(null);
+      void refreshDevices().then(online => void resumeSelected(online));
+    };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
       if (event.type !== "event") return;
       if (event.event === "device.status") {
@@ -142,6 +161,8 @@ export function App() {
         setThreads(list => list.map(t => t.threadId === next.threadId ? next.thread : t));
       }
     };
+    const saved = webSession.saved();
+    if (saved) { savedSessionAttempt.current = true; client.connect(saved); }
     return () => client.disconnect();
   }, [client]);
 
@@ -172,13 +193,22 @@ export function App() {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [client]);
 
+  useEffect(() => {
+    if (!showList) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowList(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showList]);
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [view?.seq]);
 
   async function send() {
     if (!view || !deviceId || !canSend(view.thread, status === "ready", working, draft)) return;
     const text = draft;
     setWorking(true); setNotice("");
-    const response = await client.request("turn.start", deviceId, { threadId: view.threadId, clientMessageId: crypto.randomUUID(), text });
+    const response = await client.request("turn.start", deviceId, { threadId: view.threadId, clientMessageId: newRequestID(), text });
     setWorking(false);
     setDraft(current => current === text ? preserveDraftAfterSend(current, response.outcome) : current);
     if (response.outcome !== "accepted") setNotice(errorText(response));
@@ -206,11 +236,12 @@ export function App() {
   return <div className="app-shell">
     <header className="masthead">
       <div className="brand"><span className="brand-mark" aria-hidden="true">✳</span><span>Ariel</span><small>Codex 随身工作台</small></div>
-      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接码未通过" : "Relay 未连接"}</span><button className="text-button" onClick={() => client.disconnect()}>断开</button></div>
+      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接"}</span><button className="text-button" onClick={() => { webSession.disconnect(); savedSessionAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect(); }}>断开</button></div>
     </header>
-    {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。它只保存在当前页面内存；刷新后需重新输入。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) client.connect(token); }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
+    {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
     <div className="workspace">
-      <aside className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
+      {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
+      <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
         <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId)} disabled={!deviceId}>↻</button></div>
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
@@ -220,7 +251,7 @@ export function App() {
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
       <main className="conversation">
-        <div className="conversation-head"><button className="mobile-list text-button" onClick={() => setShowList(true)}>☰ 会话</button><div><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view?.thread.title || threads.find(t => t.threadId === threadId)?.title || "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || "从左侧选择历史会话，接着工作。"}</span></div><div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div></div>
+        <div className="conversation-head"><button className="mobile-list text-button" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}>☰ 会话</button><div><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view?.thread.title || threads.find(t => t.threadId === threadId)?.title || "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || "从左侧选择历史会话，接着工作。"}</span></div><div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div></div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         <div className="transcript" aria-live="polite">{!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}{view?.thread.turns.map(turn => <section className="turn" key={turn.turnId}><div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>{turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}</section>)}{view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}<div ref={endRef} /></div>
         <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea aria-label="发送消息" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready"} rows={3} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready"}>■ 停止</button>}<button className="primary send-button" onClick={() => void send()} disabled={!canSend(view?.thread || null, status === "ready", working, draft)}>发送 <span aria-hidden="true">↗</span></button></div></div></div></div>
@@ -229,6 +260,6 @@ export function App() {
   </div>;
 }
 
-function InteractionCard({ card, values, onChange, onRespond, disabled }: { card: Interaction; values: Record<string, string>; onChange: (id: string, value: string) => void; onRespond: (decision: string) => void; disabled: boolean }) {
+export function InteractionCard({ card, values, onChange, onRespond, disabled }: { card: Interaction; values: Record<string, string>; onChange: (id: string, value: string) => void; onRespond: (decision: string) => void; disabled: boolean }) {
   return <section className="interaction-card"><span className="eyebrow">NEEDS YOUR INPUT</span><h3>{card.kind === "command_approval" ? "等待命令审批" : card.kind === "file_approval" ? "等待文件变更审批" : card.kind === "permission_request" ? "等待权限请求" : card.kind === "user_input" ? "Codex 有一个问题" : "暂不支持的交互"}</h3><p>{card.prompt}</p>{card.questions?.map(q => <label key={q.id} className="question">{q.question}<input list={`options-${card.interactionId}-${q.id}`} value={values[q.id] || ""} onChange={e => onChange(q.id, e.target.value)} placeholder={q.options?.length ? "选择建议或自行输入" : "输入回答"} /><datalist id={`options-${card.interactionId}-${q.id}`}>{q.options?.map(o => <option key={o} value={o} />)}</datalist></label>)}<div className="interaction-actions">{card.availableDecisions.map(decision => <button key={decision} className={decision === "accept_once" || decision === "answer" ? "primary" : "secondary"} disabled={disabled || (decision === "answer" && !answersForSubmission(card, values))} onClick={() => onRespond(decision)}>{decision === "accept_once" && card.kind === "permission_request" ? "仅本轮按原请求授权" : ({ accept_once: "仅本次允许", deny: "拒绝", deny_and_stop: "拒绝并停止", answer: "提交回答" } as Record<string, string>)[decision]}</button>)}</div></section>;
 }

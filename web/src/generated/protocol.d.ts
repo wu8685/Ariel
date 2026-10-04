@@ -77,6 +77,7 @@ export interface HelloOK {
   v: 1;
   connectionId: Id;
   relayEpoch: Id;
+  sessionToken?: string;
 }
 export interface Error {
   code:

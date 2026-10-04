@@ -13,6 +13,24 @@ class FakeSocket {
 }
 
 describe("Ariel WebSocket client", () => {
+  it("uses the Relay-issued session token on reconnect, not the PIN", () => {
+    const sockets: FakeSocket[] = [];
+    const client = new ArielSocket("ws://localhost/ws", () => {
+      const socket = new FakeSocket(); sockets.push(socket);
+      return socket as unknown as WebSocket;
+    });
+    const ready: string[] = [];
+    client.onReady = (_epoch, sessionToken) => ready.push(sessionToken || "");
+    client.connect("012345");
+    sockets[0].onopen?.();
+    const sessionToken = `s_${"a".repeat(64)}`;
+    sockets[0].message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken });
+    expect(ready).toEqual([sessionToken]);
+    client.wake();
+    sockets[1].onopen?.();
+    expect(JSON.parse(sockets[1].sent[0]).token).toBe(sessionToken);
+    client.disconnect();
+  });
   it("accepts exactly six ASCII digits including a leading zero", () => {
     expect(isWebPIN("012345")).toBe(true);
     for (const value of ["", "12345", "1234567", "12a456", "１２３４５６"]) expect(isWebPIN(value)).toBe(false);

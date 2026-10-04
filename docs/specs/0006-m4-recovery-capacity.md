@@ -11,6 +11,7 @@
 - Desktop 无法访问时不能宣称 `codexReady`。不自动拉起 Desktop。用户可见失败或加载中状态。
 - 单个原 owner 的 IPC follower 失效时，Agent 使该 thread 的旧 stream 明确失效（`RESYNC_REQUIRED`），释放 follower；Web 自动用新 subscription 重新取得 owner 全量快照，不继续用旧 seq。若快照结构不可归一化（包括原生历史出现无 turn ID 的条目），须以 `NATIVE_STATE_UNCERTAIN` 显式终止旧 stream、清空手机端旧视图、禁用该会话远程操作；首次订阅即发现异常也返回同一错误。Web 不自动重试这种确定性的结构异常，用户可稍后手动重新选择会话。不得静默跳过异常条目或编造 turn ID。
 - Agent 建立 Relay 会话前须对当前 Desktop IPC 做有界 initialize 探测；运行中连续两次探测失败则主动断开 Relay，令设备变为离线。Desktop 恢复后按原连接策略重试，不投递离线请求。仅测试探针与状态机，不为测试退出真实业务 Desktop。
+- Agent 所启动的 Codex App Server 子进程若退出，即使 Desktop IPC 仍可访问，也须立即取消当前 Relay 会话并由外层重连流程重建 App Server；不能保持“设备在线”但所有 thread 请求失败的假在线状态。
 - Web 从后台回到前台时若可能错过事件，应放弃旧 subscription 并从 owner 重新获取全量快照；若 WebSocket 已半开则先重建连接。未完成变更统一标为结果未知，不自动重发。
 - Relay 每 Web 未完成请求最多 32；IPC 有界事件缓冲。慢 Web 写超时即关闭其连接，让客户端重取完整快照，不能让一个慢连接无限阻塞其它会话。
 - Agent 至多缓存 64 个 thread controller，每个 thread 至多接受 16 个订阅。到达上限时只能回明确的 `OVERLOADED`；有空闲、无订阅的 controller 时可先释放其 follower 并淘汰最久未用者，不能淘汰正在请求或仍被订阅的 thread。即使 controller 被淘汰，最近 4096 个已受理／结果未知的 `threadId + clientMessageId` 仍在本进程内有界去重，不能因导航历史会话而允许同一消息 ID 重放。

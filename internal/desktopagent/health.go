@@ -9,6 +9,29 @@ import (
 )
 
 var errDesktopUnavailable = errors.New("Desktop IPC unavailable")
+var errAppServerUnavailable = errors.New("Codex App Server unavailable")
+
+func serveWithAppServer(ctx context.Context, done <-chan struct{}, run func(context.Context) error) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		select {
+		case <-done:
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
+	err := run(runCtx)
+	cancel()
+	<-stopped
+	select {
+	case <-done:
+		return errAppServerUnavailable
+	default:
+		return err
+	}
+}
 
 func checkDesktop(ctx context.Context, socket string) error {
 	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
