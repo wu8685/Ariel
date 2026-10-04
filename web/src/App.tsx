@@ -124,7 +124,7 @@ export function App() {
     };
     client.onReady = (_epoch, sessionToken) => {
       if (sessionToken) webSession.accepted(sessionToken);
-      savedSessionAttempt.current = false;
+      savedSessionAttempt.current = Boolean(sessionToken);
       setSessionExpired(false);
       expectedSubscription.current = ""; selection.current.view = null; setView(null);
       void refreshDevices().then(online => void resumeSelected(online));

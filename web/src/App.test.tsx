@@ -111,6 +111,31 @@ describe("Ariel app interactions", () => {
     expect(sessionStorage.getItem("ariel.web-session.v1")).toBeNull();
   });
 
+  it("asks for a new PIN when a Relay restart revokes a session issued after login", () => {
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      fireEvent.change(screen.getByLabelText("6 位连接码"), { target: { value: "012345" } });
+      fireEvent.click(screen.getByRole("button", { name: "连接" }));
+      const first = BrowserSocket.sockets[0];
+      first.onopen?.(new Event("open"));
+      act(() => first.message({ type: "hello.ok", v: 1, connectionId: "c1", relayEpoch: "e1", sessionToken: relaySession }));
+      expect(sessionStorage.getItem("ariel.web-session.v1")).toBe(relaySession);
+
+      act(() => first.close(1006));
+      act(() => vi.advanceTimersByTime(2000));
+      expect(BrowserSocket.sockets).toHaveLength(2);
+      const second = BrowserSocket.sockets[1];
+      second.onopen?.(new Event("open"));
+      expect(JSON.parse(second.sent[0]).token).toBe(relaySession);
+      act(() => second.close(1008));
+
+      expect(screen.getByText("保存的会话已失效，请重新输入连接码。")).toBeTruthy();
+      expect(screen.queryByText(/连接码错误或 Relay 已锁定/)).toBeNull();
+      expect(sessionStorage.getItem("ariel.web-session.v1")).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("loads online devices and closes the drawer when a history thread is selected", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

@@ -17,7 +17,7 @@
 | A11 权限请求 | 未完成真实验收 | 协议、Adapter 和 UI 测试存在；当前 Desktop 的 `request_permissions_tool` 未启用，无原生待审批样例。 |
 | A12 补充回答 | 通过（隔离 fixture） | 两问题、选项／自由文本、原 owner 回显和持久化终态已核对。 |
 | A13 请求竞争与过期 | 部分 | 双 IPC 客户端竞争和本地 stale 判定已实测；Desktop UI 与手机同时处理未实测。 |
-| A14 待处理时断线 | 部分 | 真实 user-input 在 Agent、Relay 分别重启后仍可提交；命令／文件待审批恢复未逐类实测。 |
+| A14 待处理时断线 | 通过（隔离 fixture） | 真实 user-input 在 Agent、Relay 分别重启后仍可提交；命令与文件待审批卡片也分别经过独立 Relay／Agent 重启，从 owner live request 恢复。拒绝后卡片消失，独立历史确认终态；文件拒绝后目标文件不存在。 |
 | A15 丢失响应 | 部分 | 真实 WebSocket 转发测试在 Agent 收到 mutation 后断线，Web 得到 unknown，替代 Agent 上线后路由不重放；真实 Desktop 接受后的定点丢回执尚未实测。 |
 | A16 Relay／Agent 重启 | 通过（隔离 fixture） | 同页保留选择并重订阅，旧视图清空；待回答问题恢复有真实证据。 |
 | A17 Desktop 退出／重启 | 部分 | 健康检查和子 App Server 退出已测；承载业务会话的 Desktop 未做破坏性退出实验。 |
