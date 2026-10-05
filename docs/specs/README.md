@@ -34,6 +34,7 @@
 | 0017 | [实时更新时保留历史阅读位置](0017-preserve-reading-position-on-live-updates.md) | Approved（用户已确认；0016 自动加载仍暂缓） | 用户上滑读历史时不被新消息拉回底部，手动旧页加载保持锚点 |
 | 0018 | [黑色 Night 主题与左右分列对话气泡](0018-neutral-night-chat-bubbles.md) | Approved（用户已确认） | 近黑中性主题；用户右侧蓝色气泡、Codex 左侧深灰气泡，正文不显示角色名 |
 | 0019 | [安全呈现会话 Markdown](0019-safe-markdown-conversation.md) | Implemented（自动与隔离浏览器已验；物理手机待验） | 用户／Codex 正文支持 CommonMark 与 GFM；禁用原生 HTML 和远程资源自动加载 |
+| 0020 | [一键安装、配置与启动](0020-one-command-install-and-start.md) | Draft（待用户确认） | 一个脚本支持接入指定 Relay 或同机启动 Relay + Agent；提供 Agent 自动安装文档 |
 
 ## 设计基线
 
