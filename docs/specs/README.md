@@ -27,10 +27,12 @@
 | 0010 | [刷新页面复用 Web session](0010-browser-relay-session.md) | Approved（用户已确认） | 浏览器与 Relay 内存 session 免刷新重输连接码 |
 | 0011 | [手机会话紧凑布局与 Night 视觉](0011-compact-mobile-conversation-header.md) | Approved（Web／浏览器已验；物理手机待验） | 缩小顶部区域，参考 Codex 手机版的视觉层级优化对话与输入区 |
 | 0012 | [电脑浏览器紧凑会话布局](0012-compact-desktop-conversation.md) | Draft（待用户确认） | 沿用手机紧凑布局，缩小桌面顶部与输入区，侧栏按需展开 |
-| 0013 | [大会话最近十回合与 64 MiB 有界同步](0013-paged-history-and-large-owner.md) | Approved（已实现并验证；物理手机待验） | 默认最近 10 turn、旧历史按需分页，本机原会话上限 64 MiB |
-| 0014 | [手机输入框回车换行与八行自适应](0014-mobile-composer-newline-and-eight-lines.md) | Approved（Web／隔离浏览器已验；物理手机待验） | 手机 Enter 仅换行，按钮发送；输入框一至八行增长并在超出后内部滚动 |
-| 0015 | [会话中的工具活动折叠为单行状态](0015-compact-tool-activity-in-conversation.md) | Draft（待用户确认） | 隐藏已知工具过程卡片，运行中只保留一行思考／处理状态 |
+| 0013 | [大会话最近十回合与 64 MiB 有界同步](0013-paged-history-and-large-owner.md) | Approved（已实现并验证；物理手机旧页待验） | 默认最近 10 turn、旧历史按需分页，本机原会话上限 64 MiB |
+| 0014 | [手机输入框回车换行与八行自适应](0014-mobile-composer-newline-and-eight-lines.md) | Approved（Web／物理手机已验） | 手机 Enter 仅换行，按钮发送；输入框一至八行增长并在超出后内部滚动 |
+| 0015 | [工具活动默认折叠，按需查看每段调用](0015-compact-tool-activity-in-conversation.md) | Draft（按新反馈修订，待确认） | 一组工具调用默认单行摘要，点击查看各调用；运行状态轻量呈现 |
 | 0016 | [向上滚动渐进加载会话历史](0016-scroll-triggered-history-loading.md) | Draft（暂缓；保持 0013 当前按钮加载） | 若未来启用：上滑自动逐页补充更早 turn／item，并保持阅读位置 |
+| 0017 | [实时更新时保留历史阅读位置](0017-preserve-reading-position-on-live-updates.md) | Draft（待确认；0016 自动加载仍暂缓） | 用户上滑读历史时不被新消息拉回底部，手动旧页加载保持锚点 |
+| 0018 | [黑色 Night 主题与左右分列对话气泡](0018-neutral-night-chat-bubbles.md) | Draft（待确认） | 近黑中性主题；用户右侧蓝色气泡、Codex 左侧深灰气泡，正文不显示角色名 |
 
 ## 设计基线
 
