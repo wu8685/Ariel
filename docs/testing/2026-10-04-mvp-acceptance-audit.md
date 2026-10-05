@@ -25,14 +25,14 @@
 | A19 大历史／大 diff | 部分 | [0013 的真实大会话回归](2026-10-05-0013-pagination-probe.md)已通过：47 个 turn、约 47 MB 原 owner 快照、浏览器默认最近 10 turn 并按需翻到全部 47 turn，Agent 保持在线。合成超大 diff 被容量门禁拦截，单个 7 MiB 历史 item 明确报错且后续普通历史页可读，普通真实文件 diff 已验；真实单 item 超页和极大 diff 的完整端到端路径仍未复现，不能概括为 A19 全通过。 |
 | A20 未支持交互／协议升级 | 部分 | 除 Schema／未知决定测试外，真 WebSocket 证明未来版本 Agent 握手被拒且不假在线；Web 证明未支持交互有说明而无决定按钮。跨真实 Codex Desktop 版本升级未做。 |
 | A21 基础连接鉴别 | 通过（本机及自动测试） | PIN／Agent 口令隔离、Origin、重复 Agent、帧上限和锁定均有测试；浏览器连接真实 Relay。 |
-| A22 物理手机 | 部分 | 用户已确认同 LAN、手机 PIN 登录和设备出现；[0011](2026-10-04-0011-mobile-layout.md) 与 [0014](2026-10-05-0014-mobile-composer.md) 在 390×844 真实桌面浏览器视口已验，不能替代手机。完整历史、侧栏、软键盘输入、审批和后台恢复仍待物理手机复验。 |
+| A22 物理手机 | 部分 | 用户在真实手机 Safari 上确认 PIN 登录、设备出现、隔离 fixture 的 3 个 turn／实时 Desktop 回复可见，点选会话后侧栏自动收起；Return 只换行、九行后输入框封顶并可内滚。聚焦时按钮曾超出右边界，已按 [0014](2026-10-05-0014-mobile-composer.md) 修复并完成 390×844 本机浏览器复测，仍待手机刷新复验。手机发送、审批、补充回答和后台恢复未验。 |
 | A23 无业务持久化 | 通过（当前 Ariel 进程） | Relay／Agent 源码无会话库、离线队列或正文日志写盘；2026-10-05 对运行中的 0013 Relay／Agent 复查，可写普通文件 FD 均为 0。Codex 自身的原始历史持久化不属于 Ariel 副本。 |
 
 ## 下一步的真实门槛
 
-1. [0011 手机紧凑布局](../specs/0011-compact-mobile-conversation-header.md)与[0014 手机输入框](../specs/0014-mobile-composer-newline-and-eight-lines.md)均已获确认并按 TDD 实现，390×844 浏览器结果见对应专项记录；物理手机仍需复验。
+1. [0011 手机紧凑布局](../specs/0011-compact-mobile-conversation-header.md)与[0014 手机输入框](../specs/0014-mobile-composer-newline-and-eight-lines.md)均已获确认并按 TDD 实现；物理手机已复验部分行为，同时暴露聚焦溢出，当前修复仍待手机侧复验。
 2. 物理手机完整操作需要用户在手机上执行或提供可操作的设备会话；不能用 390×844 桌面视口替代。
-3. Desktop→Web 的实时方向、双端竞争和 Desktop 重启需要隔离 fixture 与不影响业务会话的操作窗口。当前不能把双 IPC 客户端异常实验当成成功证据；A05 的 Desktop UI 消息已持久化并在 Web 重连后显示，但实时方向仍需用户在 Web 已订阅时再发送隔离消息。
+3. Desktop→Web 的实时方向已在已订阅 Web 且不刷新时，由真实 Desktop UI 发送隔离消息验证通过。双端竞争和 Desktop 重启仍需隔离 fixture 与不影响业务会话的操作窗口；不能把双 IPC 客户端异常实验当成成功证据。
 4. 原生权限请求需要可用的 Desktop 能力或版本；不擅自开启全局 feature，不把协议测试当成真实审批通过。
 
 其余 `部分` 项仍可用有界故障注入、自动测试及隔离 fixture 继续推进；每次须记录具体输入与可核对结果。

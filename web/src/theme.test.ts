@@ -79,6 +79,13 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/safe-area-inset-bottom/);
   });
 
+  it("does not let mobile input focus magnify the composer past the screen edge", () => {
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    const textarea = mobile.match(/\.composer textarea\s*\{([^}]*)\}/s)?.[1] || "";
+    const fontSize = Number(textarea.match(/font-size:\s*(\d+)px/)?.[1]);
+    expect(fontSize).toBeGreaterThanOrEqual(16);
+  });
+
   it("wraps long messages and approval prompts without horizontal scrolling", () => {
     expect(style).toMatch(/\.message-text\s*\{[^}]*overflow-wrap:\s*anywhere/s);
     expect(style).toMatch(/\.interaction-card p\s*\{[^}]*overflow-wrap:\s*anywhere/s);
