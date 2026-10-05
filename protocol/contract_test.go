@@ -18,6 +18,7 @@ func TestV1EnvelopeSchemaAcceptsKnownMessages(t *testing.T) {
 		`{"type":"event","v":1,"event":"thread.error","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","code":"NATIVE_STATE_UNCERTAIN"}`,
 		`{"type":"event","v":1,"event":"thread.snapshot","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","seq":1,"thread":{"threadId":"thread-a","title":"Fixture","cwd":"/fixture","updatedAt":"2026-10-04T00:00:00Z","runtime":"idle","turns":[],"pendingInteractions":[],"permissions":{"sandbox":"full_access","approval":"on_request"},"historyComplete":false,"recentComplete":true}}`,
 		`{"type":"event","v":1,"event":"thread.snapshot","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","seq":1,"thread":{"threadId":"thread-a","title":"Fixture","cwd":"/fixture","updatedAt":"2026-10-04T00:00:00Z","runtime":"idle","turns":[{"turnId":"turn-a","status":"completed","items":[],"itemsComplete":false,"nextItemCursor":"older-items"}],"pendingInteractions":[],"historyComplete":false,"recentComplete":true}}`,
+		`{"type":"event","v":1,"event":"thread.snapshot","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","seq":1,"thread":{"threadId":"thread-a","title":"Fixture","cwd":"/fixture","updatedAt":"2026-10-04T00:00:00Z","runtime":"idle","turns":[{"turnId":"turn-a","status":"completed","items":[{"itemId":"tool-a","role":"system","text":"工具调用","activity":{"kind":"mcpToolCall","label":"fixture/lookup","status":"completed","details":"参数: {}","truncated":false}}]}],"pendingInteractions":[]}}`,
 	}
 	for _, raw := range valid {
 		if err := Validate([]byte(raw)); err != nil {
@@ -38,6 +39,7 @@ func TestV1EnvelopeSchemaRejectsWrongVersionShapeAndUnexpectedFields(t *testing.
 		`{"type":"response","v":1,"requestId":"00000000-0000-4000-8000-000000000001","outcome":"rejected"}`,
 		`{"type":"event","v":1,"event":"thread.update","deviceId":"device-a","threadId":"mock-a","subscriptionId":"sub-a","streamId":"stream-a","seq":2,"items":[]}`,
 		`{"type":"event","v":1,"event":"thread.error","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","code":"UNKNOWN"}`,
+		`{"type":"event","v":1,"event":"thread.snapshot","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","seq":1,"thread":{"threadId":"thread-a","title":"Fixture","cwd":"/fixture","updatedAt":"2026-10-04T00:00:00Z","runtime":"idle","turns":[{"turnId":"turn-a","status":"completed","items":[{"itemId":"tool-a","role":"system","text":"工具调用","activity":{"kind":"mcpToolCall","label":"fixture/lookup","status":"completed","details":"x","truncated":false,"unsafe":true}}]}],"pendingInteractions":[]}}`,
 		`not-json`,
 	}
 	for _, raw := range invalid {

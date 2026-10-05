@@ -153,6 +153,83 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByRole("button", { name: "加载此回合更早内容" })).toBeNull();
   });
 
+  it("keeps the reading position on live updates until the reader chooses to return to latest", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "partial" }] }] };
+    const { socket } = await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    const earlierScrollCalls = vi.mocked(Element.prototype.scrollIntoView).mock.calls.length;
+    const updated: Thread = { ...recent, turns: [{ ...recent.turns[0], items: [{ itemId: "answer", role: "assistant", text: "partial and more" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
+    expect(transcript.scrollTop).toBe(300);
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(earlierScrollCalls);
+    expect(screen.getByRole("button", { name: "回到最新" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "回到最新" }));
+    expect(transcript.scrollTop).toBe(800);
+    expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
+  });
+
+  it("does not announce a new message for a status-only update while reading older content", async () => {
+    const recent: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "current", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "same text" }] }] };
+    const { socket } = await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    const stopped: Thread = { ...recent, runtime: "idle", turns: [{ ...recent.turns[0], status: "completed" }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: stopped }));
+    expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
+    const more: Thread = { ...stopped, turns: [...stopped.turns, { turnId: "next", status: "completed", items: [{ itemId: "new", role: "assistant", text: "new content" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 2, seq: 3, thread: more }));
+    expect(screen.getByRole("button", { name: "回到最新" })).toBeTruthy();
+    expect(transcript.scrollTop).toBe(300);
+  });
+
+  it("restores the same-thread reading anchor after a stream resubscription", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "anchor", role: "assistant", text: "read this" }] }] };
+    const { socket, requests } = await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.dataset.itemId === "anchor" ? { top: 120, bottom: 160 } as DOMRect : { top: 0, bottom: 0 } as DOMRect;
+    });
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    act(() => socket.message({ type: "event", v: 1, event: "thread.error", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", code: "RESYNC_REQUIRED" }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    transcript.scrollTop = 0;
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-again" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-again", streamId: "stream-again", seq: 1, thread: recent }));
+    expect(transcript.scrollTop).toBe(300);
+  });
+
+  it("preserves an existing message's screen position when older turns are prepended", async () => {
+    const recent: Thread = { ...fixtureThread, historyComplete: false, recentComplete: true, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "anchor", role: "assistant", text: "正在阅读" }] }] };
+    const { socket, requests } = await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    const anchor = document.querySelector('[data-item-id="anchor"]') as HTMLElement;
+    vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() => {
+      const top = document.querySelector('[data-item-id="older"]') ? 220 : 120;
+      return { top, bottom: top + 40 } as DOMRect;
+    });
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [recent.turns[0]], nextCursor: "older" } }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[1].requestId, outcome: "accepted", data: { turns: [{ turnId: "previous", status: "completed", items: [{ itemId: "older", role: "user", text: "更早内容" }] }], nextCursor: "" } }));
+    expect(screen.getByText("更早内容")).toBeTruthy();
+    expect(transcript.scrollTop).toBe(400);
+  });
+
   it("renders every brand mark as a monochrome vector instead of an emoji glyph", async () => {
     await openFixture();
     const marks = [...document.querySelectorAll(".brand-mark")];
@@ -221,6 +298,69 @@ describe("Ariel app interactions", () => {
     fireEvent.change(input, { target: { value: "draft\nsecond line" } });
     expect(input.value).toBe("draft\nsecond line");
     expect((screen.getByRole("button", { name: /发送/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows user and Codex bubbles on separate sides without visible names or avatars", async () => {
+    const thread: Thread = { ...fixtureThread, turns: [{ turnId: "bubble", status: "completed", items: [
+      { itemId: "user", role: "user", text: "first\nsecond" },
+      { itemId: "assistant", role: "assistant", text: "answer" },
+      { itemId: "system", role: "system", text: "compatibility notice" },
+    ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "Approve fixture only", availableDecisions: ["deny"] }] };
+    await openFixture(thread);
+    const user = document.querySelector(".message.user")!;
+    const assistant = document.querySelector(".message.assistant")!;
+    const system = document.querySelector(".message.system")!;
+    expect(user.getAttribute("aria-label")).toBe("你");
+    expect(assistant.getAttribute("aria-label")).toBe("Codex");
+    expect(user.textContent).toBe("first\nsecond");
+    expect(assistant.textContent).toBe("answer");
+    expect(system.textContent).toContain("compatibility notice");
+    expect(document.querySelectorAll(".message .avatar, .message .message-role")).toHaveLength(0);
+    expect(screen.getByText("Approve fixture only")).toBeTruthy();
+  });
+
+  it("collapses consecutive verified tool calls but expands each loaded call in order", async () => {
+    const thread = { ...fixtureThread, turns: [{ turnId: "tools", status: "completed", items: [
+      { itemId: "u", role: "user", text: "question" },
+      { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", details: "<img src=x onerror=alert(1)>", truncated: false } },
+      { itemId: "c", role: "system", text: "命令执行", activity: { kind: "commandExecution", label: "/usr/bin/true", status: "completed", details: "退出 0", truncated: false } },
+      { itemId: "a", role: "assistant", text: "answer" },
+      { itemId: "f", role: "system", text: "文件变更", activity: { kind: "fileChange", label: "文件变更", status: "completed", details: "+safe", truncated: false } },
+      { itemId: "unknown", role: "system", text: "[futureTool 项目]" },
+    ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "Approve fixture only", availableDecisions: ["deny"] }] } as unknown as Thread;
+    await openFixture(thread);
+    const first = screen.getByRole("button", { name: /已处理 2 项/ });
+    const second = screen.getByRole("button", { name: /已处理 1 项/ });
+    expect(first.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("fixture/lookup")).toBeNull();
+    expect(screen.getByText("answer")).toBeTruthy();
+    expect(screen.getByText("[futureTool 项目]")).toBeTruthy();
+    expect(screen.getByText("Approve fixture only")).toBeTruthy();
+    fireEvent.click(first);
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("fixture/lookup")).toBeTruthy();
+    expect(screen.getByText("/usr/bin/true")).toBeTruthy();
+    expect(document.querySelector(".activity-details img")).toBeNull();
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(2);
+    fireEvent.click(second);
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(3);
+    fireEvent.click(first);
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(1);
+  });
+
+  it("shows one thinking or processing line only while the active turn can run", async () => {
+    const starting: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "u", role: "user", text: "work" }] }] };
+    const { socket } = await openFixture(starting);
+    expect(screen.getAllByText("思考中…")).toHaveLength(1);
+    const activity = { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "inProgress", details: "", truncated: false } };
+    const running = { ...starting, turns: [{ ...starting.turns[0], items: [...starting.turns[0].items, activity] }] } as unknown as Thread;
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
+    expect(screen.queryByText("思考中…")).toBeNull();
+    expect(screen.getAllByText(/处理中…/)).toHaveLength(1);
+    const completed = { ...running, runtime: "idle", turns: [{ ...running.turns[0], status: "completed" }] } as unknown as Thread;
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 2, seq: 3, thread: completed }));
+    expect(screen.queryByText(/处理中…/)).toBeNull();
+    expect(screen.getByRole("button", { name: /已处理 1 项/ })).toBeTruthy();
   });
 
   it("uses Enter only for mobile newlines and requires the send button", async () => {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
@@ -161,6 +162,73 @@ func normalizeRuntime(native string) string {
 	}
 }
 
+const maxActivityDetailBytes = 16 << 10
+
+func boundedActivityText(limit int, parts ...string) (string, bool) {
+	var result strings.Builder
+	result.Grow(min(limit, 512))
+	for _, part := range parts {
+		remaining := limit - result.Len()
+		if len(part) <= remaining {
+			result.WriteString(part)
+			continue
+		}
+		if remaining > 0 {
+			cut := remaining
+			for cut > 0 && !utf8.RuneStart(part[cut]) {
+				cut--
+			}
+			result.WriteString(part[:cut])
+		}
+		return result.String(), true
+	}
+	return result.String(), false
+}
+
+func activityLabel(raw string) string {
+	if raw == "" {
+		return "工具活动"
+	}
+	if len(raw) <= 512 {
+		return raw
+	}
+	short, _ := boundedActivityText(509, raw)
+	return short + "…"
+}
+
+func activityStatus(raw string) string {
+	switch raw {
+	case "inProgress", "completed", "failed", "interrupted":
+		return raw
+	default:
+		return "unknown"
+	}
+}
+
+func nativeDetail(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		return value
+	}
+	return string(raw)
+}
+
+func nativeString(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value
+}
+
+func toolActivity(kind, label, status string, details ...string) map[string]any {
+	bounded, truncated := boundedActivityText(maxActivityDetailBytes, details...)
+	return map[string]any{"kind": kind, "label": activityLabel(label), "status": activityStatus(status), "details": bounded, "truncated": truncated}
+}
+
 func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]any, error) {
 	if id == "" {
 		return nil, ErrNativeShape
@@ -180,11 +248,19 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
-			Command   string `json:"command"`
-			Status    string `json:"status"`
-			Completed *bool  `json:"completed"`
-			Changes   []struct {
-				Path string `json:"path"`
+			Command    string          `json:"command"`
+			Status     string          `json:"status"`
+			Server     json.RawMessage `json:"server"`
+			Tool       json.RawMessage `json:"tool"`
+			Path       json.RawMessage `json:"path"`
+			Output     json.RawMessage `json:"output"`
+			Arguments  json.RawMessage `json:"arguments"`
+			DurationMs json.RawMessage `json:"durationMs"`
+			ExitCode   json.RawMessage `json:"exitCode"`
+			Completed  *bool           `json:"completed"`
+			Changes    []struct {
+				Path string          `json:"path"`
+				Diff json.RawMessage `json:"diff"`
 				Kind struct {
 					Type string `json:"type"`
 				} `json:"kind"`
@@ -194,6 +270,7 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			return nil, ErrNativeShape
 		}
 		role, text := "system", ""
+		var activity map[string]any
 		switch item.Type {
 		case "userMessage":
 			role = "user"
@@ -213,22 +290,68 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			text = item.Text
 		case "reasoning":
 			continue
+		case "mcpToolCall":
+			label := strings.Trim(strings.Join([]string{nativeString(item.Server), nativeString(item.Tool)}, "/"), "/")
+			if label == "" {
+				label = "MCP 工具"
+			}
+			parts := []string{}
+			if args := nativeDetail(item.Arguments); args != "" {
+				parts = append(parts, "参数: ", args)
+			}
+			if output := nativeDetail(item.Output); output != "" {
+				parts = append(parts, "\n输出: ", output)
+			}
+			activity = toolActivity(item.Type, label, item.Status, parts...)
+			text = "工具调用: " + activity["label"].(string)
 		case "commandExecution":
 			text = "命令: " + item.Command
 			if item.Status != "" {
 				text += "\n状态: " + item.Status
 			}
+			parts := []string{"命令: ", item.Command}
+			if output := nativeDetail(item.Output); output != "" {
+				parts = append(parts, "\n输出: ", output)
+			}
+			if len(item.ExitCode) != 0 {
+				parts = append(parts, "\n退出码: ", nativeDetail(item.ExitCode))
+			}
+			activity = toolActivity(item.Type, item.Command, item.Status, parts...)
 		case "fileChange":
 			paths := make([]string, 0, len(item.Changes))
+			parts := make([]string, 0, len(item.Changes)*4)
 			for _, change := range item.Changes {
 				if change.Path != "" {
 					paths = append(paths, change.Kind.Type+": "+change.Path)
+					parts = append(parts, change.Kind.Type, ": ", change.Path, "\n")
+				}
+				if diff := nativeDetail(change.Diff); diff != "" {
+					parts = append(parts, diff, "\n")
 				}
 			}
 			text = "文件变更: " + strings.Join(paths, "\n")
 			if item.Status != "" {
 				text += "\n状态: " + item.Status
 			}
+			label := "文件变更"
+			if len(item.Changes) == 1 && item.Changes[0].Path != "" {
+				label = item.Changes[0].Path
+			}
+			activity = toolActivity(item.Type, label, item.Status, parts...)
+		case "sleep":
+			text = "等待"
+			parts := []string{}
+			if len(item.DurationMs) != 0 {
+				parts = append(parts, "时长: ", nativeDetail(item.DurationMs), " ms")
+			}
+			activity = toolActivity(item.Type, "等待", item.Status, parts...)
+		case "imageView":
+			text = "查看图片"
+			parts := []string{}
+			if path := nativeDetail(item.Path); path != "" {
+				parts = append(parts, "路径: ", path)
+			}
+			activity = toolActivity(item.Type, "查看图片", item.Status, parts...)
 		case "userInputResponse":
 			switch {
 			case item.Completed == nil:
@@ -241,7 +364,14 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		default:
 			text = "[" + item.Type + " 项目]"
 		}
-		items = append(items, map[string]any{"itemId": item.ID, "role": role, "text": text})
+		if activity != nil {
+			text, _ = boundedActivityText(512, text)
+		}
+		projected := map[string]any{"itemId": item.ID, "role": role, "text": text}
+		if activity != nil {
+			projected["activity"] = activity
+		}
+		items = append(items, projected)
 	}
 	return map[string]any{"turnId": id, "status": status, "items": items}, nil
 }

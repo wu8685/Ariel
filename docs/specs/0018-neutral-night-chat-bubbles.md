@@ -1,6 +1,6 @@
 # 0018：黑色 Night 主题与左右分列对话气泡
 
-- 状态：Draft（2026-10-05，待用户确认；不得开始实现）。
+- 状态：Approved（用户于 2026-10-05 确认）。
 - 来源：用户希望背景回归黑色，蓝色只用于必要的高亮；用户与 Codex 的正文分别以右侧蓝色气泡和左侧中性气泡呈现，不再显示可见的“我／Codex”名字。
 - 范围：Ariel Web 的手机与电脑共用主题及会话正文；获批后覆盖 [0007](0007-night-appearance.md) 的具体色板，不改变原 owner、消息顺序、历史分页、发送、审批、权限和 Relay 协议。与 [0015](0015-compact-tool-activity-in-conversation.md) 的工具组、[0017](0017-preserve-reading-position-on-live-updates.md) 的滚动规则独立实施，但样式应兼容两者。
 

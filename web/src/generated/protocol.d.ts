@@ -147,6 +147,13 @@ export interface Item {
   itemId: Id;
   role: "user" | "assistant" | "system";
   text: string;
+  activity?: {
+    kind: "mcpToolCall" | "commandExecution" | "fileChange" | "sleep" | "imageView";
+    label: string;
+    status: "inProgress" | "completed" | "failed" | "interrupted" | "unknown";
+    details: string;
+    truncated: boolean;
+  };
 }
 export interface Interaction {
   interactionId: Id;

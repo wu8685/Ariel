@@ -27,16 +27,16 @@ function contrast(a: string, b: string): number {
 describe("fixed Night appearance", () => {
   it("uses dark page/surface tokens and high-contrast white text", () => {
     expect(style).toMatch(/color-scheme:\s*dark/);
-    expect(token("color-page")).toBe("#0b0f16");
-    expect(token("color-surface")).toBe("#121923");
-    expect(token("color-text")).toBe("#f3f7ff");
+    expect(token("color-page")).toBe("#08090b");
+    expect(token("color-surface")).toBe("#121316");
+    expect(token("color-text")).toBe("#f5f5f6");
     expect(contrast(token("color-text"), token("color-page"))).toBeGreaterThanOrEqual(4.5);
     expect(contrast(token("color-muted"), token("color-surface"))).toBeGreaterThanOrEqual(4.5);
-    expect(html).toContain('name="theme-color" content="#0b0f16"');
+    expect(html).toContain('name="theme-color" content="#08090b"');
   });
 
   it("uses blue for primary and keyboard focus while preserving semantic warnings", () => {
-    expect(token("color-accent")).toBe("#60a5fa");
+    expect(token("color-accent")).toBe("#6fa9ff");
     expect(contrast(token("color-on-primary"), token("color-primary"))).toBeGreaterThanOrEqual(4.5);
     expect(style).toMatch(/\.primary\s*\{[^}]*background:\s*var\(--color-primary\)/s);
     expect(style).toMatch(/:focus-visible\s*\{[^}]*var\(--color-accent\)/s);
@@ -53,7 +53,7 @@ describe("fixed Night appearance", () => {
   });
 
   it("uses a neutral gray logo and a mobile-only dismissible sidebar backdrop", () => {
-    expect(token("color-logo")).toBe("#b4c0cf");
+    expect(token("color-logo")).toBe("#b8b8bb");
     expect(style).toMatch(/\.brand-mark\s*\{[^}]*color:\s*var\(--color-logo\)/s);
     expect(style).toMatch(/\.brand-mark\s*\{[^}]*stroke:\s*currentColor/s);
     expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*none/s);
@@ -100,5 +100,15 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.message-text\s*\{[^}]*overflow-wrap:\s*anywhere/s);
     expect(style).toMatch(/\.interaction-card p\s*\{[^}]*overflow-wrap:\s*anywhere/s);
     expect(style).toMatch(/\.question\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
+  it("keeps blue for the user bubble and purposeful highlights, with neutral Codex and system text", () => {
+    expect(contrast(token("color-on-primary"), token("color-primary"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(token("color-text"), token("color-panel"))).toBeGreaterThanOrEqual(4.5);
+    expect(style).toMatch(/\.message\.user\s+\.message-body\s*\{[^}]*background:\s*var\(--color-primary\)/s);
+    expect(style).toMatch(/\.message\.assistant\s+\.message-body\s*\{[^}]*background:\s*var\(--color-panel\)/s);
+    expect(style).toMatch(/\.message\.user\s*\{[^}]*justify-content:\s*flex-end/s);
+    expect(style).toMatch(/\.eyebrow\s*\{[^}]*color:\s*var\(--color-subtle\)/s);
+    expect(style).toMatch(/\.empty-symbol\s*\{[^}]*color:\s*var\(--color-logo\)/s);
   });
 });

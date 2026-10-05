@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
@@ -92,6 +93,62 @@ func TestNormalizeKnownToolItemsWithoutNoisyReasoningPlaceholders(t *testing.T) 
 	answer := normalized[2].(map[string]any)["text"].(string)
 	if !strings.Contains(command, "/usr/bin/true") || !strings.Contains(command, "completed") || !strings.Contains(file, "/fixture/note.txt") || !strings.Contains(file, "completed") || strings.Contains(answer, "do-not-show") {
 		t.Fatalf("incorrect tool summary: command=%q file=%q answer=%q", command, file, answer)
+	}
+}
+
+func TestNormalizeToolActivitiesKeepBoundedVerifiedDetailsAndUnknownTypesVisible(t *testing.T) {
+	items := []json.RawMessage{
+		json.RawMessage(`{"id":"m","type":"mcpToolCall","server":"fixture","tool":"lookup","arguments":{"query":"safe"},"status":"completed"}`),
+		json.RawMessage(`{"id":"c","type":"commandExecution","command":"/usr/bin/true","status":"completed","output":"done"}`),
+		json.RawMessage(`{"id":"f","type":"fileChange","status":"completed","changes":[{"path":"/fixture/note.txt","kind":{"type":"add"},"diff":"+safe"}]}`),
+		json.RawMessage(`{"id":"s","type":"sleep","durationMs":1000}`),
+		json.RawMessage(`{"id":"i","type":"imageView","path":"/fixture/image.png"}`),
+		json.RawMessage(`{"id":"u","type":"futureTool"}`),
+	}
+	turn, err := normalizeTurn("turn", "completed", items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := turn["items"].([]any)
+	if len(got) != 6 {
+		t.Fatalf("lost item identity or order: %v", got)
+	}
+	for index, kind := range []string{"mcpToolCall", "commandExecution", "fileChange", "sleep", "imageView"} {
+		item := got[index].(map[string]any)
+		activity, ok := item["activity"].(map[string]any)
+		if !ok || activity["kind"] != kind || activity["label"] == "" || activity["status"] == "" || activity["truncated"] != false {
+			t.Fatalf("missing structured activity for %s: %v", kind, item)
+		}
+	}
+	if details := got[0].(map[string]any)["activity"].(map[string]any)["details"].(string); !strings.Contains(details, "safe") {
+		t.Fatalf("MCP arguments missing: %q", details)
+	}
+	if details := got[1].(map[string]any)["activity"].(map[string]any)["details"].(string); !strings.Contains(details, "done") {
+		t.Fatalf("command output missing: %q", details)
+	}
+	if details := got[2].(map[string]any)["activity"].(map[string]any)["details"].(string); !strings.Contains(details, "+safe") {
+		t.Fatalf("file diff missing: %q", details)
+	}
+	if _, present := got[5].(map[string]any)["activity"]; present {
+		t.Fatal("unknown type was silently treated as a tool")
+	}
+	if got[5].(map[string]any)["text"] != "[futureTool 项目]" {
+		t.Fatal("unknown type lost compatibility notice")
+	}
+}
+
+func TestNormalizeToolDetailCapsAtSixteenKiBWithoutBreakingUTF8(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{"id": "large", "type": "commandExecution", "command": "/usr/bin/true", "status": "completed", "output": strings.Repeat("界", 10000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := normalizeTurn("turn", "completed", []json.RawMessage{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activity := turn["items"].([]any)[0].(map[string]any)["activity"].(map[string]any)
+	if activity["truncated"] != true || len([]byte(activity["details"].(string))) > 16<<10 || !utf8.ValidString(activity["details"].(string)) {
+		t.Fatalf("detail cap is missing or invalid UTF-8: bytes=%d truncated=%v", len([]byte(activity["details"].(string))), activity["truncated"])
 	}
 }
 

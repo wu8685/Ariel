@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
 import { newRequestID } from "./ids";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
+import { activityStatusText, groupTurnItems } from "./activity";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
 
@@ -14,6 +15,44 @@ const recentTurnLimit = 10;
 const mobileViewportMaxWidth = 800;
 const mobileComposerMinHeight = 44;
 const mobileComposerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
+const latestFollowDistance = 80;
+type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: number; scrollHeight: number };
+
+function readingKey(deviceId: string, threadId: string): string { return `${deviceId}\u0000${threadId}`; }
+
+function captureReadingAnchor(container: HTMLElement | null, key: string): ReadingAnchor | null {
+  if (!container) return null;
+  const top = container.getBoundingClientRect().top;
+  const messages = [...container.querySelectorAll<HTMLElement>("[data-item-id]")];
+  const visible = messages.find(message => message.getBoundingClientRect().bottom > top + 1) || messages.at(-1);
+  if (!visible?.dataset.itemId) return null;
+  return { key, itemId: visible.dataset.itemId, top: visible.getBoundingClientRect().top, scrollTop: container.scrollTop, scrollHeight: container.scrollHeight };
+}
+
+function restoreReadingAnchor(container: HTMLElement, anchor: ReadingAnchor): boolean {
+  const target = [...container.querySelectorAll<HTMLElement>("[data-item-id]")].find(message => message.dataset.itemId === anchor.itemId);
+  if (!target) return false;
+  container.scrollTop = anchor.scrollTop + target.getBoundingClientRect().top - anchor.top;
+  return true;
+}
+
+function scrollToLatest(container: HTMLElement) {
+  container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+}
+
+type ContentMarker = { turnCount: number; turnId: string; itemCount: number; itemId: string; text: string; details: string; cardCount: number; cardId: string };
+function contentMarker(thread: Thread): ContentMarker {
+  const lastTurn = thread.turns.at(-1);
+  const lastItem = lastTurn?.items.at(-1);
+  return {
+    turnCount: thread.turns.length, turnId: lastTurn?.turnId || "", itemCount: lastTurn?.items.length || 0,
+    itemId: lastItem?.itemId || "", text: lastItem?.text || "", details: lastItem?.activity?.details || "",
+    cardCount: thread.pendingInteractions.length, cardId: thread.pendingInteractions.at(-1)?.interactionId || "",
+  };
+}
+function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
+  return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
+}
 const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持历史分页。" };
 
 function errorText(response: Response): string {
@@ -52,6 +91,7 @@ export function App() {
   const [working, setWorking] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [showList, setShowList] = useState(true);
+  const [showReturnToLatest, setShowReturnToLatest] = useState(false);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
@@ -62,7 +102,11 @@ export function App() {
   const deviceListGeneration = useRef(0);
   const threadListGeneration = useRef(0);
   const resuming = useRef(false);
-  const endRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
+  const resumeReadingAnchor = useRef<ReadingAnchor | null>(null);
+  const lastPaint = useRef<{ key: string; seq: number; marker: ContentMarker | null }>({ key: "", seq: -1, marker: null });
   const permissionInfoRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const device = devices.find(d => d.deviceId === deviceId);
@@ -88,6 +132,26 @@ export function App() {
     setItemLoading("");
     itemLoadingRef.current = "";
     setItemOverrides({});
+  }
+
+  function rememberReadingPosition() {
+    if (!selection.current.deviceId || !selection.current.threadId || followLatestRef.current) return;
+    const anchor = captureReadingAnchor(transcriptRef.current, readingKey(selection.current.deviceId, selection.current.threadId));
+    if (anchor) resumeReadingAnchor.current = anchor;
+  }
+
+  function onTranscriptScroll() {
+    const container = transcriptRef.current;
+    if (!container) return;
+    followLatestRef.current = container.scrollHeight - container.clientHeight - container.scrollTop <= latestFollowDistance;
+    if (followLatestRef.current) setShowReturnToLatest(false);
+  }
+
+  function returnToLatest() {
+    followLatestRef.current = true;
+    setShowReturnToLatest(false);
+    const container = transcriptRef.current;
+    if (container) scrollToLatest(container);
   }
 
   function disconnect() {
@@ -135,6 +199,9 @@ export function App() {
 
   async function selectThread(id: string, targetDevice = deviceId) {
     if (!targetDevice) return;
+    if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
+    else { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); }
+    pendingReadingAnchor.current = null;
     blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
     const old = selection.current.view;
@@ -191,7 +258,7 @@ export function App() {
         if (savedSessionAttempt.current) setSessionExpired(true);
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory(); }
+      if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory(); }
     };
     client.onReady = (_epoch, sessionToken) => {
       if (sessionToken) webSession.accepted(sessionToken);
@@ -204,6 +271,7 @@ export function App() {
       if (event.type !== "event") return;
       if (event.event === "device.status") {
         if (!event.agentOnline && event.deviceId === selection.current.deviceId) {
+          rememberReadingPosition();
           selection.current.view = null;
           setView(null);
           setNotice("Desktop Agent 暂时离线，恢复后会重新同步当前会话。");
@@ -235,6 +303,7 @@ export function App() {
         return;
       }
       if (event.event === "thread.snapshot") {
+        if (current.view?.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
         resetHistory(); selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice("");
       } else if (event.event === "thread.update") {
@@ -253,6 +322,7 @@ export function App() {
     pendingSelect.current++;
     threadListGeneration.current++;
     const oldDevice = selection.current.deviceId;
+    if (oldDevice && oldDevice !== deviceId) { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); }
     const oldSubscription = expectedSubscription.current;
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
@@ -343,7 +413,36 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [view?.seq]);
+  useLayoutEffect(() => {
+    const container = transcriptRef.current;
+    if (!container || !view) return;
+    const key = readingKey(view.deviceId, view.threadId);
+    const marker = contentMarker(view.thread);
+    const pending = pendingReadingAnchor.current;
+    if (pending?.key === key) {
+      if (!restoreReadingAnchor(container, pending)) container.scrollTop = pending.scrollTop + container.scrollHeight - pending.scrollHeight;
+      pendingReadingAnchor.current = null;
+      lastPaint.current = { key, seq: view.seq, marker };
+      return;
+    }
+    const resume = resumeReadingAnchor.current;
+    if (resume?.key === key) {
+      if (restoreReadingAnchor(container, resume)) followLatestRef.current = false;
+      else { followLatestRef.current = true; scrollToLatest(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
+      resumeReadingAnchor.current = null;
+      lastPaint.current = { key, seq: view.seq, marker };
+      return;
+    }
+    if (lastPaint.current.key !== key) {
+      followLatestRef.current = true;
+      setShowReturnToLatest(false);
+      scrollToLatest(container);
+    } else if (lastPaint.current.seq !== view.seq) {
+      if (followLatestRef.current) scrollToLatest(container);
+      else if (hasNewVisibleContent(lastPaint.current.marker, marker)) setShowReturnToLatest(true);
+    } else if (followLatestRef.current) scrollToLatest(container);
+    lastPaint.current = { key, seq: view.seq, marker };
+  }, [view?.seq, view?.threadId, history, itemOverrides]);
 
   async function loadOlder(additionalTurns = 1) {
     if (!view || !deviceId || historyLoadingRef.current || historyRef.current.exhausted) return;
@@ -363,6 +462,7 @@ export function App() {
         if (!Array.isArray(turns) || typeof nextCursor !== "string") { setNotice("历史页格式无法识别，已保留当前会话。"); return; }
         const next = appendOlderPage(current, selection.current.view?.thread.turns || view.thread.turns, { turns, nextCursor });
         if (next.cursor === current.cursor && !next.exhausted && next.older.length === current.older.length) { setNotice("历史页没有继续前进，请稍后重试。"); return; }
+        pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
         historyRef.current = next;
         setHistory(next);
         if (next.older.length >= targetCount || next.exhausted) return;
@@ -394,6 +494,7 @@ export function App() {
       const nextItemCursor = response.data?.nextItemCursor;
       const itemsComplete = response.data?.itemsComplete;
       if (response.data?.turnId !== turn.turnId || !Array.isArray(items) || typeof nextItemCursor !== "string" || typeof itemsComplete !== "boolean") { setNotice("消息页格式无法识别，已保留当前内容。"); return; }
+      pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
       setItemOverrides(current => ({ ...current, [turn.turnId]: prependOlderItems(current[turn.turnId] || turn, items, nextItemCursor, itemsComplete) }));
     } finally {
       itemLoadingRef.current = "";
@@ -457,26 +558,44 @@ export function App() {
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
-        <div className="transcript" aria-live="polite">
+        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={turn.turnId} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={turn.turnId} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}
-          <div ref={endRef} />
         </div>
+        {showReturnToLatest && view && <div className="return-latest-bar"><button type="button" onClick={returnToLatest}>回到最新</button></div>}
         <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}>■ 停止</button>}<button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working, draft)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button></div></div></div></div>
       </main>
     </div>
   </div>;
 }
 
-function ConversationTurn({ turn, loading, onLoadOlderItems }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void }) {
+function ConversationTurn({ turn, loading, onLoadOlderItems, active }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void; active: boolean }) {
+  const [expandedIDs, setExpandedIDs] = useState<Set<string>>(() => new Set());
+  const parts = groupTurnItems(turn);
+  const lastPart = parts.at(-1);
+  const processing = active && lastPart?.kind === "activity";
   return <section className="turn">
-    <div className="turn-status">{turn.status === "inProgress" ? "正在生成" : turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>
+    {turn.status !== "inProgress" && <div className="turn-status">{turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>}
     {turn.itemsComplete === false && <button className="history-action item-history-action" type="button" onClick={() => onLoadOlderItems(turn)} disabled={loading}>{loading ? "正在加载…" : "加载此回合更早内容"}</button>}
-    {turn.items.map(item => <article className={`message ${item.role}`} key={item.itemId}><div className="avatar">{item.role === "user" ? "你" : item.role === "assistant" ? "✳" : "i"}</div><div className="message-body"><div className="message-role">{item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"}</div><div className="message-text">{item.text || (turn.status === "inProgress" && item.role === "assistant" ? <span className="thinking">正在思考…</span> : "")}</div></div></article>)}
+    {parts.map(part => {
+      if (part.kind === "message") {
+        const item = part.item;
+        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.text}</div></div></article>;
+      }
+      const ids = part.items.map(item => item.itemId);
+      const expanded = ids.some(id => expandedIDs.has(id));
+      const running = processing && part === lastPart;
+      const controlID = `activity-${turn.turnId}-${ids[0]}`;
+      return <section className="activity-group" key={ids[0]} data-item-id={ids.at(-1)}>
+        <button className="activity-summary" type="button" aria-expanded={expanded} aria-controls={controlID} onClick={() => setExpandedIDs(current => { const next = new Set(current); for (const id of ids) { if (expanded) next.delete(id); else next.add(id); } return next; })}><span className="activity-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>{running ? `处理中… · ${ids.length} 项` : `已处理 ${ids.length} 项`}</button>
+        {expanded && <div className="activity-list" id={controlID}>{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <div className="activity-item" key={item.itemId} data-item-id={item.itemId}><div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div><div className="activity-kind">{item.activity!.kind}</div>{item.activity!.details ? <pre className="activity-details">{item.activity!.details}</pre> : <p className="activity-note">当前历史没有更多详情。</p>}{item.activity!.truncated && <p className="activity-note">详情已截断；完整内容请在原 Codex Desktop 查看。</p>}</div>)}</div>}
+      </section>;
+    })}
+    {active && !processing && <div className="agent-progress" role="status">思考中…</div>}
   </section>;
 }
 

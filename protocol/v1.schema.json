@@ -171,7 +171,18 @@
       "required": ["itemId", "role", "text"],
       "properties": {
         "itemId": { "$ref": "#/$defs/id" }, "role": { "enum": ["user", "assistant", "system"] },
-        "text": { "type": "string" }
+        "text": { "type": "string" },
+        "activity": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "label", "status", "details", "truncated"],
+          "properties": {
+            "kind": { "enum": ["mcpToolCall", "commandExecution", "fileChange", "sleep", "imageView"] },
+            "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "status": { "enum": ["inProgress", "completed", "failed", "interrupted", "unknown"] },
+            "details": { "type": "string", "maxLength": 16384 },
+            "truncated": { "type": "boolean" }
+          }
+        }
       }
     },
     "interaction": {
