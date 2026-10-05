@@ -145,9 +145,15 @@ func TestAgentHeartbeatDropsSilentRelay(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := RunWithService(ctx, Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http"), Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac", HeartbeatInterval: 30 * time.Millisecond, HeartbeatTimeout: 30 * time.Millisecond}, NewService(fakeHistory{}, nil))
+	ready, notReady := false, false
+	err := RunWithService(ctx, Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http"), Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac", HeartbeatInterval: 30 * time.Millisecond, HeartbeatTimeout: 30 * time.Millisecond,
+		OnReady: func() error { ready = true; return nil }, OnNotReady: func() { notReady = true },
+	}, NewService(fakeHistory{}, nil))
 	if err == nil || ctx.Err() != nil {
 		t.Fatalf("silent Relay did not cause bounded disconnect: %v", err)
+	}
+	if !ready || !notReady {
+		t.Fatalf("handshake readiness lifecycle: ready=%v notReady=%v", ready, notReady)
 	}
 }
 

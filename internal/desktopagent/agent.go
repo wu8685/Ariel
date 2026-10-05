@@ -19,6 +19,8 @@ import (
 type Config struct {
 	URL, Token, DeviceID, DeviceName, Binary, Socket, CWD string
 	HeartbeatInterval, HeartbeatTimeout                   time.Duration
+	OnReady                                               func() error
+	OnNotReady                                            func()
 }
 type agent struct {
 	conn     *websocket.Conn
@@ -105,6 +107,14 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	if protocol.Validate(body) != nil || json.Unmarshal(body, &ack) != nil || ack.Type != "hello.ok" {
 		return errors.New("invalid Relay acknowledgement")
+	}
+	if cfg.OnReady != nil {
+		if err := cfg.OnReady(); err != nil {
+			return err
+		}
+		if cfg.OnNotReady != nil {
+			defer cfg.OnNotReady()
+		}
 	}
 	heartCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()

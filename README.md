@@ -18,7 +18,26 @@ Ariel 不建立另一份聊天记录。原会话、工作目录和执行权限�
 
 首版只面向同一可信局域网、单用户和已存在的本机会话。没有新建会话、文件上传、后台通知或公网部署支持。
 
-## 在可信局域网运行
+## 一键启动（推荐）
+
+在已安装兼容 Codex Desktop、Go 1.26+ 和 Node.js/npm 的 Mac 上，选择可信局域网网卡地址，一条命令构建并后台启动 Web、Relay 和 Desktop Agent：
+
+```sh
+./scripts/ariel.sh up local --listen '<Mac-LAN-IP>:8080' --device-id 'my-mac' --device-name '我的 Mac'
+./scripts/ariel.sh status
+```
+
+手机打开脚本输出的 URL；需要连接码时，在可信本机终端运行 `./scripts/ariel.sh show-pin`。再次启动只需 `./scripts/ariel.sh up`，停止用 `./scripts/ariel.sh stop`。脚本不会接管已经手工运行的同端口服务。
+
+如果 Relay 已在别处，只安装并注册本机 Agent：
+
+```sh
+./scripts/ariel.sh up agent --relay-url 'wss://relay.example.com/ws' --device-id 'my-mac' --device-name '我的 Mac' --token-file '/path/to/private/relay-agent-token'
+```
+
+完整的自动安装输入、凭据边界、外部 Relay 要求与排障步骤见[供 Agent 执行的安装指南](docs/operations/agent-install.md)。
+
+## 手动启动（故障排查）
 
 需要 Go 1.26+、Node.js/npm，以及已启动且版本匹配的 Codex Desktop。以下命令在项目根目录运行；把 `<Mac-LAN-IP>` 换成 Mac 在局域网中的地址，`<long-random-token>` 换成仅自己知道的高强度随机 Agent 口令，`<six-digit-pin>` 换成你设置的固定 6 位数字连接码（可以以 0 开头）。两者必须不同。
 

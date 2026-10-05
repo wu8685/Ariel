@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -59,8 +60,24 @@ func main() {
 		log.Fatalf("Desktop IPC profile not verified for Desktop %s / Codex %s", desktopVersion, cliVersion)
 	}
 	backoff := time.Second
+	readyFile := os.Getenv("ARIEL_READY_FILE")
+	if readyFile != "" {
+		_ = os.Remove(readyFile)
+	}
+	markReady := func() error {
+		if readyFile == "" {
+			return nil
+		}
+		return os.WriteFile(readyFile, []byte(strconv.Itoa(os.Getpid())), 0600)
+	}
+	clearReady := func() {
+		if readyFile != "" {
+			_ = os.Remove(readyFile)
+		}
+	}
+	defer clearReady()
 	for ctx.Err() == nil {
-		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket})
+		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, OnReady: markReady, OnNotReady: clearReady})
 		if ctx.Err() != nil {
 			break
 		}
