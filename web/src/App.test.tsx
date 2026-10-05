@@ -230,6 +230,26 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(400);
   });
 
+  it("preserves an existing message's screen position when older items are prepended", async () => {
+    const partial: Thread = { ...fixtureThread, turns: [{ turnId: "giant", status: "completed", items: [{ itemId: "anchor", role: "assistant", text: "正在阅读" }], itemsComplete: false, nextItemCursor: "before-anchor" }] };
+    const { socket, requests } = await openFixture(partial);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    const anchor = document.querySelector('[data-item-id="anchor"]') as HTMLElement;
+    vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() => {
+      const top = document.querySelector('[data-item-id="older"]') ? 220 : 120;
+      return { top, bottom: top + 40 } as DOMRect;
+    });
+    fireEvent.click(screen.getByRole("button", { name: "加载此回合更早内容" }));
+    await waitFor(() => expect(requests("thread.history.items")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history.items")[0].requestId, outcome: "accepted", data: { turnId: "giant", items: [{ itemId: "older", role: "assistant", text: "更早内容" }], nextItemCursor: "", itemsComplete: true } }));
+    expect(screen.getByText("更早内容")).toBeTruthy();
+    expect(transcript.scrollTop).toBe(400);
+  });
+
   it("renders every brand mark as a monochrome vector instead of an emoji glyph", async () => {
     await openFixture();
     const marks = [...document.querySelectorAll(".brand-mark")];
