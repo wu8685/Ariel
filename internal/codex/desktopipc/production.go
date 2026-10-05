@@ -126,7 +126,11 @@ func TransientCanonicalPlaceholder(state json.RawMessage, expectedCWD string) bo
 }
 
 func StartProductionTurn(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string) (string, error) {
-	if owner == "" || threadID == "" || clientMessageID == "" || strings.TrimSpace(text) == "" {
+	return StartProductionTurnImages(ctx, c, owner, threadID, cwd, state, clientMessageID, text, nil)
+}
+
+func StartProductionTurnImages(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string, images []string) (string, error) {
+	if owner == "" || threadID == "" || clientMessageID == "" || (strings.TrimSpace(text) == "" && len(images) == 0) {
 		return "", ErrProtocol
 	}
 	if !nativeCanonicalAddressable(state) {
@@ -135,8 +139,15 @@ func StartProductionTurn(ctx context.Context, c caller, owner, threadID, cwd str
 	if !idleFixture(state, cwd) {
 		return "", ErrTurnBusy
 	}
+	input := make([]any, 0, 1+len(images))
+	if text != "" {
+		input = append(input, map[string]any{"type": "text", "text": text, "text_elements": []any{}})
+	}
+	for _, image := range images {
+		input = append(input, map[string]any{"type": "image", "url": image})
+	}
 	r, err := c.Call(ctx, Request{Method: "thread-follower-start-turn", Version: 2, TargetClientID: owner, Mutating: true, Params: map[string]any{
-		"conversationId": threadID, "turnStart": map[string]any{"request": map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": []any{map[string]any{"type": "text", "text": text, "text_elements": []any{}}}}, "context": map[string]bool{"inheritThreadSettings": true}},
+		"conversationId": threadID, "turnStart": map[string]any{"request": map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input}, "context": map[string]bool{"inheritThreadSettings": true}},
 	}})
 	if err != nil {
 		return "", err

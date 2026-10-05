@@ -28,6 +28,7 @@ export type Request = {
     | "thread.read"
     | "thread.history"
     | "thread.history.items"
+    | "thread.image"
     | "thread.subscribe"
     | "thread.unsubscribe"
     | "turn.start"
@@ -147,6 +148,15 @@ export interface Item {
   itemId: Id;
   role: "user" | "assistant" | "system";
   text: string;
+  /**
+   * @maxItems 24
+   */
+  images?: {
+    index: number;
+    kind: "native" | "markdown";
+    alt: string;
+    source: string;
+  }[];
   activity?: {
     kind: "mcpToolCall" | "commandExecution" | "fileChange" | "sleep" | "imageView";
     label: string;

@@ -49,6 +49,13 @@ describe("conversation Markdown projection", () => {
     expect(screen.getByText("图片", { exact: true })).toBeTruthy();
   });
 
+  it("renders only a matched local screenshot reference through the supplied loader", () => {
+    render(<ConversationMarkdown text={'![local](shot%20one.png) ![remote](https://example.test/track.png)'} renderImage={(source, alt) => source === "shot%20one.png" ? <button aria-label={`加载截图：${alt}`}>截图</button> : null} />);
+    expect(screen.getByRole("button", { name: "加载截图：local" })).toBeTruthy();
+    expect(screen.getByText("图片：remote")).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
+  });
+
   it("retains the entire raw body with an explicit notice when one item is too large to parse", () => {
     const text = "a".repeat(256 * 1024 + 1);
     render(<ConversationMarkdown text={text} />);

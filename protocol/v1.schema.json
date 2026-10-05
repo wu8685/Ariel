@@ -63,7 +63,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
+        "method": { "enum": ["device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -72,6 +72,7 @@
         { "if": { "properties": { "method": { "const": "thread.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.history" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.history.items" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyItemsParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.image" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/imageParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/startParams" } } } },
@@ -96,15 +97,21 @@
       "type": "object", "additionalProperties": false, "required": ["threadId", "turnId"],
       "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }
     },
+    "imageParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "turnId", "itemId", "imageIndex"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "itemId": { "$ref": "#/$defs/id" }, "imageIndex": { "type": "integer", "minimum": 0, "maximum": 23 } }
+    },
     "unsubscribeParams": {
       "type": "object", "additionalProperties": false, "required": ["subscriptionId"],
       "properties": { "subscriptionId": { "$ref": "#/$defs/id" } }
     },
     "startParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "clientMessageId", "text"],
+      "anyOf": [{ "properties": { "text": { "type": "string", "minLength": 1 } } }, { "required": ["images"], "properties": { "images": { "type": "array", "minItems": 1 } } }],
       "properties": {
         "threadId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/requestId" },
-        "text": { "type": "string", "minLength": 1, "maxLength": 65536 }
+        "text": { "type": "string", "maxLength": 65536 },
+        "images": { "type": "array", "maxItems": 3, "items": { "type": "string", "minLength": 1, "maxLength": 5592435 } }
       }
     },
     "interruptParams": {
@@ -172,6 +179,7 @@
       "properties": {
         "itemId": { "$ref": "#/$defs/id" }, "role": { "enum": ["user", "assistant", "system"] },
         "text": { "type": "string" },
+        "images": { "type": "array", "maxItems": 24, "items": { "type": "object", "additionalProperties": false, "required": ["index", "kind", "alt", "source"], "properties": { "index": { "type": "integer", "minimum": 0 }, "kind": { "enum": ["native", "markdown"] }, "alt": { "type": "string", "maxLength": 256 }, "source": { "type": "string", "maxLength": 2048 } } } },
         "activity": {
           "type": "object", "additionalProperties": false,
           "required": ["kind", "label", "status", "details", "truncated"],

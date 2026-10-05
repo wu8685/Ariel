@@ -200,6 +200,9 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		Limit           int                 `json:"limit"`
 		ClientMessageID string              `json:"clientMessageId"`
 		Text            string              `json:"text"`
+		Images          []string            `json:"images"`
+		ItemID          string              `json:"itemId"`
+		ImageIndex      int                 `json:"imageIndex"`
 		ExpectedTurnID  string              `json:"expectedTurnId"`
 		InteractionID   string              `json:"interactionId"`
 		Decision        string              `json:"decision"`
@@ -234,6 +237,10 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 			p.Limit = 100
 		}
 		data, err = a.service.HistoryItems(ctx, p.ThreadID, p.TurnID, p.Cursor, p.Limit)
+	case "thread.image":
+		var uri string
+		uri, err = a.service.Image(ctx, p.ThreadID, p.TurnID, p.ItemID, p.ImageIndex)
+		data = map[string]any{"dataUri": uri}
 	case "thread.subscribe":
 		loadCtx, cancel := context.WithTimeout(ctx, 28*time.Second)
 		defer cancel()
@@ -261,7 +268,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		}
 	case "turn.start":
 		var turnID string
-		turnID, err = a.service.Start(ctx, p.ThreadID, p.ClientMessageID, p.Text)
+		turnID, err = a.service.StartWithImages(ctx, p.ThreadID, p.ClientMessageID, p.Text, p.Images)
 		data = map[string]any{"turnId": turnID}
 	case "turn.interrupt":
 		err = a.service.Interrupt(ctx, p.ThreadID, p.ExpectedTurnID)

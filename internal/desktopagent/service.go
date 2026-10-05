@@ -663,6 +663,13 @@ func (s *Service) retireIdle(c *threadController) {
 }
 
 func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (string, error) {
+	return s.StartWithImages(ctx, threadID, messageID, text, nil)
+}
+
+func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text string, images []string) (string, error) {
+	if (text == "" && len(images) == 0) || validateUploadImages(images) != nil {
+		return "", errors.New("INVALID_ARGUMENT")
+	}
 	c, err := s.controller(threadID)
 	if err != nil {
 		return "", err
@@ -688,7 +695,18 @@ func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (
 		return "", err
 	}
 	c.mu.Unlock()
-	turnID, err := live.Start(ctx, messageID, text)
+	var turnID string
+	if len(images) > 0 {
+		imageLive, ok := live.(interface {
+			StartWithImages(context.Context, string, string, []string) (string, error)
+		})
+		if !ok {
+			return "", errors.New("PROTOCOL_UNSUPPORTED")
+		}
+		turnID, err = imageLive.StartWithImages(ctx, messageID, text, images)
+	} else {
+		turnID, err = live.Start(ctx, messageID, text)
+	}
 	if errors.Is(err, desktopipc.ErrTurnBusy) {
 		return "", errors.New("TURN_BUSY")
 	}

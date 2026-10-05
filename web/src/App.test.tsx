@@ -62,6 +62,22 @@ async function openFixture(thread: Thread = fixtureThread) {
 }
 
 describe("Ariel app interactions", () => {
+  it("sends an attached screenshot without text and renders a native reply image on demand", async () => {
+    const thread: Thread = { ...fixtureThread, turns: [{ turnId: "turn-image", status: "completed", items: [{ itemId: "reply-image", role: "assistant", text: "Codex 生成的图片", images: [{ index: 0, kind: "native", alt: "Codex 图片", source: "" }] }] }] };
+    const { socket, requests } = await openFixture(thread);
+    fireEvent.click(screen.getByRole("button", { name: "加载截图：Codex 图片" }));
+    await waitFor(() => expect(requests("thread.image")).toHaveLength(1));
+    expect(requests("thread.image")[0].params).toEqual({ threadId: "fixture", turnId: "turn-image", itemId: "reply-image", imageIndex: 0 });
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.image")[0].requestId, outcome: "accepted", data: { dataUri: "data:image/png;base64,AAAA" } }));
+    expect(await screen.findByRole("img", { name: "Codex 图片" })).toBeTruthy();
+    const file = new File([Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), value => value.charCodeAt(0))], "shot.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("附加截图"), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "移除截图：shot.png" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(requests("turn.start")).toHaveLength(1));
+    expect(requests("turn.start")[0].params.text).toBe("");
+    expect(requests("turn.start")[0].params.images[0]).toMatch(/^data:image\/png;base64,/);
+  });
   it("falls back to explicitly read-only paged history when owner snapshot is oversized", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

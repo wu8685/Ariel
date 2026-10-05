@@ -247,6 +247,8 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
+				URL  string `json:"url"`
+				Path string `json:"path"`
 			} `json:"content"`
 			Command    string          `json:"command"`
 			Status     string          `json:"status"`
@@ -278,7 +280,9 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			for _, c := range item.Content {
 				if c.Type == "text" {
 					parts = append(parts, c.Text)
-				} else {
+				} else if (c.Type == "image" && !strings.HasPrefix(c.URL, "data:image/")) || (c.Type == "localImage" && c.Path == "") {
+					parts = append(parts, "[图片暂不可用]")
+				} else if c.Type != "image" && c.Type != "localImage" {
 					parts = append(parts, "[非文本输入: "+c.Type+"]")
 				}
 			}
@@ -286,6 +290,9 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		case "agentMessage":
 			role = "assistant"
 			text = item.Text
+		case "imageGeneration":
+			role = "assistant"
+			text = "Codex 生成的图片"
 		case "plan":
 			text = item.Text
 		case "reasoning":
@@ -368,6 +375,9 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			text, _ = boundedActivityText(512, text)
 		}
 		projected := map[string]any{"itemId": item.ID, "role": role, "text": text}
+		if images := imageReferences(raw); len(images) > 0 {
+			projected["images"] = images
+		}
 		if activity != nil {
 			projected["activity"] = activity
 		}

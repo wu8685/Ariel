@@ -5,7 +5,11 @@ import "encoding/json"
 // TurnContainsClientMessage verifies the native userMessage.clientId field.
 // The native item.id is a different, owner-generated identifier.
 func TurnContainsClientMessage(state json.RawMessage, turnID, clientMessageID, text string) bool {
-	if turnID == "" || clientMessageID == "" || text == "" {
+	return TurnContainsClientMessageImages(state, turnID, clientMessageID, text, 0)
+}
+
+func TurnContainsClientMessageImages(state json.RawMessage, turnID, clientMessageID, text string, imageCount int) bool {
+	if turnID == "" || clientMessageID == "" || (text == "" && imageCount == 0) || imageCount < 0 {
 		return false
 	}
 	var snapshot struct {
@@ -63,10 +67,19 @@ func TurnContainsClientMessage(state json.RawMessage, turnID, clientMessageID, t
 				Text string `json:"text"`
 			} `json:"content"`
 		}
-		if json.Unmarshal(raw, &item) != nil || item.Type != "userMessage" || item.ClientID != clientMessageID || len(item.Content) != 1 {
+		if json.Unmarshal(raw, &item) != nil || item.Type != "userMessage" || item.ClientID != clientMessageID {
 			continue
 		}
-		if item.Content[0].Type == "text" && item.Content[0].Text == text {
+		texts, images := 0, 0
+		for _, content := range item.Content {
+			if content.Type == "text" && content.Text == text {
+				texts++
+			}
+			if content.Type == "image" || content.Type == "localImage" {
+				images++
+			}
+		}
+		if images == imageCount && ((text == "" && texts == 0) || (text != "" && texts == 1)) && len(item.Content) == texts+images {
 			return true
 		}
 	}

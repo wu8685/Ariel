@@ -47,6 +47,6 @@ export function permissionSummary(permissions?: { sandbox: string; approval: str
 
 // Current Desktop permissions are visible context, not an additional send
 // gate. The original owner still decides whether a turn or tool may run.
-export function canSend(thread: { runtime: string; pendingInteractions: readonly unknown[] } | null, ready: boolean, working: boolean, draft: string): boolean {
-  return !!thread && ready && !working && thread.runtime === "idle" && thread.pendingInteractions.length === 0 && !!draft.trim();
+export function canSend(thread: { runtime: string; pendingInteractions: readonly unknown[] } | null, ready: boolean, working: boolean, draft: string, imageCount = 0): boolean {
+  return !!thread && ready && !working && thread.runtime === "idle" && thread.pendingInteractions.length === 0 && (!!draft.trim() || imageCount > 0);
 }

@@ -162,6 +162,10 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (f *Follower) Start(ctx context.Context, clientMessageID, text string) (string, error) {
+	return f.StartWithImages(ctx, clientMessageID, text, nil)
+}
+
+func (f *Follower) StartWithImages(ctx context.Context, clientMessageID, text string, images []string) (string, error) {
 	f.startMu.Lock()
 	defer f.startMu.Unlock()
 	f.opMu.Lock()
@@ -170,7 +174,7 @@ func (f *Follower) Start(ctx context.Context, clientMessageID, text string) (str
 	if err != nil {
 		return "", err
 	}
-	turnID, err := StartProductionTurn(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, clientMessageID, text)
+	turnID, err := StartProductionTurnImages(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, clientMessageID, text, images)
 	if err != nil {
 		return "", err
 	}
@@ -181,7 +185,7 @@ func (f *Follower) Start(ctx context.Context, clientMessageID, text string) (str
 		if err != nil {
 			return "", &CallError{Cause: err, Outcome: "unknown"}
 		}
-		if TurnContainsClientMessage(current, turnID, clientMessageID, text) {
+		if TurnContainsClientMessageImages(current, turnID, clientMessageID, text, len(images)) {
 			return turnID, nil
 		}
 		select {

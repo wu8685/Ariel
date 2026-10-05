@@ -7,6 +7,7 @@ import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
+import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
 
@@ -88,6 +89,8 @@ export function App() {
   const itemLoadingRef = useRef("");
   const [itemOverrides, setItemOverrides] = useState<Record<string, Turn>>({});
   const [draft, setDraft] = useState("");
+  const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
+  const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -210,7 +213,7 @@ export function App() {
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
     selection.current = { deviceId: targetDevice, threadId: id, view: null };
-    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); resetHistory();
+    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); resetHistory();
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
     const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
@@ -504,13 +507,29 @@ export function App() {
   }
 
   async function send() {
-    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, status === "ready", working, draft)) return;
+    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, status === "ready", working, draft, screenshots.length)) return;
     const text = draft;
+    const images = screenshots;
     setWorking(true); setNotice("");
-    const response = await client.request("turn.start", deviceId, { threadId: view.threadId, clientMessageId: newRequestID(), text });
+    const response = await client.request("turn.start", deviceId, { threadId: view.threadId, clientMessageId: newRequestID(), text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) });
     setWorking(false);
     setDraft(current => current === text ? preserveDraftAfterSend(current, response.outcome) : current);
+    if (response.outcome === "accepted") setScreenshots(current => current === images ? [] : current);
     if (response.outcome !== "accepted") setNotice(errorText(response));
+  }
+
+  async function addScreenshots(files: FileList | null) {
+    if (!files?.length) return;
+    try { setScreenshots(await readScreenshotFiles(screenshots, files)); setNotice(""); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "截图无法读取。"); }
+    if (screenshotInputRef.current) screenshotInputRef.current.value = "";
+  }
+
+  async function loadImage(turnId: string, itemId: string, imageIndex: number): Promise<string> {
+    if (!view || !deviceId) throw new Error("会话已切换");
+    const response = await client.request("thread.image", deviceId, { threadId: view.threadId, turnId, itemId, imageIndex });
+    if (response.outcome !== "accepted" || typeof response.data?.dataUri !== "string") throw new Error(errorText(response));
+    return response.data.dataUri;
   }
 
   async function stop() {
@@ -562,19 +581,27 @@ export function App() {
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol">✳</div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}
         </div>
         {showReturnToLatest && view && <div className="return-latest-bar"><button type="button" onClick={returnToLatest}>回到最新</button></div>}
-        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}<div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} /><div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>{activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}>■ 停止</button>}<button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working, draft)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button></div></div></div></div>
+        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
+          {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button type="button" aria-label={`移除截图：${image.name}`} onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}>×</button></div>)}</div>}
+          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} />
+            <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
+              <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || status !== "ready" || readOnlyHistory || working} />
+              <button className="attach-button" type="button" aria-label="选择截图" title="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || status !== "ready" || readOnlyHistory || working}>＋</button>
+              {activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}>■ 停止</button>}
+              <button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working, draft, screenshots.length)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button>
+            </div></div></div></div>
       </main>
     </div>
   </div>;
 }
 
-function ConversationTurn({ turn, loading, onLoadOlderItems, active }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void; active: boolean }) {
+function ConversationTurn({ turn, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
   const parts = groupTurnItems(turn);
   const lastPart = parts.at(-1);
@@ -589,7 +616,9 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, active }: { turn: T
     {parts.map(part => {
       if (part.kind === "message") {
         const item = part.item;
-        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.role === "system" ? item.text : <ConversationMarkdown text={item.text} />}</div></div></article>;
+        const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
+        const nativeImages = item.images?.filter(image => image.kind === "native") || [];
+        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.role === "system" ? item.text : <ConversationMarkdown text={item.text} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>

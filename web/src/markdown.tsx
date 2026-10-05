@@ -52,10 +52,11 @@ class MarkdownErrorBoundary extends Component<{ text: string; children: ReactNod
   }
 }
 
-export function ConversationMarkdown({ text }: { text: string }) {
+export function ConversationMarkdown({ text, renderImage }: { text: string; renderImage?: (source: string, alt: string) => ReactNode }) {
   const messageID = useId().replace(/[^a-z\d_-]/giu, "");
   if (text.length > maxMarkdownCodeUnits) return <PlainFallback text={text} notice="内容过长，暂以纯文本显示。" />;
+  const imageComponents: Components = renderImage ? { ...components, img({ src, alt }) { return renderImage(src || "", alt || "") || <span className="markdown-image-placeholder" role="img" aria-label={alt ? `图片：${alt}` : "图片"}>{alt ? `图片：${alt}` : "图片"}</span>; } } : components;
   return <MarkdownErrorBoundary text={text}>
-    <div className="markdown-body"><Markdown remarkPlugins={markdownPlugins} remarkRehypeOptions={{ clobberPrefix: `ariel-${messageID}-` }} skipHtml urlTransform={url => safeHref(url) || ""} components={components}>{text}</Markdown></div>
+    <div className="markdown-body"><Markdown remarkPlugins={markdownPlugins} remarkRehypeOptions={{ clobberPrefix: `ariel-${messageID}-` }} skipHtml urlTransform={(url, key, node) => node.tagName === "img" && key === "src" ? url : safeHref(url) || ""} components={imageComponents}>{text}</Markdown></div>
   </MarkdownErrorBoundary>;
 }
