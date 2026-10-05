@@ -316,6 +316,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .send-glyph { display: block; margin-left: 0 !important; font-size: 20px; line-height: 1; }
   .stop-button { min-height: 44px; border-radius: 22px; padding: 9px 12px; }
   .message { gap: 11px; }
+  .question input, .question select { font-size: 16px; min-width: 0; max-width: 100%; }
   .thread-row { padding: 15px; }
   .sidebar-foot { font-size: 9px; }
   .permission-strip { display: none; }

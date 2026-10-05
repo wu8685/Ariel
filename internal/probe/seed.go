@@ -16,7 +16,7 @@ func SeedFixture(ctx context.Context, rpc appserver.RPC, m Manifest, enabled boo
 		return err
 	}
 	h := appserver.HistoryReader{RPC: rpc}
-	thread, err := h.Read(ctx, m.ThreadID)
+	thread, err := h.ReadFull(ctx, m.ThreadID)
 	if err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func SeedFixture(ctx context.Context, rpc appserver.RPC, m Manifest, enabled boo
 			rpc.Call(stopCtx, "turn/interrupt", map[string]string{"threadId": m.ThreadID, "turnId": accepted.Turn.ID}, nil)
 			return errors.New("seed did not finish; exact-turn interrupt attempted")
 		case <-ticker.C:
-			thread, err := h.Read(ctx, m.ThreadID)
+			thread, err := h.ReadFull(ctx, m.ThreadID)
 			if err != nil {
 				return err
 			}

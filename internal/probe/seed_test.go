@@ -30,9 +30,28 @@ func TestSeedRequiresGuardAndVerifiesLiteralReply(t *testing.T) {
 	}
 }
 
+func TestSeedReadsCompletedTurnWhenDefaultHistoryIsPaged(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, ".ariel-fixture"), []byte("guard"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{SchemaVersion: 1, ThreadID: "fixture", Workspace: workspace, CreatedByProbe: true, CreatedAt: time.Now(), GuardID: "guard"}
+	f := &seedRPC{cwd: workspace, reply: "ARIEL_SEED_OK", paged: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := SeedFixture(ctx, f, m, true, time.Millisecond); err != nil {
+		t.Fatalf("completed seed was not verified: %v", err)
+	}
+	if !f.fullReadSeen {
+		t.Fatal("seed verifier did not request the completed turn")
+	}
+}
+
 type seedRPC struct {
-	cwd, reply string
-	started    bool
+	cwd, reply   string
+	started      bool
+	paged        bool
+	fullReadSeen bool
 }
 
 func (f *seedRPC) Call(ctx context.Context, method string, params any, result any) error {
@@ -40,7 +59,9 @@ func (f *seedRPC) Call(ctx context.Context, method string, params any, result an
 	switch method {
 	case "thread/read":
 		turns := []any{}
-		if f.started {
+		includeTurns := params.(map[string]any)["includeTurns"] == true
+		f.fullReadSeen = f.fullReadSeen || includeTurns
+		if f.started && (!f.paged || includeTurns) {
 			turns = append(turns, map[string]any{"id": "seed-turn", "status": "completed", "items": []any{map[string]any{"type": "agentMessage", "text": f.reply}}})
 		}
 		value = map[string]any{"thread": map[string]any{"id": "fixture", "cwd": f.cwd, "turns": turns}}

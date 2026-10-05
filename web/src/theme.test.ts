@@ -86,6 +86,11 @@ describe("fixed Night appearance", () => {
     expect(fontSize).toBeGreaterThanOrEqual(16);
   });
 
+  it("keeps mobile approval and question fields from magnifying the page on focus", () => {
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(mobile).toMatch(/\.question input,\s*\.question select\s*\{[^}]*font-size:\s*16px;[^}]*min-width:\s*0/s);
+  });
+
   it("visually distinguishes an unavailable mobile send button from the blue active button", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(mobile).toMatch(/\.send-button:disabled\s*\{[^}]*background:\s*#[0-9a-fA-F]{6};[^}]*border-color:\s*#[0-9a-fA-F]{6};[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1/s);
