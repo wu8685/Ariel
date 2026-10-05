@@ -35,6 +35,8 @@
 | 0018 | [黑色 Night 主题与左右分列对话气泡](0018-neutral-night-chat-bubbles.md) | Approved（用户已确认） | 近黑中性主题；用户右侧蓝色气泡、Codex 左侧深灰气泡，正文不显示角色名 |
 | 0019 | [安全呈现会话 Markdown](0019-safe-markdown-conversation.md) | Implemented（自动与隔离浏览器已验；物理手机待验） | 用户／Codex 正文支持 CommonMark 与 GFM；禁用原生 HTML 和远程资源自动加载 |
 | 0020 | [一键安装、配置与启动](0020-one-command-install-and-start.md) | Implemented（自动／隔离／LAN 已验；物理手机待验） | 一个脚本支持接入指定 Relay 或同机启动 Relay + Agent；提供 Agent 自动安装文档 |
+| 0021 | [每回合一个图标折叠全部工具活动](0021-single-icon-tool-activity.md) | Implemented（自动已验；手机待验） | 默认隐藏全部已验证工具记录；每 turn 一个图标按需展开 |
+| 0022 | [提高 Night 主题黑白对比](0022-crisp-black-white-night.md) | Implemented（自动／静态浏览器已验；手机待验） | 纯黑基底、纯白主文字与清晰中性层级 |
 
 ## 设计基线
 

@@ -352,12 +352,12 @@ describe("Ariel app interactions", () => {
     expect(document.querySelector(".message.system strong")).toBeNull();
     expect(screen.getByText("**system literal**")).toBeTruthy();
     expect(screen.getByText("**approval literal**")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /已处理 1 项/ }));
+    fireEvent.click(screen.getByRole("button", { name: /打开工具调用.*1 项/ }));
     expect(document.querySelector(".activity-details strong")).toBeNull();
     expect(screen.getByText("**tool literal**")).toBeTruthy();
   });
 
-  it("collapses consecutive verified tool calls but expands each loaded call in order", async () => {
+  it("hides all verified calls behind one icon per turn and restores their interleaved order", async () => {
     const thread = { ...fixtureThread, turns: [{ turnId: "tools", status: "completed", items: [
       { itemId: "u", role: "user", text: "question" },
       { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", details: "<img src=x onerror=alert(1)>", truncated: false } },
@@ -367,23 +367,42 @@ describe("Ariel app interactions", () => {
       { itemId: "unknown", role: "system", text: "[futureTool 项目]" },
     ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "Approve fixture only", availableDecisions: ["deny"] }] } as unknown as Thread;
     await openFixture(thread);
-    const first = screen.getByRole("button", { name: /已处理 2 项/ });
-    const second = screen.getByRole("button", { name: /已处理 1 项/ });
-    expect(first.getAttribute("aria-expanded")).toBe("false");
+    const opener = screen.getByRole("button", { name: /打开工具调用.*3 项/ });
+    expect(screen.getAllByRole("button", { name: /打开工具调用/ })).toHaveLength(1);
+    expect(opener.getAttribute("aria-expanded")).toBe("false");
+    expect(opener.textContent?.trim()).toHaveLength(0);
     expect(screen.queryByText("fixture/lookup")).toBeNull();
+    expect(screen.queryByText("/usr/bin/true")).toBeNull();
+    expect(screen.queryByText("文件变更")).toBeNull();
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
     expect(screen.getByText("answer")).toBeTruthy();
     expect(screen.getByText("[futureTool 项目]")).toBeTruthy();
     expect(screen.getByText("Approve fixture only")).toBeTruthy();
-    fireEvent.click(first);
-    expect(first.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(opener);
+    expect(screen.getByRole("button", { name: /收起工具调用.*3 项/ }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("fixture/lookup")).toBeTruthy();
     expect(screen.getByText("/usr/bin/true")).toBeTruthy();
     expect(document.querySelector(".activity-details img")).toBeNull();
-    expect(document.querySelectorAll(".activity-item")).toHaveLength(2);
-    fireEvent.click(second);
     expect(document.querySelectorAll(".activity-item")).toHaveLength(3);
-    fireEvent.click(first);
-    expect(document.querySelectorAll(".activity-item")).toHaveLength(1);
+    const transcriptOrder = [...document.querySelectorAll(".turn .message, .turn .activity-item")].map(node => node.getAttribute("data-item-id"));
+    expect(transcriptOrder).toEqual(["u", "m", "c", "a", "f", "unknown"]);
+    fireEvent.click(screen.getByRole("button", { name: /收起工具调用/ }));
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
+    expect(screen.getAllByRole("button", { name: /打开工具调用/ })).toHaveLength(1);
+  });
+
+  it("keeps one tool opener expanded as live calls append to the same turn", async () => {
+    const activity = (itemId: string) => ({ itemId, role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: itemId, status: "completed", details: itemId, truncated: false } });
+    const starting = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "live-tools", status: "inProgress", items: [activity("first")] }] } as unknown as Thread;
+    const { socket } = await openFixture(starting);
+    const controlAnchor = document.querySelector(".activity-group")?.getAttribute("data-item-id");
+    fireEvent.click(screen.getByRole("button", { name: /打开工具调用.*1 项/ }));
+    const updated = { ...starting, turns: [{ ...starting.turns[0], items: [activity("first"), activity("second"), { itemId: "note", role: "assistant", text: "progress" }, activity("third")] }] } as unknown as Thread;
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
+    expect(screen.getAllByRole("button", { name: /收起工具调用.*3 项/ })).toHaveLength(1);
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(3);
+    expect(document.querySelector(".activity-group")?.getAttribute("data-item-id")).toBe(controlAnchor);
+    expect(screen.getByText("progress")).toBeTruthy();
   });
 
   it("shows one thinking or processing line only while the active turn can run", async () => {
@@ -395,10 +414,11 @@ describe("Ariel app interactions", () => {
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
     expect(screen.queryByText("思考中…")).toBeNull();
     expect(screen.getAllByText(/处理中…/)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /打开工具调用.*1 项/ })).toBeTruthy();
     const completed = { ...running, runtime: "idle", turns: [{ ...running.turns[0], status: "completed" }] } as unknown as Thread;
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 2, seq: 3, thread: completed }));
     expect(screen.queryByText(/处理中…/)).toBeNull();
-    expect(screen.getByRole("button", { name: /已处理 1 项/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /打开工具调用.*1 项/ })).toBeTruthy();
   });
 
   it("uses Enter only for mobile newlines and requires the send button", async () => {

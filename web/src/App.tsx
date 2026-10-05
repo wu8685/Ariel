@@ -575,10 +575,14 @@ export function App() {
 }
 
 function ConversationTurn({ turn, loading, onLoadOlderItems, active }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void; active: boolean }) {
-  const [expandedIDs, setExpandedIDs] = useState<Set<string>>(() => new Set());
+  const [activityExpanded, setActivityExpanded] = useState(false);
   const parts = groupTurnItems(turn);
   const lastPart = parts.at(-1);
   const processing = active && lastPart?.kind === "activity";
+  const activityParts = parts.filter(part => part.kind === "activity");
+  const activityCount = activityParts.reduce((count, part) => count + part.items.length, 0);
+  const firstActivity = activityParts[0];
+  const activityLabel = `${activityExpanded ? "收起" : "打开"}工具调用（${activityCount} 项）`;
   return <section className="turn">
     {turn.status !== "inProgress" && <div className="turn-status">{turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>}
     {turn.itemsComplete === false && <button className="history-action item-history-action" type="button" onClick={() => onLoadOlderItems(turn)} disabled={loading}>{loading ? "正在加载…" : "加载此回合更早内容"}</button>}
@@ -587,16 +591,13 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, active }: { turn: T
         const item = part.item;
         return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.role === "system" ? item.text : <ConversationMarkdown text={item.text} />}</div></div></article>;
       }
-      const ids = part.items.map(item => item.itemId);
-      const expanded = ids.some(id => expandedIDs.has(id));
-      const running = processing && part === lastPart;
-      const controlID = `activity-${turn.turnId}-${ids[0]}`;
-      return <section className="activity-group" key={ids[0]} data-item-id={ids.at(-1)}>
-        <button className="activity-summary" type="button" aria-expanded={expanded} aria-controls={controlID} onClick={() => setExpandedIDs(current => { const next = new Set(current); for (const id of ids) { if (expanded) next.delete(id); else next.add(id); } return next; })}><span className="activity-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>{running ? `处理中… · ${ids.length} 项` : `已处理 ${ids.length} 项`}</button>
-        {expanded && <div className="activity-list" id={controlID}>{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <div className="activity-item" key={item.itemId} data-item-id={item.itemId}><div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div><div className="activity-kind">{item.activity!.kind}</div>{item.activity!.details ? <pre className="activity-details">{item.activity!.details}</pre> : <p className="activity-note">当前历史没有更多详情。</p>}{item.activity!.truncated && <p className="activity-note">详情已截断；完整内容请在原 Codex Desktop 查看。</p>}</div>)}</div>}
+      if (!activityExpanded && part !== firstActivity) return null;
+      return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
+        {part === firstActivity && <button className={`activity-toggle ${activityExpanded ? "open" : ""}`} type="button" aria-label={activityLabel} title={activityLabel} aria-expanded={activityExpanded} onClick={() => setActivityExpanded(open => !open)}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m9 5 7 7-7 7" /></svg></button>}
+        {activityExpanded && <div className="activity-list">{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <div className="activity-item" key={item.itemId} data-item-id={item.itemId}><div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div><div className="activity-kind">{item.activity!.kind}</div>{item.activity!.details ? <pre className="activity-details">{item.activity!.details}</pre> : <p className="activity-note">当前历史没有更多详情。</p>}{item.activity!.truncated && <p className="activity-note">详情已截断；完整内容请在原 Codex Desktop 查看。</p>}</div>)}</div>}
       </section>;
     })}
-    {active && !processing && <div className="agent-progress" role="status">思考中…</div>}
+    {active && <div className="agent-progress" role="status">{processing ? "处理中…" : "思考中…"}</div>}
   </section>;
 }
 

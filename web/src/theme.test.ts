@@ -27,12 +27,13 @@ function contrast(a: string, b: string): number {
 describe("fixed Night appearance", () => {
   it("uses dark page/surface tokens and high-contrast white text", () => {
     expect(style).toMatch(/color-scheme:\s*dark/);
-    expect(token("color-page")).toBe("#08090b");
-    expect(token("color-surface")).toBe("#121316");
-    expect(token("color-text")).toBe("#f5f5f6");
+    expect(token("color-page")).toBe("#000000");
+    expect(token("color-surface")).toBe("#0d0d0d");
+    expect(token("color-text")).toBe("#ffffff");
     expect(contrast(token("color-text"), token("color-page"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(token("color-muted"), token("color-surface"))).toBeGreaterThanOrEqual(4.5);
-    expect(html).toContain('name="theme-color" content="#08090b"');
+    expect(contrast(token("color-muted"), token("color-surface"))).toBeGreaterThanOrEqual(7);
+    expect(contrast(token("color-subtle"), token("color-surface"))).toBeGreaterThanOrEqual(4.5);
+    expect(html).toContain('name="theme-color" content="#000000"');
   });
 
   it("uses blue for primary and keyboard focus while preserving semantic warnings", () => {
@@ -41,6 +42,7 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.primary\s*\{[^}]*background:\s*var\(--color-primary\)/s);
     expect(style).toMatch(/:focus-visible\s*\{[^}]*var\(--color-accent\)/s);
     expect(style).toMatch(/\.permission-strip\.danger\s*\{[^}]*var\(--color-warning/s);
+    expect(style).toMatch(/\.primary:disabled\s*\{[^}]*background:\s*var\(--color-raised\);[^}]*color:\s*var\(--color-subtle\);[^}]*opacity:\s*1/s);
   });
 
   it("keeps connection, conversation, composer and question controls on dark surfaces", () => {
@@ -53,7 +55,7 @@ describe("fixed Night appearance", () => {
   });
 
   it("uses a neutral gray logo and a mobile-only dismissible sidebar backdrop", () => {
-    expect(token("color-logo")).toBe("#b8b8bb");
+    expect(token("color-logo")).toBe("#b8b8b8");
     expect(style).toMatch(/\.brand-mark\s*\{[^}]*color:\s*var\(--color-logo\)/s);
     expect(style).toMatch(/\.brand-mark\s*\{[^}]*stroke:\s*currentColor/s);
     expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*none/s);
@@ -110,6 +112,13 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.message\.user\s*\{[^}]*justify-content:\s*flex-end/s);
     expect(style).toMatch(/\.eyebrow\s*\{[^}]*color:\s*var\(--color-subtle\)/s);
     expect(style).toMatch(/\.empty-symbol\s*\{[^}]*color:\s*var\(--color-logo\)/s);
+    for (const name of ["color-surface", "color-panel", "color-raised", "color-border"]) {
+      const value = token(name).slice(1);
+      expect(value.slice(0, 2)).toBe(value.slice(2, 4));
+      expect(value.slice(2, 4)).toBe(value.slice(4, 6));
+    }
+    expect(style).toMatch(/\.activity-toggle\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(style).toMatch(/\.activity-toggle\s*\{[^}]*color:\s*var\(--color-text\)/s);
   });
 
   it("contains Markdown tables and code inside bubbles with readable links", () => {
