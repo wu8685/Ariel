@@ -6,6 +6,7 @@ import { newRequestID } from "./ids";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
 import { activityStatusText, groupTurnItems } from "./activity";
+import { ConversationMarkdown } from "./markdown";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
 
@@ -584,7 +585,7 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, active }: { turn: T
     {parts.map(part => {
       if (part.kind === "message") {
         const item = part.item;
-        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.text}</div></div></article>;
+        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.role === "system" ? item.text : <ConversationMarkdown text={item.text} />}</div></div></article>;
       }
       const ids = part.items.map(item => item.itemId);
       const expanded = ids.some(id => expandedIDs.has(id));

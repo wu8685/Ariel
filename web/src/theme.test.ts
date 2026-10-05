@@ -111,4 +111,13 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.eyebrow\s*\{[^}]*color:\s*var\(--color-subtle\)/s);
     expect(style).toMatch(/\.empty-symbol\s*\{[^}]*color:\s*var\(--color-logo\)/s);
   });
+
+  it("contains Markdown tables and code inside bubbles with readable links", () => {
+    expect(style).toMatch(/\.markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(style).toMatch(/\.markdown-body pre\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(style).toMatch(/\.markdown-body a\s*\{[^}]*text-decoration:\s*underline/s);
+    expect(style).toMatch(/\.markdown-body\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(style).toMatch(/\.markdown-body p\s*\{[^}]*white-space:\s*pre-wrap/s);
+    expect(style).toMatch(/\.markdown-body \.sr-only\s*\{[^}]*position:\s*absolute/s);
+  });
 });

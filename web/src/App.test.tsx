@@ -339,6 +339,24 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("Approve fixture only")).toBeTruthy();
   });
 
+  it("formats only user and Codex bodies while keeping system, tool and approval text literal", async () => {
+    const thread = { ...fixtureThread, turns: [{ turnId: "markdown", status: "completed", items: [
+      { itemId: "user", role: "user", text: "**your emphasis**" },
+      { itemId: "assistant", role: "assistant", text: "[source](https://example.test/)" },
+      { itemId: "system", role: "system", text: "**system literal**" },
+      { itemId: "tool", role: "system", text: "tool", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", details: "**tool literal**", truncated: false } },
+    ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "**approval literal**", availableDecisions: ["deny"] }] } as unknown as Thread;
+    await openFixture(thread);
+    expect(document.querySelector(".message.user strong")?.textContent).toBe("your emphasis");
+    expect(document.querySelector(".message.assistant a")?.getAttribute("href")).toBe("https://example.test/");
+    expect(document.querySelector(".message.system strong")).toBeNull();
+    expect(screen.getByText("**system literal**")).toBeTruthy();
+    expect(screen.getByText("**approval literal**")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /已处理 1 项/ }));
+    expect(document.querySelector(".activity-details strong")).toBeNull();
+    expect(screen.getByText("**tool literal**")).toBeTruthy();
+  });
+
   it("collapses consecutive verified tool calls but expands each loaded call in order", async () => {
     const thread = { ...fixtureThread, turns: [{ turnId: "tools", status: "completed", items: [
       { itemId: "u", role: "user", text: "question" },
