@@ -10,6 +10,12 @@
 
 这证明当前 Agent／Relay 的下行订阅链路在 owner 主动变化时可工作，但 owner 在该测试中是隔离 fake。真实 Codex Desktop UI 发消息时 Web 同步的 A05 端到端验收仍未完成；不能把此测试算作物理手机或 Desktop UI 实测。
 
+### 真实 Desktop UI → 已订阅 Web（后续补验）
+
+2026-10-05 在带 `.ariel-fixture` guard 的隔离 fixture 上，先用只读探针核对 Desktop 原 owner 可订阅、持久化历史为 2 个 completed turn／4 个 item。仅监听 `127.0.0.1:8090` 的测试 Relay／Agent 与 in-app browser 已连通，Web 已点选原 fixture 并显示同样的 2 个 turn；此时页面未发任何变更请求。
+
+用户随后在 **Codex Desktop UI** 中对该 fixture 发送一条明确禁止工具的短消息。保持同一 Web 标签页和订阅、不刷新页面，Web 从 2 个 turn 更新为 3 个 completed turn，并显示该条消息及 Codex 的精确回复。再次独立运行只读 `probe history --thread`，原 Codex 持久化历史为 3 个 completed turn／6 个 item。测试前后的 Web 会话标题与工作目录后缀一致；未在 Web 重发。由此完成 A05 的真实 Desktop UI→Web 方向浏览器验收；物理手机的同方向可见性仍单列 A22，不由此推定。
+
 ## 当前网页的只读手机尺寸检查
 
 本机 8082 入口提供最新构建。在 in-app browser 的临时标签以 390×844 视口打开未登录页，两个 Ariel 品牌图形的计算颜色均为 `rgb(180, 192, 207)`，截图目测为灰色；页面仍显示未连接状态。临时视口已恢复、标签已关闭。未输入 PIN 或操作真实会话，因此这项检查不能证明物理手机 Safari 缓存已更新，也不能覆盖已连接会话页。
