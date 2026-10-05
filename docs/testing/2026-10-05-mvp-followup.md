@@ -32,3 +32,9 @@
 ## A19：单个历史 item 超页的边界
 
 新增 `TestOversizedSingleHistoryItemFailsOnlyThatPage`：模拟一个超过 Web 历史页预算的 7 MiB `agentMessage` item。`thread.history.items` 的页面限制从 100 逐步缩至 1，最终明确返回 `HISTORY_TOO_LARGE`；随后同一 Agent Service 仍能读取普通历史页。这是单 item 超限隔离的自动回归，不是当前 Desktop 原生大 diff 或物理手机的端到端验收。
+
+## A22：物理手机续聊与输入区
+
+用户在真实手机 Safari 上以原固定连接码登录 LAN Relay，隔离 fixture 的最新 3 个 turn 与 Desktop 实时回复可见，点选会话后侧栏自动收起。键盘 Return 只换行，九行草稿使输入框封顶并可内滚；聚焦时暴露的横向溢出经 16px 手机输入字号修复，用户刷新后确认按钮完整可见，详见 [0014 专项记录](2026-10-05-0014-mobile-composer.md)。
+
+随后用户从手机向同一 fixture 点击发送一条禁止工具的短消息。保持另一 Web 页面订阅且不刷新，该页面由 3 个增长到 4 个 completed turn 并显示精确回复；独立原历史探针为 4 个 completed turn／8 个 item。由此手机→原 owner→另一 Web 的实时方向已通过；原生审批、补充回答、后台恢复及 Desktop 重启仍需分别验收，不能以发送通过替代。

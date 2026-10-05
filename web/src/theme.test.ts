@@ -86,6 +86,11 @@ describe("fixed Night appearance", () => {
     expect(fontSize).toBeGreaterThanOrEqual(16);
   });
 
+  it("visually distinguishes an unavailable mobile send button from the blue active button", () => {
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(mobile).toMatch(/\.send-button:disabled\s*\{[^}]*background:\s*#[0-9a-fA-F]{6};[^}]*border-color:\s*#[0-9a-fA-F]{6};[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1/s);
+  });
+
   it("wraps long messages and approval prompts without horizontal scrolling", () => {
     expect(style).toMatch(/\.message-text\s*\{[^}]*overflow-wrap:\s*anywhere/s);
     expect(style).toMatch(/\.interaction-card p\s*\{[^}]*overflow-wrap:\s*anywhere/s);

@@ -311,6 +311,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .composer-actions { justify-content: flex-end; flex: none; padding: 2px; }
   .composer-actions > div { align-items: center; gap: 2px; }
   .send-button { display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0; border-radius: 50%; }
+  .send-button:disabled { background: #3a3d43; border-color: #3a3d43; color: var(--color-muted); opacity: 1; }
   .send-label { display: none; }
   .send-glyph { display: block; margin-left: 0 !important; font-size: 20px; line-height: 1; }
   .stop-button { min-height: 44px; border-radius: 22px; padding: 9px 12px; }
