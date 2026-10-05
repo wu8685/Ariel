@@ -30,6 +30,7 @@
 | 0013 | [大会话最近十回合与 64 MiB 有界同步](0013-paged-history-and-large-owner.md) | Approved（已实现并验证；物理手机待验） | 默认最近 10 turn、旧历史按需分页，本机原会话上限 64 MiB |
 | 0014 | [手机输入框回车换行与八行自适应](0014-mobile-composer-newline-and-eight-lines.md) | Approved（Web／隔离浏览器已验；物理手机待验） | 手机 Enter 仅换行，按钮发送；输入框一至八行增长并在超出后内部滚动 |
 | 0015 | [会话中的工具活动折叠为单行状态](0015-compact-tool-activity-in-conversation.md) | Draft（待用户确认） | 隐藏已知工具过程卡片，运行中只保留一行思考／处理状态 |
+| 0016 | [向上滚动渐进加载会话历史](0016-scroll-triggered-history-loading.md) | Draft（待用户确认） | 首屏最多 10 turn，用户向上滚动时自动逐页补充更早 turn／item，并保持阅读位置 |
 
 ## 设计基线
 
