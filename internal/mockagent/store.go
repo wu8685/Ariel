@@ -2,7 +2,9 @@ package mockagent
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,6 +84,69 @@ func (s *Store) List(limit int, cursor string) ([]map[string]any, string, error)
 		next = "mock:" + strconv.Itoa(end)
 	}
 	return result, next, nil
+}
+
+func (s *Store) Search(query string, limit int, cursor string) ([]map[string]any, string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len([]rune(query)) > 128 || limit < 1 || limit > 100 {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	hash := sha256.Sum256([]byte(query))
+	prefix := fmt.Sprintf("mock-search:%x:", hash[:8])
+	start := 0
+	if cursor != "" {
+		if !strings.HasPrefix(cursor, prefix) {
+			return nil, "", errors.New("INVALID_ARGUMENT")
+		}
+		var err error
+		start, err = strconv.Atoi(strings.TrimPrefix(cursor, prefix))
+		if err != nil || start < 1 {
+			return nil, "", errors.New("INVALID_ARGUMENT")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	matched := make([]map[string]any, 0)
+	needle := strings.ToLower(query)
+	for _, id := range s.order {
+		t := s.threads[id]
+		snippet := ""
+		if strings.Contains(strings.ToLower(t.title), needle) {
+			snippet = t.title
+		} else {
+			for _, turn := range t.turns {
+				for _, item := range turn.items {
+					if strings.Contains(strings.ToLower(item.text), needle) {
+						snippet = item.text
+						break
+					}
+				}
+				if snippet != "" {
+					break
+				}
+			}
+		}
+		if snippet == "" {
+			continue
+		}
+		data := threadData(t)
+		data["turns"] = []any{}
+		runes := []rune(snippet)
+		if len(runes) > 400 {
+			runes = runes[:400]
+		}
+		data["searchSnippet"] = string(runes)
+		matched = append(matched, data)
+	}
+	if cursor != "" && start >= len(matched) {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	end := min(start+limit, len(matched))
+	next := ""
+	if end < len(matched) {
+		next = prefix + strconv.Itoa(end)
+	}
+	return matched[start:end], next, nil
 }
 
 func (s *Store) Read(id string) (map[string]any, error) {

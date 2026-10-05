@@ -62,6 +62,67 @@ async function openFixture(thread: Thread = fixtureThread) {
 }
 
 describe("Ariel app interactions", () => {
+  it("searches all native sessions with a debounced query, shows snippets, pages, and restores recents", async () => {
+    const { socket, requests } = await openFixture();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "Ariel" } });
+    expect(requests("thread.list")).toHaveLength(1);
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    expect(requests("thread.list")[1].params).toMatchObject({ searchTerm: "Ariel", limit: 50 });
+    const result = { ...fixtureThread, threadId: "found", title: "Found title", searchSnippet: "命中的消息内容" };
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [result], nextCursor: "page-two" } }));
+    expect(await screen.findByText("命中的消息内容")).toBeTruthy();
+    expect(screen.getByLabelText("会话列表").textContent).not.toContain("Fixture");
+    fireEvent.click(screen.getByRole("button", { name: "加载更多 →" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(3));
+    expect(requests("thread.list")[2].params).toMatchObject({ searchTerm: "Ariel", cursor: "page-two" });
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[2].requestId, outcome: "accepted", data: { threads: [{ ...fixtureThread, threadId: "older", title: "Older hit" }], nextCursor: "" } }));
+    expect(await screen.findByText("Older hit")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(4));
+    expect(requests("thread.list")[3].params.searchTerm).toBeUndefined();
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[3].requestId, outcome: "accepted", data: { threads: [fixtureThread], nextCursor: "" } }));
+    expect(await screen.findByText("Fixture")).toBeTruthy();
+    expect(screen.queryByText("Older hit")).toBeNull();
+  });
+
+  it("isolates stale search responses and keeps search errors local to the sidebar", async () => {
+    const { socket, requests } = await openFixture();
+    const search = screen.getByRole("searchbox", { name: "搜索会话" });
+    fireEvent.change(search, { target: { value: "first" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    fireEvent.change(search, { target: { value: "second" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(3));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[2].requestId, outcome: "accepted", data: { threads: [], nextCursor: "" } }));
+    expect(await screen.findByText("没有找到匹配会话")).toBeTruthy();
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [{ ...fixtureThread, threadId: "stale", title: "Stale result" }] } }));
+    expect(screen.queryByText("Stale result")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(4));
+    expect(requests("thread.list")[3].params.searchTerm).toBe("second");
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[3].requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "unsupported" } }));
+    expect(await screen.findByText("当前 Codex 版本不支持会话内容搜索")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy();
+  });
+
+  it("refreshes the list when edited input trims to the same query", async () => {
+    const { socket, requests } = await openFixture();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: " " } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    expect(requests("thread.list")[1].params.searchTerm).toBeUndefined();
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [fixtureThread], nextCursor: "" } }));
+    await waitFor(() => expect(screen.getByLabelText("会话列表").textContent).toContain("Fixture"));
+  });
+
+  it("keeps a search snippet visible when the selected session receives a live update", async () => {
+    const { socket, requests } = await openFixture();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "Ariel" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [{ ...fixtureThread, searchSnippet: "匹配摘要" }], nextCursor: "" } }));
+    expect(await screen.findByText("匹配摘要")).toBeTruthy();
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: { ...fixtureThread, runtime: "inProgress" } }));
+    expect(screen.getByText("匹配摘要")).toBeTruthy();
+  });
+
   it("sends an attached screenshot without text and renders a native reply image on demand", async () => {
     const thread: Thread = { ...fixtureThread, turns: [{ turnId: "turn-image", status: "completed", items: [{ itemId: "reply-image", role: "assistant", text: "Codex 生成的图片", images: [{ index: 0, kind: "native", alt: "Codex 图片", source: "" }] }] }] };
     const { socket, requests } = await openFixture(thread);

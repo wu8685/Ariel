@@ -3,6 +3,8 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"unicode/utf8"
 )
 
 type RPC interface {
@@ -25,6 +27,16 @@ type Turn struct {
 type Page struct {
 	Data       []Thread `json:"data"`
 	NextCursor *string  `json:"nextCursor"`
+}
+
+type SearchResult struct {
+	Thread  Thread `json:"thread"`
+	Snippet string `json:"snippet"`
+}
+
+type SearchPage struct {
+	Data       []SearchResult `json:"data"`
+	NextCursor *string        `json:"nextCursor"`
 }
 
 type TurnPage struct {
@@ -52,6 +64,20 @@ func (h HistoryReader) List(ctx context.Context, cursor string, limit int) (Page
 		params["cursor"] = cursor
 	}
 	err := h.RPC.Call(ctx, "thread/list", params, &out)
+	return out, err
+}
+
+func (h HistoryReader) Search(ctx context.Context, query, cursor string, limit int) (SearchPage, error) {
+	var out SearchPage
+	query = strings.TrimSpace(query)
+	if query == "" || utf8.RuneCountInString(query) > 128 || limit < 1 || limit > 100 {
+		return out, ErrInvalidArgument
+	}
+	params := map[string]any{"searchTerm": query, "limit": limit, "sortKey": "updated_at", "sourceKinds": []string{"cli", "vscode", "appServer"}, "archived": false}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	err := h.RPC.Call(ctx, "thread/search", params, &out)
 	return out, err
 }
 func (h HistoryReader) Read(ctx context.Context, threadID string) (Thread, error) {

@@ -147,6 +147,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--color-text);
 }
 .device-meta { padding: 13px 24px 19px; display: flex; gap: 8px; align-items: center; color: var(--color-muted); font-size: 11px; }
+.sidebar-search { display: flex; align-items: center; gap: 7px; height: 38px; margin: 0 24px 12px; padding: 0 10px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-panel); color: var(--color-muted); }
+.sidebar-search:focus-within { border-color: var(--color-accent); }
+.sidebar-search .search-glyph { flex: none; font-size: 23px; line-height: 1; color: var(--color-subtle); }
+.sidebar-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--color-text); font-size: 13px; }
+.sidebar-search input::placeholder { color: var(--color-subtle); }
+.sidebar-search input:focus-visible { outline: 0; }
+.sidebar-search button { flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: var(--color-muted); font-size: 20px; line-height: 1; }
+.sidebar-search button:hover { color: var(--color-text); background: var(--color-raised); }
 .list-caption {
   border-top: 1px solid var(--color-border);
   display: flex;
@@ -174,8 +182,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .thread-row:hover { background: var(--color-panel); }
 .thread-row.selected { background: var(--color-raised); border-color: var(--color-accent); box-shadow: inset 3px 0 0 var(--color-accent); }
 .thread-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+.thread-snippet { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; width: 100%; margin-top: 6px; color: var(--color-muted); font-size: 11px; line-height: 1.35; }
 .thread-path { font-size: 11px; color: var(--color-muted); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; font-family: ui-monospace, SFMono-Regular, monospace; }
 .thread-date { font-size: 10px; color: var(--color-subtle); margin-top: 9px; }
+.list-state { margin: 12px 14px; color: var(--color-muted); font-size: 12px; line-height: 1.5; }
+.list-error { color: var(--color-warning); }
 .load-more { margin: 8px 24px; border: 0; background: none; color: var(--color-muted); text-align: left; padding: 10px 0; }
 .load-more:hover { color: var(--color-accent); }
 .sidebar-foot { border-top: 1px solid var(--color-border); color: var(--color-subtle); padding: 16px 24px; font-size: 10px; letter-spacing: .8px; }
@@ -349,6 +360,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .sidebar-head { padding: 12px 18px 10px; }
   .sidebar-head .eyebrow { display: none; }
   .sidebar-head h2 { margin: 0; font-size: 19px; }
+  .sidebar-search { margin: 0 18px 10px; }
   .conversation { height: 100%; }
   .conversation-head { height: 66px; padding: 9px 12px; gap: 11px; z-index: 3; background: var(--color-page); border-bottom-color: var(--color-border); }
   .conversation-title { min-width: 0; flex: 1; }

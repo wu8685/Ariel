@@ -83,7 +83,7 @@
     "emptyParams": { "type": "object", "additionalProperties": false },
     "listParams": {
       "type": "object", "additionalProperties": false,
-      "properties": { "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }
+      "properties": { "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "searchTerm": { "type": "string", "minLength": 1, "maxLength": 128 } }
     },
     "threadParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
@@ -152,7 +152,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["threadId", "title", "cwd", "updatedAt", "runtime", "turns", "pendingInteractions"],
       "properties": {
-        "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" },
+        "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" }, "searchSnippet": { "type": "string", "maxLength": 400 },
         "cwd": { "type": "string" }, "updatedAt": { "type": "string" },
         "runtime": { "enum": ["idle", "inProgress", "notLoaded", "unknown"] },
         "historyComplete": { "type": "boolean" },

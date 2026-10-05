@@ -38,6 +38,7 @@
 | 0021 | [每回合一个图标折叠全部工具活动](0021-single-icon-tool-activity.md) | Implemented（自动已验；手机待验） | 默认隐藏全部已验证工具记录；每 turn 一个图标按需展开 |
 | 0022 | [提高 Night 主题黑白对比](0022-crisp-black-white-night.md) | Implemented（自动／静态浏览器已验；手机待验） | 纯黑基底、纯白主文字与清晰中性层级 |
 | 0023 | [会话截图的发送与展示](0023-conversation-screenshots.md) | Implemented（自动／隔离 Desktop 已验；浏览器与手机视觉待验） | 用户截图发送；双方原生与本地 Markdown 截图按需展示 |
+| 0024 | [侧栏搜索原始 Codex 会话](0024-session-search.md) | Implemented（自动／真实 Codex／本机部署已验；手机待验） | 当前设备内搜索标题与可检索消息，摘要与分页，旧请求隔离 |
 
 ## 设计基线
 

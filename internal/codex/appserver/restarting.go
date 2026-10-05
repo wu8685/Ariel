@@ -96,7 +96,7 @@ func (r *RestartingRPC) invalidate(generation uint64) {
 
 func (r *RestartingRPC) Call(ctx context.Context, method string, params any, result any) error {
 	switch method {
-	case "thread/list", "thread/read", "thread/turns/list", "thread/items/list":
+	case "thread/list", "thread/search", "thread/read", "thread/turns/list", "thread/items/list":
 	default:
 		return ErrProtocol
 	}

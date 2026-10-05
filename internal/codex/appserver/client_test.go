@@ -231,6 +231,28 @@ func TestHistoryReaderUsesOnlyReadMethods(t *testing.T) {
 	}
 }
 
+func TestHistoryReaderSearchUsesNativeFullTextAndCursor(t *testing.T) {
+	f := &fakeRPC{}
+	h := HistoryReader{RPC: f}
+	page, err := h.Search(context.Background(), "Ariel", "native-next", 25)
+	if err != nil || len(page.Data) != 1 || page.Data[0].Snippet != "matched text" || page.NextCursor == nil || *page.NextCursor != "next" {
+		t.Fatalf("search page: %+v, %v", page, err)
+	}
+	if len(f.methods) != 1 || f.methods[0] != "thread/search" {
+		t.Fatalf("not native search: %v", f.methods)
+	}
+	params := f.params[0].(map[string]any)
+	if params["searchTerm"] != "Ariel" || params["cursor"] != "native-next" || params["limit"] != 25 || params["sortKey"] != "updated_at" || params["archived"] != false {
+		t.Fatalf("wrong search params: %#v", params)
+	}
+	if _, err := h.Search(context.Background(), "", "", 25); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("empty search term: %v", err)
+	}
+	if _, err := h.Search(context.Background(), strings.Repeat("x", 129), "", 25); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("oversized search term: %v", err)
+	}
+}
+
 func TestHistoryReaderFullReadIsExplicit(t *testing.T) {
 	f := &fakeRPC{}
 	h := HistoryReader{RPC: f}
@@ -334,6 +356,8 @@ func (f *fakeRPC) Call(ctx context.Context, method string, params any, result an
 	switch method {
 	case "thread/list":
 		body = `{"data":[],"nextCursor":null}`
+	case "thread/search":
+		body = `{"data":[{"thread":{"id":"fixture-thread","name":"Fixture","cwd":"/fixture","status":{"type":"idle"}},"snippet":"matched text"}],"nextCursor":"next","backwardsCursor":null}`
 	case "thread/read":
 		body = `{"thread":{"id":"fixture-thread","turns":[],"status":{"type":"notLoaded"}}}`
 	case "thread/turns/list":

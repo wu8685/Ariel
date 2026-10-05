@@ -68,6 +68,19 @@ func TestRestartingRPCRecoversReadOnlyCallWithoutDroppingCaller(t *testing.T) {
 	}
 }
 
+func TestRestartingRPCAllowsNativeSearchAsReadOnly(t *testing.T) {
+	endpoint := &fakeReadOnlyEndpoint{done: make(chan struct{})}
+	rpc, err := NewRestartingRPC(context.Background(), func(context.Context) (ReadOnlyEndpoint, error) { return endpoint, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rpc.Close()
+	var result struct{ OK bool }
+	if err := rpc.Call(context.Background(), "thread/search", map[string]any{"searchTerm": "fixture"}, &result); err != nil || !result.OK || endpoint.calls != 1 {
+		t.Fatalf("native read-only search was blocked: result=%v err=%v calls=%d", result.OK, err, endpoint.calls)
+	}
+}
+
 func TestRestartingRPCReplacesDeadChildEvenBeforeNextRequest(t *testing.T) {
 	first := &fakeReadOnlyEndpoint{done: make(chan struct{})}
 	second := &fakeReadOnlyEndpoint{done: make(chan struct{})}

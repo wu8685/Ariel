@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,34 @@ import (
 
 type fakeHistory struct{}
 type anyThreadHistory struct{}
+
+type searchableHistory struct{ fakeHistory }
+
+func (searchableHistory) Search(_ context.Context, query, cursor string, limit int) (appserver.SearchPage, error) {
+	if query != "Ariel" || cursor != "" || limit != 50 {
+		return appserver.SearchPage{}, fmt.Errorf("unexpected native search args")
+	}
+	next := "next-page"
+	return appserver.SearchPage{Data: []appserver.SearchResult{{Thread: appserver.Thread{ID: "thread", Name: "Title", CWD: "/fixture", Status: json.RawMessage(`{"type":"idle"}`), Turns: []appserver.Turn{{ID: "should-not-leak"}}}, Snippet: strings.Repeat("S", 600)}}, NextCursor: &next}, nil
+}
+
+func TestServiceSearchNormalizesBoundedResultWithoutTurns(t *testing.T) {
+	s := NewService(searchableHistory{}, nil)
+	results, next, err := s.Search(context.Background(), "Ariel", 50, "")
+	if err != nil || next != "next-page" || len(results) != 1 {
+		t.Fatalf("search: %v, %q, %+v", err, next, results)
+	}
+	if len([]rune(results[0]["searchSnippet"].(string))) != 400 || len(results[0]["turns"].([]any)) != 0 {
+		t.Fatalf("unbounded or leaking result: %+v", results[0])
+	}
+}
+
+func TestServiceSearchReportsUnsupportedNativeAPI(t *testing.T) {
+	s := NewService(fakeHistory{}, nil)
+	if _, _, err := s.Search(context.Background(), "Ariel", 50, ""); !errors.Is(err, appserver.ErrMethodUnavailable) {
+		t.Fatalf("unsupported search: %v", err)
+	}
+}
 
 type pagedHistory struct{ fakeHistory }
 type wideMetadataHistory struct{ historyStub }

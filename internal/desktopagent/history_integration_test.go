@@ -13,6 +13,36 @@ import (
 
 // Opt-in, read-only check against an installed Codex binary. The target ID is
 // supplied at runtime and never written to a fixture, log, or repository file.
+func TestReadOnlyNativeSearchAgainstInstalledCodex(t *testing.T) {
+	query := os.Getenv("ARIEL_READONLY_SEARCH_QUERY")
+	if query == "" {
+		t.Skip("set ARIEL_READONLY_SEARCH_QUERY for a read-only native search check")
+	}
+	defaults, err := probe.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	process, err := appserver.Start(ctx, probe.BundledBinary(defaults.AppPath), os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer process.Close()
+	s := NewService(appserver.HistoryReader{RPC: process.Session}, nil)
+	defer s.Close()
+	results, _, err := s.Search(ctx, query, 50, "")
+	if err != nil || len(results) == 0 {
+		t.Fatalf("native search returned no fixture results: count=%d err=%v", len(results), err)
+	}
+	for _, result := range results {
+		if result["threadId"] == "" || result["searchSnippet"] == nil || len(result["turns"].([]any)) != 0 {
+			t.Fatal("native search result shape invalid or full history leaked")
+		}
+	}
+	t.Logf("read-only native search verified: results=%d", len(results))
+}
+
 func TestReadOnlyPagedHistoryAgainstInstalledCodex(t *testing.T) {
 	id := os.Getenv("ARIEL_READONLY_THREAD_ID")
 	if id == "" {

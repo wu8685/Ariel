@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 type History interface {
 	List(context.Context, string, int) (appserver.Page, error)
 	Read(context.Context, string) (appserver.Thread, error)
+}
+
+type SearchHistory interface {
+	Search(context.Context, string, string, int) (appserver.SearchPage, error)
 }
 
 type PagedHistory interface {
@@ -162,6 +167,39 @@ func (s *Service) List(ctx context.Context, limit int, cursor string) ([]map[str
 		}
 		if e = checkThreadSize(thread); e != nil {
 			return nil, "", e
+		}
+		threads = append(threads, thread)
+	}
+	next := ""
+	if page.NextCursor != nil {
+		next = *page.NextCursor
+	}
+	return threads, next, nil
+}
+
+func (s *Service) Search(ctx context.Context, query string, limit int, cursor string) ([]map[string]any, string, error) {
+	reader, ok := s.history.(SearchHistory)
+	if !ok {
+		return nil, "", appserver.ErrMethodUnavailable
+	}
+	page, err := reader.Search(ctx, query, cursor, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	threads := make([]map[string]any, 0, len(page.Data))
+	for _, result := range page.Data {
+		result.Thread.Turns = nil
+		thread, err := NormalizeStored(result.Thread)
+		if err != nil {
+			return nil, "", err
+		}
+		snippet := []rune(strings.TrimSpace(result.Snippet))
+		if len(snippet) > 400 {
+			snippet = snippet[:400]
+		}
+		thread["searchSnippet"] = string(snippet)
+		if err := checkThreadSize(thread); err != nil {
+			return nil, "", err
 		}
 		threads = append(threads, thread)
 	}

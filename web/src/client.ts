@@ -7,7 +7,8 @@ export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(valu
 type Method = "device.list" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
-export function timeoutFor(method: Method): number {
+export function timeoutFor(method: Method, params: Record<string, unknown> = {}): number {
+  if (method === "thread.list" && typeof params.searchTerm === "string" && params.searchTerm) return 40000;
   if (method === "thread.subscribe" || method === "thread.history" || method === "thread.history.items" || method === "thread.image") return 35000;
   if (method === "turn.start" || method === "turn.interrupt" || method === "interaction.respond") return 50000;
   return 12000;
@@ -71,7 +72,7 @@ export class ArielSocket {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         resolve(this.localFailure(requestId, "unknown", "OUTCOME_UNKNOWN"));
-      }, timeoutFor(method));
+      }, timeoutFor(method, params));
       this.pending.set(requestId, { finish: resolve, timer });
       try { this.ws?.send(JSON.stringify(message)); }
       catch {

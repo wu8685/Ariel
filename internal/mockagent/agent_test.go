@@ -63,6 +63,14 @@ func TestAgentRelayEndToEnd(t *testing.T) {
 	if len(data["threads"].([]any)) != 1 || data["nextCursor"] == "" {
 		t.Fatalf("list page: %v", data)
 	}
+	searched := request("thread.list", map[string]any{"limit": 1, "searchTerm": "Ariel"})
+	if searched["outcome"] != "accepted" {
+		t.Fatalf("search: %v", searched)
+	}
+	searchData := searched["data"].(map[string]any)
+	if len(searchData["threads"].([]any)) != 1 || searchData["threads"].([]any)[0].(map[string]any)["searchSnippet"] == "" || searchData["nextCursor"] == "" {
+		t.Fatalf("search page: %v", searchData)
+	}
 	if m := request("thread.read", map[string]any{"threadId": "mock-thread-a"}); m["outcome"] != "accepted" {
 		t.Fatalf("read: %v", m)
 	}

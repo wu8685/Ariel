@@ -125,6 +125,7 @@ export interface ThreadSnapshot {
 export interface Thread {
   threadId: Id;
   title: string;
+  searchSnippet?: string;
   cwd: string;
   updatedAt: string;
   runtime: "idle" | "inProgress" | "notLoaded" | "unknown";

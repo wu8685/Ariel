@@ -24,6 +24,23 @@ func TestMockStoreListsSameTitleDistinctWorkspaceWithCursor(t *testing.T) {
 	}
 }
 
+func TestMockStoreSearchesMessageContentAndPagesMatches(t *testing.T) {
+	s := NewStore(StoreConfig{StepInterval: time.Second})
+	s.threads["mock-thread-a"].turns = []*turnState{{id: "t", status: "completed", items: []*itemState{{id: "i", role: "user", text: "search needle in message"}}}}
+	s.threads["mock-thread-b"].turns = []*turnState{{id: "t", status: "completed", items: []*itemState{{id: "i", role: "assistant", text: "another needle"}}}}
+	first, cursor, err := s.Search("needle", 1, "")
+	if err != nil || len(first) != 1 || cursor == "" || first[0]["searchSnippet"] == "" {
+		t.Fatalf("first search page: %+v %q %v", first, cursor, err)
+	}
+	second, end, err := s.Search("needle", 1, cursor)
+	if err != nil || len(second) != 1 || end != "" || second[0]["threadId"] == first[0]["threadId"] {
+		t.Fatalf("second search page: %+v %q %v", second, end, err)
+	}
+	if _, _, err := s.Search("different", 1, cursor); err == nil {
+		t.Fatal("cursor for another query accepted")
+	}
+}
+
 func TestMockStoreBusyAndExactInterruptUnderConcurrentStarts(t *testing.T) {
 	s := NewStore(StoreConfig{StepInterval: time.Second})
 	const threadID = "mock-thread-a"

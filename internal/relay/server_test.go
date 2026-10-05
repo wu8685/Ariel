@@ -281,6 +281,26 @@ func TestRelayReleasesLateAcceptedSubscriptionAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestRelayAllowsNativeSearchLongerThanOrdinaryList(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 30 * time.Millisecond, SubscriptionTimeout: 300 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	a := dialTest(t, s.URL, "")
+	sendJSON(t, a, agentHello())
+	readJSON(t, a)
+	w := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, w, webHello())
+	readJSON(t, w)
+	id := "00000000-0000-4000-8000-000000000099"
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.list", "params": map[string]any{"searchTerm": "Ariel", "limit": 50}})
+	forwarded := readJSON(t, a)
+	time.Sleep(80 * time.Millisecond)
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"threads": []any{}, "nextCursor": ""}})
+	if got := readJSON(t, w); got["outcome"] != "accepted" {
+		t.Fatalf("search timed out as ordinary list: %v", got)
+	}
+}
+
 func TestRelayCorrelatesSameWebRequestIDAcrossTwoConnections(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())

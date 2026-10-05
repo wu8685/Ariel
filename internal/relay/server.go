@@ -435,6 +435,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	var reference struct {
 		ThreadID       string `json:"threadId"`
 		SubscriptionID string `json:"subscriptionId"`
+		SearchTerm     string `json:"searchTerm"`
 	}
 	json.Unmarshal(params, &reference)
 	s.mu.Lock()
@@ -491,6 +492,9 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	timeout := s.cfg.RequestTimeout
 	if method == "thread.subscribe" {
 		timeout = s.cfg.SubscriptionTimeout
+	}
+	if method == "thread.list" && reference.SearchTerm != "" {
+		timeout = max(s.cfg.RequestTimeout, s.cfg.SubscriptionTimeout) + 5*time.Second
 	}
 	if method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" {
 		timeout = s.cfg.MutationTimeout

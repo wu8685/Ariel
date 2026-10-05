@@ -94,6 +94,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		ThreadID        string              `json:"threadId"`
 		SubscriptionID  string              `json:"subscriptionId"`
 		Cursor          string              `json:"cursor"`
+		SearchTerm      string              `json:"searchTerm"`
 		Limit           int                 `json:"limit"`
 		ClientMessageID string              `json:"clientMessageId"`
 		Text            string              `json:"text"`
@@ -115,7 +116,11 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		}
 		var threads []map[string]any
 		var cursor string
-		threads, cursor, err = a.store.List(p.Limit, p.Cursor)
+		if p.SearchTerm != "" {
+			threads, cursor, err = a.store.Search(p.SearchTerm, p.Limit, p.Cursor)
+		} else {
+			threads, cursor, err = a.store.List(p.Limit, p.Cursor)
+		}
 		data = map[string]any{"threads": threads, "nextCursor": cursor}
 	case "thread.read":
 		var thread map[string]any

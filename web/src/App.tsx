@@ -78,6 +78,13 @@ export function App() {
   const [deviceId, setDeviceId] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
   const [cursor, setCursor] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchRevision, setSearchRevision] = useState(0);
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState("");
+  const searchInputRef = useRef("");
+  const searchInputChanged = useRef(false);
   const [threadId, setThreadId] = useState("");
   const [view, setView] = useState<ThreadView | null>(null);
   const [readOnlyHistory, setReadOnlyHistory] = useState(false);
@@ -173,15 +180,32 @@ export function App() {
     return found;
   }
 
-  async function loadThreads(id: string, next = "") {
+  async function loadThreads(id: string, next = "", query = searchTerm) {
     const generation = ++threadListGeneration.current;
-    if (!id) { setThreads([]); return; }
-    const response = await client.request("thread.list", id, { limit: 50, ...(next ? { cursor: next } : {}) });
-    if (generation !== threadListGeneration.current || selection.current.deviceId !== id) return;
-    if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+    if (!id) { setThreads([]); setListLoading(false); return; }
+    setListLoading(true);
+    setListError("");
+    const response = await client.request("thread.list", id, { limit: 50, ...(next ? { cursor: next } : {}), ...(query ? { searchTerm: query } : {}) });
+    if (generation !== threadListGeneration.current || selection.current.deviceId !== id || searchInputRef.current.trim() !== query) return;
+    setListLoading(false);
+    if (response.outcome !== "accepted") {
+      setListError(query && response.error?.code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : errorText(response));
+      return;
+    }
     const page = (response.data?.threads as Thread[] | undefined) || [];
     setThreads(current => next ? [...current, ...page] : page);
     setCursor(String(response.data?.nextCursor || ""));
+  }
+
+  function updateSearch(value: string) {
+    searchInputRef.current = value;
+    searchInputChanged.current = true;
+    threadListGeneration.current++;
+    setSearchInput(value);
+    setThreads([]);
+    setCursor("");
+    setListError("");
+    setListLoading(status === "ready" && !!deviceId);
   }
 
   async function showReadOnlyHistory(id: string, targetDevice: string, epoch: number): Promise<boolean> {
@@ -314,7 +338,7 @@ export function App() {
         const next = applyThreadEvent(current.view, event);
         if (!next) { void resync(); return; }
         selection.current.view = next; setView(next);
-        setThreads(list => list.map(t => t.threadId === next.threadId ? next.thread : t));
+        setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
       }
     };
     const saved = webSession.saved();
@@ -331,12 +355,21 @@ export function App() {
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); resetHistory();
+    setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
-    if (status === "ready" && deviceId) void loadThreads(deviceId);
-  }, [deviceId, status]);
+    if (!searchInputChanged.current) return;
+    const timer = window.setTimeout(() => {
+      setSearchTerm(searchInput.trim());
+      setSearchRevision(current => current + 1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
+    if (status === "ready" && deviceId) void loadThreads(deviceId, "", searchTerm);
+  }, [deviceId, status, searchRevision]);
 
   useEffect(() => {
     let hiddenAt = 0;
@@ -561,12 +594,13 @@ export function App() {
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
         <div className="sidebar-identity"><div className="brand"><BrandMark /><span>Ariel</span></div><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="sidebar-disconnect text-button" aria-label="断开" onClick={disconnect}>断开</button></div>
-        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId)} disabled={!deviceId}>↻</button></div>
+        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}>↻</button></div>
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
-        <div className="list-caption"><span>最近会话</span><span>{threads.length}</span></div>
-        <div className="thread-list">{threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span><span className="thread-path">{t.cwd}</span><span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
-        {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor)}>加载更多 →</button>}
+        <div className="sidebar-search"><span className="search-glyph" aria-hidden="true">⌕</span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button type="button" aria-label="清空搜索" onClick={() => updateSearch("")}>×</button>}</div>
+        <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{threads.length}</span></div>
+        <div className="thread-list">{threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-path">{t.cwd}</span><span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
+        {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
       <main className="conversation">
