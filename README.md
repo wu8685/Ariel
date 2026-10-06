@@ -33,6 +33,14 @@ Ariel 不建立另一份聊天记录。原会话、工作目录和执行权限�
 
 手机打开脚本输出的 URL；需要连接码时，在可信本机终端运行 `./scripts/ariel.sh show-pin`。再次启动只需 `./scripts/ariel.sh up`，停止用 `./scripts/ariel.sh stop`。脚本不会接管已经手工运行的同端口服务。
 
+切换 Wi-Fi、手机热点或其他局域网后，不必手动查询新 IP。运行下面一条命令即可发现当前默认私有 IPv4、保留原 token／PIN 和设备身份，并安全重建、重启与核验本地 Relay／Agent：
+
+```sh
+./scripts/ariel.sh restart-local
+```
+
+命令只适用于已经完成首次 `up local` 的配置，只接受 RFC1918 私有 IPv4；不会绑定公网地址、`0.0.0.0`，也不会停止占用目标端口的外部进程。
+
 如果 Relay 已在别处，只安装并注册本机 Agent：
 
 ```sh

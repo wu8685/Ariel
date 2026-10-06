@@ -24,6 +24,7 @@ const helpText = `Ariel one-command setup (macOS)
   scripts/ariel.sh up local --listen <LAN-IP:port> --device-id <id> --device-name <name> [--token-file <path>] [--pin-file <path>]
   scripts/ariel.sh up agent --relay-url <wss://host/ws> --device-id <id> --device-name <name> --token-file <path> [--allow-insecure-ws]
   scripts/ariel.sh up                  # start with saved configuration
+  scripts/ariel.sh restart-local       # discover current private LAN IPv4 and safely restart local mode
   scripts/ariel.sh status              # no credentials shown
   scripts/ariel.sh stop                # only script-managed processes
   scripts/ariel.sh show-pin            # local mode only
@@ -65,6 +66,8 @@ func Run(ctx context.Context, root string, args []string, output io.Writer) erro
 		return status(root, output)
 	case "stop":
 		return stop(root, output)
+	case "restart-local":
+		return restartLocal(ctx, root, output)
 	case "up":
 		return up(ctx, root, opts, output)
 	default:
@@ -368,6 +371,141 @@ func waitForReady(root, name string, pid int, ready func() bool) error {
 	return fmt.Errorf("%s did not become ready; inspect .local/runtime/%s.log", name, name)
 }
 
+func buildConfigured(ctx context.Context, root string, cfg config, output io.Writer) error {
+	env, profileStatus, err := checkDesktop(ctx)
+	if err != nil {
+		return err
+	}
+	if profileStatus == probe.IPCProfileUnverified {
+		_, _ = fmt.Fprintf(output, "兼容性提示：Desktop %s / Codex %s 高于最低版本，允许启动但尚未逐版本验证；若私有 IPC 已变化，当前操作会显式失败。\n", env.DesktopVersion, env.BundledCodexVersion)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		return errors.New("Go 1.26+ is required")
+	}
+	if cfg.Mode == "local" {
+		if _, err := exec.LookPath("npm"); err != nil {
+			return errors.New("Node.js/npm is required for local mode")
+		}
+	}
+	for _, step := range buildSteps(cfg) {
+		_, _ = fmt.Fprintf(output, "构建：%s\n", step)
+		if err := runBuild(ctx, root, step, output); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func startConfigured(root string, cfg config, output io.Writer) error {
+	token, err := readCredential(filepath.Join(runtimeDir(root), "agent-token"), true)
+	if err != nil {
+		return err
+	}
+	if cfg.Mode == "local" {
+		pin, err := readCredential(filepath.Join(runtimeDir(root), "web-pin"), false)
+		if err != nil {
+			return err
+		}
+		relayPID, err := startManaged(root, "relay", envWith(cleanArielEnvironment(os.Environ()), "ARIEL_TOKEN="+token, "ARIEL_WEB_PIN="+pin, "ARIEL_LISTEN="+cfg.Listen, "ARIEL_ORIGINS=http://"+cfg.Listen, "ARIEL_WEB_DIST="+filepath.Join(root, "web", "dist")))
+		if err != nil {
+			return err
+		}
+		if err := waitForReady(root, "relay", relayPID, func() bool { return httpReady(cfg.Listen) }); err != nil {
+			return errors.Join(err, rollbackStarted(root, cfg.Mode))
+		}
+	}
+	_ = os.Remove(readyPath(root))
+	agentEnv := cleanArielEnvironment(os.Environ())
+	if cfg.Mode == "local" {
+		host, _, _ := net.SplitHostPort(cfg.Listen)
+		agentEnv = localAgentEnvironment(agentEnv, host)
+	}
+	agentEnv = envWith(agentEnv, "ARIEL_TOKEN="+token, "ARIEL_RELAY_URL="+cfg.RelayURL, "ARIEL_DEVICE_ID="+cfg.DeviceID, "ARIEL_DEVICE_NAME="+cfg.DeviceName, "ARIEL_READY_FILE="+readyPath(root))
+	agentPID, err := startManaged(root, "desktop-agent", agentEnv)
+	if err != nil {
+		return errors.Join(err, rollbackStarted(root, cfg.Mode))
+	}
+	if err := waitForReady(root, "desktop-agent", agentPID, func() bool { return agentReady(root, agentPID) }); err != nil {
+		return errors.Join(err, rollbackStarted(root, cfg.Mode))
+	}
+	if cfg.Mode == "local" {
+		_, _ = fmt.Fprintf(output, "Ariel 可使用：http://%s/；运行 show-pin 可查看连接码\n", cfg.Listen)
+	} else {
+		_, _ = fmt.Fprintln(output, "Agent 已与指定 Relay 握手；请在该 Relay 的 Web 页面确认设备列表")
+	}
+	return nil
+}
+
+type restartLocalOps struct {
+	discover     func(context.Context) (string, error)
+	managedState func(string) (bool, bool, error)
+	checkPort    func(string) error
+	build        func(context.Context, string, config, io.Writer) error
+	stop         func(string, io.Writer) error
+	start        func(string, config, io.Writer) error
+	status       func(string, io.Writer) error
+}
+
+func restartLocal(ctx context.Context, root string, output io.Writer) error {
+	return restartLocalWith(ctx, root, output, restartLocalOps{
+		discover:     func(ctx context.Context) (string, error) { return discoverPrivateLANIPv4(ctx, systemCommandOutput) },
+		managedState: managedState,
+		checkPort:    checkPortFree,
+		build:        buildConfigured,
+		stop:         stop,
+		start:        startConfigured,
+		status:       status,
+	})
+}
+
+func restartLocalWith(ctx context.Context, root string, output io.Writer, ops restartLocalOps) error {
+	cfg, err := loadConfig(root)
+	if err != nil {
+		return fmt.Errorf("restart-local requires an existing local configuration: %w", err)
+	}
+	if cfg.Mode != "local" {
+		return errors.New("restart-local requires a saved local mode configuration")
+	}
+	address, err := ops.discover(ctx)
+	if err != nil {
+		return err
+	}
+	_, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		return errors.New("saved local listen address is invalid")
+	}
+	listen := net.JoinHostPort(address, port)
+	candidate, err := localConfigForListen(cfg, listen)
+	if err != nil {
+		return err
+	}
+	relayRunning, agentRunning, err := ops.managedState(root)
+	if err != nil {
+		return err
+	}
+	if listen != cfg.Listen || !relayRunning {
+		if err := ops.checkPort(listen); err != nil {
+			return err
+		}
+	}
+	if err := ops.build(ctx, root, candidate, output); err != nil {
+		return err
+	}
+	if relayRunning || agentRunning {
+		if err := ops.stop(root, output); err != nil {
+			return err
+		}
+	}
+	updated, err := updateLocalListen(root, cfg, listen)
+	if err != nil {
+		return err
+	}
+	if err := ops.start(root, updated, output); err != nil {
+		return err
+	}
+	return ops.status(root, output)
+}
+
 func up(ctx context.Context, root string, opts options, output io.Writer) error {
 	var cfg config
 	var err error
@@ -407,62 +545,8 @@ func up(ctx context.Context, root string, opts options, output io.Writer) error 
 			return err
 		}
 	}
-	env, profileStatus, err := checkDesktop(ctx)
-	if err != nil {
+	if err := buildConfigured(ctx, root, cfg, output); err != nil {
 		return err
 	}
-	if profileStatus == probe.IPCProfileUnverified {
-		_, _ = fmt.Fprintf(output, "兼容性提示：Desktop %s / Codex %s 高于最低版本，允许启动但尚未逐版本验证；若私有 IPC 已变化，当前操作会显式失败。\n", env.DesktopVersion, env.BundledCodexVersion)
-	}
-	if _, err := exec.LookPath("go"); err != nil {
-		return errors.New("Go 1.26+ is required")
-	}
-	if cfg.Mode == "local" {
-		if _, err := exec.LookPath("npm"); err != nil {
-			return errors.New("Node.js/npm is required for local mode")
-		}
-	}
-	for _, step := range buildSteps(cfg) {
-		_, _ = fmt.Fprintf(output, "构建：%s\n", step)
-		if err := runBuild(ctx, root, step, output); err != nil {
-			return err
-		}
-	}
-	token, err := readCredential(filepath.Join(runtimeDir(root), "agent-token"), true)
-	if err != nil {
-		return err
-	}
-	if cfg.Mode == "local" {
-		pin, err := readCredential(filepath.Join(runtimeDir(root), "web-pin"), false)
-		if err != nil {
-			return err
-		}
-		relayPID, err := startManaged(root, "relay", envWith(cleanArielEnvironment(os.Environ()), "ARIEL_TOKEN="+token, "ARIEL_WEB_PIN="+pin, "ARIEL_LISTEN="+cfg.Listen, "ARIEL_ORIGINS=http://"+cfg.Listen, "ARIEL_WEB_DIST="+filepath.Join(root, "web", "dist")))
-		if err != nil {
-			return err
-		}
-		if err := waitForReady(root, "relay", relayPID, func() bool { return httpReady(cfg.Listen) }); err != nil {
-			return errors.Join(err, rollbackStarted(root, cfg.Mode))
-		}
-	}
-	_ = os.Remove(readyPath(root))
-	agentEnv := cleanArielEnvironment(os.Environ())
-	if cfg.Mode == "local" {
-		host, _, _ := net.SplitHostPort(cfg.Listen)
-		agentEnv = localAgentEnvironment(agentEnv, host)
-	}
-	agentEnv = envWith(agentEnv, "ARIEL_TOKEN="+token, "ARIEL_RELAY_URL="+cfg.RelayURL, "ARIEL_DEVICE_ID="+cfg.DeviceID, "ARIEL_DEVICE_NAME="+cfg.DeviceName, "ARIEL_READY_FILE="+readyPath(root))
-	agentPID, err := startManaged(root, "desktop-agent", agentEnv)
-	if err != nil {
-		return errors.Join(err, rollbackStarted(root, cfg.Mode))
-	}
-	if err := waitForReady(root, "desktop-agent", agentPID, func() bool { return agentReady(root, agentPID) }); err != nil {
-		return errors.Join(err, rollbackStarted(root, cfg.Mode))
-	}
-	if cfg.Mode == "local" {
-		_, _ = fmt.Fprintf(output, "Ariel 可使用：http://%s/；运行 show-pin 可查看连接码\n", cfg.Listen)
-	} else {
-		_, _ = fmt.Fprintln(output, "Agent 已与指定 Relay 握手；请在该 Relay 的 Web 页面确认设备列表")
-	}
-	return nil
+	return startConfigured(root, cfg, output)
 }

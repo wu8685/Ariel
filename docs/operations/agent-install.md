@@ -9,7 +9,7 @@
 3. 选定稳定且唯一的 `device-id`（字母、数字、点、下划线或连字符；最多 64 字符）和用户看得懂的 `device-name`。后续重启复用同一 ID，避免浏览器中的设备选择失效。
 4. 只通过本机私有文件传入 Agent 长口令，绝不放在命令参数、聊天文本、提交或日志中。脚本将凭据复制到 Git 忽略的 `.local/runtime/`（目录 `0700`，文件 `0600`）。现有 Go 服务仍通过进程环境变量读取口令，同一系统用户可能读取自己的进程环境；请保护 Mac 用户会话。
 
-脚本入口为 `./scripts/ariel.sh`；可从任意目录用其绝对路径调用。首次 `up` 完成配置、构建和后台启动；之后只需 `./scripts/ariel.sh up`。`status` 不显示凭据；`stop` 只停止脚本自己登记且核对过身份的进程。现有手工服务或其他端口被占用时，入口会报错，不会接管或杀掉对方。
+脚本入口为 `./scripts/ariel.sh`；可从任意目录用其绝对路径调用。首次 `up` 完成配置、构建和后台启动；之后只需 `./scripts/ariel.sh up`。本机模式切换局域网后用 `./scripts/ariel.sh restart-local` 自动发现当前默认私有 IPv4，并保留凭据、设备身份与端口。`status` 不显示凭据；`stop` 只停止脚本自己登记且核对过身份的进程。现有手工服务或其他端口被占用时，入口会报错，不会接管或杀掉对方。
 
 ## 模式 A：本机 Agent 注册到指定 Relay
 
@@ -45,11 +45,12 @@
 ```sh
 ./scripts/ariel.sh status   # Relay HTTP 可达性、Agent 握手／Codex 就绪
 ./scripts/ariel.sh up       # 沿用原配置和口令；已运行时不重复启动
+./scripts/ariel.sh restart-local # 本机模式：发现当前 LAN IPv4，保留凭据并安全重启
 ./scripts/ariel.sh stop     # 先 Agent 后 Relay；不杀外部进程
 ./scripts/ariel.sh help
 ```
 
-更新仓库代码后，先 `stop`，再 `up` 以重建二进制。若要更换 Relay、监听地址或设备身份，先 `stop`，再用完整的 `up agent`／`up local` 参数加 `--replace-config`；切换到另一外部 Relay 时必须提供它的口令文件。从外部模式切到本机模式且未导入 token 时，会生成新的本机长口令，不复用外部 Relay 的凭据。错误或构建失败会保留已保存配置；可修复后重试。日志位于 `.local/runtime/relay.log` 与 `.local/runtime/desktop-agent.log`，不要把未经检查的日志直接公开。
+更新仓库代码后，先 `stop`，再 `up` 以重建二进制。若只是本机模式切换局域网，直接运行 `restart-local`；它先完成地址、端口、Desktop 与构建预检，再停止受管进程，且不会显示或改写 token／PIN。若要更换外部 Relay、端口或设备身份，先 `stop`，再用完整的 `up agent`／`up local` 参数加 `--replace-config`；切换到另一外部 Relay 时必须提供它的口令文件。从外部模式切到本机模式且未导入 token 时，会生成新的本机长口令，不复用外部 Relay 的凭据。错误或构建失败会保留已保存配置；可修复后重试。日志位于 `.local/runtime/relay.log` 与 `.local/runtime/desktop-agent.log`，不要把未经检查的日志直接公开。
 
 安装 Agent 的交付报告应只包含：模式、脚本版本或 commit、手机／Relay URL（不含口令）、`status` 结果、是否做过物理手机验收，以及未验证事项。不要发送真实会话正文、绝对私人路径、token、PIN 或 Codex 凭据。
 
@@ -61,6 +62,7 @@
 | Desktop/IPC 不可用或版本未验证 | 打开 Codex Desktop，核对项目支持的 Desktop／内置 Codex 版本；不要用未知版本强行启动。 |
 | Relay 在线、Agent 尚未握手 | 检查 `status`、Agent 日志、URL 与 Relay 长口令；本机 LAN 地址应绕过 HTTP 代理。不要反复提交手机短码碰锁定上限。 |
 | 手机无法打开页面 | 检查脚本报告的监听 IP、同一可信局域网、防火墙和 AP 隔离；不要为了排障关闭整机防火墙。 |
+| 切换局域网后旧地址失效 | 运行 `./scripts/ariel.sh restart-local`；它只接受默认网卡上的 RFC1918 IPv4。新 Origin 需重新输入原 PIN。 |
 | 页面打开但没有设备 | 先看 `status` 是否显示 Agent 握手；若已握手，刷新页面并检查是否选择了正确的稳定设备 ID。 |
 
 本工具不是 launchd 服务；Mac 重启后需再次执行 `up`。它也不自动部署公网 TLS 或外部 Relay。

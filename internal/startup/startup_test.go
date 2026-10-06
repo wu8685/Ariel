@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -26,6 +28,13 @@ func TestParseTwoSetupModesAndRejectUnknownFlags(t *testing.T) {
 	}
 	if _, err := parseArgs([]string{"up", "local", "--bogus"}); err == nil {
 		t.Fatal("unknown flag accepted")
+	}
+	restart, err := parseArgs([]string{"restart-local"})
+	if err != nil || restart.command != "restart-local" {
+		t.Fatalf("restart-local: %+v, %v", restart, err)
+	}
+	if _, err := parseArgs([]string{"restart-local", "--listen", "192.168.1.2:8080"}); err == nil {
+		t.Fatal("restart-local accepted manual network arguments")
 	}
 }
 
@@ -134,6 +143,140 @@ func TestImportPINAndRejectImplicitConfigChange(t *testing.T) {
 	changed.pinFile = ""
 	if _, err := prepareConfig(root, changed); err == nil {
 		t.Fatal("implicit reconfiguration accepted")
+	}
+}
+
+func TestUpdateLocalListenPreservesCredentialsAndDeviceIdentity(t *testing.T) {
+	root := t.TempDir()
+	opts, _ := parseArgs([]string{"up", "local", "--listen", "192.168.1.2:18081", "--device-id", "same-device", "--device-name", "Same Device"})
+	before, err := prepareConfig(root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenBefore, _ := os.ReadFile(filepath.Join(runtimeDir(root), "agent-token"))
+	pinBefore, _ := os.ReadFile(filepath.Join(runtimeDir(root), "web-pin"))
+	after, err := updateLocalListen(root, before, "10.1.2.3:18081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Listen != "10.1.2.3:18081" || after.RelayURL != "ws://10.1.2.3:18081/ws" || after.DeviceID != before.DeviceID || after.DeviceName != before.DeviceName {
+		t.Fatalf("unexpected updated config: %+v", after)
+	}
+	tokenAfter, _ := os.ReadFile(filepath.Join(runtimeDir(root), "agent-token"))
+	pinAfter, _ := os.ReadFile(filepath.Join(runtimeDir(root), "web-pin"))
+	if string(tokenAfter) != string(tokenBefore) || string(pinAfter) != string(pinBefore) {
+		t.Fatal("network update changed credential bytes")
+	}
+	loaded, err := loadConfig(root)
+	if err != nil || loaded != after {
+		t.Fatalf("saved update: %+v, %v", loaded, err)
+	}
+}
+
+func TestRestartLocalPreflightsBeforeStoppingAndPreservesConfigOnFailure(t *testing.T) {
+	root := t.TempDir()
+	opts, _ := parseArgs([]string{"up", "local", "--listen", "192.168.1.2:18082", "--device-id", "mac", "--device-name", "Mac"})
+	before, err := prepareConfig(root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, built := false, false
+	ops := restartLocalOps{
+		discover:     func(context.Context) (string, error) { return "192.168.2.3", nil },
+		managedState: func(string) (bool, bool, error) { return true, true, nil },
+		checkPort:    func(string) error { return errors.New("occupied") },
+		build:        func(context.Context, string, config, io.Writer) error { built = true; return nil },
+		stop:         func(string, io.Writer) error { stopped = true; return nil },
+	}
+	if err := restartLocalWith(context.Background(), root, io.Discard, ops); err == nil || !strings.Contains(err.Error(), "occupied") {
+		t.Fatalf("foreign port was not rejected: %v", err)
+	}
+	if stopped || built {
+		t.Fatalf("preflight failure stopped=%v built=%v", stopped, built)
+	}
+	after, err := loadConfig(root)
+	if err != nil || after != before {
+		t.Fatalf("preflight failure changed config: %+v, %v", after, err)
+	}
+}
+
+func TestRestartLocalUpdatesAfterBuildAndHandlesPartialManagedState(t *testing.T) {
+	root := t.TempDir()
+	opts, _ := parseArgs([]string{"up", "local", "--listen", "192.168.1.2:18083", "--device-id", "mac", "--device-name", "Mac"})
+	if _, err := prepareConfig(root, opts); err != nil {
+		t.Fatal(err)
+	}
+	tokenBefore, _ := os.ReadFile(filepath.Join(runtimeDir(root), "agent-token"))
+	pinBefore, _ := os.ReadFile(filepath.Join(runtimeDir(root), "web-pin"))
+	events := []string{}
+	ops := restartLocalOps{
+		discover: func(context.Context) (string, error) {
+			events = append(events, "discover")
+			return "10.2.3.4", nil
+		},
+		managedState: func(string) (bool, bool, error) {
+			events = append(events, "managed")
+			return true, false, nil
+		},
+		checkPort: func(listen string) error {
+			events = append(events, "port:"+listen)
+			return nil
+		},
+		build: func(context.Context, string, config, io.Writer) error {
+			events = append(events, "build")
+			return nil
+		},
+		stop: func(string, io.Writer) error {
+			events = append(events, "stop")
+			return nil
+		},
+		start: func(_ string, cfg config, _ io.Writer) error {
+			events = append(events, "start:"+cfg.Listen)
+			loaded, err := loadConfig(root)
+			if err != nil || loaded != cfg {
+				return errors.New("start did not receive saved config")
+			}
+			return nil
+		},
+		status: func(string, io.Writer) error {
+			events = append(events, "status")
+			return nil
+		},
+	}
+	if err := restartLocalWith(context.Background(), root, io.Discard, ops); err != nil {
+		t.Fatal(err)
+	}
+	want := "discover,managed,port:10.2.3.4:18083,build,stop,start:10.2.3.4:18083,status"
+	if got := strings.Join(events, ","); got != want {
+		t.Fatalf("restart order: %s", got)
+	}
+	tokenAfter, _ := os.ReadFile(filepath.Join(runtimeDir(root), "agent-token"))
+	pinAfter, _ := os.ReadFile(filepath.Join(runtimeDir(root), "web-pin"))
+	if string(tokenAfter) != string(tokenBefore) || string(pinAfter) != string(pinBefore) {
+		t.Fatal("restart changed credentials")
+	}
+}
+
+func TestRestartLocalRejectsMissingAndRemoteConfiguration(t *testing.T) {
+	called := false
+	ops := restartLocalOps{discover: func(context.Context) (string, error) { called = true; return "192.168.1.2", nil }}
+	if err := restartLocalWith(context.Background(), t.TempDir(), io.Discard, ops); err == nil {
+		t.Fatal("missing config accepted")
+	}
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "token")
+	if err := os.WriteFile(tokenFile, []byte(strings.Repeat("a", 64)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remote, _ := parseArgs([]string{"up", "agent", "--relay-url", "wss://relay.example/ws", "--device-id", "mac", "--device-name", "Mac", "--token-file", tokenFile})
+	if _, err := prepareConfig(root, remote); err != nil {
+		t.Fatal(err)
+	}
+	if err := restartLocalWith(context.Background(), root, io.Discard, ops); err == nil || !strings.Contains(err.Error(), "local mode") {
+		t.Fatalf("remote config accepted: %v", err)
+	}
+	if called {
+		t.Fatal("invalid config reached network discovery")
 	}
 }
 

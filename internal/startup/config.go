@@ -35,11 +35,11 @@ var pinPattern = regexp.MustCompile(`^[0-9]{6}$`)
 
 func parseArgs(args []string) (options, error) {
 	if len(args) == 0 {
-		return options{}, errors.New("choose up, status, stop, show-pin or help")
+		return options{}, errors.New("choose up, restart-local, status, stop, show-pin or help")
 	}
 	opts := options{command: args[0]}
 	if opts.command != "up" {
-		if opts.command != "status" && opts.command != "stop" && opts.command != "show-pin" && opts.command != "help" {
+		if opts.command != "restart-local" && opts.command != "status" && opts.command != "stop" && opts.command != "show-pin" && opts.command != "help" {
 			return options{}, fmt.Errorf("unknown command %q", opts.command)
 		}
 		if len(args) != 1 {
@@ -360,6 +360,34 @@ func prepareConfig(root string, opts options) (config, error) {
 		return config{}, err
 	}
 	return cfg, nil
+}
+
+func localConfigForListen(cfg config, listen string) (config, error) {
+	if cfg.Mode != "local" {
+		return config{}, errors.New("restart-local requires a saved local mode configuration")
+	}
+	updated := cfg
+	updated.Listen = listen
+	updated.RelayURL = "ws://" + listen + "/ws"
+	if err := validateConfig(updated); err != nil {
+		return config{}, err
+	}
+	return updated, nil
+}
+
+func updateLocalListen(root string, cfg config, listen string) (config, error) {
+	updated, err := localConfigForListen(cfg, listen)
+	if err != nil {
+		return config{}, err
+	}
+	data, err := json.MarshalIndent(updated, "", "  ")
+	if err != nil {
+		return config{}, err
+	}
+	if err := writePrivate(configPath(root), append(data, '\n')); err != nil {
+		return config{}, err
+	}
+	return updated, nil
 }
 
 func buildSteps(cfg config) []string {
