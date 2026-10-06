@@ -39,6 +39,7 @@
 | 0022 | [提高 Night 主题黑白对比](0022-crisp-black-white-night.md) | Implemented（自动／静态浏览器已验；手机待验） | 纯黑基底、纯白主文字与清晰中性层级 |
 | 0023 | [会话截图的发送与展示](0023-conversation-screenshots.md) | Implemented（自动／隔离 Desktop 已验；浏览器与手机视觉待验） | 用户截图发送；双方原生与本地 Markdown 截图按需展示 |
 | 0024 | [侧栏搜索原始 Codex 会话](0024-session-search.md) | Implemented（自动／真实 Codex／本机部署已验；手机待验） | 当前设备内搜索标题与可检索消息，摘要与分页，旧请求隔离 |
+| 0025 | [最低版本兼容门禁与运行期失败](0025-minimum-version-compatibility.md) | Implemented（自动／当前 Desktop 只读探针／LAN 启动已验） | 版本达到最低门槛即可启动；私有 IPC 不兼容时按当前操作显式失败且不重放 |
 
 ## 设计基线
 

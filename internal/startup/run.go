@@ -234,19 +234,20 @@ func checkPortFree(listen string) error {
 	return listener.Close()
 }
 
-func checkDesktop(ctx context.Context) error {
+func checkDesktop(ctx context.Context) (probe.Environment, probe.IPCProfileStatus, error) {
 	defaults, err := probe.Defaults()
 	if err != nil {
-		return err
+		return probe.Environment{}, probe.IPCProfileUnsupported, err
 	}
 	env, err := probe.Detect(ctx, defaults)
+	status, profileErr := probe.CheckIPCProfile(env.DesktopVersion, env.BundledCodexVersion)
+	if profileErr != nil {
+		return env, status, profileErr
+	}
 	if err != nil || !env.IPCInitialized {
-		return errors.New("Codex Desktop IPC is unavailable; open the compatible Desktop app first")
+		return env, probe.IPCProfileUnsupported, errors.New("Codex Desktop IPC is unavailable; open the compatible Desktop app first")
 	}
-	if !probe.IPCProfileVerified(env.DesktopVersion, env.BundledCodexVersion) {
-		return fmt.Errorf("Desktop %s / Codex %s is not in the verified compatibility profile", env.DesktopVersion, env.BundledCodexVersion)
-	}
-	return nil
+	return env, status, nil
 }
 
 func runBuild(ctx context.Context, root, name string, output io.Writer) error {
@@ -354,7 +355,10 @@ func startManaged(root, name string, env []string) (int, error) {
 func waitForReady(root, name string, pid int, ready func() bool) error {
 	for until := time.Now().Add(20 * time.Second); time.Now().Before(until); time.Sleep(200 * time.Millisecond) {
 		record, running, err := readManaged(root, name)
-		if err != nil || !running || record.PID != pid {
+		if err != nil {
+			return fmt.Errorf("%s failed its managed-process identity check before readiness: %w", name, err)
+		}
+		if !running || record.PID != pid {
 			return fmt.Errorf("%s exited before readiness; inspect .local/runtime/%s.log", name, name)
 		}
 		if ready() {
@@ -403,8 +407,12 @@ func up(ctx context.Context, root string, opts options, output io.Writer) error 
 			return err
 		}
 	}
-	if err := checkDesktop(ctx); err != nil {
+	env, profileStatus, err := checkDesktop(ctx)
+	if err != nil {
 		return err
+	}
+	if profileStatus == probe.IPCProfileUnverified {
+		_, _ = fmt.Fprintf(output, "兼容性提示：Desktop %s / Codex %s 高于最低版本，允许启动但尚未逐版本验证；若私有 IPC 已变化，当前操作会显式失败。\n", env.DesktopVersion, env.BundledCodexVersion)
 	}
 	if _, err := exec.LookPath("go"); err != nil {
 		return errors.New("Go 1.26+ is required")

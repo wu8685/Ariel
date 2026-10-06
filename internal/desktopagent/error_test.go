@@ -21,3 +21,15 @@ func TestLargeSessionErrorsAreScopedAndClassified(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeCompatibilityErrorsAreExplicitlyClassified(t *testing.T) {
+	for _, err := range []error{
+		ErrNativeShape,
+		appserver.ErrMethodUnavailable,
+		desktopipc.ErrProtocol,
+	} {
+		if got := requestErrorCode(err); got != "PROTOCOL_UNSUPPORTED" {
+			t.Fatalf("%v classified as %s", err, got)
+		}
+	}
+}

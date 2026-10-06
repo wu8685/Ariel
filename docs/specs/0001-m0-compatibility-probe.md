@@ -166,7 +166,7 @@ manifest 不包含 token、账号信息、完整聊天正文或 owner ID。
 - IPC 单帧最大 8 MiB，pending request 最大 32 个。
 - 事件缓冲最多 64 帧且总计不超过 16 MiB；先过滤其他 thread 的状态广播，消费后释放容量。
 - 缓冲溢出、错误 source owner、未知 stream version、revision 缺口或格式错误使观察失败，不丢事件后继续报告成功。
-- 私有控制同时校验 Desktop `26.930.31730` 和内置 Codex `0.160.0`；其他版本先复验。
+- 私有控制的原始实测基线是 Desktop `26.930.31730` 和内置 Codex `0.160.0`。启动门禁已由 [0025](0025-minimum-version-compatibility.md) 改为最低版本判断：达到或高于该基线即可运行，高版本实际不兼容时由当前操作显式失败。
 - 当前 probe 遇到状态缺口会 fail closed 并退出；自动重订阅尚未实现，后续 Agent 负责恢复。
 
 ### 8.2 已验证的交互回执限制

@@ -56,8 +56,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if !probe.IPCProfileVerified(desktopVersion, cliVersion) {
-		log.Fatalf("Desktop IPC profile not verified for Desktop %s / Codex %s", desktopVersion, cliVersion)
+	profileStatus, err := probe.CheckIPCProfile(desktopVersion, cliVersion)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if profileStatus == probe.IPCProfileUnverified {
+		log.Printf("compatibility warning: Desktop %s / Codex %s is above the minimum profile and has not been verified version-by-version; incompatible IPC operations will fail", desktopVersion, cliVersion)
 	}
 	backoff := time.Second
 	readyFile := os.Getenv("ARIEL_READY_FILE")

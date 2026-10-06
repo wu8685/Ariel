@@ -317,6 +317,8 @@ func requestErrorCode(err error) string {
 		return "HISTORY_TOO_LARGE"
 	case errors.Is(err, desktopipc.ErrOverloaded):
 		return "OVERLOADED"
+	case errors.Is(err, ErrNativeShape), errors.Is(err, appserver.ErrMethodUnavailable), errors.Is(err, desktopipc.ErrProtocol):
+		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
 	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED":

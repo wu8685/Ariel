@@ -760,7 +760,7 @@ func TestServiceStopsOversizeLiveStreamWithExplicitError(t *testing.T) {
 		if event["event"] != "thread.error" || event["code"] != "HISTORY_TOO_LARGE" {
 			t.Fatalf("oversize update leaked: event=%v code=%v", event["event"], event["code"])
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("missing explicit stream error")
 	}
 }

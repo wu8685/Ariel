@@ -2,6 +2,7 @@ package probe
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -29,18 +30,32 @@ func TestBinarySelectionMatchesDesktopAndHonorsExplicitPath(t *testing.T) {
 	}
 }
 
-func TestIPCProfileRequiresMatchingDesktopBuildAndCLI(t *testing.T) {
+func TestIPCProfileUsesMinimumVersionsAndLabelsEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		desktop, cli string
-		ok           bool
+		status       IPCProfileStatus
+		fail         bool
 	}{
-		{"26.930.31730", "0.160.0", true},
-		{"26.931.1", "0.160.0", false},
-		{"26.930.31730", "0.161.0", false},
-		{"", "0.160.0", false},
+		{"26.930.31730", "0.160.0", IPCProfileVerified, false},
+		{"v26.930.31730", "v0.160.0", IPCProfileVerified, false},
+		{"26.930.51102", "0.160.0", IPCProfileUnverified, false},
+		{"26.931.1", "0.160.0", IPCProfileUnverified, false},
+		{"27.0.0", "0.161.0", IPCProfileUnverified, false},
+		{"26.930.31730", "0.161.0", IPCProfileUnverified, false},
+		{"26.930.9999", "0.160.0", IPCProfileUnsupported, true},
+		{"26.930.31730", "0.160.0-alpha.1", IPCProfileUnsupported, true},
+		{"26.930.31729", "0.999.0", IPCProfileUnsupported, true},
+		{"26.999.0", "0.159.999", IPCProfileUnsupported, true},
+		{"", "0.160.0", IPCProfileUnsupported, true},
+		{"26.930", "0.160.0", IPCProfileUnsupported, true},
+		{"26.930.latest", "0.160.0", IPCProfileUnsupported, true},
 	} {
-		if got := IPCProfileVerified(tc.desktop, tc.cli); got != tc.ok {
-			t.Fatalf("%+v: %v", tc, got)
+		got, err := CheckIPCProfile(tc.desktop, tc.cli)
+		if got != tc.status || (err != nil) != tc.fail {
+			t.Fatalf("%+v: status=%q err=%v", tc, got, err)
+		}
+		if tc.fail && (!strings.Contains(err.Error(), MinimumDesktopVersion) || !strings.Contains(err.Error(), MinimumCodexVersion)) {
+			t.Fatalf("failure omits minimum versions: %v", err)
 		}
 	}
 }

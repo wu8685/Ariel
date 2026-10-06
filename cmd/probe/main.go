@@ -92,9 +92,13 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 			break
 		}
 		desktopVersion, _ := probe.DesktopVersion(ctx, cfg.AppPath)
-		if !probe.IPCProfileVerified(desktopVersion, version) {
-			fmt.Fprintln(errout, "Desktop IPC version profile unverified")
+		profileStatus, profileErr := probe.CheckIPCProfile(desktopVersion, version)
+		if profileErr != nil {
+			fmt.Fprintln(errout, profileErr)
 			return 1
+		}
+		if profileStatus == probe.IPCProfileUnverified {
+			fmt.Fprintf(errout, "warning: Desktop %s / Codex %s is above the minimum profile and unverified\n", desktopVersion, version)
 		}
 		c, e := probe.ConnectThread(ctx, cfg.Socket, *thread)
 		if e != nil {
