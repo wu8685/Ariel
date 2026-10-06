@@ -435,7 +435,7 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("**tool literal**")).toBeTruthy();
   });
 
-  it("hides all verified calls behind one icon per turn and restores their interleaved order", async () => {
+  it("hides all verified calls behind one quiet text control per turn and restores their interleaved order", async () => {
     const thread = { ...fixtureThread, turns: [{ turnId: "tools", status: "completed", items: [
       { itemId: "u", role: "user", text: "question" },
       { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", details: "<img src=x onerror=alert(1)>", truncated: false } },
@@ -448,7 +448,8 @@ describe("Ariel app interactions", () => {
     const opener = screen.getByRole("button", { name: /打开工具调用.*3 项/ });
     expect(screen.getAllByRole("button", { name: /打开工具调用/ })).toHaveLength(1);
     expect(opener.getAttribute("aria-expanded")).toBe("false");
-    expect(opener.textContent?.trim()).toHaveLength(0);
+    expect(opener.textContent?.trim()).toBe("使用了 3 个工具");
+    expect(opener.querySelector("svg")).toBeNull();
     expect(screen.queryByText("fixture/lookup")).toBeNull();
     expect(screen.queryByText("/usr/bin/true")).toBeNull();
     expect(screen.queryByText("文件变更")).toBeNull();
@@ -457,7 +458,9 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("[futureTool 项目]")).toBeTruthy();
     expect(screen.getByText("Approve fixture only")).toBeTruthy();
     fireEvent.click(opener);
-    expect(screen.getByRole("button", { name: /收起工具调用.*3 项/ }).getAttribute("aria-expanded")).toBe("true");
+    const closer = screen.getByRole("button", { name: /收起工具调用.*3 项/ });
+    expect(closer.getAttribute("aria-expanded")).toBe("true");
+    expect(closer.textContent?.trim()).toBe("收起工具调用（3 项）");
     expect(screen.getByText("fixture/lookup")).toBeTruthy();
     expect(screen.getByText("/usr/bin/true")).toBeTruthy();
     expect(document.querySelector(".activity-details img")).toBeNull();
@@ -466,7 +469,7 @@ describe("Ariel app interactions", () => {
     expect(transcriptOrder).toEqual(["u", "m", "c", "a", "f", "unknown"]);
     fireEvent.click(screen.getByRole("button", { name: /收起工具调用/ }));
     expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
-    expect(screen.getAllByRole("button", { name: /打开工具调用/ })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /打开工具调用/ }).textContent?.trim()).toBe("使用了 3 个工具");
   });
 
   it("keeps one tool opener expanded as live calls append to the same turn", async () => {

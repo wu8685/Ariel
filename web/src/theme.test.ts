@@ -127,8 +127,8 @@ describe("fixed Night appearance", () => {
       expect(value.slice(0, 2)).toBe(value.slice(2, 4));
       expect(value.slice(2, 4)).toBe(value.slice(4, 6));
     }
-    expect(style).toMatch(/\.activity-toggle\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
-    expect(style).toMatch(/\.activity-toggle\s*\{[^}]*color:\s*var\(--color-text\)/s);
+    expect(style).toMatch(/\.activity-toggle\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;[^}]*color:\s*var\(--color-subtle\);[^}]*font-size:\s*12px/s);
+    expect(style).not.toMatch(/\.activity-toggle\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
   });
 
   it("contains Markdown tables and code inside bubbles with readable links", () => {

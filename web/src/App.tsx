@@ -780,6 +780,7 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, onLoadImage, active
   const activityCount = activityParts.reduce((count, part) => count + part.items.length, 0);
   const firstActivity = activityParts[0];
   const activityLabel = `${activityExpanded ? "收起" : "打开"}工具调用（${activityCount} 项）`;
+  const activityToggleText = activityExpanded ? activityLabel : `使用了 ${activityCount} 个工具`;
   return <section className="turn">
     {turn.status !== "inProgress" && <div className="turn-status">{turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>}
     {turn.itemsComplete === false && <button className="history-action item-history-action" type="button" onClick={() => onLoadOlderItems(turn)} disabled={loading}>{loading ? "正在加载…" : "加载此回合更早内容"}</button>}
@@ -792,7 +793,7 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, onLoadImage, active
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
-        {part === firstActivity && <button className={`activity-toggle ${activityExpanded ? "open" : ""}`} type="button" aria-label={activityLabel} title={activityLabel} aria-expanded={activityExpanded} onClick={() => setActivityExpanded(open => !open)}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m9 5 7 7-7 7" /></svg></button>}
+        {part === firstActivity && <button className={`activity-toggle ${activityExpanded ? "open" : ""}`} type="button" aria-label={activityLabel} title={activityLabel} aria-expanded={activityExpanded} onClick={() => setActivityExpanded(open => !open)}>{activityToggleText}</button>}
         {activityExpanded && <div className="activity-list">{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <div className="activity-item" key={item.itemId} data-item-id={item.itemId}><div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div><div className="activity-kind">{item.activity!.kind}</div>{item.activity!.details ? <pre className="activity-details">{item.activity!.details}</pre> : <p className="activity-note">当前历史没有更多详情。</p>}{item.activity!.truncated && <p className="activity-note">详情已截断；完整内容请在原 Codex Desktop 查看。</p>}</div>)}</div>}
       </section>;
     })}

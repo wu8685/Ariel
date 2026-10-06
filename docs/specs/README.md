@@ -44,6 +44,7 @@
 | 0027 | [二维码一次性配对登录](0027-qr-pairing-login.md) | Implemented（自动／真实 Relay 配对／本机部署已验；物理手机扫码待验） | 已登录浏览器展示短时一次性二维码；手机明确确认后获得标准 Web Session，二维码不包含 6 位 PIN |
 | 0028 | [手机输入框与操作栏上下分层](0028-stacked-mobile-composer-actions.md) | Implemented（自动／隔离浏览器已验；物理手机待验） | 输入文字独占上层宽度；附件在下层左侧，停止与发送 icon 在下层右侧 |
 | 0029 | [手机输入字号与会话正文一致](0029-mobile-composer-font-size.md) | Implemented（自动／隔离浏览器已验；物理 iPhone 待验） | 输入文字使用与会话正文相同的 14px 字号，同时避免 iOS 聚焦时自动放大页面 |
+| 0030 | [工具调用折叠文字入口](0030-tool-activity-text-toggle.md) | Implemented（自动／浏览器样式已验；物理手机待验） | 用低对比度“使用了 N 个工具”文字代替圆形箭头，展开内容与顺序保持不变 |
 
 ## 设计基线
 

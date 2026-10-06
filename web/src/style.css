@@ -305,10 +305,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .markdown-fallback-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .thinking { color: var(--color-muted); font-style: italic; }
 .activity-group { margin: 4px 0; min-width: 0; }
-.activity-toggle { display: inline-grid; place-items: center; min-width: 44px; min-height: 44px; padding: 9px; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface); color: var(--color-text); }
-.activity-toggle:hover, .activity-toggle.open { background: var(--color-panel); }
-.activity-toggle svg { width: 18px; height: 18px; transition: transform .18s ease; }
-.activity-toggle.open svg { transform: rotate(90deg); }
+.activity-toggle { display: inline-flex; align-items: center; min-width: 0; min-height: 0; padding: 3px 0; border: 0; border-radius: 0; background: transparent; color: var(--color-subtle); font-size: 12px; line-height: 1.5; text-align: left; }
+.activity-toggle:hover, .activity-toggle.open { background: transparent; color: var(--color-muted); }
 .activity-list { margin: 8px 0 0 8px; padding-left: 13px; border-left: 1px solid var(--color-border); }
 .activity-item { padding: 10px 12px; margin: 6px 0; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); overflow-wrap: anywhere; }
 .activity-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--color-text); font-size: 12px; font-weight: 600; }
