@@ -43,6 +43,7 @@
 | 0026 | [一键发现局域网地址并重启本地 Ariel](0026-one-command-lan-restart.md) | Implemented（自动／真实 LAN 重启已验） | 切换局域网后保留凭据与设备身份，自动发现私有 IPv4 并安全重启本地 Relay／Agent |
 | 0027 | [二维码一次性配对登录](0027-qr-pairing-login.md) | Implemented（自动／真实 Relay 配对／本机部署已验；物理手机扫码待验） | 已登录浏览器展示短时一次性二维码；手机明确确认后获得标准 Web Session，二维码不包含 6 位 PIN |
 | 0028 | [手机输入框与操作栏上下分层](0028-stacked-mobile-composer-actions.md) | Implemented（自动／隔离浏览器已验；物理手机待验） | 输入文字独占上层宽度；附件在下层左侧，停止与发送 icon 在下层右侧 |
+| 0029 | [手机输入字号与会话正文一致](0029-mobile-composer-font-size.md) | Implemented（自动／隔离浏览器已验；物理 iPhone 待验） | 输入文字使用与会话正文相同的 14px 字号，同时避免 iOS 聚焦时自动放大页面 |
 
 ## 设计基线
 

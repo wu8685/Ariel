@@ -6,6 +6,7 @@ const style = readFileSync(fileURLToPath(new URL("./style.css", import.meta.url)
 const interaction = readFileSync(fileURLToPath(new URL("./interaction.css", import.meta.url)), "utf8");
 const html = readFileSync(fileURLToPath(new URL("../index.html", import.meta.url)), "utf8");
 const app = readFileSync(fileURLToPath(new URL("./App.tsx", import.meta.url)), "utf8");
+const main = readFileSync(fileURLToPath(new URL("./main.tsx", import.meta.url)), "utf8");
 
 function token(name: string): string {
   return style.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1]?.toLowerCase() || "";
@@ -88,11 +89,13 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/safe-area-inset-bottom/);
   });
 
-  it("does not let mobile input focus magnify the composer past the screen edge", () => {
+  it("matches the mobile composer font size to conversation text", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     const textarea = mobile.match(/\.composer textarea\s*\{([^}]*)\}/s)?.[1] || "";
-    const fontSize = Number(textarea.match(/font-size:\s*(\d+)px/)?.[1]);
-    expect(fontSize).toBeGreaterThanOrEqual(16);
+    const message = style.match(/\.message-text\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(textarea).toMatch(/font-size:\s*14px/);
+    expect(message).toMatch(/font-size:\s*14px/);
+    expect(main).toMatch(/configureIOSInputViewport\(document, navigator\)/);
   });
 
   it("keeps mobile approval and question fields from magnifying the page on focus", () => {

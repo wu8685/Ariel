@@ -416,7 +416,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .message-text { overflow-wrap: anywhere; }
   .composer-wrap { padding: 6px 10px max(12px, env(safe-area-inset-bottom)); background: var(--color-page); }
   .composer { display: flex; flex-direction: column; align-items: stretch; border-radius: 27px; background: var(--color-panel); border-color: var(--color-border-strong); }
-  .composer textarea { flex: none; width: 100%; min-width: 0; min-height: 44px; max-height: 212px; padding: 10px 16px; font-size: 16px; line-height: 24px; overflow-y: auto; }
+  .composer textarea { flex: none; width: 100%; min-width: 0; min-height: 44px; max-height: 212px; padding: 10px 16px; font-size: 14px; line-height: 24px; overflow-y: auto; }
   .composer-actions > span { display: none; }
   .composer-actions { width: 100%; justify-content: flex-end; flex: none; padding: 0 4px 4px; }
   .composer-actions > div { width: 100%; align-items: center; gap: 2px; }
