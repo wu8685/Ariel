@@ -587,6 +587,50 @@ describe("Ariel app interactions", () => {
     }
   });
 
+  it("keeps an empty mobile composer at one line when the running placeholder wraps", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => 68 });
+      const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "user", role: "user", text: "work" }] }] };
+      await openFixture(running);
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      expect(input.value).toBe("");
+      expect(input.placeholder).toContain("Codex 正在运行");
+      expect(input.style.height).toBe("44px");
+      expect(input.scrollTop).toBe(0);
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+      if (originalScrollHeight) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", originalScrollHeight);
+      else delete (HTMLTextAreaElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    }
+  });
+
+  it("does not remeasure an unchanged mobile draft for every streaming update", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+    let measurementReads = 0;
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => { measurementReads++; return 68; } });
+      const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "partial" }] }] };
+      const { socket } = await openFixture(running);
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: "draft" } });
+      expect(input.style.height).toBe("68px");
+      const readsBeforeStreamChunk = measurementReads;
+      const updated: Thread = { ...running, turns: [{ ...running.turns[0], items: [{ itemId: "answer", role: "assistant", text: "partial and more" }] }] };
+      act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
+      expect(measurementReads).toBe(readsBeforeStreamChunk);
+      expect(input.style.height).toBe("68px");
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+      if (originalScrollHeight) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", originalScrollHeight);
+      else delete (HTMLTextAreaElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    }
+  });
+
   it("keeps the mobile composer inside a keyboard-shrunken visual viewport", async () => {
     const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
     const originalHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");

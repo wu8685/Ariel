@@ -538,7 +538,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   useEffect(() => { setPermissionInfoOpen(false); }, [deviceId, threadId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const input = composerInputRef.current;
     if (!input) return;
     const resize = () => {
@@ -546,6 +546,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const caretAtEnd = input.selectionEnd === input.value.length;
       input.style.height = "";
       if (window.innerWidth > mobileViewportMaxWidth) return;
+      if (!input.value) {
+        input.style.height = `${mobileComposerMinHeight}px`;
+        input.scrollTop = 0;
+        return;
+      }
       input.style.height = "auto";
       const contentHeight = input.scrollHeight;
       input.style.height = `${Math.max(mobileComposerMinHeight, Math.min(contentHeight, mobileComposerMaxHeight))}px`;
@@ -554,7 +559,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [draft, view]);
+  }, [draft, activeTurn?.turnId]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
