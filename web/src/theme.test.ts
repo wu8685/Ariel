@@ -74,10 +74,17 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/\.sidebar-disconnect\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.permission-strip\s*\{[^}]*display:\s*none/s);
     expect(mobile).toMatch(/\.composer\s*\{[^}]*border-radius:\s*\d+px/s);
+    expect(mobile).toMatch(/\.composer\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*stretch/s);
     expect(mobile).toMatch(/\.composer textarea\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
     expect(mobile).toMatch(/\.composer textarea\s*\{[^}]*max-height:\s*212px/s);
+    expect(mobile).toMatch(/\.composer textarea\s*\{[^}]*width:\s*100%/s);
     expect(mobile).not.toMatch(/\.composer textarea\s*\{[^}]*field-sizing:\s*content/s);
+    expect(mobile).toMatch(/\.composer-actions\s*\{[^}]*width:\s*100%/s);
+    expect(mobile).toMatch(/\.composer-actions\s*>\s*div\s*\{[^}]*width:\s*100%/s);
+    expect(mobile).toMatch(/\.attach-button\s*\{[^}]*margin-right:\s*auto/s);
     expect(mobile).toMatch(/\.send-button[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.stop-button[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.stop-label\s*\{[^}]*display:\s*none/s);
     expect(mobile).toMatch(/safe-area-inset-bottom/);
   });
 

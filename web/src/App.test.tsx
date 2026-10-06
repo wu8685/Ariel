@@ -907,7 +907,10 @@ describe("Ariel app interactions", () => {
     const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "turn-1", status: "inProgress", items: [{ itemId: "reply", role: "assistant", text: "Working" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
     expect(await screen.findByText("Working")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /停止/ }));
+    const stop = screen.getByRole("button", { name: "停止" });
+    expect(stop.querySelector(".stop-glyph")?.textContent).toBe("■");
+    expect(stop.getAttribute("title")).toBe("停止");
+    fireEvent.click(stop);
     expect(requests("turn.interrupt")).toHaveLength(1);
     expect(requests("turn.interrupt")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", expectedTurnId: "turn-1" } });
     expect(requests("turn.start")).toHaveLength(1);

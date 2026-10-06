@@ -762,7 +762,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || status !== "ready" || readOnlyHistory || working} />
               <button className="attach-button" type="button" aria-label="选择截图" title="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || status !== "ready" || readOnlyHistory || working}>＋</button>
-              {activeTurn && <button className="stop-button" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}>■ 停止</button>}
+              {activeTurn && <button className="stop-button" type="button" aria-label="停止" title="停止" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}><span className="stop-glyph" aria-hidden="true">■</span><span className="stop-label" aria-hidden="true">停止</span></button>}
               <button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working, draft, screenshots.length)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button>
             </div></div></div></div>
       </main>
