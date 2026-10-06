@@ -62,6 +62,7 @@ func Run(ctx context.Context, cfg Config) error {
 		queues = append(queues, queueReader)
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
+	service.SetThreadCreator(appserver.NewThreadCreator(cfg.Binary))
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -103,7 +104,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled()}}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled()}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -219,6 +220,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		InteractionID   string              `json:"interactionId"`
 		Decision        string              `json:"decision"`
 		Answers         map[string][]string `json:"answers"`
+		CWD             string              `json:"cwd"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, nil, errors.New("INVALID_ARGUMENT"))
@@ -227,6 +229,10 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	var data map[string]any
 	var err error
 	switch method {
+	case "thread.create":
+		var thread map[string]any
+		thread, err = a.service.CreateThread(ctx, p.CWD)
+		data = map[string]any{"thread": thread}
 	case "thread.list":
 		if p.Limit == 0 {
 			p.Limit = 50

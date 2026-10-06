@@ -429,10 +429,10 @@ func TestRelayAllowsBoundedExtraTimeForForwardedMutation(t *testing.T) {
 	sendJSON(t, w, webHello())
 	readJSON(t, w)
 	id := "00000000-0000-4000-8000-000000000023"
-	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "turn.start", "params": map[string]any{"threadId": "mock-thread-a", "clientMessageId": "00000000-0000-4000-8000-000000000024", "text": "hello"}})
+	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.create", "params": map[string]any{"cwd": "/mock/workspace"}})
 	forwarded := readJSON(t, a)
 	time.Sleep(80 * time.Millisecond)
-	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"turnId": "turn-late"}})
+	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"thread": mockThread()}})
 	got := readJSON(t, w)
 	if got["outcome"] != "accepted" {
 		t.Fatalf("mutation timed out early: %v", got)

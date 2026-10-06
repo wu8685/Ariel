@@ -9,10 +9,11 @@ import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
+import { groupThreadsByProject } from "./projects";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 10;
 const mobileViewportMaxWidth = 800;
@@ -58,7 +59,7 @@ function contentMarker(thread: Thread): ContentMarker {
 function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
   return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
 }
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持历史分页。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。" };
 
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
@@ -157,6 +158,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [searchRevision, setSearchRevision] = useState(0);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState("");
+  const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [newThreadCwd, setNewThreadCwd] = useState("");
+  const [newThreadError, setNewThreadError] = useState("");
+  const [creatingThread, setCreatingThread] = useState(false);
   const searchInputRef = useRef("");
   const searchInputChanged = useRef(false);
   const [threadId, setThreadId] = useState("");
@@ -191,6 +196,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const pendingSelect = useRef(0);
   const deviceListGeneration = useRef(0);
   const threadListGeneration = useRef(0);
+  const threadCreateGeneration = useRef(0);
   const resuming = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
@@ -203,10 +209,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const queueDrag = useRef<{ pointerId: number; queueId: string; startY: number; order: string[] } | null>(null);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
+  const threadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
   const mock = device?.adapterVersion?.startsWith("mock-") ?? false;
   const activeTurn = view?.thread.turns.findLast(t => t.status === "inProgress");
   const queuedMessages = view?.thread.queuedMessages || [];
   const queueEnabled = device?.capabilities.queue === true;
+  const threadCreateEnabled = device?.capabilities.threadCreate === true;
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
   const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
   const renderedQueuedMessages = dragQueueOrder.length === queuedMessages.length
@@ -337,6 +345,52 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setCursor(String(response.data?.nextCursor || ""));
   }
 
+  function openNewThreadDialog() {
+    if (!threadCreateEnabled || !deviceId) return;
+    setNewThreadCwd(view?.thread.cwd || selectedThread?.cwd || threadGroups[0]?.path || "");
+    setNewThreadError("");
+    setNewThreadOpen(true);
+  }
+
+  function closeNewThreadDialog() {
+    if (creatingThread) return;
+    threadCreateGeneration.current++;
+    setNewThreadOpen(false);
+    setNewThreadError("");
+  }
+
+  async function createThread() {
+    const cwd = newThreadCwd.trim();
+    if (!threadCreateEnabled || !deviceId || !cwd || creatingThread) return;
+    const generation = ++threadCreateGeneration.current;
+    const targetDevice = deviceId;
+    setCreatingThread(true);
+    setNewThreadError("");
+    const response = await client.request("thread.create", targetDevice, { cwd });
+    if (generation !== threadCreateGeneration.current || targetDevice !== selection.current.deviceId) return;
+    setCreatingThread(false);
+    if (response.outcome !== "accepted") {
+      setNewThreadError(response.error?.code === "INVALID_ARGUMENT" ? "目录必须是这台电脑上已存在的绝对文件夹路径。" : errorText(response));
+      return;
+    }
+    const candidate = response.data?.thread as Partial<Thread> | undefined;
+    if (!candidate || typeof candidate.threadId !== "string" || !candidate.threadId || typeof candidate.cwd !== "string" || !candidate.cwd || typeof candidate.title !== "string" || typeof candidate.updatedAt !== "string" || !Array.isArray(candidate.turns) || !Array.isArray(candidate.pendingInteractions)) {
+      setNewThreadError("创建结果无法确认。请先在 Codex Desktop 中核对，不要直接重试。");
+      return;
+    }
+    const created = candidate as Thread;
+    searchInputRef.current = "";
+    searchInputChanged.current = false;
+    setSearchInput("");
+    setSearchTerm("");
+    setCursor("");
+    setThreads(current => [created, ...current.filter(thread => thread.threadId !== created.threadId)]);
+    setNewThreadOpen(false);
+    setShowList(false);
+    await selectThread(created.threadId, targetDevice);
+    composerInputRef.current?.focus();
+  }
+
   function updateSearch(value: string) {
     searchInputRef.current = value;
     searchInputChanged.current = true;
@@ -429,7 +483,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
       if (sessionToken) webSession.accepted(sessionToken);
@@ -521,7 +575,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -558,6 +612,15 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showList]);
+
+  useEffect(() => {
+    if (!newThreadOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !creatingThread) closeNewThreadDialog();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [newThreadOpen, creatingThread]);
 
   useEffect(() => {
     if (!permissionInfoOpen) return;
@@ -915,24 +978,44 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       <div className="brand"><BrandMark /><span>Ariel</span><small>Codex 随身工作台</small></div>
       <div className="mast-actions">{status === "ready" && <button className="text-button pair-entry" type="button" onClick={() => void openPairingInvite()}>手机扫码登录</button>}<span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="text-button" onClick={disconnect}>断开</button></div>
     </header>
+    {newThreadOpen && <div className="thread-create-backdrop" role="presentation">
+      <section className="thread-create-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-create-title">
+        <button className="thread-create-close icon-button" type="button" aria-label="关闭新建会话" onClick={closeNewThreadDialog} disabled={creatingThread}>×</button>
+        <span className="eyebrow">NEW CODEX SESSION</span>
+        <h2 id="thread-create-title">新建会话</h2>
+        <p>选择一个已有项目，或输入这台电脑上的绝对目录。这里只创建空会话，不会自动发送消息。</p>
+        <label htmlFor="known-project">已有项目</label>
+        <select id="known-project" aria-label="选择已有项目" value={threadGroups.some(group => group.path === newThreadCwd) ? newThreadCwd : ""} onChange={event => { if (event.target.value) setNewThreadCwd(event.target.value); }} disabled={creatingThread}>
+          <option value="">手动输入其他目录</option>
+          {threadGroups.filter(group => group.path !== "路径未知").map(group => <option key={group.key} value={group.path}>{group.name} — {group.path}</option>)}
+        </select>
+        <label htmlFor="thread-create-cwd">项目目录</label>
+        <input id="thread-create-cwd" aria-label="项目目录" value={newThreadCwd} maxLength={4096} onChange={event => setNewThreadCwd(event.target.value)} placeholder="/Users/me/workspace/project" disabled={creatingThread} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+        {newThreadError && <p className="thread-create-error" role="alert">{newThreadError}</p>}
+        <div className="thread-create-actions"><button className="secondary" type="button" onClick={closeNewThreadDialog} disabled={creatingThread}>取消</button><button className="primary" type="button" aria-label="创建会话" onClick={() => void createThread()} disabled={creatingThread || !newThreadCwd.trim()}>{creatingThread ? "正在创建…" : "创建"}</button></div>
+      </section>
+    </div>}
     {status !== "ready" && (phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>)}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
         <div className="sidebar-identity"><div className="brand"><BrandMark /><span>Ariel</span></div><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="sidebar-disconnect text-button" aria-label="断开" onClick={disconnect}>断开</button></div>
-        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2><button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}>↻</button></div>
+        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2>{threadCreateEnabled && <button className="icon-button" type="button" aria-label="新建会话" title="新建会话" onClick={openNewThreadDialog}>＋</button>}<button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}>↻</button></div>
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
         <div className="sidebar-search"><span className="search-glyph" aria-hidden="true">⌕</span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button type="button" aria-label="清空搜索" onClick={() => updateSearch("")}>×</button>}</div>
-        <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{threads.length}</span></div>
-        <div className="thread-list">{threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-path">{t.cwd}</span><span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
+        <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
+        <div className="thread-list">{threadGroups.map(group => <section className="project-group" aria-label={`项目 ${group.name}`} key={group.key}>
+          <header className="project-heading"><div><h3 className="project-name">{group.name}</h3><span className="project-path" title={group.path}>{group.path}</span></div><span className="project-count" aria-label={`${group.threads.length} 个会话`}>{group.threads.length}</span></header>
+          <div className="project-threads">{group.threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
+        </section>)}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
       <main className="conversation">
         <div className="conversation-head">
           <button className="mobile-list text-button" aria-label={`打开会话列表，${connectionLabel}`} aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><span className="menu-glyph" aria-hidden="true">☰</span><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
-          <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view?.thread.title || selectedThread?.title || "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
+          <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>

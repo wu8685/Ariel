@@ -27,6 +27,7 @@ export type Request = {
     | "auth.pair.create"
     | "auth.pair.cancel"
     | "device.list"
+    | "thread.create"
     | "thread.list"
     | "thread.read"
     | "thread.history"
@@ -83,6 +84,7 @@ export interface Capabilities {
   interrupt?: boolean;
   interaction?: boolean;
   queue?: boolean;
+  threadCreate?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";

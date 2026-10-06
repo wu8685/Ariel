@@ -5,10 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
@@ -34,6 +37,10 @@ type FollowUpQueue interface {
 	Update(context.Context, string, string, string, []string) (appserver.QueuedSubmission, error)
 	Delete(context.Context, string, string) (bool, error)
 	Reorder(context.Context, string, []string) error
+}
+
+type ThreadCreator interface {
+	Create(context.Context, string) (appserver.Thread, error)
 }
 
 var ErrHistoryTooLarge = errors.New("HISTORY_TOO_LARGE")
@@ -88,6 +95,7 @@ type threadController struct {
 type Service struct {
 	history          History
 	queue            FollowUpQueue
+	creator          ThreadCreator
 	attach           LiveFactory
 	mu               sync.Mutex
 	queueMu          sync.Mutex
@@ -114,6 +122,49 @@ func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Se
 }
 
 func (s *Service) QueueEnabled() bool { return s.queue != nil }
+
+func (s *Service) SetThreadCreator(creator ThreadCreator) { s.creator = creator }
+func (s *Service) ThreadCreationEnabled() bool            { return s.creator != nil }
+
+func canonicalProjectDirectory(cwd string) (string, error) {
+	if cwd == "" || strings.ContainsRune(cwd, 0) || utf8.RuneCountInString(cwd) > 4096 || !filepath.IsAbs(cwd) {
+		return "", errors.New("INVALID_ARGUMENT")
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
+	if err != nil {
+		return "", errors.New("INVALID_ARGUMENT")
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("INVALID_ARGUMENT")
+	}
+	return resolved, nil
+}
+
+func (s *Service) CreateThread(ctx context.Context, cwd string) (map[string]any, error) {
+	if s.creator == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	canonical, err := canonicalProjectDirectory(cwd)
+	if err != nil {
+		return nil, err
+	}
+	created, err := s.creator.Create(ctx, canonical)
+	if err != nil {
+		return nil, err
+	}
+	if !threadIDPattern.MatchString(created.ID) || created.CWD != canonical {
+		return nil, appserver.ErrOutcomeUnknown
+	}
+	created.Turns = nil
+	thread, err := NormalizeStored(created)
+	if err != nil {
+		return nil, appserver.ErrOutcomeUnknown
+	}
+	thread["historyComplete"] = true
+	thread["recentComplete"] = true
+	return thread, nil
+}
 
 func (s *Service) controller(id string) (*threadController, error) {
 	s.mu.Lock()

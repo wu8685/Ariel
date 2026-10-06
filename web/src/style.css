@@ -141,6 +141,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pairing-state { min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--color-muted); }
 .pairing-state strong { color: var(--color-text); font-size: 20px; }
 .pairing-state.success strong { color: var(--color-success); }
+.thread-create-backdrop { position: fixed; z-index: 42; inset: 0; display: grid; place-items: center; padding: 20px; background: #000c; }
+.thread-create-dialog { position: relative; display: flex; width: min(520px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; flex-direction: column; padding: 28px; border: 1px solid var(--color-border-strong); border-radius: 14px; background: var(--color-surface); box-shadow: 0 28px 80px #000b; }
+.thread-create-dialog h2 { margin: 8px 0 7px; font-family: Georgia, "Songti SC", serif; font-size: 28px; font-weight: 400; }
+.thread-create-dialog p { margin: 0 0 20px; color: var(--color-muted); font-size: 12px; line-height: 1.6; }
+.thread-create-dialog label { margin: 12px 0 7px; color: var(--color-muted); font-size: 11px; font-weight: 700; letter-spacing: .6px; }
+.thread-create-dialog select, .thread-create-dialog input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 8px; outline: 0; background: var(--color-panel); color: var(--color-text); }
+.thread-create-dialog select:focus, .thread-create-dialog input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+.thread-create-dialog .thread-create-error { margin: 12px 0 0; color: var(--color-warning); }
+.thread-create-close { position: absolute; top: 9px; right: 9px; min-width: 44px; min-height: 44px; }
+.thread-create-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
+.thread-create-actions button { min-height: 42px; padding: 0 16px; }
 
 .workspace { display: grid; grid-template-columns: 312px minmax(0, 1fr); flex: 1; min-height: 0; }
 .sidebar {
@@ -186,7 +197,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-weight: 700;
   text-transform: uppercase;
 }
-.thread-list { overflow: auto; flex: 1; padding: 0 10px; }
+.thread-list { overflow: auto; flex: 1; padding: 0 10px 12px; }
+.project-group { min-width: 0; margin: 0 0 7px; }
+.project-heading { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; padding: 11px 12px 6px; background: var(--color-surface); }
+.project-heading > div { min-width: 0; }
+.project-name { margin: 0; overflow: hidden; color: var(--color-muted); font-size: 12px; font-weight: 700; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.project-path { display: block; margin-top: 2px; overflow: hidden; color: var(--color-subtle); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.project-count { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--color-panel); color: var(--color-subtle); font-size: 10px; }
+.project-threads { min-width: 0; }
 .thread-row {
   display: flex;
   flex-direction: column;
@@ -195,7 +213,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border: 1px solid transparent;
   background: transparent;
   border-radius: 5px;
-  padding: 14px;
+  padding: 11px 14px;
   margin: 2px 0;
   color: var(--color-text);
 }
@@ -203,8 +221,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .thread-row.selected { background: var(--color-raised); border-color: var(--color-accent); box-shadow: inset 3px 0 0 var(--color-accent); }
 .thread-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
 .thread-snippet { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; width: 100%; margin-top: 6px; color: var(--color-muted); font-size: 11px; line-height: 1.35; }
-.thread-path { font-size: 11px; color: var(--color-muted); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; font-family: ui-monospace, SFMono-Regular, monospace; }
-.thread-date { font-size: 10px; color: var(--color-subtle); margin-top: 9px; }
+.thread-date { font-size: 10px; color: var(--color-subtle); margin-top: 7px; }
 .list-state { margin: 12px 14px; color: var(--color-muted); font-size: 12px; line-height: 1.5; }
 .list-error { color: var(--color-warning); }
 .load-more { margin: 8px 24px; border: 0; background: none; color: var(--color-muted); text-align: left; padding: 10px 0; }

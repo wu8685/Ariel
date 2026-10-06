@@ -628,7 +628,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	if method == "thread.list" && reference.SearchTerm != "" {
 		timeout = max(s.cfg.RequestTimeout, s.cfg.SubscriptionTimeout) + 5*time.Second
 	}
-	if method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
+	if method == "thread.create" || method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
 		timeout = s.cfg.MutationTimeout
 	}
 	entry.timer = time.AfterFunc(timeout, func() {

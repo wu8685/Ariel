@@ -41,7 +41,7 @@ afterEach(() => {
 
 const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
 
-async function openFixture(thread: Thread = fixtureThread, queue = false) {
+async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -50,7 +50,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false) {
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
@@ -84,6 +84,68 @@ describe("Ariel app interactions", () => {
     act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[3].requestId, outcome: "accepted", data: { threads: [fixtureThread], nextCursor: "" } }));
     expect(await screen.findByText("Fixture")).toBeTruthy();
     expect(screen.queryByText("Older hit")).toBeNull();
+  });
+
+  it("groups sidebar sessions by project cwd without changing their recency order", async () => {
+    const { socket, requests } = await openFixture();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "project" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    const alphaNew = { ...fixtureThread, threadId: "alpha-new", title: "Alpha new", cwd: "/work/alpha" };
+    const beta = { ...fixtureThread, threadId: "beta", title: "Beta task", cwd: "/work/beta" };
+    const alphaOld = { ...fixtureThread, threadId: "alpha-old", title: "Alpha old", cwd: "/work/alpha/" };
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [alphaNew, beta, alphaOld], nextCursor: "" } }));
+
+    const sidebar = screen.getByLabelText("会话列表");
+    await waitFor(() => expect(sidebar.querySelectorAll(".project-group")).toHaveLength(2));
+    const groups = [...sidebar.querySelectorAll<HTMLElement>(".project-group")];
+    expect(groups[0].querySelector(".project-name")?.textContent).toBe("alpha");
+    expect(groups[0].querySelector(".project-path")?.textContent).toBe("/work/alpha");
+    expect(groups[0].querySelector(".project-count")?.textContent).toBe("2");
+    expect(groups[0].textContent).toContain("Alpha new");
+    expect(groups[0].textContent).toContain("Alpha old");
+    expect(groups[1].querySelector(".project-name")?.textContent).toBe("beta");
+    expect(sidebar.querySelector(".list-caption")?.textContent).toContain("2 个项目");
+    expect(sidebar.querySelector(".list-caption")?.textContent).toContain("3 个会话");
+  });
+
+  it("creates an empty thread in the chosen project and hands it to the normal subscription flow", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, true);
+    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
+    expect(screen.getByRole("dialog", { name: "新建会话" })).toBeTruthy();
+    const cwd = screen.getByRole("textbox", { name: "项目目录" });
+    expect((cwd as HTMLInputElement).value).toBe("/tmp/fixture");
+    fireEvent.change(screen.getByRole("combobox", { name: "选择已有项目" }), { target: { value: "/tmp/fixture" } });
+    expect((cwd as HTMLInputElement).value).toBe("/tmp/fixture");
+    fireEvent.change(cwd, { target: { value: "/work/new-project" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
+    expect(requests("thread.create")[0].params).toEqual({ cwd: "/work/new-project" });
+    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000099", title: "", cwd: "/work/new-project", updatedAt: "2026-10-07T00:00:00Z" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "accepted", data: { thread: created } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect(requests("thread.subscribe")[1].params.threadId).toBe(created.threadId);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-created" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: created.threadId, subscriptionId: "sub-created", streamId: "stream-created", seq: 1, thread: created }));
+    expect(await screen.findByRole("heading", { name: "未命名会话" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "新建会话" })).toBeNull();
+  });
+
+  it("keeps the chosen directory visible when thread creation is rejected", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, true);
+    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
+    const cwd = screen.getByRole("textbox", { name: "项目目录" });
+    fireEvent.change(cwd, { target: { value: "/missing/project" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "rejected", error: { code: "INVALID_ARGUMENT", message: "invalid" } }));
+    expect(await screen.findByText("目录必须是这台电脑上已存在的绝对文件夹路径。")).toBeTruthy();
+    expect((cwd as HTMLInputElement).value).toBe("/missing/project");
+    expect(screen.getByRole("dialog", { name: "新建会话" })).toBeTruthy();
+  });
+
+  it("hides thread creation when the Desktop Agent does not advertise it", async () => {
+    await openFixture();
+    expect(screen.queryByRole("button", { name: "新建会话" })).toBeNull();
   });
 
   it("isolates stale search responses and keeps search errors local to the sidebar", async () => {
