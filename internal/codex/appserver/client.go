@@ -24,6 +24,7 @@ var (
 	ErrInvalidArgument   = errors.New("INVALID_ARGUMENT")
 	ErrCapacity          = errors.New("App Server pending request limit reached")
 	ErrResponseTooLarge  = errors.New("HISTORY_TOO_LARGE")
+	ErrOutcomeUnknown    = errors.New("OUTCOME_UNKNOWN")
 )
 
 const DefaultMaxResponseBytes = 64 << 20

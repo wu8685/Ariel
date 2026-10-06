@@ -45,6 +45,7 @@
 | 0028 | [手机输入框与操作栏上下分层](0028-stacked-mobile-composer-actions.md) | Implemented（自动／隔离浏览器已验；物理手机待验） | 输入文字独占上层宽度；附件在下层左侧，停止与发送 icon 在下层右侧 |
 | 0029 | [手机输入字号与会话正文一致](0029-mobile-composer-font-size.md) | Implemented（自动／隔离浏览器已验；物理 iPhone 待验） | 输入文字使用与会话正文相同的 14px 字号，同时避免 iOS 聚焦时自动放大页面 |
 | 0030 | [工具调用折叠文字入口](0030-tool-activity-text-toggle.md) | Implemented（自动／浏览器样式已验；物理手机待验） | 用低对比度“使用了 N 个工具”文字代替圆形箭头，展开内容与顺序保持不变 |
+| 0031 | [Codex 原生后续输入队列](0031-codex-follow-up-queue.md) | Implemented（自动／真实 Codex fixture 已验；物理手机拖拽待验） | 运行中排队后续输入；支持引导、编辑、删除和拖拽调整顺序，并保持 Desktop owner 唯一执行权 |
 
 ## 设计基线
 

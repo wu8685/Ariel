@@ -52,7 +52,16 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer readOnlyRPC.Close()
-	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) })
+	queueReader := appserver.QueueReader{RPC: readOnlyRPC}
+	queueSupported, err := queueReader.Supported(ctx)
+	if err != nil {
+		return err
+	}
+	var queues []FollowUpQueue
+	if queueSupported {
+		queues = append(queues, queueReader)
+	}
+	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -94,7 +103,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true}}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled()}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -205,6 +214,8 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		ItemID          string              `json:"itemId"`
 		ImageIndex      int                 `json:"imageIndex"`
 		ExpectedTurnID  string              `json:"expectedTurnId"`
+		QueueID         string              `json:"queueId"`
+		QueueIDs        []string            `json:"queueIds"`
 		InteractionID   string              `json:"interactionId"`
 		Decision        string              `json:"decision"`
 		Answers         map[string][]string `json:"answers"`
@@ -278,6 +289,26 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "turn.interrupt":
 		err = a.service.Interrupt(ctx, p.ThreadID, p.ExpectedTurnID)
 		data = map[string]any{}
+	case "queue.add":
+		var queued []map[string]any
+		queued, err = a.service.QueueAdd(ctx, p.ThreadID, p.ClientMessageID, p.Text, p.Images)
+		data = map[string]any{"queuedMessages": queued}
+	case "queue.update":
+		var queued []map[string]any
+		queued, err = a.service.QueueUpdate(ctx, p.ThreadID, p.QueueID, p.Text, p.Images)
+		data = map[string]any{"queuedMessages": queued}
+	case "queue.delete":
+		var queued []map[string]any
+		queued, err = a.service.QueueDelete(ctx, p.ThreadID, p.QueueID)
+		data = map[string]any{"queuedMessages": queued}
+	case "queue.reorder":
+		var queued []map[string]any
+		queued, err = a.service.QueueReorder(ctx, p.ThreadID, p.QueueIDs)
+		data = map[string]any{"queuedMessages": queued}
+	case "queue.steer":
+		var queued []map[string]any
+		queued, err = a.service.QueueSteer(ctx, p.ThreadID, p.QueueID, p.ExpectedTurnID)
+		data = map[string]any{"queuedMessages": queued}
 	case "interaction.respond":
 		err = a.service.Respond(ctx, p.ThreadID, p.InteractionID, p.Decision, p.Answers)
 		data = map[string]any{}
@@ -294,6 +325,10 @@ func (a *agent) reply(ctx context.Context, id string, data map[string]any, err e
 		msg["data"] = data
 	} else {
 		outcome, code := "rejected", requestErrorCode(err)
+		if errors.Is(err, appserver.ErrOutcomeUnknown) {
+			outcome = "unknown"
+			code = "OUTCOME_UNKNOWN"
+		}
 		var callErr *desktopipc.CallError
 		if errors.As(err, &callErr) {
 			outcome = callErr.Outcome

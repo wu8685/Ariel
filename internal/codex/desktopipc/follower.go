@@ -16,6 +16,7 @@ type Follower struct {
 	opMu      sync.Mutex
 	startMu   sync.Mutex
 	respondMu sync.Mutex
+	steerMu   sync.Mutex
 	stateMu   sync.Mutex
 	updates   chan struct{}
 	wake      chan struct{}
@@ -204,6 +205,34 @@ func (f *Follower) Interrupt(ctx context.Context, expectedTurnID string) error {
 		return err
 	}
 	return InterruptProductionTurn(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, expectedTurnID)
+}
+
+func (f *Follower) Steer(ctx context.Context, expectedTurnID, queuedMessageID, clientMessageID, text string, images []string) error {
+	f.steerMu.Lock()
+	defer f.steerMu.Unlock()
+	state, err := f.Refresh(ctx)
+	if err != nil {
+		return err
+	}
+	if err := SteerProductionTurn(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, expectedTurnID, queuedMessageID, clientMessageID, text, images); err != nil {
+		return err
+	}
+	verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	for {
+		current, err := f.Refresh(verifyCtx)
+		if err != nil {
+			return &CallError{Cause: err, Outcome: "unknown"}
+		}
+		if TurnContainsSteeringMessageImages(current, expectedTurnID, queuedMessageID, clientMessageID, text, len(images)) {
+			return nil
+		}
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-verifyCtx.Done():
+			return &CallError{Cause: verifyCtx.Err(), Outcome: "unknown"}
+		}
+	}
 }
 
 func (f *Follower) Respond(ctx context.Context, interactionID, decision string, answers map[string][]string) error {

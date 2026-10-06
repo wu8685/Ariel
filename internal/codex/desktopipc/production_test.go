@@ -85,6 +85,37 @@ func TestProductionInterruptRejectsStaleTurnBeforeNativeCall(t *testing.T) {
 	}
 }
 
+func TestProductionSteerPreservesQueueIdentityAndRejectsStaleTurn(t *testing.T) {
+	owner := &recordingOwner{reply: Reply{Result: json.RawMessage(`{"result":{"turnId":"active"}}`)}}
+	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"inProgress"},"requests":[],"turns":[{"turnId":"active","status":"inProgress","items":[]}]}`)
+	image := "data:image/png;base64,AAAA"
+	if err := SteerProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", state, "active", "queue-id", "client-id", "guide", []string{image}); err != nil {
+		t.Fatal(err)
+	}
+	if len(owner.calls) != 1 || owner.calls[0].Method != "thread-follower-steer-turn" || owner.calls[0].Version != 1 || !owner.calls[0].Mutating {
+		t.Fatalf("steer call: %+v", owner.calls)
+	}
+	body, _ := json.Marshal(owner.calls[0].Params)
+	for key, value := range map[string]string{"conversationId": "thread", "id": "queue-id", "serverQueuedMessageId": "queue-id", "clientUserMessageId": "client-id", "text": "guide", "cwd": "/fixture", "src": image} {
+		if !containsJSON(body, key, value) {
+			t.Fatalf("missing %s=%s: %s", key, value, body)
+		}
+	}
+	if err := SteerProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", state, "stale", "queue-two", "client-two", "no", nil); !errors.Is(err, ErrStaleTurn) || len(owner.calls) != 1 {
+		t.Fatalf("stale steer reached owner: %v calls=%d", err, len(owner.calls))
+	}
+}
+
+func TestProductionSteerTreatsMismatchedReceiptAsUnknown(t *testing.T) {
+	owner := &recordingOwner{reply: Reply{Result: json.RawMessage(`{"result":{"turnId":"other"}}`)}}
+	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"inProgress"},"requests":[],"turns":[{"turnId":"active","status":"inProgress","items":[]}]}`)
+	err := SteerProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", state, "active", "queue-id", "client-id", "guide", nil)
+	var call *CallError
+	if !errors.As(err, &call) || call.Outcome != "unknown" || len(owner.calls) != 1 {
+		t.Fatalf("ambiguous steer receipt: %v", err)
+	}
+}
+
 func containsJSON(b []byte, key, want string) bool {
 	var root any
 	if json.Unmarshal(b, &root) != nil {

@@ -41,7 +41,7 @@ afterEach(() => {
 
 const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
 
-async function openFixture(thread: Thread = fixtureThread) {
+async function openFixture(thread: Thread = fixtureThread, queue = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -50,7 +50,7 @@ async function openFixture(thread: Thread = fixtureThread) {
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
@@ -139,6 +139,49 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requests("turn.start")).toHaveLength(1));
     expect(requests("turn.start")[0].params.text).toBe("");
     expect(requests("turn.start")[0].params.images[0]).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("queues follow-ups while running and supports edit, reorder, delete, and steer", async () => {
+    const first = { queueId: "queue-one", clientMessageId: "message-one", text: "第一条", images: [] as [], editable: true };
+    const second = { queueId: "queue-two", clientMessageId: "message-two", text: "第二条", images: [] as [], editable: true };
+    const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active-turn", status: "inProgress", items: [] }], queuedMessages: [first] };
+    const { socket, requests } = await openFixture(running, true);
+
+    const input = screen.getByRole("textbox", { name: "发送消息" });
+    fireEvent.change(input, { target: { value: "第二条" } });
+    fireEvent.click(screen.getByRole("button", { name: "加入队列" }));
+    await waitFor(() => expect(requests("queue.add")).toHaveLength(1));
+    expect(requests("queue.add")[0].params).toMatchObject({ threadId: "fixture", text: "第二条" });
+    expect(requests("turn.start")).toHaveLength(0);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.add")[0].requestId, outcome: "accepted", data: { queuedMessages: [first, second] } }));
+    expect((input as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByText(/共 2 条，最上方优先执行/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "更多选项：第一条" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "编辑" }));
+    expect((input as HTMLTextAreaElement).value).toBe("第一条");
+    fireEvent.change(input, { target: { value: "第一条（已修改）" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存排队消息" }));
+    await waitFor(() => expect(requests("queue.update")).toHaveLength(1));
+    expect(requests("queue.update")[0].params).toMatchObject({ threadId: "fixture", queueId: "queue-one", text: "第一条（已修改）" });
+    const edited = { ...first, text: "第一条（已修改）" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.update")[0].requestId, outcome: "accepted", data: { queuedMessages: [edited, second] } }));
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "拖拽排序：第一条（已修改）" }), { key: "ArrowDown" });
+    await waitFor(() => expect(requests("queue.reorder")).toHaveLength(1));
+    expect(requests("queue.reorder")[0].params.queueIds).toEqual(["queue-two", "queue-one"]);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.reorder")[0].requestId, outcome: "accepted", data: { queuedMessages: [second, edited] } }));
+
+    fireEvent.click(screen.getByRole("button", { name: "删除排队消息：第二条" }));
+    await waitFor(() => expect(requests("queue.delete")).toHaveLength(1));
+    expect(requests("queue.delete")[0].params.queueId).toBe("queue-two");
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.delete")[0].requestId, outcome: "accepted", data: { queuedMessages: [edited] } }));
+
+    fireEvent.click(screen.getByRole("button", { name: "引导：第一条（已修改）" }));
+    await waitFor(() => expect(requests("queue.steer")).toHaveLength(1));
+    expect(requests("queue.steer")[0].params).toMatchObject({ queueId: "queue-one", expectedTurnId: "active-turn" });
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.steer")[0].requestId, outcome: "accepted", data: { queuedMessages: [] } }));
+    expect(screen.queryByLabelText("排队的后续输入")).toBeNull();
   });
   it("falls back to explicitly read-only paged history when owner snapshot is oversized", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);

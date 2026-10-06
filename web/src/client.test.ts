@@ -82,6 +82,8 @@ describe("Ariel WebSocket client", () => {
     expect(timeoutFor("turn.start")).toBeGreaterThan(timeoutFor("thread.list"));
     expect(timeoutFor("thread.history")).toBeGreaterThan(timeoutFor("thread.list"));
     expect(timeoutFor("thread.history.items")).toBeGreaterThan(timeoutFor("thread.list"));
+    expect(timeoutFor("queue.add")).toBe(timeoutFor("turn.start"));
+    expect(timeoutFor("queue.reorder")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("thread.list", { searchTerm: "Ariel" })).toBeGreaterThan(timeoutFor("thread.subscribe"));
   });
   it("sends token only in hello, not the URL, and correlates replies", async () => {

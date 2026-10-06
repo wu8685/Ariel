@@ -27,7 +27,8 @@
         "history": { "type": "boolean" },
         "send": { "type": "boolean" },
         "interrupt": { "type": "boolean" },
-        "interaction": { "type": "boolean" }
+        "interaction": { "type": "boolean" },
+        "queue": { "type": "boolean" }
       }
     },
     "webHello": {
@@ -64,7 +65,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -80,6 +81,11 @@
         { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/startParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.interrupt" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/interruptParams" } } } },
+        { "if": { "properties": { "method": { "const": "queue.add" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueAddParams" } } } },
+        { "if": { "properties": { "method": { "const": "queue.update" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueUpdateParams" } } } },
+        { "if": { "properties": { "method": { "const": "queue.delete" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueItemParams" } } } },
+        { "if": { "properties": { "method": { "const": "queue.reorder" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueReorderParams" } } } },
+        { "if": { "properties": { "method": { "const": "queue.steer" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueSteerParams" } } } },
         { "if": { "properties": { "method": { "const": "interaction.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/respondParams" } } } }
       ]
     },
@@ -125,6 +131,36 @@
       "type": "object", "additionalProperties": false, "required": ["threadId", "expectedTurnId"],
       "properties": { "threadId": { "$ref": "#/$defs/id" }, "expectedTurnId": { "$ref": "#/$defs/id" } }
     },
+    "queueAddParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "clientMessageId", "text"],
+      "anyOf": [{ "properties": { "text": { "type": "string", "minLength": 1 } } }, { "required": ["images"], "properties": { "images": { "type": "array", "minItems": 1 } } }],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/requestId" },
+        "text": { "type": "string", "maxLength": 65536 },
+        "images": { "type": "array", "maxItems": 3, "items": { "type": "string", "minLength": 1, "maxLength": 5592435 } }
+      }
+    },
+    "queueUpdateParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "queueId", "text"],
+      "anyOf": [{ "properties": { "text": { "type": "string", "minLength": 1 } } }, { "required": ["images"], "properties": { "images": { "type": "array", "minItems": 1 } } }],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "queueId": { "$ref": "#/$defs/id" },
+        "text": { "type": "string", "maxLength": 65536 },
+        "images": { "type": "array", "maxItems": 3, "items": { "type": "string", "minLength": 1, "maxLength": 5592435 } }
+      }
+    },
+    "queueItemParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "queueId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "queueId": { "$ref": "#/$defs/id" } }
+    },
+    "queueReorderParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "queueIds"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "queueIds": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } } }
+    },
+    "queueSteerParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "queueId", "expectedTurnId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "queueId": { "$ref": "#/$defs/id" }, "expectedTurnId": { "$ref": "#/$defs/id" } }
+    },
     "respondParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "interactionId", "decision"],
       "properties": {
@@ -166,7 +202,18 @@
         "recentComplete": { "type": "boolean" },
         "permissions": { "type": "object", "additionalProperties": false, "required": ["sandbox", "approval"], "properties": { "sandbox": { "enum": ["read_only", "workspace_write", "full_access", "unknown"] }, "approval": { "enum": ["on_request", "never", "unknown"] } } },
         "turns": { "type": "array", "items": { "$ref": "#/$defs/turn" } },
-        "pendingInteractions": { "type": "array", "items": { "$ref": "#/$defs/interaction" } }
+        "pendingInteractions": { "type": "array", "items": { "$ref": "#/$defs/interaction" } },
+        "queuedMessages": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/queuedMessage" } }
+      }
+    },
+    "queuedMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["queueId", "clientMessageId", "text", "images", "editable"],
+      "properties": {
+        "queueId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/id" },
+        "text": { "type": "string", "maxLength": 65536 },
+        "images": { "type": "array", "maxItems": 3, "items": { "type": "string", "minLength": 1, "maxLength": 5592435 } },
+        "editable": { "type": "boolean" }
       }
     },
     "turn": {

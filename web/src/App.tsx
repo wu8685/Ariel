@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
@@ -9,10 +9,10 @@ import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
-import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction } from "./generated/protocol";
+import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 10;
 const mobileViewportMaxWidth = 800;
@@ -64,10 +64,33 @@ function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
 }
 
+function responseQueue(response: Response): QueuedMessage[] | null {
+  const items = response.data?.queuedMessages;
+  if (!Array.isArray(items)) return null;
+  for (const item of items) {
+    if (!item || typeof item !== "object") return null;
+    const value = item as Record<string, unknown>;
+    if (typeof value.queueId !== "string" || !value.queueId || typeof value.clientMessageId !== "string" || !value.clientMessageId || typeof value.text !== "string" || typeof value.editable !== "boolean" || !Array.isArray(value.images) || value.images.length > 3 || value.images.some(image => typeof image !== "string")) return null;
+  }
+  return items as QueuedMessage[];
+}
+
 function BrandMark() {
   return <svg className="brand-mark" aria-hidden="true" viewBox="0 0 32 32" focusable="false">
     <path d="M16 2v28 M2 16h28 M6.1 6.1l19.8 19.8 M25.9 6.1 6.1 25.9" />
   </svg>;
+}
+
+function QueueHandleIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 16 18" fill="currentColor"><circle cx="5" cy="4" r="1.2"/><circle cx="11" cy="4" r="1.2"/><circle cx="5" cy="9" r="1.2"/><circle cx="11" cy="9" r="1.2"/><circle cx="5" cy="14" r="1.2"/><circle cx="11" cy="14" r="1.2"/></svg>;
+}
+
+function QueueGuideIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v3.5A3.5 3.5 0 0 0 6.5 12H15"/><path d="m12 9 3 3-3 3"/></svg>;
+}
+
+function QueueTrashIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 5h11M7 2.75h4M5 5l.7 10h6.6L13 5M7.5 7.5v5M10.5 7.5v5"/></svg>;
 }
 
 function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: PhonePairing; origin: string; onConfirm: () => void; onCancel: () => void }) {
@@ -151,6 +174,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
+  const [queueWorking, setQueueWorking] = useState("");
+  const [editingQueueId, setEditingQueueId] = useState("");
+  const [queueMenuId, setQueueMenuId] = useState("");
+  const [draggingQueueId, setDraggingQueueId] = useState("");
+  const [dragQueueOrder, setDragQueueOrder] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
   const [showList, setShowList] = useState(true);
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
@@ -172,10 +200,18 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const permissionInfoRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pairingGeneration = useRef(0);
+  const queueDrag = useRef<{ pointerId: number; queueId: string; startY: number; order: string[] } | null>(null);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
   const mock = device?.adapterVersion?.startsWith("mock-") ?? false;
   const activeTurn = view?.thread.turns.findLast(t => t.status === "inProgress");
+  const queuedMessages = view?.thread.queuedMessages || [];
+  const queueEnabled = device?.capabilities.queue === true;
+  const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
+  const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
+  const renderedQueuedMessages = dragQueueOrder.length === queuedMessages.length
+    ? dragQueueOrder.map(id => queuedMessages.find(item => item.queueId === id)).filter((item): item is QueuedMessage => !!item)
+    : queuedMessages;
   const currentPermissions = view && !mock ? permissionSummary(view.thread.permissions) : null;
   const connectionLabel = status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接";
   const permissionWarning = Boolean(currentPermissions?.warning || currentPermissions?.label.includes("未知"));
@@ -341,7 +377,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
     selection.current = { deviceId: targetDevice, threadId: id, view: null };
-    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); resetHistory();
+    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
     const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
@@ -485,7 +521,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); resetHistory();
+    setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -537,6 +573,35 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }, [permissionInfoOpen]);
 
   useEffect(() => { setPermissionInfoOpen(false); }, [deviceId, threadId]);
+
+  useEffect(() => {
+    if (editingQueueId && !queuedMessages.some(item => item.queueId === editingQueueId)) {
+      setEditingQueueId("");
+      setDraft("");
+      setScreenshots([]);
+    }
+  }, [editingQueueId, queuedMessages]);
+
+  useEffect(() => {
+    if (!queueMenuId) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".queue-more-wrap")) setQueueMenuId("");
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setQueueMenuId(""); };
+    document.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); };
+  }, [queueMenuId]);
+
+  useEffect(() => {
+    if (!dragQueueOrder.length) return;
+    const current = queuedMessages.map(item => item.queueId);
+    if (current.length !== dragQueueOrder.length || current.some(id => !dragQueueOrder.includes(id))) {
+      queueDrag.current = null;
+      setDraggingQueueId("");
+      setDragQueueOrder([]);
+    }
+  }, [queuedMessages, dragQueueOrder]);
 
   useLayoutEffect(() => {
     const input = composerInputRef.current;
@@ -674,16 +739,142 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     }
   }
 
+  function applyQueueResponse(response: Response, targetDevice: string, targetThread: string, targetEpoch: number): boolean {
+    const items = responseQueue(response);
+    if (!items || pendingSelect.current !== targetEpoch || selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread || !selection.current.view) return false;
+    const next = { ...selection.current.view, thread: { ...selection.current.view.thread, queuedMessages: items } };
+    selection.current.view = next;
+    setView(next);
+    return true;
+  }
+
   async function send() {
-    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, status === "ready", working, draft, screenshots.length)) return;
+    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, status === "ready", working || !!queueWorking, draft, screenshots.length, queueEnabled)) return;
     const text = draft;
     const images = screenshots;
+    const targetDevice = deviceId;
+    const targetThread = view.threadId;
+    const targetEpoch = pendingSelect.current;
+    const queueID = editingQueueId;
     setWorking(true); setNotice("");
-    const response = await client.request("turn.start", deviceId, { threadId: view.threadId, clientMessageId: newRequestID(), text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) });
+    const content = { text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) };
+    const response = queueID
+      ? await client.request("queue.update", targetDevice, { threadId: targetThread, queueId: queueID, ...content })
+      : view.thread.runtime === "inProgress" && queueEnabled
+        ? await client.request("queue.add", targetDevice, { threadId: targetThread, clientMessageId: newRequestID(), ...content })
+        : await client.request("turn.start", targetDevice, { threadId: targetThread, clientMessageId: newRequestID(), ...content });
     setWorking(false);
-    setDraft(current => current === text ? preserveDraftAfterSend(current, response.outcome) : current);
-    if (response.outcome === "accepted") setScreenshots(current => current === images ? [] : current);
-    if (response.outcome !== "accepted") setNotice(errorText(response));
+    const stillSelected = pendingSelect.current === targetEpoch && selection.current.deviceId === targetDevice && selection.current.threadId === targetThread;
+    const queueMutation = !!queueID || (view.thread.runtime === "inProgress" && queueEnabled);
+    const accepted = response.outcome === "accepted" && (!queueMutation || applyQueueResponse(response, targetDevice, targetThread, targetEpoch));
+    if (stillSelected) {
+      setDraft(current => current === text ? preserveDraftAfterSend(current, accepted ? "accepted" : response.outcome === "accepted" ? "unknown" : response.outcome) : current);
+      if (accepted) {
+        setScreenshots(current => current === images ? [] : current);
+        if (queueID) setEditingQueueId("");
+      }
+      if (!accepted) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response));
+    }
+  }
+
+  function editQueuedMessage(item: QueuedMessage) {
+    if (!item.editable || working || queueWorking) return;
+    if (!editingQueueId && (draft.trim() || screenshots.length)) {
+      setNotice("请先发送或清空当前草稿，再编辑排队消息。");
+      return;
+    }
+    setEditingQueueId(item.queueId);
+    setQueueMenuId("");
+    setDraft(item.text);
+    setScreenshots(item.images.map((dataUri, index) => ({ name: `排队截图 ${index + 1}`, bytes: Math.ceil(dataUri.length * .75), dataUri })));
+    setNotice("");
+    composerInputRef.current?.focus();
+  }
+
+  function cancelQueueEdit() {
+    setEditingQueueId("");
+    setDraft("");
+    setScreenshots([]);
+    setNotice("");
+  }
+
+  async function mutateQueue(method: "queue.delete" | "queue.reorder" | "queue.steer", params: Record<string, unknown>, marker: string) {
+    if (!view || !deviceId || working || queueWorking || readOnlyHistory) return;
+    const targetDevice = deviceId;
+    const targetThread = view.threadId;
+    const targetEpoch = pendingSelect.current;
+    setQueueWorking(marker);
+    setNotice("");
+    const response = await client.request(method, targetDevice, { threadId: targetThread, ...params });
+    setQueueWorking("");
+    if (pendingSelect.current !== targetEpoch || selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread) return;
+    if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+    if (!applyQueueResponse(response, targetDevice, targetThread, targetEpoch)) { setNotice("队列回执格式无法确认，请等待状态同步后再操作。"); return; }
+    if (params.queueId === editingQueueId) cancelQueueEdit();
+  }
+
+  function deleteQueuedMessage(item: QueuedMessage) {
+    setQueueMenuId("");
+    void mutateQueue("queue.delete", { queueId: item.queueId }, `delete:${item.queueId}`);
+  }
+
+  function moveQueuedMessage(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= queuedMessages.length) return;
+    const queueIds = queuedMessages.map(item => item.queueId);
+    [queueIds[index], queueIds[target]] = [queueIds[target], queueIds[index]];
+    setQueueMenuId("");
+    void mutateQueue("queue.reorder", { queueIds }, `reorder:${queuedMessages[index].queueId}`);
+  }
+
+  function beginQueueDrag(item: QueuedMessage, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (working || queueWorking) return;
+    const order = queuedMessages.map(queued => queued.queueId);
+    queueDrag.current = { pointerId: event.pointerId, queueId: item.queueId, startY: event.clientY, order };
+    setQueueMenuId("");
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function updateQueueDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = queueDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId || Math.abs(event.clientY - drag.startY) < 4 || typeof document.elementFromPoint !== "function") return;
+    event.preventDefault();
+    setDraggingQueueId(drag.queueId);
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-queue-id]");
+    const targetID = target?.dataset.queueId;
+    if (!targetID || targetID === drag.queueId) return;
+    const from = drag.order.indexOf(drag.queueId);
+    const to = drag.order.indexOf(targetID);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...drag.order];
+    next.splice(to, 0, next.splice(from, 1)[0]);
+    drag.order = next;
+    setDragQueueOrder(next);
+  }
+
+  function finishQueueDrag(event: ReactPointerEvent<HTMLButtonElement>, submit: boolean) {
+    const drag = queueDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    queueDrag.current = null;
+    setDraggingQueueId("");
+    setDragQueueOrder([]);
+    const current = queuedMessages.map(item => item.queueId);
+    if (submit && (drag.order.length !== current.length || drag.order.some((id, index) => id !== current[index]))) {
+      void mutateQueue("queue.reorder", { queueIds: drag.order }, `reorder:${drag.queueId}`);
+    }
+  }
+
+  function queueHandleKeyDown(index: number, event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    moveQueuedMessage(index, event.key === "ArrowUp" ? -1 : 1);
+  }
+
+  function steerQueuedMessage(item: QueuedMessage) {
+    if (!activeTurn || view?.thread.pendingInteractions.length || !item.editable) return;
+    setQueueMenuId("");
+    void mutateQueue("queue.steer", { queueId: item.queueId, expectedTurnId: activeTurn.turnId }, `steer:${item.queueId}`);
   }
 
   async function addScreenshots(files: FileList | null) {
@@ -757,13 +948,38 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         </div>
         {showReturnToLatest && view && <div className="return-latest-bar"><button type="button" onClick={returnToLatest}>回到最新</button></div>}
         <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
+          {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">
+            {queuePaused && <div className="queue-head"><span>后续输入已暂停</span><small>开始下一轮前可继续调整</small></div>}
+            <span className="sr-only">共 {queuedMessages.length} 条，最上方优先执行。</span>
+            <ol className="queue-list">{renderedQueuedMessages.map((item, index) => {
+              const busy = !!queueWorking || working || !!draggingQueueId;
+              const summary = item.text.trim() || (item.images.length ? `${item.images.length} 张截图` : "无法预览的输入");
+              return <li className={`queue-item ${editingQueueId === item.queueId ? "editing" : ""} ${draggingQueueId === item.queueId ? "dragging" : ""}`} key={item.queueId} data-queue-id={item.queueId}>
+                <button className="queue-handle" type="button" aria-label={`拖拽排序：${summary}`} title="拖拽排序；也可用上下方向键" onPointerDown={event => beginQueueDrag(item, event)} onPointerMove={updateQueueDrag} onPointerUp={event => finishQueueDrag(event, true)} onPointerCancel={event => finishQueueDrag(event, false)} onLostPointerCapture={event => finishQueueDrag(event, false)} onKeyDown={event => queueHandleKeyDown(index, event)} disabled={!!queueWorking || working}><QueueHandleIcon /></button>
+                <div className="queue-content"><span className="queue-text">{summary}</span>{item.images.length > 0 && item.text.trim() && <small>{item.images.length} 张截图</small>}{!item.editable && <small>此输入只能删除或调序</small>}</div>
+                <div className="queue-actions">
+                  {item.editable && <button className="queue-guide-action" type="button" aria-label={`引导：${summary}`} title="插入当前思考，不中断 Codex" onClick={() => steerQueuedMessage(item)} disabled={busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /><span>引导</span></button>}
+                  <button className="queue-icon-action" type="button" aria-label={`删除排队消息：${summary}`} title="删除" onClick={() => deleteQueuedMessage(item)} disabled={busy}><QueueTrashIcon /></button>
+                  <div className="queue-more-wrap">
+                    <button className="queue-more-action" type="button" aria-label={`更多选项：${summary}`} title="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={() => setQueueMenuId(current => current === item.queueId ? "" : item.queueId)} disabled={busy}>•••</button>
+                    {queueMenuId === item.queueId && <div className="queue-menu" role="menu" aria-label={`排队消息选项：${summary}`}>
+                      {item.editable && <button type="button" role="menuitem" onClick={() => editQueuedMessage(item)}>编辑</button>}
+                      <button type="button" role="menuitem" onClick={() => moveQueuedMessage(index, -1)} disabled={index === 0}>上移</button>
+                      <button type="button" role="menuitem" onClick={() => moveQueuedMessage(index, 1)} disabled={index === renderedQueuedMessages.length - 1}>下移</button>
+                    </div>}
+                  </div>
+                </div>
+              </li>;
+            })}</ol>
+          </section>}
           {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button type="button" aria-label={`移除截图：${image.name}`} onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}>×</button></div>)}</div>}
-          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? view.thread.runtime === "inProgress" ? "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} />
+          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} />
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || status !== "ready" || readOnlyHistory || working} />
               <button className="attach-button" type="button" aria-label="选择截图" title="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || status !== "ready" || readOnlyHistory || working}>＋</button>
+              {editingQueueId && <button className="queue-cancel-button" type="button" onClick={cancelQueueEdit} disabled={working}>取消编辑</button>}
               {activeTurn && <button className="stop-button" type="button" aria-label="停止" title="停止" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}><span className="stop-glyph" aria-hidden="true">■</span><span className="stop-label" aria-hidden="true">停止</span></button>}
-              <button className="primary send-button" aria-label="发送" onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working, draft, screenshots.length)}><span className="send-label">发送</span><span className="send-glyph" aria-hidden="true">↑</span></button>
+              <button className="primary send-button" aria-label={sendAction} title={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working || !!queueWorking, draft, screenshots.length, queueEnabled)}><span className="send-label">{sendAction}</span><span className="send-glyph" aria-hidden="true">↑</span></button>
             </div></div></div></div>
       </main>
     </div>

@@ -28,6 +28,14 @@ type PagedHistory interface {
 	Items(context.Context, string, string, string, int) (appserver.ItemPage, error)
 }
 
+type FollowUpQueue interface {
+	List(context.Context, string) ([]appserver.QueuedSubmission, error)
+	Add(context.Context, string, string, string, []string) (appserver.QueuedSubmission, error)
+	Update(context.Context, string, string, string, []string) (appserver.QueuedSubmission, error)
+	Delete(context.Context, string, string) (bool, error)
+	Reorder(context.Context, string, []string) error
+}
+
 var ErrHistoryTooLarge = errors.New("HISTORY_TOO_LARGE")
 
 const maxThreadPayloadBytes = 7 << 20
@@ -79,8 +87,11 @@ type threadController struct {
 }
 type Service struct {
 	history          History
+	queue            FollowUpQueue
 	attach           LiveFactory
 	mu               sync.Mutex
+	queueMu          sync.Mutex
+	queueCache       map[string]queueCacheEntry
 	threads          map[string]*threadController
 	clock            uint64
 	seen             map[string]struct{}
@@ -89,9 +100,20 @@ type Service struct {
 	placeholderGrace time.Duration
 }
 
-func NewService(history History, attach LiveFactory) *Service {
-	return &Service{history: history, attach: attach, threads: map[string]*threadController{}, seen: map[string]struct{}{}, placeholderGrace: 8 * time.Second}
+type queueCacheEntry struct {
+	items     []map[string]any
+	checkedAt time.Time
 }
+
+func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Service {
+	var followUps FollowUpQueue
+	if len(queue) > 0 {
+		followUps = queue[0]
+	}
+	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, placeholderGrace: 8 * time.Second}
+}
+
+func (s *Service) QueueEnabled() bool { return s.queue != nil }
 
 func (s *Service) controller(id string) (*threadController, error) {
 	s.mu.Lock()
@@ -225,6 +247,9 @@ func (s *Service) Read(ctx context.Context, id string) (map[string]any, error) {
 	if _, ok := s.history.(PagedHistory); !ok {
 		thread["historyComplete"] = true
 		thread["recentComplete"] = true
+		if err := s.attachQueue(ctx, thread); err != nil {
+			return nil, err
+		}
 		return thread, checkThreadSize(thread)
 	}
 	for limit := recentTurnLimit; ; limit = max(1, limit/2) {
@@ -241,6 +266,9 @@ func (s *Service) Read(ctx context.Context, id string) (map[string]any, error) {
 		thread["turns"] = recent
 		thread["historyComplete"] = historyComplete
 		thread["recentComplete"] = historyComplete || len(recent) >= recentTurnLimit
+		if err := s.attachQueue(ctx, thread); err != nil {
+			return nil, err
+		}
 		if err := checkThreadSize(thread); err != nil {
 			if errors.Is(err, ErrHistoryTooLarge) && limit > 1 {
 				continue
@@ -514,14 +542,8 @@ func (s *Service) pump(c *threadController, live Live) {
 				s.invalidateLive(c, live, "RESYNC_REQUIRED")
 				return
 			}
-			c.mu.Lock()
-			if c.live != live {
-				c.mu.Unlock()
-				return
-			}
 			thread, e := NormalizeLive(c.id, c.title, c.cwd, raw)
 			if e != nil {
-				c.mu.Unlock()
 				if desktopipc.TransientCanonicalPlaceholder(raw, c.cwd) {
 					if placeholderTimer == nil {
 						placeholderTimer = time.NewTimer(s.placeholderGrace)
@@ -537,11 +559,20 @@ func (s *Service) pump(c *threadController, live Live) {
 				placeholderTimer = nil
 				placeholderDeadline = nil
 			}
+			if e = s.attachQueue(context.Background(), thread); e != nil {
+				s.invalidateLive(c, live, "RESYNC_REQUIRED")
+				return
+			}
 			boundErr := s.boundLiveThread(context.Background(), thread)
 			tooLarge := boundErr != nil
 			type delivery struct {
 				emit  func(map[string]any)
 				event map[string]any
+			}
+			c.mu.Lock()
+			if c.live != live {
+				c.mu.Unlock()
+				return
 			}
 			out := make([]delivery, 0, len(c.subs))
 			for _, sub := range c.subs {
@@ -628,6 +659,14 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
+	if err := s.attachQueue(ctx, thread); err != nil {
+		c.mu.Unlock()
+		return "", "", nil, nil, err
+	}
+	if err := checkThreadSize(thread); err != nil {
+		c.mu.Unlock()
+		return "", "", nil, nil, err
+	}
 	sub := &subscription{id: "desktop-sub-" + rand.Text(), streamID: "desktop-stream-" + rand.Text(), seq: 1, emit: emit}
 	c.subs[sub.id] = sub
 	c.mu.Unlock()
@@ -637,6 +676,9 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 			live := c.live
 			latestRaw, currentErr := live.Current()
 			latest, normalizeErr := NormalizeLive(c.id, c.title, c.cwd, latestRaw)
+			if normalizeErr == nil {
+				normalizeErr = s.attachQueue(context.Background(), latest)
+			}
 			if currentErr != nil || normalizeErr != nil {
 				sub.active = true
 				c.mu.Unlock()
@@ -662,7 +704,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 }
 
 func sameThreadContent(a, b map[string]any) bool {
-	return a["runtime"] == b["runtime"] && a["historyComplete"] == b["historyComplete"] && a["recentComplete"] == b["recentComplete"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"])
+	return a["runtime"] == b["runtime"] && a["historyComplete"] == b["historyComplete"] && a["recentComplete"] == b["recentComplete"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"]) && reflect.DeepEqual(a["queuedMessages"], b["queuedMessages"])
 }
 
 func (s *Service) Unsubscribe(id string) bool {
@@ -808,6 +850,312 @@ func (s *Service) Respond(ctx context.Context, threadID, interactionID, decision
 		return errors.New("STALE_INTERACTION")
 	}
 	return err
+}
+
+func normalizeQueuedSubmission(item appserver.QueuedSubmission) (map[string]any, error) {
+	if item.ID == "" || item.ClientUserMessageID == "" || len(item.Input) == 0 {
+		return nil, ErrNativeShape
+	}
+	textParts := make([]string, 0, 1)
+	images := make([]string, 0, 3)
+	editable := true
+	for _, input := range item.Input {
+		switch input.Type {
+		case "text":
+			if input.Text == "" {
+				return nil, ErrNativeShape
+			}
+			textParts = append(textParts, input.Text)
+			if len(textParts) > 1 {
+				editable = false
+			}
+		case "image":
+			if validateUploadImages([]string{input.URL}) != nil {
+				editable = false
+				continue
+			}
+			images = append(images, input.URL)
+		default:
+			editable = false
+		}
+	}
+	text := strings.Join(textParts, "\n")
+	if text == "" && len(images) == 0 {
+		text = "包含需在 Codex Desktop 管理的原生附件"
+	}
+	if len(images) > 3 {
+		editable = false
+	}
+	return map[string]any{"queueId": item.ID, "clientMessageId": item.ClientUserMessageID, "text": text, "images": images, "editable": editable}, nil
+}
+
+func (s *Service) queueMessages(ctx context.Context, threadID string) ([]map[string]any, error) {
+	if s.queue == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	items, err := s.queue.List(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		normalized, err := normalizeQueuedSubmission(item)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	s.queueMu.Lock()
+	s.queueCache[threadID] = queueCacheEntry{items: result, checkedAt: time.Now()}
+	s.queueMu.Unlock()
+	return result, nil
+}
+
+func (s *Service) cachedQueueMessages(ctx context.Context, threadID string) ([]map[string]any, error) {
+	s.queueMu.Lock()
+	cached, ok := s.queueCache[threadID]
+	s.queueMu.Unlock()
+	if ok && time.Since(cached.checkedAt) < time.Second {
+		return cached.items, nil
+	}
+	return s.queueMessages(ctx, threadID)
+}
+
+func (s *Service) attachQueue(ctx context.Context, thread map[string]any) error {
+	if s.queue == nil {
+		return nil
+	}
+	threadID, ok := thread["threadId"].(string)
+	if !ok || threadID == "" {
+		return ErrNativeShape
+	}
+	items, err := s.cachedQueueMessages(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	thread["queuedMessages"] = items
+	return nil
+}
+
+func validQueueContent(text string, images []string) bool {
+	return (text != "" || len(images) > 0) && len([]rune(text)) <= 65536 && validateUploadImages(images) == nil
+}
+
+func findQueuedMessage(items []map[string]any, queueID string) (map[string]any, bool) {
+	for _, item := range items {
+		if item["queueId"] == queueID {
+			return item, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Service) QueueAdd(ctx context.Context, threadID, clientMessageID, text string, images []string) ([]map[string]any, error) {
+	if s.queue == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	if threadID == "" || clientMessageID == "" || !validQueueContent(text, images) {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	c, err := s.controller(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.releaseController(c)
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	before, err := s.queueMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range before {
+		if item["clientMessageId"] == clientMessageID {
+			return nil, errors.New("INVALID_ARGUMENT")
+		}
+	}
+	accepted, err := s.queue.Add(ctx, threadID, clientMessageID, text, images)
+	if err != nil {
+		return nil, err
+	}
+	if accepted.ID == "" || accepted.ClientUserMessageID != clientMessageID {
+		return nil, &desktopipc.CallError{Cause: ErrNativeShape, Outcome: "unknown"}
+	}
+	return s.queueMessages(ctx, threadID)
+}
+
+func (s *Service) QueueUpdate(ctx context.Context, threadID, queueID, text string, images []string) ([]map[string]any, error) {
+	if s.queue == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	if threadID == "" || queueID == "" || !validQueueContent(text, images) {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	c, err := s.controller(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.releaseController(c)
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	before, err := s.queueMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	item, ok := findQueuedMessage(before, queueID)
+	if !ok || item["editable"] != true {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	accepted, err := s.queue.Update(ctx, threadID, queueID, text, images)
+	if err != nil {
+		return nil, err
+	}
+	if accepted.ID != queueID || accepted.ClientUserMessageID != item["clientMessageId"] {
+		return nil, &desktopipc.CallError{Cause: ErrNativeShape, Outcome: "unknown"}
+	}
+	return s.queueMessages(ctx, threadID)
+}
+
+func (s *Service) QueueDelete(ctx context.Context, threadID, queueID string) ([]map[string]any, error) {
+	if s.queue == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	if threadID == "" || queueID == "" {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	c, err := s.controller(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.releaseController(c)
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	before, err := s.queueMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := findQueuedMessage(before, queueID); !ok {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	deleted, err := s.queue.Delete(ctx, threadID, queueID)
+	if err != nil {
+		return nil, err
+	}
+	if !deleted {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	return s.queueMessages(ctx, threadID)
+}
+
+func (s *Service) QueueReorder(ctx context.Context, threadID string, queueIDs []string) ([]map[string]any, error) {
+	if s.queue == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	if threadID == "" || len(queueIDs) == 0 || len(queueIDs) > appserver.MaxQueuedSubmissions {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	c, err := s.controller(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.releaseController(c)
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	before, err := s.queueMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if len(before) != len(queueIDs) {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	want := make(map[string]struct{}, len(before))
+	for _, item := range before {
+		want[item["queueId"].(string)] = struct{}{}
+	}
+	for _, id := range queueIDs {
+		if _, ok := want[id]; !ok {
+			return nil, errors.New("INVALID_ARGUMENT")
+		}
+		delete(want, id)
+	}
+	if len(want) != 0 {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	if err := s.queue.Reorder(ctx, threadID, queueIDs); err != nil {
+		return nil, err
+	}
+	after, err := s.queueMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for index, id := range queueIDs {
+		if after[index]["queueId"] != id {
+			return nil, &desktopipc.CallError{Cause: ErrNativeShape, Outcome: "unknown"}
+		}
+	}
+	return after, nil
+}
+
+func (s *Service) QueueSteer(ctx context.Context, threadID, queueID, expectedTurnID string) ([]map[string]any, error) {
+	if s.queue == nil {
+		return nil, appserver.ErrMethodUnavailable
+	}
+	if threadID == "" || queueID == "" || expectedTurnID == "" {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	c, err := s.controller(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.releaseController(c)
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	items, err := s.queueMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	item, ok := findQueuedMessage(items, queueID)
+	if !ok || item["editable"] != true {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	c.mu.Lock()
+	if err := s.ensureLive(ctx, c); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	live := c.live
+	if err := s.validateLive(c); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	c.mu.Unlock()
+	steerer, ok := live.(interface {
+		Steer(context.Context, string, string, string, string, []string) error
+	})
+	if !ok {
+		return nil, errors.New("PROTOCOL_UNSUPPORTED")
+	}
+	text := item["text"].(string)
+	images := item["images"].([]string)
+	if err := steerer.Steer(ctx, expectedTurnID, queueID, item["clientMessageId"].(string), text, images); err != nil {
+		if errors.Is(err, desktopipc.ErrStaleTurn) {
+			return nil, errors.New("STALE_TURN")
+		}
+		return nil, err
+	}
+	deleted, err := s.queue.Delete(ctx, threadID, queueID)
+	if err != nil {
+		return nil, &desktopipc.CallError{Cause: err, Outcome: "unknown"}
+	}
+	if !deleted {
+		remaining, listErr := s.queueMessages(ctx, threadID)
+		if listErr == nil {
+			if _, exists := findQueuedMessage(remaining, queueID); !exists {
+				return remaining, nil
+			}
+		}
+		return nil, &desktopipc.CallError{Cause: ErrNativeShape, Outcome: "unknown"}
+	}
+	return s.queueMessages(ctx, threadID)
 }
 
 func (s *Service) Close() {

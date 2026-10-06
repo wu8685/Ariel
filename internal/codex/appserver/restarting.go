@@ -6,8 +6,9 @@ import (
 	"time"
 )
 
-// ReadOnlyEndpoint is one disposable App Server child. No mutation method is
-// routed through this wrapper; Desktop owner IPC remains mutation authority.
+// ReadOnlyEndpoint is one disposable App Server child. In addition to reads,
+// RestartingRPC admits only durable queue coordination mutations. It never
+// starts or steers a turn; Desktop owner IPC remains execution authority.
 type ReadOnlyEndpoint interface {
 	RPC
 	Done() <-chan struct{}
@@ -95,8 +96,11 @@ func (r *RestartingRPC) invalidate(generation uint64) {
 }
 
 func (r *RestartingRPC) Call(ctx context.Context, method string, params any, result any) error {
+	retryable := true
 	switch method {
-	case "thread/list", "thread/search", "thread/read", "thread/turns/list", "thread/items/list":
+	case "thread/list", "thread/search", "thread/read", "thread/turns/list", "thread/items/list", "thread/queue/list":
+	case "thread/queue/add", "thread/queue/update", "thread/queue/delete", "thread/queue/reorder":
+		retryable = false
 	default:
 		return ErrProtocol
 	}
@@ -112,8 +116,11 @@ func (r *RestartingRPC) Call(ctx context.Context, method string, params any, res
 		select {
 		case <-endpoint.Done():
 			r.invalidate(generation)
-			if attempt == 0 && ctx.Err() == nil {
+			if retryable && attempt == 0 && ctx.Err() == nil {
 				continue
+			}
+			if !retryable && ctx.Err() == nil {
+				return ErrOutcomeUnknown
 			}
 		default:
 		}

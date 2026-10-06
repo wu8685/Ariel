@@ -18,6 +18,9 @@ describe("thread stream state", () => {
     expect(canSend(idle, true, false, "hello")).toBe(true);
     expect(canSend(readOnly, true, false, "hello")).toBe(true);
     expect(canSend({ ...idle, pendingInteractions: [{ interactionId: "pending" }] }, true, false, "hello")).toBe(false);
+    expect(canSend(thread, true, false, "follow up", 0, true)).toBe(true);
+    expect(canSend({ ...thread, pendingInteractions: [{ interactionId: "pending" }] }, true, false, "follow up", 0, true)).toBe(true);
+    expect(canSend(thread, true, false, "follow up", 0, false)).toBe(false);
     expect(canSend(idle, false, false, "hello")).toBe(false);
   });
   it("accepts snapshot then replaces item by ID without duplicating text", () => {

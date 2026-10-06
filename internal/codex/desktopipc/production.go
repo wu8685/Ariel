@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -183,4 +184,62 @@ func InterruptProductionTurn(ctx context.Context, c caller, owner, threadID, cwd
 		return ErrStaleTurn
 	}
 	return interruptFixtureTurn(ctx, c, owner, threadID, expectedTurnID)
+}
+
+func SteerProductionTurn(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, expectedTurnID, queuedMessageID, clientMessageID, text string, images []string) error {
+	if owner == "" || threadID == "" || cwd == "" || expectedTurnID == "" || queuedMessageID == "" || clientMessageID == "" || (strings.TrimSpace(text) == "" && len(images) == 0) {
+		return ErrProtocol
+	}
+	if !nativeCanonicalAddressable(state) {
+		return ErrNativeStateUncertain
+	}
+	var identity struct {
+		CWD      string            `json:"cwd"`
+		Requests []json.RawMessage `json:"requests"`
+	}
+	if json.Unmarshal(state, &identity) != nil || identity.CWD != cwd || identity.Requests == nil {
+		return ErrNativeStateUncertain
+	}
+	if len(identity.Requests) != 0 {
+		return ErrTurnBusy
+	}
+	status, known := nativeTurnStatus(state, expectedTurnID)
+	if !known || status != "inProgress" {
+		return ErrStaleTurn
+	}
+	input := make([]any, 0, 1+len(images))
+	if text != "" {
+		input = append(input, map[string]any{"type": "text", "text": text, "text_elements": []any{}})
+	}
+	imageAttachments := make([]any, 0, len(images))
+	for index, image := range images {
+		input = append(input, map[string]any{"type": "image", "url": image})
+		imageAttachments = append(imageAttachments, map[string]any{"id": fmt.Sprintf("%s:%d", queuedMessageID, index), "src": image})
+	}
+	restoreMessage := map[string]any{
+		"id":                    queuedMessageID,
+		"clientUserMessageId":   clientMessageID,
+		"serverQueuedMessageId": queuedMessageID,
+		"text":                  text,
+		"context": map[string]any{
+			"prompt": text, "addedFiles": []any{}, "fileAttachments": []any{}, "ideContext": nil,
+			"imageAttachments": imageAttachments,
+		},
+		"cwd": cwd, "createdAt": 0,
+	}
+	reply, err := c.Call(ctx, Request{Method: "thread-follower-steer-turn", Version: 1, TargetClientID: owner, Mutating: true, Params: map[string]any{
+		"conversationId": threadID, "clientUserMessageId": clientMessageID, "input": input, "restoreMessage": restoreMessage,
+	}})
+	if err != nil {
+		return err
+	}
+	var accepted struct {
+		Result struct {
+			TurnID string `json:"turnId"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(reply.Result, &accepted) != nil || accepted.Result.TurnID == "" || accepted.Result.TurnID != expectedTurnID {
+		return &CallError{Cause: ErrProtocol, Outcome: "unknown"}
+	}
+	return nil
 }

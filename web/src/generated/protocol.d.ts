@@ -36,6 +36,11 @@ export type Request = {
     | "thread.unsubscribe"
     | "turn.start"
     | "turn.interrupt"
+    | "queue.add"
+    | "queue.update"
+    | "queue.delete"
+    | "queue.reorder"
+    | "queue.steer"
     | "interaction.respond";
   params: {
     [k: string]: unknown;
@@ -77,6 +82,7 @@ export interface Capabilities {
   send?: boolean;
   interrupt?: boolean;
   interaction?: boolean;
+  queue?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";
@@ -140,6 +146,10 @@ export interface Thread {
   };
   turns: Turn[];
   pendingInteractions: Interaction[];
+  /**
+   * @maxItems 64
+   */
+  queuedMessages?: QueuedMessage[];
 }
 export interface Turn {
   turnId: Id;
@@ -179,6 +189,16 @@ export interface Interaction {
     question: string;
     options?: string[];
   }[];
+}
+export interface QueuedMessage {
+  queueId: Id;
+  clientMessageId: Id;
+  text: string;
+  /**
+   * @maxItems 3
+   */
+  images: [] | [string] | [string, string] | [string, string, string];
+  editable: boolean;
 }
 export interface ThreadUpdate {
   type: "event";
