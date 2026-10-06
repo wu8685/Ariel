@@ -58,6 +58,25 @@ describe("Ariel WebSocket client", () => {
       client.disconnect();
     } finally { vi.useRealTimers(); }
   });
+  it("does not replay a one-time pairing credential after an uncertain disconnect", () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeSocket[] = [];
+      const client = new ArielSocket("ws://localhost/ws", () => {
+        const socket = new FakeSocket(); sockets.push(socket);
+        return socket as unknown as WebSocket;
+      });
+      const statuses: string[] = [];
+      client.onStatus = status => statuses.push(status);
+      client.connect(`p_${"a".repeat(64)}`);
+      sockets[0].onopen?.();
+      sockets[0].close(1006);
+      vi.advanceTimersByTime(60000);
+      expect(sockets).toHaveLength(1);
+      expect(statuses.at(-1)).toBe("invalid");
+      client.disconnect();
+    } finally { vi.useRealTimers(); }
+  });
   it("waits longer for auto-load and owner mutations than ordinary reads", () => {
     expect(timeoutFor("thread.subscribe")).toBeGreaterThan(timeoutFor("thread.list"));
     expect(timeoutFor("turn.start")).toBeGreaterThan(timeoutFor("thread.list"));

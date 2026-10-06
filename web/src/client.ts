@@ -1,10 +1,11 @@
 import { validateEnvelope } from "./protocol";
 import { newRequestID } from "./ids";
 import type { ArielProtocolV1Envelope, Response } from "./generated/protocol";
+import { isPairingCredential } from "./pairing";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
-type Method = "device.list" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "interaction.respond";
+type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 export function timeoutFor(method: Method, params: Record<string, unknown> = {}): number {
@@ -122,6 +123,11 @@ export class ArielSocket {
       if (this.helloTimer) clearTimeout(this.helloTimer);
       this.failPending();
       if (event.code === 1008) {
+        this.token = "";
+        this.onStatus("invalid");
+        return;
+      }
+      if (isPairingCredential(this.token)) {
         this.token = "";
         this.onStatus("invalid");
         return;

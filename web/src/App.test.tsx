@@ -29,6 +29,7 @@ beforeEach(() => {
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
   BrowserSocket.sockets = [];
   sessionStorage.clear();
+  window.history.replaceState({}, "", "/");
 });
 
 afterEach(() => {
@@ -655,6 +656,53 @@ describe("Ariel app interactions", () => {
     expect(BrowserSocket.sockets).toHaveLength(2);
     BrowserSocket.sockets[1].onopen?.(new Event("open"));
     expect(JSON.parse(BrowserSocket.sockets[1].sent[0]).token).toBe(relaySession);
+  });
+
+  it("requires explicit mobile confirmation before exchanging a scrubbed pairing fragment", async () => {
+    const pairing = `p_${"b".repeat(64)}`;
+    window.history.replaceState({}, "", `/#pair=${pairing}`);
+    render(<App />);
+    expect(screen.getByRole("heading", { name: "确认登录 Ariel" })).toBeTruthy();
+    expect(window.location.hash).toBe("");
+    expect([...Array(sessionStorage.length)].map((_, index) => sessionStorage.getItem(sessionStorage.key(index)!))).not.toContain(pairing);
+    expect(BrowserSocket.sockets).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "确认在此手机登录" }));
+    expect(BrowserSocket.sockets).toHaveLength(1);
+    BrowserSocket.sockets[0].onopen?.(new Event("open"));
+    expect(JSON.parse(BrowserSocket.sockets[0].sent[0]).token).toBe(pairing);
+    BrowserSocket.sockets[0].message({ type: "hello.ok", v: 1, connectionId: "paired", relayEpoch: "e", sessionToken: relaySession });
+    await waitFor(() => expect(sessionStorage.getItem("ariel.web-session.v1")).toBe(relaySession));
+    expect(document.body.textContent).not.toContain(pairing);
+    expect(screen.queryByRole("heading", { name: "确认登录 Ariel" })).toBeNull();
+  });
+
+  it("lets a scanned phone cancel without making a connection", () => {
+    const pairing = `p_${"c".repeat(64)}`;
+    window.history.replaceState({}, "", `/#pair=${pairing}`);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(BrowserSocket.sockets).toHaveLength(0);
+    expect(screen.getByLabelText("6 位连接码")).toBeTruthy();
+  });
+
+  it("creates a local QR invitation and reports one-time consumption", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    fireEvent.click(await screen.findByRole("button", { name: "手机扫码登录" }));
+    const pairRequests = () => socket.sent.map(value => JSON.parse(value)).filter(value => value.method?.startsWith("auth.pair."));
+    await waitFor(() => expect(pairRequests()).toHaveLength(1));
+    expect(pairRequests()[0].method).toBe("auth.pair.create");
+    const pairing = `p_${"d".repeat(64)}`;
+    act(() => socket.message({ type: "response", v: 1, requestId: pairRequests()[0].requestId, outcome: "accepted", data: { credential: pairing, expiresAt: new Date(Date.now() + 120_000).toISOString() } }));
+    const image = await screen.findByRole("img", { name: "手机扫码登录二维码" });
+    expect(image.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+    expect(image.getAttribute("src")).not.toContain(pairing);
+    expect(document.body.textContent).not.toContain(pairing);
+    act(() => socket.message({ type: "event", v: 1, event: "auth.pair.consumed" }));
+    expect(await screen.findByText("手机已登录")).toBeTruthy();
   });
 
   it("clears a rejected saved session and explicit disconnect", async () => {

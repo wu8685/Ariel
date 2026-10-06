@@ -41,6 +41,7 @@
 | 0024 | [侧栏搜索原始 Codex 会话](0024-session-search.md) | Implemented（自动／真实 Codex／本机部署已验；手机待验） | 当前设备内搜索标题与可检索消息，摘要与分页，旧请求隔离 |
 | 0025 | [最低版本兼容门禁与运行期失败](0025-minimum-version-compatibility.md) | Implemented（自动／当前 Desktop 只读探针／LAN 启动已验） | 版本达到最低门槛即可启动；私有 IPC 不兼容时按当前操作显式失败且不重放 |
 | 0026 | [一键发现局域网地址并重启本地 Ariel](0026-one-command-lan-restart.md) | Implemented（自动／真实 LAN 重启已验） | 切换局域网后保留凭据与设备身份，自动发现私有 IPv4 并安全重启本地 Relay／Agent |
+| 0027 | [二维码一次性配对登录](0027-qr-pairing-login.md) | Implemented（自动／真实 Relay 配对／本机部署已验；物理手机扫码待验） | 已登录浏览器展示短时一次性二维码；手机明确确认后获得标准 Web Session，二维码不包含 6 位 PIN |
 
 ## 设计基线
 

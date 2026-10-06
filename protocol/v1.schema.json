@@ -12,7 +12,8 @@
     { "$ref": "#/$defs/threadSnapshot" },
     { "$ref": "#/$defs/threadUpdate" },
     { "$ref": "#/$defs/threadError" },
-    { "$ref": "#/$defs/interactionResolved" }
+    { "$ref": "#/$defs/interactionResolved" },
+    { "$ref": "#/$defs/authPairConsumed" }
   ],
   "$defs": {
     "id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -63,10 +64,12 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
+        { "if": { "properties": { "method": { "const": "auth.pair.create" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/emptyParams" } } } },
+        { "if": { "properties": { "method": { "const": "auth.pair.cancel" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/pairCancelParams" } } } },
         { "if": { "properties": { "method": { "const": "device.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/emptyParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/listParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
@@ -81,6 +84,10 @@
       ]
     },
     "emptyParams": { "type": "object", "additionalProperties": false },
+    "pairCancelParams": {
+      "type": "object", "additionalProperties": false, "required": ["credential"],
+      "properties": { "credential": { "type": "string", "pattern": "^p_[0-9a-f]{64}$" } }
+    },
     "listParams": {
       "type": "object", "additionalProperties": false,
       "properties": { "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "searchTerm": { "type": "string", "minLength": 1, "maxLength": 128 } }
@@ -253,6 +260,13 @@
         "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "interaction.resolved" },
         "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
         "interactionId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "authPairConsumed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "auth.pair.consumed" }
       }
     }
   }

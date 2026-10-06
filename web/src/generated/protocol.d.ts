@@ -15,7 +15,8 @@ export type ArielProtocolV1Envelope =
   | ThreadSnapshot
   | ThreadUpdate
   | ThreadError
-  | InteractionResolved;
+  | InteractionResolved
+  | AuthPairConsumed;
 export type Id = string;
 export type Request = {
   type: "request";
@@ -23,6 +24,8 @@ export type Request = {
   requestId: RequestId;
   deviceId: Id;
   method:
+    | "auth.pair.create"
+    | "auth.pair.cancel"
     | "device.list"
     | "thread.list"
     | "thread.read"
@@ -206,4 +209,9 @@ export interface InteractionResolved {
   deviceId: Id;
   threadId: Id;
   interactionId: Id;
+}
+export interface AuthPairConsumed {
+  type: "event";
+  v: 1;
+  event: "auth.pair.consumed";
 }

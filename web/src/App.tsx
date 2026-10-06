@@ -8,6 +8,7 @@ import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryStat
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
+import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction } from "./generated/protocol";
 import "./interaction.css";
 
@@ -19,6 +20,8 @@ const mobileComposerMinHeight = 44;
 const mobileComposerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
 const latestFollowDistance = 80;
 type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: number; scrollHeight: number };
+type PhonePairing = { credential: string; phase: "confirm" | "connecting" | "error" };
+type PairingInvite = { status: "loading" | "waiting" | "consumed" | "expired" | "error"; credential: string; expiresAt: number; qr: string; message: string };
 
 function readingKey(deviceId: string, threadId: string): string { return `${deviceId}\u0000${threadId}`; }
 
@@ -67,9 +70,57 @@ function BrandMark() {
   </svg>;
 }
 
-export function App() {
+function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: PhonePairing; origin: string; onConfirm: () => void; onCancel: () => void }) {
+  const error = pairing.phase === "error";
+  return <section className="connect-panel pairing-confirm" aria-label="确认扫码登录">
+    <div><span className="eyebrow">ONE-TIME PAIRING</span><h1>确认登录 Ariel</h1><p>你正在登录 <strong>{origin}</strong>。只有你亲自扫描并确认时才继续。</p></div>
+    <div className="pairing-confirm-card">
+      <div className="pairing-phone-mark" aria-hidden="true">⌁</div>
+      <h2>{error ? "二维码已失效" : pairing.phase === "connecting" ? "正在建立安全会话…" : "在这台手机上继续？"}</h2>
+      <p>{error ? "配对可能已过期、取消、使用过，或连接结果未知。请重新扫码。" : "确认后会直接进入 Ariel；6 位连接码不会传到这台手机。"}</p>
+      <div className="pairing-actions">
+        {!error && <button className="primary" type="button" onClick={onConfirm} disabled={pairing.phase === "connecting"}>确认在此手机登录</button>}
+        <button className="secondary" type="button" onClick={onCancel}>{error ? "使用连接码登录" : "取消"}</button>
+      </div>
+      <small>一次性凭据不可重放；仅在可信局域网使用。</small>
+    </div>
+  </section>;
+}
+
+function PairingDialog({ invite, seconds, onClose, onRegenerate }: { invite: PairingInvite; seconds: number; onClose: () => void; onRegenerate: () => void }) {
+  return <div className="pairing-backdrop" role="presentation">
+    <section className="pairing-dialog" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
+      <button className="pairing-close icon-button" type="button" aria-label="关闭扫码登录" onClick={onClose}>×</button>
+      <span className="eyebrow">ONE-TIME PAIRING</span>
+      <h2 id="pairing-title">手机扫码登录</h2>
+      {invite.status === "loading" && <div className="pairing-state" role="status">正在生成一次性二维码…</div>}
+      {invite.status === "waiting" && <>
+        <div className="pairing-qr"><img src={invite.qr} alt="手机扫码登录二维码" /></div>
+        <p>用手机系统相机扫描，然后在手机上点击确认。</p>
+        <strong className="pairing-countdown">{seconds} 秒后失效</strong>
+        <small>二维码不包含 6 位连接码；旁观者抢先扫描仍可能占用本次邀请。</small>
+      </>}
+      {invite.status === "consumed" && <div className="pairing-state success"><strong>手机已登录</strong><span>这张二维码已经失效，不能再次使用。</span></div>}
+      {invite.status === "expired" && <div className="pairing-state"><strong>二维码已过期</strong><span>请重新生成后再扫描。</span></div>}
+      {invite.status === "error" && <div className="pairing-state" role="alert"><strong>{invite.message}</strong></div>}
+      <div className="pairing-actions">
+        {(invite.status === "expired" || invite.status === "error") && <button className="primary" type="button" onClick={onRegenerate}>重新生成</button>}
+        <button className="secondary" type="button" onClick={onClose}>关闭</button>
+      </div>
+    </section>
+  </div>;
+}
+
+export function App({ initialPairingCredential }: { initialPairingCredential?: string } = {}) {
   const client = useMemo(() => new ArielSocket(wsURL), []);
   const webSession = useMemo(() => new WebSession(() => window.sessionStorage), []);
+  const [phonePairing, setPhonePairing] = useState<PhonePairing | null>(() => {
+    const credential = initialPairingCredential ?? takePairingCredential(window.location, window.history);
+    return credential ? { credential, phase: "confirm" } : null;
+  });
+  const pairingAttempt = useRef(false);
+  const [pairingInvite, setPairingInvite] = useState<PairingInvite | null>(null);
+  const [pairingSeconds, setPairingSeconds] = useState(0);
   const [token, setToken] = useState("");
   const [sessionExpired, setSessionExpired] = useState(false);
   const savedSessionAttempt = useRef(false);
@@ -120,6 +171,7 @@ export function App() {
   const lastPaint = useRef<{ key: string; seq: number; marker: ContentMarker | null }>({ key: "", seq: -1, marker: null });
   const permissionInfoRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  const pairingGeneration = useRef(0);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
   const mock = device?.adapterVersion?.startsWith("mock-") ?? false;
@@ -166,7 +218,59 @@ export function App() {
   }
 
   function disconnect() {
-    webSession.disconnect(); savedSessionAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
+    closePairingInvite();
+    webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
+  }
+
+  function cancelPairingCredential(credential: string) {
+    if (isPairingCredential(credential) && status === "ready") void client.request("auth.pair.cancel", "relay", { credential });
+  }
+
+  function closePairingInvite() {
+    pairingGeneration.current++;
+    if (pairingInvite?.status === "waiting") cancelPairingCredential(pairingInvite.credential);
+    setPairingInvite(null);
+  }
+
+  async function openPairingInvite() {
+    const generation = ++pairingGeneration.current;
+    if (pairingInvite?.status === "waiting") cancelPairingCredential(pairingInvite.credential);
+    setPairingInvite({ status: "loading", credential: "", expiresAt: 0, qr: "", message: "" });
+    const response = await client.request("auth.pair.create", "relay", {});
+    if (generation !== pairingGeneration.current) {
+      const staleCredential = response.data?.credential;
+      if (typeof staleCredential === "string") cancelPairingCredential(staleCredential);
+      return;
+    }
+    const credential = response.data?.credential;
+    const expiresAtText = response.data?.expiresAt;
+    const expiresAt = typeof expiresAtText === "string" ? Date.parse(expiresAtText) : Number.NaN;
+    if (response.outcome !== "accepted" || typeof credential !== "string" || !isPairingCredential(credential) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      setPairingInvite({ status: "error", credential: "", expiresAt: 0, qr: "", message: "无法创建配对，请重试。" });
+      return;
+    }
+    try {
+      const qr = await pairingQRCode(pairingURL(window.location.origin, credential));
+      if (generation !== pairingGeneration.current) { cancelPairingCredential(credential); return; }
+      setPairingInvite({ status: "waiting", credential, expiresAt, qr, message: "" });
+    } catch {
+      cancelPairingCredential(credential);
+      setPairingInvite({ status: "error", credential: "", expiresAt: 0, qr: "", message: "二维码生成失败，请重试。" });
+    }
+  }
+
+  function confirmPhonePairing() {
+    if (!phonePairing || phonePairing.phase !== "confirm") return;
+    pairingAttempt.current = true;
+    savedSessionAttempt.current = false;
+    setPhonePairing({ ...phonePairing, phase: "connecting" });
+    client.connect(phonePairing.credential);
+  }
+
+  function cancelPhonePairing() {
+    pairingAttempt.current = false;
+    client.disconnect();
+    setPhonePairing(null);
   }
 
   async function refreshDevices(): Promise<Device[]> {
@@ -283,13 +387,18 @@ export function App() {
       setStatus(next);
       if (next === "invalid") {
         webSession.rejected();
-        if (savedSessionAttempt.current) setSessionExpired(true);
+        if (pairingAttempt.current) {
+          setPhonePairing(current => current ? { credential: "", phase: "error" } : current);
+        } else if (savedSessionAttempt.current) setSessionExpired(true);
+        pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory(); }
+      if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
       if (sessionToken) webSession.accepted(sessionToken);
+      if (pairingAttempt.current) setPhonePairing(null);
+      pairingAttempt.current = false;
       savedSessionAttempt.current = Boolean(sessionToken);
       setSessionExpired(false);
       expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory();
@@ -297,6 +406,10 @@ export function App() {
     };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
       if (event.type !== "event") return;
+      if (event.event === "auth.pair.consumed") {
+        setPairingInvite(current => current?.status === "waiting" ? { ...current, status: "consumed", credential: "", qr: "" } : current);
+        return;
+      }
       if (event.event === "device.status") {
         if (!event.agentOnline && event.deviceId === selection.current.deviceId) {
           rememberReadingPosition();
@@ -341,10 +454,27 @@ export function App() {
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
       }
     };
-    const saved = webSession.saved();
-    if (saved) { savedSessionAttempt.current = true; client.connect(saved); }
+    if (!phonePairing) {
+      const saved = webSession.saved();
+      if (saved) { savedSessionAttempt.current = true; client.connect(saved); }
+    }
     return () => client.disconnect();
   }, [client]);
+
+  useEffect(() => {
+    if (pairingInvite?.status !== "waiting") { setPairingSeconds(0); return; }
+    const tick = () => {
+      const seconds = Math.max(0, Math.ceil((pairingInvite.expiresAt - Date.now()) / 1000));
+      setPairingSeconds(seconds);
+      if (seconds === 0) {
+        cancelPairingCredential(pairingInvite.credential);
+        setPairingInvite(current => current?.credential === pairingInvite.credential ? { ...current, status: "expired", credential: "", qr: "" } : current);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [pairingInvite?.status, pairingInvite?.credential, pairingInvite?.expiresAt]);
 
   useEffect(() => {
     pendingSelect.current++;
@@ -587,9 +717,9 @@ export function App() {
   return <div className={`app-shell ${status === "ready" ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><BrandMark /><span>Ariel</span><small>Codex 随身工作台</small></div>
-      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="text-button" onClick={disconnect}>断开</button></div>
+      <div className="mast-actions">{status === "ready" && <button className="text-button pair-entry" type="button" onClick={() => void openPairingInvite()}>手机扫码登录</button>}<span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="text-button" onClick={disconnect}>断开</button></div>
     </header>
-    {status !== "ready" && <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>}
+    {status !== "ready" && (phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay"><div><span className="eyebrow">PRIVATE ACCESS</span><h1>继续你的工作，<br />不必守在电脑前。</h1><p>输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>)}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
@@ -632,6 +762,7 @@ export function App() {
             </div></div></div></div>
       </main>
     </div>
+    {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
   </div>;
 }
 

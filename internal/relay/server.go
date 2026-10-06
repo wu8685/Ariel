@@ -33,7 +33,9 @@ type Config struct {
 
 const maxWebSubscriptions = 32
 const maxWebSessions = 32
+const maxWebPairings = 8
 const webSessionLifetime = 24 * time.Hour
+const webPairingLifetime = 2 * time.Minute
 
 type Server struct {
 	cfg            Config
@@ -44,11 +46,18 @@ type Server struct {
 	webPINFailures int
 	webSessions    map[[32]byte]time.Time
 	sessionOrder   [][32]byte
+	pairings       map[[32]byte]pairing
+	pairingByWeb   map[*peer][32]byte
 	agents         map[string]*peer
 	webs           map[*peer]struct{}
 	routes         map[string]*route
 	byWeb          map[*peer]map[string]string
 	subs           map[*peer]map[string]*subscription
+}
+
+type pairing struct {
+	creator   *peer
+	expiresAt time.Time
 }
 
 type route struct {
@@ -120,7 +129,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = 5 * time.Second
 	}
-	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
+	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
 }
 
 func ValidWebPIN(pin string) bool {
@@ -135,57 +144,110 @@ func ValidWebPIN(pin string) bool {
 	return true
 }
 
-func (s *Server) authorize(role, token string) (string, bool) {
+func pairingKey(token string) ([32]byte, bool) {
+	if len(token) != 66 || !strings.HasPrefix(token, "p_") {
+		return [32]byte{}, false
+	}
+	if _, err := hex.DecodeString(token[2:]); err != nil {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256([]byte(token)), true
+}
+
+func (s *Server) removePairingLocked(key [32]byte) {
+	invitation, ok := s.pairings[key]
+	if !ok {
+		return
+	}
+	delete(s.pairings, key)
+	if current, ok := s.pairingByWeb[invitation.creator]; ok && current == key {
+		delete(s.pairingByWeb, invitation.creator)
+	}
+}
+
+func (s *Server) cleanExpiredPairingsLocked() {
+	now := s.now()
+	for key, invitation := range s.pairings {
+		if !now.Before(invitation.expiresAt) {
+			s.removePairingLocked(key)
+		}
+	}
+}
+
+func (s *Server) issueWebSessionLocked() (string, bool) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", false
+	}
+	sessionToken := "s_" + hex.EncodeToString(bytes)
+	key := sha256.Sum256([]byte(sessionToken))
+	active := s.sessionOrder[:0]
+	for _, prior := range s.sessionOrder {
+		if _, ok := s.webSessions[prior]; ok {
+			active = append(active, prior)
+		}
+	}
+	s.sessionOrder = active
+	s.webSessions[key] = s.now().Add(webSessionLifetime)
+	s.sessionOrder = append(s.sessionOrder, key)
+	for len(s.webSessions) > maxWebSessions {
+		oldest := s.sessionOrder[0]
+		s.sessionOrder = s.sessionOrder[1:]
+		delete(s.webSessions, oldest)
+	}
+	return sessionToken, true
+}
+
+func (s *Server) authorize(role, token string) (string, *peer, bool) {
 	if role == "agent" {
-		return "", subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
+		return "", nil, subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
 	}
 	if role != "web" {
-		return "", false
+		return "", nil, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if strings.HasPrefix(token, "p_") {
+		key, valid := pairingKey(token)
+		if !valid {
+			return "", nil, false
+		}
+		invitation, ok := s.pairings[key]
+		if !ok || !s.now().Before(invitation.expiresAt) {
+			s.removePairingLocked(key)
+			return "", nil, false
+		}
+		if _, active := s.webs[invitation.creator]; !active {
+			s.removePairingLocked(key)
+			return "", nil, false
+		}
+		s.removePairingLocked(key)
+		sessionToken, ok := s.issueWebSessionLocked()
+		return sessionToken, invitation.creator, ok
+	}
 	if s.webPINFailures >= 10 {
-		return "", false
+		return "", nil, false
 	}
 	if strings.HasPrefix(token, "s_") {
 		if len(token) != 66 {
-			return "", false
+			return "", nil, false
 		}
 		if _, err := hex.DecodeString(token[2:]); err != nil {
-			return "", false
+			return "", nil, false
 		}
 		key := sha256.Sum256([]byte(token))
 		if expiry, ok := s.webSessions[key]; ok && s.now().Before(expiry) {
-			return token, true
+			return token, nil, true
 		}
 		delete(s.webSessions, key)
-		return "", false
+		return "", nil, false
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.WebPIN)) == 1 {
-		bytes := make([]byte, 32)
-		if _, err := rand.Read(bytes); err != nil {
-			return "", false
-		}
-		sessionToken := "s_" + hex.EncodeToString(bytes)
-		key := sha256.Sum256([]byte(sessionToken))
-		active := s.sessionOrder[:0]
-		for _, prior := range s.sessionOrder {
-			if _, ok := s.webSessions[prior]; ok {
-				active = append(active, prior)
-			}
-		}
-		s.sessionOrder = active
-		s.webSessions[key] = s.now().Add(webSessionLifetime)
-		s.sessionOrder = append(s.sessionOrder, key)
-		for len(s.webSessions) > maxWebSessions {
-			oldest := s.sessionOrder[0]
-			s.sessionOrder = s.sessionOrder[1:]
-			delete(s.webSessions, oldest)
-		}
-		return sessionToken, true
+		sessionToken, ok := s.issueWebSessionLocked()
+		return sessionToken, nil, ok
 	}
 	s.webPINFailures++
-	return "", false
+	return "", nil, false
 }
 
 func (s *Server) Handler() http.Handler {
@@ -231,7 +293,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
-	sessionToken, authorized := s.authorize(hello.Role, hello.Token)
+	sessionToken, pairingCreator, authorized := s.authorize(hello.Role, hello.Token)
 	if !authorized {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
@@ -256,6 +318,9 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := p.send(ctx, ack); err != nil {
 		return
+	}
+	if pairingCreator != nil {
+		_ = pairingCreator.send(ctx, map[string]any{"type": "event", "v": 1, "event": "auth.pair.consumed"})
 	}
 	if p.role == "agent" {
 		s.broadcastDevice(p, true)
@@ -350,6 +415,9 @@ func (s *Server) removePeer(p *peer) {
 			delete(s.agents, p.deviceID)
 		}
 	} else {
+		if key, ok := s.pairingByWeb[p]; ok {
+			s.removePairingLocked(key)
+		}
 		delete(s.webs, p)
 		delete(s.byWeb, p)
 	}
@@ -365,6 +433,58 @@ func (s *Server) removePeer(p *peer) {
 	if p.role == "agent" {
 		s.broadcastDevice(p, false)
 	}
+}
+
+func (s *Server) createPairing(ctx context.Context, web *peer, requestID string) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		_ = web.send(ctx, responseError(requestID, "unknown", "OUTCOME_UNKNOWN", "pairing credential generation failed"))
+		return
+	}
+	credential := "p_" + hex.EncodeToString(bytes)
+	key := sha256.Sum256([]byte(credential))
+	s.mu.Lock()
+	s.cleanExpiredPairingsLocked()
+	if previous, ok := s.pairingByWeb[web]; ok {
+		s.removePairingLocked(previous)
+	}
+	if len(s.pairings) >= maxWebPairings {
+		s.mu.Unlock()
+		_ = web.send(ctx, responseError(requestID, "rejected", "OVERLOADED", "too many pending pairing invitations"))
+		return
+	}
+	expiresAt := s.now().Add(webPairingLifetime)
+	s.pairings[key] = pairing{creator: web, expiresAt: expiresAt}
+	s.pairingByWeb[web] = key
+	s.mu.Unlock()
+	_ = web.send(ctx, map[string]any{
+		"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted",
+		"data": map[string]any{"credential": credential, "expiresAt": expiresAt.UTC().Format(time.RFC3339Nano)},
+	})
+}
+
+func (s *Server) cancelPairing(ctx context.Context, web *peer, requestID string, params json.RawMessage) {
+	var request struct {
+		Credential string `json:"credential"`
+	}
+	if json.Unmarshal(params, &request) != nil {
+		_ = web.send(ctx, responseError(requestID, "rejected", "INVALID_ARGUMENT", "invalid pairing credential"))
+		return
+	}
+	key, valid := pairingKey(request.Credential)
+	cancelled := false
+	if valid {
+		s.mu.Lock()
+		if invitation, ok := s.pairings[key]; ok && invitation.creator == web {
+			s.removePairingLocked(key)
+			cancelled = true
+		}
+		s.mu.Unlock()
+	}
+	_ = web.send(ctx, map[string]any{
+		"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted",
+		"data": map[string]any{"cancelled": cancelled},
+	})
 }
 
 func sendUnsubscribe(ctx context.Context, agent *peer, subscriptionID string) error {
@@ -407,6 +527,18 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 	}
 	if p.role != "web" || msg.Type != "request" {
 		return false
+	}
+	if msg.Method == "auth.pair.create" || msg.Method == "auth.pair.cancel" {
+		if msg.DeviceID != "relay" {
+			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "INVALID_ARGUMENT", "pairing requests target relay"))
+			return true
+		}
+		if msg.Method == "auth.pair.create" {
+			s.createPairing(ctx, p, msg.RequestID)
+		} else {
+			s.cancelPairing(ctx, p, msg.RequestID, msg.Params)
+		}
+		return true
 	}
 	if msg.Method != "device.list" {
 		return s.forwardRequest(ctx, p, msg.RequestID, msg.DeviceID, msg.Method, msg.Params)
