@@ -245,6 +245,22 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.steer")[0].requestId, outcome: "accepted", data: { queuedMessages: [] } }));
     expect(screen.queryByLabelText("排队的后续输入")).toBeNull();
   });
+
+  it("keeps a queued item and explains an unsupported guide without mentioning history pagination", async () => {
+    const queued = { queueId: "queue-one", clientMessageId: "message-one", text: "继续检查", images: [] as [], editable: true };
+    const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active-turn", status: "inProgress", items: [] }], queuedMessages: [queued] };
+    const { socket, requests } = await openFixture(running, true);
+
+    fireEvent.click(screen.getByRole("button", { name: "引导：继续检查" }));
+    await waitFor(() => expect(requests("queue.steer")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("queue.steer")[0].requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "PROTOCOL_UNSUPPORTED" } }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("立即引导");
+    expect(alert.textContent).toContain("排队项仍保留");
+    expect(alert.textContent).not.toContain("历史分页");
+    expect(screen.getByRole("button", { name: "引导：继续检查" })).toBeTruthy();
+  });
   it("falls back to explicitly read-only paged history when owner snapshot is oversized", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

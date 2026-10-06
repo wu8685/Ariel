@@ -47,6 +47,26 @@ type leasedLive struct {
 	release func()
 }
 
+func (l *leasedLive) StartWithImages(ctx context.Context, clientMessageID, text string, images []string) (string, error) {
+	capable, ok := l.Live.(interface {
+		StartWithImages(context.Context, string, string, []string) (string, error)
+	})
+	if !ok {
+		return "", desktopipc.ErrProtocol
+	}
+	return capable.StartWithImages(ctx, clientMessageID, text, images)
+}
+
+func (l *leasedLive) Steer(ctx context.Context, expectedTurnID, queuedMessageID, clientMessageID, text string, images []string) error {
+	capable, ok := l.Live.(interface {
+		Steer(context.Context, string, string, string, string, []string) error
+	})
+	if !ok {
+		return desktopipc.ErrProtocol
+	}
+	return capable.Steer(ctx, expectedTurnID, queuedMessageID, clientMessageID, text, images)
+}
+
 func (l *leasedLive) Close() error {
 	err := l.Live.Close()
 	l.release()

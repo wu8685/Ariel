@@ -9,6 +9,21 @@ import (
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 )
 
+type mutationCapableLive struct {
+	*fakeLive
+	started, steered bool
+}
+
+func (l *mutationCapableLive) StartWithImages(context.Context, string, string, []string) (string, error) {
+	l.started = true
+	return "image-turn", nil
+}
+
+func (l *mutationCapableLive) Steer(context.Context, string, string, string, string, []string) error {
+	l.steered = true
+	return nil
+}
+
 func TestProductionOwnerTimeoutAllowsSlowDesktopReceipt(t *testing.T) {
 	if productionIPCOptions("thread").RequestTimeout < 30*time.Second {
 		t.Fatal("native owner timeout too short")
@@ -75,5 +90,37 @@ func TestLargeFollowerFallbackRetriesOnlyFrameOverflowAndReleasesLease(t *testin
 	})
 	if !errors.Is(err, desktopipc.ErrProtocol) || len(attempts) != 1 {
 		t.Fatalf("protocol error must not retry: attempts=%v err=%v", attempts, err)
+	}
+}
+
+func TestLargeFollowerFallbackPreservesOwnerMutationCapabilities(t *testing.T) {
+	capable := &mutationCapableLive{fakeLive: &fakeLive{updates: make(chan struct{})}}
+	live, err := openFollowerWithFallback(func(large bool) (Live, error) {
+		if !large {
+			return nil, desktopipc.ErrFrameTooLarge
+		}
+		return capable, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	imageStarter, ok := live.(interface {
+		StartWithImages(context.Context, string, string, []string) (string, error)
+	})
+	if !ok {
+		t.Fatal("large follower erased StartWithImages capability")
+	}
+	if _, err := imageStarter.StartWithImages(context.Background(), "client", "", []string{"data:image/png;base64,AAAA"}); err != nil || !capable.started {
+		t.Fatalf("large follower did not forward StartWithImages: %v", err)
+	}
+	steerer, ok := live.(interface {
+		Steer(context.Context, string, string, string, string, []string) error
+	})
+	if !ok {
+		t.Fatal("large follower erased Steer capability")
+	}
+	if err := steerer.Steer(context.Background(), "turn", "queue", "client", "guide", nil); err != nil || !capable.steered {
+		t.Fatalf("large follower did not forward Steer: %v", err)
 	}
 }

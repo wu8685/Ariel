@@ -1,6 +1,6 @@
 # 0031：Codex 原生后续输入队列
 
-- 状态：Implemented（自动测试与真实 Codex queue CRUD／Desktop owner Steer 已验；物理手机拖拽待用户复验）。
+- 状态：Implemented（自动测试与真实 Codex queue CRUD／Desktop owner Steer 已验；large follower 能力透传回归已验；物理手机拖拽待用户复验）。
 - 背景：Codex Desktop 在当前 turn 运行期间允许继续提交后续输入，并对排队项执行立即引导、编辑、删除和重排。Ariel 当前在运行期间只允许写草稿，发送按钮被禁用。
 - 依赖：沿用 0004 的 Desktop owner 写入边界、0013 的有界同步和 0025 的最低版本兼容原则。
 
@@ -42,6 +42,7 @@
 3. 对 queue mutation 禁止自动重试。连接在结果确认前中断时返回 `unknown/OUTCOME_UNKNOWN`，Web 保留草稿或编辑态并要求重新同步；不得猜测成功或重放。
 4. `queue.reorder` 必须精确包含当前 queue 的每个 ID 一次。缺失、重复、外来或过期 ID 均拒绝，避免旧 Web 覆盖较新的队列变化。
 5. queue item 和 thread ID 必须在操作前后匹配；Steer 必须匹配当前 `expectedTurnId`。active turn 已变化时返回 `STALE_TURN`，排队项保持不变。
+6. owner 历史超过普通 IPC frame、切换到 64 MiB large follower 时，租约包装层必须完整透传 `Steer` 与带图片发送能力；不得因包装类型擦除可选 mutation interface 而误报 `PROTOCOL_UNSUPPORTED`。Steer 失败时 durable queue item 必须继续保留。
 
 ## 容量与内容边界
 
@@ -56,11 +57,13 @@
 3. Service／协议／Relay red tests：能力位、queuedMessages、五个新 method、完整 reorder、跨 thread queue ID、防重复 client ID、响应和订阅更新均有覆盖。
 4. Web red tests：运行中发送变为 queue.add；成功清空、失败保留；拖拽手柄的键盘重排、更多菜单编辑、删除、引导；无 capability 时保持草稿模式；手机宽度无横向溢出并保留可访问名称。
 5. 回归：Go race tests、`go vet`、Web tests 和 production build 全部通过；隔离 fixture 已验证 queue add／list／update／delete／reorder，以及 queue item 经 Desktop owner Steer、收到原生 `steeringUserMessage` 确认后再从 durable queue 删除。最后重启本地 Ariel，确认 LAN 页面与 health endpoint。
+6. 大会话回归：强制普通 follower 发生 frame overflow 并进入 large follower，确认包装后的 owner 仍可执行 Steer；Web 对未来真实不兼容显示“立即引导不受支持且排队项仍保留”，不得再误写成历史分页失败。
 
 ## 实现说明
 
 - Ariel 不自行复制一份队列：Web 展示和编辑的是 Codex durable queue，跨浏览器或 Desktop 的变化会以原生状态为准。
 - “引导”通过 Desktop owner 私有 IPC 提交并逐字段确认 `steeringUserMessage`；只有确认成功后才删除对应 durable queue item，避免消息丢失。
+- large follower 的租约包装器显式转发 `Steer` 和 `StartWithImages`，避免 Go interface 包装擦除底层扩展能力。
 - experimental queue mutation 不自动重试；连接在结果未知时显式返回 `OUTCOME_UNKNOWN`，避免重复排队、误删或旧顺序覆盖新顺序。
 - 页面流式更新期间只按 1 秒有界频率回读 queue，读取发生在会话状态锁之外，避免 token streaming 反复阻塞布局与交互。
 

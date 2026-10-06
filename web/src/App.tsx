@@ -871,7 +871,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const response = await client.request(method, targetDevice, { threadId: targetThread, ...params });
     setQueueWorking("");
     if (pendingSelect.current !== targetEpoch || selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread) return;
-    if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+    if (response.outcome !== "accepted") {
+      setNotice(method === "queue.steer" && response.error?.code === "PROTOCOL_UNSUPPORTED"
+        ? "当前 Codex Desktop 不支持立即引导；排队项仍保留。"
+        : errorText(response));
+      return;
+    }
     if (!applyQueueResponse(response, targetDevice, targetThread, targetEpoch)) { setNotice("队列回执格式无法确认，请等待状态同步后再操作。"); return; }
     if (params.queueId === editingQueueId) cancelQueueEdit();
   }
