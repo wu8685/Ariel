@@ -22,6 +22,8 @@ const mobileViewportMaxWidth = 800;
 const mobileComposerMinHeight = 44;
 const mobileComposerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
 const latestFollowDistance = 80;
+const queueMenuWidth = 108;
+const queueMenuRowHeight = 34;
 type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: number; scrollHeight: number };
 type PhonePairing = { credential: string; phase: "confirm" | "connecting" | "error" };
 type PairingInvite = { status: "loading" | "waiting" | "consumed" | "expired" | "error"; credential: string; expiresAt: number; qr: string; message: string };
@@ -917,8 +919,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function toggleQueueMenu(item: QueuedMessage, event: ReactMouseEvent<HTMLButtonElement>) {
     if (queueMenuId === item.queueId) { setQueueMenuId(""); return; }
     const rect = event.currentTarget.getBoundingClientRect();
-    const width = 126;
-    const estimatedHeight = (item.editable ? 3 : 2) * 36 + 12;
+    const width = queueMenuWidth;
+    const estimatedHeight = (item.editable ? 3 : 2) * queueMenuRowHeight + 10;
     const above = rect.top >= estimatedHeight + 8;
     setQueueMenuPosition({
       left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),

@@ -56,6 +56,7 @@
 | 0039 | [真实浏览器手机 UI 与截图回归](0039-real-browser-mobile-ui-regression.md) | Implemented（真实 Chromium touch、布局几何与两张截图基线已验；物理 iPhone/Safari 不在本规格验收范围内） | 用隔离 WebSocket fixture、真实 touch 事件和截图基线覆盖关键手机 UI |
 | 0040 | [兼容 bundled Codex 的原生置顶分区](0040-bundled-codex-pinned-section-compatibility.md) | Implemented（真实 Codex／自动／移动截图已验） | 在较新 `isPinned` 字段之外兼容 0.160.0 的保留 `Pinned` section，让现有置顶会话立即可见 |
 | 0041 | [会话加载标识改为可靠的蓝色矢量图](0041-vector-blue-session-loading-mark.md) | Implemented（自动／移动截图已验） | 用 `currentColor` SVG 替代可能被 Safari 渲染成绿色 emoji 的 Unicode 占位标识 |
+| 0042 | [排队项更多菜单的紧凑字体与排版](0042-compact-queue-menu-typography.md) | Implemented（自动／移动截图已验） | 修复 Portal 菜单继承断开导致的 16px 原生按钮，并统一队列区视觉层级 |
 
 ## 设计基线
 

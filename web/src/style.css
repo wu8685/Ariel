@@ -379,17 +379,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queue-handle svg { width: 15px; height: 18px; }
 .queue-content { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .queue-text { overflow: hidden; color: var(--color-text); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.queue-content small { color: var(--color-subtle); font-size: 10px; }
+.queue-content small { color: var(--color-subtle); font-size: 10px; line-height: 1.35; }
 .queue-actions { display: flex; align-items: center; gap: 1px; }
-.queue-actions button, .queue-cancel-button { min-height: 34px; padding: 4px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--color-subtle); font-size: 11px; white-space: nowrap; }
+.queue-actions button, .queue-cancel-button { min-height: 34px; padding: 4px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--color-subtle); font-size: 11px; line-height: 1; white-space: nowrap; }
 .queue-actions button:hover:not(:disabled), .queue-cancel-button:hover:not(:disabled) { background: #ffffff0a; color: var(--color-text); }
 .queue-guide-action { display: inline-flex; align-items: center; gap: 4px; }
 .queue-guide-action svg, .queue-icon-action svg { width: 17px; height: 17px; flex: none; }
 .queue-icon-action, .queue-more-action { display: grid; place-items: center; min-width: 34px; padding: 0 !important; }
 .queue-more-action { letter-spacing: 1px; line-height: 1; }
 .queue-more-wrap { position: relative; }
-.queue-menu { position: fixed; z-index: 70; display: flex; width: 126px; flex-direction: column; padding: 5px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-raised); box-shadow: 0 12px 30px #0009; }
-.queue-menu button { width: 100%; min-height: 36px; padding: 7px 10px; text-align: left; }
+.queue-menu { position: fixed; z-index: 70; display: flex; width: 108px; flex-direction: column; padding: 4px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-raised); box-shadow: 0 12px 30px #0009; font-size: 12px; line-height: 1.4; }
+.queue-menu button { width: 100%; min-height: 34px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--color-muted); font-size: inherit; line-height: inherit; text-align: left; }
+.queue-menu button:hover:not(:disabled) { background: #ffffff0a; color: var(--color-text); }
+.queue-menu button:disabled { color: var(--color-subtle); opacity: .45; }
 .composer { border: 1px solid var(--color-border-strong); background: var(--color-surface); box-shadow: 0 8px 28px #00000040; border-radius: 9px; overflow: hidden; }
 .composer:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
 .composer textarea { display: block; border: 0; resize: none; width: 100%; outline: 0; padding: 17px 18px 0; background: transparent; color: var(--color-text); min-height: 82px; }

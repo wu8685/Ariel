@@ -74,11 +74,25 @@ test("mobile queue and overlay remain clear above the composer", async ({ page }
   }));
   expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.queueBottom).toBeLessThanOrEqual(geometry.composerTop);
+  await expect(page.locator(".queue-text").first()).toHaveCSS("font-size", "12px");
+  await expect(page.locator(".composer textarea")).toHaveCSS("font-size", "14px");
 
-  await page.getByRole("button", { name: /更多选项：第二条/ }).click();
+  const moreButton = page.getByRole("button", { name: /更多选项：第二条/ });
+  await moreButton.click();
   const menu = page.getByRole("menu", { name: /排队消息选项：第二条/ });
   await expect(menu).toBeVisible();
+  const editItem = menu.getByRole("menuitem", { name: "编辑" });
+  await expect(menu).toHaveCSS("font-size", "12px");
+  await expect(editItem).toHaveCSS("font-size", "12px");
+  await expect(editItem).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   const menuBox = await menu.boundingBox();
+  const editItemBox = await editItem.boundingBox();
+  const moreButtonBox = await moreButton.boundingBox();
+  const menuRight = (menuBox?.x || 0) + (menuBox?.width || 0);
+  const moreButtonRight = (moreButtonBox?.x || 0) + (moreButtonBox?.width || 0);
+  expect(menuBox?.width || 0).toBeLessThanOrEqual(108);
+  expect(editItemBox?.height || 0).toBeGreaterThanOrEqual(34);
+  expect(Math.abs(menuRight - moreButtonRight)).toBeLessThanOrEqual(1);
   expect(menuBox?.y || 0).toBeGreaterThanOrEqual(0);
   expect((menuBox?.y || 0) + (menuBox?.height || 0)).toBeLessThanOrEqual(geometry.composerTop);
   await expect(page).toHaveScreenshot("mobile-queue-menu.png", { animations: "disabled", caret: "hide" });

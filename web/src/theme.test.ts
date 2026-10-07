@@ -100,6 +100,20 @@ describe("fixed Night appearance", () => {
     expect(main).toMatch(/configureIOSInputViewport\(document, navigator\)/);
   });
 
+  it("gives the portaled queue menu an explicit compact type scale and themed buttons", () => {
+    const menu = style.match(/\.queue-menu\s*\{([^}]*)\}/s)?.[1] || "";
+    const menuButton = style.match(/\.queue-menu button\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(menu).toMatch(/width:\s*108px/);
+    expect(menu).toMatch(/font-size:\s*12px/);
+    expect(menu).toMatch(/line-height:\s*1\.4/);
+    expect(menuButton).toMatch(/min-height:\s*34px/);
+    expect(menuButton).toMatch(/border:\s*0/);
+    expect(menuButton).toMatch(/border-radius:\s*6px/);
+    expect(menuButton).toMatch(/background:\s*transparent/);
+    expect(menuButton).toMatch(/color:\s*var\(--color-muted\)/);
+    expect(menuButton).toMatch(/font-size:\s*inherit/);
+  });
+
   it("keeps mobile approval and question fields from magnifying the page on focus", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(mobile).toMatch(/\.question input,\s*\.question select\s*\{[^}]*font-size:\s*16px;[^}]*min-width:\s*0/s);
