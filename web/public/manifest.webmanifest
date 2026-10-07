@@ -1,0 +1,23 @@
+{
+  "name": "Ariel — Codex 随身工作台",
+  "short_name": "Ariel",
+  "description": "在可信局域网中从手机继续使用 Mac 上的 Codex 会话。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "/brand/ariel-logo-wind-messenger-micro.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/ariel-logo-wind-messenger-color-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,94 +1,143 @@
 ---
 name: Ariel visual system
 source: https://github.com/wu8685/Ariel
-extracted: 2026-10-07
+adopted: 2026-10-07
+direction: wind-messenger
 ---
 
-# Ariel visual system
+# Ariel visual system — 风之信使
 
-## Source observations
+## Brand idea
 
-- Ariel is a private relay that lets a phone continue a Codex Desktop session on a Mac; the original session, working directory, and permissions remain local.
-- The shipped product uses a Night interface: black page, near-black surfaces, white text, neutral-gray brand mark, and blue interaction highlights.
-- The former in-product mark was an eight-spoke monoline asterisk. It has been fully replaced by the formal storm-harpy micro mark, rendered through `currentColor` in compact product surfaces.
-- The product posture is compact, technical, private, and persistent rather than playful or cloud-like.
+Ariel 的名称来自莎士比亚《暴风雨》中的空气精灵。他替 Prospero 在多处传令，能够化作风、火焰与飞鸟。
+
+正式 Logo 将这一典故转译为适合办公软件的「风之信使」：
+
+- 侧身、闭目、中性精灵，表达温和与专注，不再正面凝视。
+- 打开的双翼表达自由、持续运行与跨设备移动。
+- 胸前晨星是唯一 relay core，也是唯一命令源。
+- 六条风带从同一个 core 出发，通向六个接收点，表达多个 Codex App。
+- 视觉气质是浪漫、可靠、清醒，不是卡通吉祥物，也不是暗黑游戏阵营。
+
+## Canonical assets
+
+| Asset | File | Final display width | Primary use |
+| --- | --- | --- | --- |
+| Full-color master | `web/public/brand/ariel-logo-wind-messenger-color.png` | `≥ 320 px` | README hero, website hero, launch art, social visual |
+| Full-color compact PNG | `web/public/brand/ariel-logo-wind-messenger-color-512.png` | `≥ 320 px` | avatar source, social and documentation use |
+| Deep-ink monochrome | `web/public/brand/ariel-logo-wind-messenger-ink.png` | `128–319 px` | light backgrounds, print, docs, lockups |
+| Reverse monochrome | `web/public/brand/ariel-logo-wind-messenger-white.png` | `128–319 px` | dark product surfaces and presentations |
+| Deep-ink micro mark | `web/public/brand/ariel-logo-wind-messenger-micro.svg` | `16–127 px` | favicon, navigation, compact status surfaces |
+| Reverse micro mark | `web/public/brand/ariel-logo-wind-messenger-micro-white.svg` | `16–127 px` | dark navigation and compact dark surfaces |
+
+Only the six repository assets listed above are approved for runtime use. Rejected or intermediate exploration files are not copied into this repository.
 
 ## Core tokens
 
+HEX values are the asset-production anchors. OKLCH values are the CSS equivalents used by the preview and product surfaces.
+
 ```css
 :root {
-  --bg:      oklch(0% 0 0);               /* source #000000 */
-  --surface: oklch(15.91% 0 0);           /* source #0d0d0d */
-  --fg:      oklch(100% 0 0);             /* source #ffffff */
-  --muted:   oklch(78.26% 0 0);           /* source #b8b8b8 */
-  --border:  oklch(36.77% 0 0);           /* source #3f3f3f */
-  --accent:  oklch(73.18% 0.1397 258.07); /* source #6fa9ff */
+  --ariel-cloud:      #F7FBFF;
+  --ariel-indigo:     #162B5C;
+  --ariel-blue:       #246BFD;
+  --ariel-sky:        #72C7FF;
+  --ariel-iris:       #7A72E8;
+  --ariel-gold:       #F6B942;
 
-  --font-display: Georgia, 'Songti SC', serif;
-  --font-body: Inter, 'SF Pro Text', 'PingFang SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  --ariel-bg:         oklch(98.7% 0.007 245);
+  --ariel-fg:         oklch(29.5% 0.083 263);
+  --ariel-primary:    oklch(56% 0.23 259);
+  --ariel-air:        oklch(80% 0.12 235);
+  --ariel-secondary:  oklch(60% 0.15 285);
+  --ariel-command:    oklch(81% 0.14 82);
+
+  --font-display: 'Iowan Old Style', 'Songti SC', Georgia, serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 ```
 
-## Supporting product colors
+### Color roles
 
-- Primary action: `oklch(50.22% 0.1762 260.15)` from `#1d5dc6`.
-- Connected/success: `oklch(79.39% 0.1307 163.92)` from `#5dd6a5`.
-- Caution: `oklch(82.98% 0.0993 62.31)` from `#f6b983`.
-
-## Adopted mythic mark palette — vivid color edition
-
-| Token | HEX | OKLCH | Role |
-| --- | --- | --- | --- |
-| Night Canvas | `#02040A` | `oklch(10.71% 0.0194 262.03)` | Primary dark canvas and avatar background |
-| Tempest Navy | `#071A3D` | `oklch(22.63% 0.0719 261.12)` | Outer silhouette and figure body |
-| Wing Cobalt | `#0B4F9C` | `oklch(43.53% 0.1404 256.01)` | Wing depth and inner strokes |
-| Storm Silver | `#F2FAFF` | `oklch(98.05% 0.0108 234.81)` | Face, feathers, and highlight planes |
-| Relay Azure | `#00A8FF` | `oklch(70.26% 0.1696 242.92)` | Relay core, message routes, and endpoints only |
-| Air Cyan | `#63F4FF` | `oklch(89.33% 0.1238 202.21)` | Small signal highlight only |
-| Command Gold | `#FFC247` | `oklch(84.87% 0.1508 81.27)` | Command source, relay-core inner ring, storm-flash fill |
-| Tempest Coral | `#FF5A47` | `oklch(68.57% 0.2038 29.77)` | Outline on the two storm flashes only |
-
-The vivid edition uses value separation instead of indiscriminate saturation: deep navy holds the silhouette, cobalt models the wings, silver keeps the face readable, azure/cyan carries the outgoing message paths, and gold identifies the single command source. Relay Azure has a `7.85:1` contrast ratio against Night Canvas.
-
-The full-color treatment belongs only to the mythic master. Do not derive a separate flattened or cartoon-like product-color mark from it. Product chrome may still use the supporting interface colors above, but the identity mark itself switches from the full mythic master directly to monochrome.
-
-Monochrome contracts:
-
-- Light background: Deep Ink `#111827` / `oklch(21.01% 0.0318 264.66)`.
-- Dark background: Light Ink `#F7F9FC` / `oklch(98.14% 0.0045 258.32)`.
-- The monochrome artwork is a direct simplification of the original grayscale mythic Ariel: retain the adult frontal face, enclosing harpy wings, storm points, relay core, and ten-route message structure.
-- Remove grain, gradients, glow, material shading, doubled contours, decorative curls, and feather scratches. Use major silhouette planes, primary feather cuts, and three line-weight levels only.
-- Monochrome variants must remain true one-ink artwork. Do not retain blue endpoints, introduce a second tone, or simulate depth with decorative shading.
-
-## Size tiers
-
-| Final displayed width | Asset | Use |
+| Color | Role | Constraint |
 | --- | --- | --- |
-| `≥ 320 px` | `web/public/brand/ariel-logo-mythic-color.png` | README hero, mythic hero art, launch visuals, social source artwork, presentation covers |
-| `128–319 px` | `web/public/brand/ariel-logo-mythic-ink.png` or `web/public/brand/ariel-logo-mythic-white.png` | README medium display, website lockup, login, documents, print, monochrome campaigns |
-| `16–127 px` | `web/public/brand/ariel-logo-micro.svg` | App navigation, favicon, status surfaces |
+| Cloud White `#F7FBFF` | feather light, light canvas, reverse mark | May occupy large surfaces |
+| Wind Indigo `#162B5C` | silhouette, text, light-surface monochrome | Only monochrome master color on light backgrounds |
+| Relay Blue `#246BFD` | primary product action, deep wing planes | Do not flood full product surfaces |
+| Open Sky `#72C7FF` | air routes and light wing planes | Supporting color only |
+| Iris Air `#7A72E8` | secondary wind route | Use once or twice per composition |
+| Dawn Gold `#F6B942` | central command source and six receivers | Never use as general decoration |
 
-The color and simplified monochrome mythic marks share the same ten-route narrative structure. Only the micro mark reduces the story to six routes because a recognizable face and feather system cannot survive below 128 px.
+## Size contracts
+
+| Final displayed width | Required asset tier | Notes |
+| --- | --- | --- |
+| `≥ 320 px` | Full-color master | Full mythic story and color layers are legible |
+| `128–319 px` | Monochrome master | Use ink on light surfaces, white on dark surfaces |
+| `16–127 px` | Micro mark | Do not downscale the full character artwork |
 
 - Absolute digital minimum: `16 × 16 px`, micro mark only.
-- Simplified monochrome mythic minimum: `128 × 128 px` or `24 × 24 mm` in print.
-- Mythic-master minimum: `320 × 320 px` or `60 × 60 mm` in print.
-- Define `1×` as the relay core diameter. Keep at least `1×` clear space on all four sides.
-- In a square avatar, the full mark should occupy 72–78% of the canvas. Never crop the top/bottom storm points or lateral endpoints.
+- Common product navigation sizes: `24`, `28`, `32`, or `40 px`, micro mark only.
+- Common app/avatar source: `512 × 512 px`, use the compact full-color PNG on a Wind Indigo background.
+- Define `1×` as the diameter of the central command star. Keep at least `1×` clear space on all sides.
+- In a square avatar, the mark should occupy `76%–82%` of the canvas. Do not crop wing tips, ribbons, or receiver stars.
 - Mark-to-wordmark spacing: `0.75×`.
 
-## Layout and mark posture
+## Layout posture
 
-1. Keep the mythic face and enclosing harpy-wing silhouette identical across full-color and monochrome master marks; simplify line density instead of replacing the character with a geometric mascot.
-2. Use the full-color mythic master only at narrative scale. Use one-ink Deep Ink or Light Ink at product and document scale; do not create a separate product-color logo.
-3. Prefer radial or converging geometry to express many clients entering one relay; avoid generic cloud, Wi-Fi, chat-bubble, or hexagon imagery.
-4. Use square or circular canvases with minimal rounding. Monochrome versions have no gradients, shadows, glow, texture, or decorative depth.
-5. Pair the symbol with the existing serif `Ariel` wordmark in product contexts; use the symbol alone for avatars and favicons.
+1. Use an open, airy canvas. The mark should feel as if it is moving through morning air, not trapped in a badge.
+2. Keep the figure in calm side profile. Do not add direct gaze, large eyes, smile, mask, claws, or weapons.
+3. Preserve one central command star and exactly six outgoing routes in full and monochrome masters.
+4. Keep gold limited to the command source and receiver stars. Do not add gold borders, gold wordmarks, or decorative star fields.
+5. Use the serif `Ariel` wordmark beside the symbol in brand contexts; product UI body copy remains system sans.
+6. Full-color artwork is an identity illustration, not a navigation icon. Switch tiers instead of sharpening or compressing it.
 
-## Repository integration
+## Monochrome contract
 
-- Product URLs use `/brand/ariel-logo-mythic-color.png`, `/brand/ariel-logo-mythic-ink.png`, `/brand/ariel-logo-mythic-white.png`, and `/brand/ariel-logo-micro.svg` from Vite's `web/public/brand/` root.
-- Use the shared `web/src/ArielLogo.tsx` component instead of writing inline logo SVGs or directly selecting an asset in feature code.
-- The README hero is the 480px color master; the Night login uses the 128–160px white mythic mark; navigation, loading and favicon use the micro mark.
-- `docs/brand/logo-guideline.html` references the same repository assets through relative paths. It does not carry a second asset copy.
+- Light background: use Deep Ink `#162B5C` only.
+- Dark background: use Cloud White `#F7FBFF` only.
+- Both files are true transparent one-ink PNGs with identical geometry.
+- Do not create monochrome variants with CSS `filter`, opacity tricks, gradient masks, or grayscale conversion at runtime.
+- Do not add a colored endpoint, glow, shadow, second tone, or circular badge.
+
+## Micro mark contract
+
+The micro mark deliberately drops the human profile. At `16–127 px`, it keeps the three durable genes that survive:
+
+1. two open wing gestures;
+2. one central command star;
+3. six routes terminating in six receivers.
+
+Use the provided SVGs. Do not redraw the micro mark from the full-color PNG and do not use a Unicode star or asterisk substitute.
+
+## Product usage map
+
+| Surface | Asset |
+| --- | --- |
+| README header / website hero | `ariel-logo-wind-messenger-color.png` at `320–420 px` |
+| GitHub organization avatar | `ariel-logo-wind-messenger-color-512.png` on `#162B5C` square canvas |
+| Light About / login brand block | `ariel-logo-wind-messenger-ink.png` |
+| Dark About / login brand block | `ariel-logo-wind-messenger-white.png` |
+| Light product navigation | `ariel-logo-wind-messenger-micro.svg` |
+| Dark product navigation | `ariel-logo-wind-messenger-micro-white.svg` |
+| Favicon | `ariel-logo-wind-messenger-micro.svg` |
+| Print / monochrome document | corresponding monochrome master, never the color PNG converted at runtime |
+
+## Forbidden use
+
+- Do not use retired predecessor assets in new product code.
+- Do not import rejected or intermediate exploration files.
+- Do not redesign the character into a cartoon mascot or dark fantasy emblem.
+- Do not change the route count, crop the six receiver stars, or add extra decorative stars.
+- Do not stretch, rotate, skew, or use `object-fit: cover`.
+- Do not apply CSS hue rotation, saturation, grayscale, drop-shadow, neon glow, or outline.
+- Do not place the full-color master inside a small navigation slot.
+- Do not add a rounded-square or circular container unless the destination platform requires an app-icon background.
+
+## Accessibility
+
+- If the symbol is the only visible brand name, use `alt="Ariel"`.
+- If the word `Ariel` is already adjacent, use `alt=""` or `aria-hidden="true"` for the symbol.
+- Never include “image”, “icon”, or the full mythic description in ordinary UI alt text.
+- Reserve the descriptive alt text for documentation or brand-guideline pages.

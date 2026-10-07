@@ -1,35 +1,37 @@
 import type { CSSProperties } from "react";
 
-export type ArielLogoVariant = "auto" | "mythic" | "mono" | "micro";
-export type ArielLogoTone = "auto" | "color" | "ink" | "white";
+export type ArielLogoVariant = "auto" | "color" | "mono" | "micro";
+export type ArielLogoTone = "auto" | "ink" | "white";
 
 export interface ArielLogoProps {
-  size?: number | string;
+  size: number | string;
   variant?: ArielLogoVariant;
   tone?: ArielLogoTone;
   alt?: string;
   decorative?: boolean;
   className?: string;
+  priority?: boolean;
 }
 
 export const arielLogoAssets = {
-  color: "/brand/ariel-logo-mythic-color.png",
-  ink: "/brand/ariel-logo-mythic-ink.png",
-  white: "/brand/ariel-logo-mythic-white.png",
-  micro: "/brand/ariel-logo-micro.svg",
+  color: "/brand/ariel-logo-wind-messenger-color.png",
+  color512: "/brand/ariel-logo-wind-messenger-color-512.png",
+  ink: "/brand/ariel-logo-wind-messenger-ink.png",
+  white: "/brand/ariel-logo-wind-messenger-white.png",
+  microInk: "/brand/ariel-logo-wind-messenger-micro.svg",
+  microWhite: "/brand/ariel-logo-wind-messenger-micro-white.svg",
 } as const;
 
-function pixelSize(size: number | string): number | null {
-  if (typeof size === "number") return size;
-  const match = size.trim().match(/^(\d+(?:\.\d+)?)px$/);
-  return match ? Number(match[1]) : null;
-}
-
 export function resolveArielLogoVariant(size: number | string, variant: ArielLogoVariant): Exclude<ArielLogoVariant, "auto"> {
+  if (typeof size === "number" && (!Number.isFinite(size) || size < 16)) {
+    throw new Error("ArielLogo numeric size must be at least 16px.");
+  }
   if (variant !== "auto") return variant;
-  const pixels = pixelSize(size);
-  if (pixels === null || pixels < 128) return "micro";
-  return pixels >= 320 ? "mythic" : "mono";
+  if (typeof size !== "number") {
+    throw new Error("ArielLogo requires an explicit variant when size is a CSS string.");
+  }
+  if (size < 128) return "micro";
+  return size < 320 ? "mono" : "color";
 }
 
 function cssSize(size: number | string): string {
@@ -40,30 +42,47 @@ function classNames(variant: Exclude<ArielLogoVariant, "auto">, className?: stri
   return ["ariel-logo", `ariel-logo--${variant}`, className].filter(Boolean).join(" ");
 }
 
-export function ArielLogo({ size = 32, variant = "auto", tone = "auto", alt, decorative = false, className }: ArielLogoProps) {
+function sources(variant: Exclude<ArielLogoVariant, "auto">): { light: string; dark: string } {
+  if (variant === "micro") return { light: arielLogoAssets.microInk, dark: arielLogoAssets.microWhite };
+  if (variant === "mono") return { light: arielLogoAssets.ink, dark: arielLogoAssets.white };
+  return { light: arielLogoAssets.color, dark: arielLogoAssets.color };
+}
+
+export function ArielLogo({
+  size,
+  variant = "auto",
+  tone = "auto",
+  alt,
+  decorative = false,
+  className,
+  priority = false,
+}: ArielLogoProps) {
   const resolvedVariant = resolveArielLogoVariant(size, variant);
-  const style = { width: cssSize(size) } as CSSProperties;
+  const candidates = sources(resolvedVariant);
+  const autoTone = tone === "auto" && resolvedVariant !== "color";
+  const resolvedTone = resolvedVariant === "color" ? "color" : tone;
+  const src = resolvedVariant === "color" ? candidates.light : tone === "white" ? candidates.dark : candidates.light;
+  const dimension = cssSize(size);
+  const style = { width: dimension, height: dimension } as CSSProperties;
   const accessibility = decorative
     ? { "aria-hidden": true as const }
     : { role: "img", "aria-label": alt || "Ariel" };
 
-  if (resolvedVariant === "micro") {
-    return <span {...accessibility} className={classNames("micro", className)} data-variant="micro" data-tone={tone} style={style} />;
-  }
-
-  let resolvedTone: ArielLogoTone;
-  let src: string;
-  if (resolvedVariant === "mythic") {
-    const mythicTone: "color" | "ink" | "white" = tone === "ink" || tone === "white" ? tone : "color";
-    resolvedTone = mythicTone;
-    src = arielLogoAssets[mythicTone];
-  } else {
-    resolvedTone = tone === "ink" || tone === "white" ? tone : "auto";
-    src = resolvedTone === "white" ? arielLogoAssets.white : arielLogoAssets.ink;
-  }
-
-  return <picture {...accessibility} className={classNames(resolvedVariant, className)} data-variant={resolvedVariant} data-tone={resolvedTone} style={style}>
-    {resolvedVariant === "mono" && resolvedTone === "auto" && <source media="(prefers-color-scheme: dark)" srcSet={arielLogoAssets.white} />}
-    <img src={src} alt="" aria-hidden="true" />
+  return <picture
+    {...accessibility}
+    className={classNames(resolvedVariant, className)}
+    data-variant={resolvedVariant}
+    data-tone={resolvedTone}
+    style={style}
+  >
+    {autoTone && <source media="(prefers-color-scheme: dark)" srcSet={candidates.dark} />}
+    <img
+      src={src}
+      alt=""
+      aria-hidden="true"
+      decoding="async"
+      loading={priority ? "eager" : undefined}
+      fetchPriority={priority ? "high" : undefined}
+    />
   </picture>;
 }

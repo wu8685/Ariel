@@ -2,48 +2,69 @@
 
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { ArielLogo, resolveArielLogoVariant } from "./ArielLogo";
+import { ArielLogo, arielLogoAssets, resolveArielLogoVariant } from "./ArielLogo";
 
 describe("ArielLogo", () => {
-  it("keeps the formal 128px and 320px tier boundaries", () => {
-    expect(resolveArielLogoVariant(127, "auto")).toBe("micro");
-    expect(resolveArielLogoVariant(128, "auto")).toBe("mono");
-    expect(resolveArielLogoVariant("319px", "auto")).toBe("mono");
-    expect(resolveArielLogoVariant("320px", "auto")).toBe("mythic");
-    expect(resolveArielLogoVariant("10rem", "auto")).toBe("micro");
+  it("uses the wind-messenger tier at every critical numeric size", () => {
+    for (const size of [16, 24, 32, 64]) expect(resolveArielLogoVariant(size, "auto"), `${size}px`).toBe("micro");
+    for (const size of [128, 256]) expect(resolveArielLogoVariant(size, "auto"), `${size}px`).toBe("mono");
+    for (const size of [320, 512]) expect(resolveArielLogoVariant(size, "auto"), `${size}px`).toBe("color");
   });
 
-  it("selects the formal asset tier from a numeric display size", () => {
+  it("rejects auto selection for CSS string sizes and sub-minimum numbers", () => {
+    expect(() => resolveArielLogoVariant("320px", "auto")).toThrow(/explicit variant/i);
+    expect(() => resolveArielLogoVariant("clamp(128px, 12vw, 160px)", "auto")).toThrow(/explicit variant/i);
+    expect(() => resolveArielLogoVariant(15, "auto")).toThrow(/at least 16/i);
+    expect(resolveArielLogoVariant("10rem", "mono")).toBe("mono");
+  });
+
+  it("selects exactly one image element and the correct theme candidates", () => {
     const { rerender } = render(<ArielLogo size={64} alt="Ariel 微标" />);
-    expect(screen.getByRole("img", { name: "Ariel 微标" }).getAttribute("data-variant")).toBe("micro");
+    let logo = screen.getByRole("img", { name: "Ariel 微标" });
+    expect(logo.getAttribute("data-variant")).toBe("micro");
+    expect(logo.querySelectorAll("img")).toHaveLength(1);
+    expect(logo.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.microInk);
+    expect(logo.querySelector("source")?.getAttribute("srcset")).toBe(arielLogoAssets.microWhite);
 
-    rerender(<ArielLogo size={160} alt="Ariel 单色标" />);
-    const mono = screen.getByRole("img", { name: "Ariel 单色标" });
-    expect(mono.getAttribute("data-variant")).toBe("mono");
-    expect(mono.querySelector("img")?.getAttribute("src")).toBe("/brand/ariel-logo-mythic-ink.png");
-    expect(mono.querySelector("source")?.getAttribute("srcset")).toBe("/brand/ariel-logo-mythic-white.png");
+    rerender(<ArielLogo size={160} tone="auto" alt="Ariel 单色标" />);
+    logo = screen.getByRole("img", { name: "Ariel 单色标" });
+    expect(logo.getAttribute("data-variant")).toBe("mono");
+    expect(logo.querySelectorAll("img")).toHaveLength(1);
+    expect(logo.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.ink);
+    expect(logo.querySelector("source")?.getAttribute("srcset")).toBe(arielLogoAssets.white);
 
-    rerender(<ArielLogo size={360} alt="Ariel 彩色神话标" />);
-    const mythic = screen.getByRole("img", { name: "Ariel 彩色神话标" });
-    expect(mythic.getAttribute("data-variant")).toBe("mythic");
-    expect(mythic.querySelector("img")?.getAttribute("src")).toBe("/brand/ariel-logo-mythic-color.png");
+    rerender(<ArielLogo size={320} alt="Ariel 彩色标" />);
+    logo = screen.getByRole("img", { name: "Ariel 彩色标" });
+    expect(logo.getAttribute("data-variant")).toBe("color");
+    expect(logo.querySelectorAll("img")).toHaveLength(1);
+    expect(logo.querySelector("source")).toBeNull();
+    expect(logo.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.color);
   });
 
-  it("honors explicit variant and tone without filtering or distorting the asset", () => {
-    const { container } = render(<ArielLogo size="10rem" variant="mono" tone="white" alt="Ariel 反白标" className="custom-logo" />);
+  it("honors explicit string-size variant, tone, priority and custom class", () => {
+    render(<ArielLogo size="10rem" variant="mono" tone="white" priority alt="Ariel 反白标" className="custom-logo" />);
     const logo = screen.getByRole("img", { name: "Ariel 反白标" });
+    const image = logo.querySelector("img")!;
     expect(logo.getAttribute("data-variant")).toBe("mono");
     expect(logo.getAttribute("data-tone")).toBe("white");
     expect(logo.classList.contains("custom-logo")).toBe(true);
-    expect(logo.querySelector("img")?.getAttribute("src")).toBe("/brand/ariel-logo-mythic-white.png");
-    expect(container.innerHTML).not.toContain("filter");
+    expect(image.getAttribute("src")).toBe(arielLogoAssets.white);
+    expect(image.getAttribute("fetchpriority")).toBe("high");
+    expect(image.getAttribute("loading")).toBe("eager");
   });
 
-  it("keeps decorative marks out of the accessibility tree", () => {
-    const { container } = render(<ArielLogo size={29} variant="micro" decorative />);
+  it("selects the provided white micro asset without CSS recoloring", () => {
+    const { container } = render(<ArielLogo size={29} variant="micro" tone="white" decorative />);
     expect(within(container).queryByRole("img")).toBeNull();
-    const logo = container.querySelector(".ariel-logo--micro");
-    expect(logo?.getAttribute("aria-hidden")).toBe("true");
+    const logo = container.querySelector(".ariel-logo--micro")!;
+    expect(logo.getAttribute("aria-hidden")).toBe("true");
+    expect(logo.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.microWhite);
     expect((logo as HTMLElement).style.width).toBe("29px");
+    expect((logo as HTMLElement).style.height).toBe("29px");
+  });
+
+  it("defaults an independent logo to the accessible name Ariel", () => {
+    render(<ArielLogo size={128} variant="mono" tone="ink" />);
+    expect(screen.getByRole("img", { name: "Ariel" })).toBeTruthy();
   });
 });

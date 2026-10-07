@@ -1,10 +1,10 @@
 # Ariel
 
 <p align="center">
-  <img src="web/public/brand/ariel-logo-mythic-color.png" width="480" alt="Ariel 风暴鹰身彩色神话主版 Logo" />
+  <img src="web/public/brand/ariel-logo-wind-messenger-color.png" width="480" alt="Ariel 风之信使彩色主版 Logo" />
 </p>
 
-Ariel 的正式品牌标识源自《暴风雨》中的空气精灵：同一个信使从中央接收命令，并将消息传递到多个位置。资产的尺寸选择、配色和禁止事项见[品牌使用规范](docs/brand/logo-guideline.html)与[工程化品牌规范](docs/brand/brand-spec.md)。
+Ariel 的正式品牌标识源自《暴风雨》中的空气精灵“风之信使”：胸前晨星作为唯一 relay core，将六条风带送往多个 Codex App。资产的尺寸选择、配色和禁止事项见[品牌使用规范](docs/brand/logo-guideline.html)与[工程化品牌规范](docs/brand/brand-spec.md)。
 
 Ariel 让你离开电脑后，仍能从手机浏览器接着使用 Mac 上的 Codex Desktop 会话。点开已有会话就自动加载原会话；历史、实时回复和运行状态在手机上继续显示。你可以发送消息、停止当前任务、处理命令或文件审批，并回答 Codex 的补充问题。
 

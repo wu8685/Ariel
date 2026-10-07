@@ -3,510 +3,350 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#05070d" />
-  <title>Ariel · 神话版 Logo 尺寸与色彩规范</title>
+  <meta name="theme-color" content="#f7fbff" />
+  <title>Ariel · 风之信使 Logo 系统</title>
   <style>
     :root {
-      --bg: oklch(10.71% 0.0194 262.03);
-      --surface: oklch(13% 0.025 255);
-      --surface-2: oklch(18% 0.035 255);
-      --fg: oklch(96.19% 0.0125 255.51);
-      --muted: oklch(72% 0.018 250);
-      --quiet: oklch(52% 0.02 250);
-      --border: oklch(27% 0.03 255);
-      --blue: oklch(70.26% 0.1696 242.92);
-      --cyan: oklch(89.33% 0.1238 202.21);
-      --gold: oklch(84.87% 0.1508 81.27);
-      --coral: oklch(68.57% 0.2038 29.77);
-      --night: #02040a;
-      --navy: #071a3d;
-      --ink: #0b4f9c;
-      --silver: #f2faff;
-      --relay: #00a8ff;
-      --air: #63f4ff;
-      --command: #ffc247;
-      --tempest: #ff5a47;
-      --display: Georgia, "Songti SC", serif;
-      --body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+      --bg: oklch(98.7% 0.007 245);
+      --surface: oklch(100% 0 0 / .82);
+      --surface-solid: oklch(100% 0 0);
+      --fg: oklch(29.5% .083 263);
+      --muted: oklch(52% .045 263);
+      --border: oklch(89% .028 252);
+      --blue: oklch(56% .23 259);
+      --sky: oklch(80% .12 235);
+      --iris: oklch(60% .15 285);
+      --gold: oklch(81% .14 82);
+      --night: oklch(20% .07 263);
+      --display: "Iowan Old Style", "Songti SC", Georgia, serif;
+      --body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
+
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
+    html { min-width: 320px; scroll-behavior: smooth; background: var(--bg); }
     body {
       margin: 0;
       min-width: 320px;
-      background: var(--bg);
       color: var(--fg);
       font-family: var(--body);
       -webkit-font-smoothing: antialiased;
+      background:
+        radial-gradient(circle at 86% 9%, oklch(91% .075 235 / .7), transparent 27rem),
+        radial-gradient(circle at 10% 28%, oklch(94% .05 295 / .52), transparent 31rem),
+        linear-gradient(145deg, var(--bg), oklch(96.5% .022 265));
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .28;
+      background-image:
+        linear-gradient(oklch(60% .05 260 / .1) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(60% .05 260 / .1) 1px, transparent 1px);
+      background-size: 80px 80px;
+      mask-image: linear-gradient(to bottom, black, transparent 78%);
     }
     button, a { font: inherit; }
     a { color: inherit; }
     button:focus-visible, a:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
-    .wrap { width: min(1420px, calc(100% - 48px)); margin: 0 auto; }
+    img { max-width: 100%; }
+
+    .shell { position: relative; z-index: 1; width: min(1460px, calc(100% - 48px)); margin: 0 auto; }
     .topbar {
-      min-height: 70px;
+      min-height: 76px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 24px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
     }
-    .brand { display: flex; align-items: center; gap: 12px; }
-    .brand img { width: 30px; height: 30px; filter: invert(1); }
-    .brand strong { font: 400 27px/1 var(--display); letter-spacing: -.04em; }
+    .brand { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; }
+    .brand img { width: 30px; height: 30px; }
+    .brand strong { font: 500 28px/1 var(--display); letter-spacing: -.04em; }
     .meta { color: var(--muted); font: 700 10px/1.4 var(--mono); letter-spacing: .17em; text-transform: uppercase; }
+
     .hero {
-      min-height: 720px;
+      min-height: 730px;
       display: grid;
-      grid-template-columns: minmax(0, .84fr) minmax(480px, 1.16fr);
-      gap: clamp(48px, 7vw, 112px);
+      grid-template-columns: minmax(330px, .78fr) minmax(520px, 1.22fr);
       align-items: center;
-      padding: 78px 0;
-      border-bottom: 1px solid var(--border);
+      gap: clamp(44px, 7vw, 112px);
+      padding: 72px 0 86px;
     }
-    .eyebrow { margin: 0 0 22px; color: var(--blue); font: 800 11px/1.2 var(--mono); letter-spacing: .2em; text-transform: uppercase; }
-    h1 { margin: 0; font: 400 clamp(58px, 6.6vw, 104px)/.92 var(--display); letter-spacing: -.065em; text-wrap: balance; }
-    .lead { max-width: 650px; margin: 30px 0 0; color: var(--muted); font-size: clamp(16px, 1.35vw, 20px); line-height: 1.8; text-wrap: pretty; }
-    .lead strong { color: var(--fg); font-weight: 600; }
-    .principle {
-      margin: 34px 0 0;
-      padding: 0;
-      display: grid;
-      gap: 12px;
-      list-style: none;
-    }
-    .principle li { display: grid; grid-template-columns: 26px 1fr; gap: 12px; color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .principle b { color: var(--blue); font: 800 10px/1.7 var(--mono); }
-    .hero-mark {
+    .hero-copy { max-width: 580px; }
+    .eyebrow { margin: 0 0 24px; color: var(--blue); font: 800 11px/1.3 var(--mono); letter-spacing: .2em; text-transform: uppercase; }
+    h1 { margin: 0; font: 500 clamp(64px, 7vw, 112px)/.9 var(--display); letter-spacing: -.075em; text-wrap: balance; }
+    .lead { max-width: 560px; margin: 32px 0 0; color: var(--muted); font-size: clamp(17px, 1.35vw, 21px); line-height: 1.8; text-wrap: pretty; }
+    .lead strong { color: var(--fg); font-weight: 680; }
+    .hero-points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 44px 0 0; padding: 0; list-style: none; }
+    .hero-points li { padding-top: 14px; border-top: 1px solid var(--border); }
+    .hero-points b { display: block; margin-bottom: 7px; font-size: 13px; }
+    .hero-points span { display: block; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+    .hero-stage {
       position: relative;
-      min-height: 620px;
+      min-width: 0;
+      aspect-ratio: 1;
       display: grid;
       place-items: center;
       overflow: hidden;
-      border: 1px solid var(--border);
+      border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+      border-radius: 38px;
       background:
-        radial-gradient(circle at 50% 52%, color-mix(in oklch, var(--blue) 15%, transparent), transparent 37%),
-        linear-gradient(var(--border) 1px, transparent 1px),
-        linear-gradient(90deg, var(--border) 1px, transparent 1px),
-        #02040a;
-      background-size: auto, 12.5% 12.5%, 12.5% 12.5%, auto;
+        radial-gradient(circle at 50% 46%, oklch(100% 0 0 / .98), oklch(96.5% .022 250 / .88) 62%, oklch(91.5% .06 278 / .68));
+      box-shadow: 0 32px 84px oklch(32% .09 265 / .15), inset 0 1px 0 white;
+      transition: background 180ms ease;
     }
-    .hero-mark::after {
+    .hero-stage::before {
       content: "";
       position: absolute;
-      inset: 7%;
-      border: 1px solid color-mix(in oklch, var(--blue) 30%, transparent);
+      width: 74%;
+      aspect-ratio: 1;
+      border: 1px solid oklch(65% .1 260 / .16);
       border-radius: 50%;
-      pointer-events: none;
+      box-shadow: 0 0 0 46px oklch(66% .09 260 / .045), 0 0 0 104px oklch(66% .09 260 / .024);
     }
-    .hero-mark img { position: relative; z-index: 2; width: min(88%, 590px); aspect-ratio: 1; object-fit: contain; transition: transform .45s ease, opacity .25s ease; }
-    .hero-mark[data-mode="master"] img { width: min(94%, 620px); border-radius: 50%; }
-    .hero-mark[data-mode="mono"] { background: #f8fafc; }
-    .hero-mark[data-mode="mono"]::after { border-color: rgb(17 24 39 / .22); }
-    .hero-mark[data-mode="mono"] .mark-note { color: #6b7280; }
-    .hero-mark:hover img { transform: scale(1.018); }
-    .mark-note { position: absolute; z-index: 3; right: 18px; bottom: 16px; color: var(--quiet); font: 700 9px/1.5 var(--mono); letter-spacing: .13em; text-transform: uppercase; }
-    .mode-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
-    .mode-btn {
-      min-height: 44px;
-      padding: 0 17px;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      transition: .16s ease;
+    .hero-stage.paper { background: #f8fafc; }
+    .hero-stage.night { background: #101c3b; box-shadow: 0 32px 84px oklch(16% .06 264 / .28), inset 0 1px 0 rgb(255 255 255 / .08); }
+    .hero-stage.night::before { border-color: rgb(255 255 255 / .12); box-shadow: 0 0 0 46px rgb(255 255 255 / .025), 0 0 0 104px rgb(255 255 255 / .014); }
+    .hero-mark { position: relative; z-index: 2; width: 91%; height: auto; display: block; animation: arrive 800ms cubic-bezier(.2,.72,.18,1) both; }
+    .mode-switch { position: absolute; z-index: 4; left: 20px; top: 20px; display: flex; flex-wrap: wrap; gap: 7px; }
+    .mode-btn { min-height: 38px; padding: 0 12px; border: 1px solid color-mix(in oklch, var(--border) 90%, transparent); border-radius: 999px; background: oklch(100% 0 0 / .78); color: var(--muted); font-size: 11px; cursor: pointer; backdrop-filter: blur(14px); }
+    .mode-btn:hover, .mode-btn[aria-pressed="true"] { border-color: var(--blue); color: var(--fg); background: white; }
+    .mode-note { position: absolute; z-index: 4; right: 22px; bottom: 20px; color: var(--muted); font: 700 9px/1.4 var(--mono); letter-spacing: .11em; text-transform: uppercase; }
+    .hero-stage.night .mode-note { color: rgb(247 249 252 / .64); }
+    @keyframes arrive { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
+
+    section { padding: 80px 0; border-top: 1px solid var(--border); }
+    .section-head { display: flex; justify-content: space-between; align-items: end; gap: 28px; margin-bottom: 32px; }
+    .section-head h2 { max-width: 760px; margin: 0; font: 500 clamp(40px, 4.7vw, 70px)/.98 var(--display); letter-spacing: -.055em; text-wrap: balance; }
+    .section-head p { max-width: 510px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.75; text-align: right; }
+
+    .asset-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+    .asset-card { min-width: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
+    .asset-art { min-height: 310px; display: grid; place-items: center; padding: 34px; border-bottom: 1px solid var(--border); background: #f8fafc; }
+    .asset-art.night { background: #101c3b; }
+    .asset-art.airy { background: radial-gradient(circle, white, #edf5ff 70%); }
+    .asset-art img { width: min(100%, 230px); height: auto; }
+    .asset-card.micro .asset-art img { width: 96px; }
+    .asset-copy { padding: 24px; }
+    .asset-copy small { color: var(--blue); font: 800 9px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    .asset-copy h3 { margin: 12px 0 10px; font: 500 27px/1.05 var(--display); letter-spacing: -.03em; }
+    .asset-copy p { min-height: 70px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+    .download { min-height: 42px; margin-top: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; text-decoration: none; font-size: 12px; font-weight: 700; }
+    .download:hover { border-color: var(--blue); background: color-mix(in oklch, var(--blue) 7%, white); }
+
+    .tier-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-left: 1px solid var(--border); }
+    .tier { min-height: 360px; padding: 34px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
+    .tier.primary { background: color-mix(in oklch, var(--blue) 5%, white); }
+    .tier-index { color: var(--blue); font: 800 10px/1 var(--mono); letter-spacing: .16em; }
+    .tier h3 { margin: 28px 0 8px; font: 500 31px/1 var(--display); }
+    .tier .range { margin: 0 0 22px; color: var(--fg); font: 700 18px/1 var(--mono); }
+    .tier p { min-height: 80px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+    .tier-preview { min-height: 120px; margin-top: 28px; display: flex; align-items: end; justify-content: center; gap: 26px; }
+    .tier-preview img { width: var(--size); height: var(--size); object-fit: contain; }
+    .size-item { display: grid; gap: 10px; justify-items: center; color: var(--muted); font: 10px/1 var(--mono); }
+
+    .palette { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+    .swatch { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
+    .swatch-color { height: 136px; background: var(--swatch); }
+    .swatch-copy { padding: 19px; }
+    .swatch h3 { margin: 0 0 9px; font-size: 13px; }
+    .swatch p { margin: 0; color: var(--muted); font: 10px/1.6 var(--mono); overflow-wrap: anywhere; }
+    .swatch small { display: block; margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    .scene-grid { display: grid; grid-template-columns: 1.05fr .95fr .8fr; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+    .scene { min-height: 320px; position: relative; padding: 32px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow: hidden; }
+    .scene-label { position: absolute; right: 20px; top: 18px; opacity: .52; font: 800 9px/1 var(--mono); letter-spacing: .15em; text-transform: uppercase; }
+    .readme { background: white; color: #1f2328; }
+    .repo { color: #656d76; font-size: 12px; }
+    .readme-lockup { min-height: 215px; display: flex; align-items: center; gap: 22px; }
+    .readme-lockup img { width: 132px; height: 132px; object-fit: contain; }
+    .readme-lockup strong { display: block; font: 600 38px/1 var(--body); letter-spacing: -.04em; }
+    .readme-lockup span { display: block; max-width: 290px; margin-top: 10px; color: #656d76; font-size: 13px; line-height: 1.55; }
+    .console { background: #101c3b; color: #f7f9fc; }
+    .console-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid rgb(255 255 255 / .12); }
+    .console-brand { display: flex; align-items: center; gap: 11px; }
+    .console-brand img { width: 30px; height: 30px; }
+    .console-brand strong { font: 500 24px/1 var(--display); }
+    .online { display: inline-flex; align-items: center; gap: 7px; color: #9be6c4; font: 700 9px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .online::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #62d6a4; }
+    .relay-card { margin-top: 34px; padding: 22px; border: 1px solid rgb(255 255 255 / .12); border-radius: 16px; background: rgb(255 255 255 / .045); }
+    .relay-card small { color: #8fa2c8; font: 700 9px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    .relay-card b { display: block; margin-top: 12px; font-size: 18px; }
+    .avatar-scene { display: grid; place-items: center; background: linear-gradient(145deg, #eaf4ff, #eeeaff); }
+    .avatar { width: 180px; height: 180px; display: grid; place-items: center; border-radius: 40px; background: #101c3b; box-shadow: 0 24px 48px rgb(22 43 92 / .2); }
+    .avatar img { width: 142px; height: 142px; object-fit: contain; }
+
+    .rule-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-left: 1px solid var(--border); }
+    .rule { min-height: 250px; padding: 30px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
+    .rule b { color: var(--blue); font: 800 10px/1 var(--mono); letter-spacing: .16em; }
+    .rule h3 { margin: 28px 0 10px; font: 500 26px/1.05 var(--display); }
+    .rule p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    footer { min-height: 120px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); color: var(--muted); font: 700 10px/1.5 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+
+    @media (max-width: 1120px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; }
+      .hero-copy { max-width: 760px; }
+      .hero-stage { width: min(100%, 780px); justify-self: center; }
+      .asset-grid { grid-template-columns: repeat(2, 1fr); }
+      .palette { grid-template-columns: repeat(3, 1fr); }
+      .scene-grid { grid-template-columns: 1fr 1fr; }
+      .avatar-scene { grid-column: 1 / -1; }
+      .rule-grid { grid-template-columns: repeat(2, 1fr); }
     }
-    .mode-btn:hover, .mode-btn[aria-pressed="true"] { border-color: var(--blue); color: var(--fg); background: color-mix(in oklch, var(--blue) 10%, transparent); }
-    .section-head { display: grid; grid-template-columns: 1fr minmax(300px, .72fr); gap: 48px; align-items: end; padding: 96px 0 32px; }
-    .section-head h2 { margin: 0; font: 400 clamp(42px, 5vw, 72px)/.95 var(--display); letter-spacing: -.05em; }
-    .section-head p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
-    .variant-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
-    .variant { min-width: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .variant-art { min-height: 390px; display: grid; place-items: center; padding: 42px; border-bottom: 1px solid var(--border); }
-    .variant-art.night { background: #02040a; }
-    .variant-art.paper { background: #f8fafc; }
-    .variant-art.indigo { background: #13213b; }
-    .variant-art.mythic {
-      background:
-        radial-gradient(circle at 50% 48%, rgb(95 159 255 / .18), transparent 42%),
-        #02040a;
-    }
-    .variant-art.mythic img { width: min(96%, 330px); height: min(96%, 330px); border-radius: 50%; }
-    .variant-art img { width: min(88%, 300px); height: min(88%, 300px); object-fit: contain; }
-    .variant-body { padding: 25px 25px 27px; }
-    .variant-kicker { color: var(--blue); font: 800 9px/1 var(--mono); letter-spacing: .17em; text-transform: uppercase; }
-    .variant h3 { margin: 15px 0 10px; font: 400 31px/1 var(--display); letter-spacing: -.035em; }
-    .variant p { min-height: 68px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
-    .asset-actions { display: flex; gap: 8px; margin-top: 22px; }
-    .asset-link { min-height: 43px; flex: 1; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); text-decoration: none; font-size: 12px; transition: .15s ease; }
-    .asset-link:hover { border-color: var(--blue); background: color-mix(in oklch, var(--blue) 9%, transparent); }
-    .asset-link.primary { background: var(--fg); border-color: var(--fg); color: var(--bg); }
-    .asset-link.primary:hover { background: var(--blue); border-color: var(--blue); }
-    .context-grid { display: grid; grid-template-columns: 1.15fr .85fr; border: 1px solid var(--border); }
-    .context-column { min-width: 0; }
-    .context-column + .context-column { border-left: 1px solid var(--border); }
-    .scene { position: relative; min-height: 330px; padding: clamp(28px, 4vw, 56px); overflow: hidden; }
-    .scene + .scene { border-top: 1px solid var(--border); }
-    .scene-label { position: absolute; top: 17px; right: 18px; color: inherit; opacity: .48; font: 800 9px/1 var(--mono); letter-spacing: .15em; text-transform: uppercase; }
-    .github { background: #fff; color: #1f2328; }
-    .repo-line { display: flex; align-items: center; gap: 9px; color: #656d76; font-size: 12px; }
-    .repo-dot { width: 10px; height: 10px; border: 1px solid #8c959f; border-radius: 50%; }
-    .readme-lockup { display: flex; align-items: center; gap: 22px; margin-top: 66px; }
-    .readme-lockup img { width: 84px; height: 84px; }
-    .readme-lockup strong { display: block; font: 700 38px/1.1 var(--body); letter-spacing: -.035em; }
-    .readme-lockup span { display: block; margin-top: 8px; color: #656d76; font-size: 14px; }
-    .console { background: #070a10; }
-    .console-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-    .console-brand { display: flex; align-items: center; gap: 14px; }
-    .console-brand img { width: 48px; height: 48px; filter: invert(1); }
-    .console-brand strong { font: 400 29px/1 var(--display); }
-    .connected { display: inline-flex; align-items: center; gap: 8px; color: #9edfc4; font: 700 10px/1 var(--mono); letter-spacing: .11em; text-transform: uppercase; }
-    .connected::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #5dd6a5; box-shadow: 0 0 0 5px rgb(93 214 165 / .12); }
-    .relay-panel { margin-top: 50px; display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: end; padding-top: 25px; border-top: 1px solid #253047; }
-    .relay-panel p { margin: 0; color: #8d98aa; font: 12px/1.7 var(--mono); }
-    .relay-panel b { display: block; margin-top: 8px; color: #eef3fb; font: 500 18px/1.3 var(--body); }
-    .pulse { width: 12px; height: 12px; border-radius: 50%; background: #68a8ff; box-shadow: 0 0 0 10px rgb(104 168 255 / .12); animation: pulse 2s ease-in-out infinite; }
-    @keyframes pulse { 50% { box-shadow: 0 0 0 18px rgb(104 168 255 / 0); } }
-    @media (prefers-reduced-motion: reduce) {
-      html { scroll-behavior: auto; }
-      .hero-mark img, .mode-btn, .asset-link { transition: none; }
-      .pulse { animation: none; }
-    }
-    .social { background: #13213b; display: grid; grid-template-columns: 150px 1fr; gap: 30px; align-items: center; }
-    .avatar { width: 150px; aspect-ratio: 1; border-radius: 24%; display: grid; place-items: center; background: #05070d; box-shadow: 0 20px 55px rgb(0 0 0 / .3); }
-    .avatar img { width: 82%; height: 82%; object-fit: contain; }
-    .social h3 { margin: 0; font: 400 37px/1.05 var(--display); }
-    .social p { margin: 13px 0 0; color: #b7c4d9; font-size: 13px; line-height: 1.65; }
-    .micro-scene { background: #eef2f7; color: #111827; }
-    .micro-row { min-height: 180px; display: flex; align-items: end; justify-content: center; gap: clamp(22px, 4vw, 54px); }
-    .micro-item { display: grid; gap: 12px; justify-items: center; color: #6b7280; font: 10px/1 var(--mono); }
-    .micro-item img { width: var(--size); height: var(--size); }
-    .spec-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
-    .spec-card { min-width: 0; padding: 30px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .spec-card.primary { background: color-mix(in oklch, var(--blue) 7%, var(--surface)); }
-    .spec-kicker { color: var(--blue); font: 800 9px/1 var(--mono); letter-spacing: .17em; text-transform: uppercase; }
-    .spec-card h3 { margin: 18px 0 8px; font: 400 31px/1 var(--display); letter-spacing: -.035em; }
-    .spec-range { margin: 0 0 21px; color: var(--fg); font: 700 18px/1 var(--mono); font-variant-numeric: tabular-nums; }
-    .spec-card p { min-height: 66px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-    .spec-preview { height: 178px; display: grid; place-items: center; margin: 27px 0 23px; border: 1px solid var(--border); background: #02040a; }
-    .spec-preview.paper-preview { background: #f8fafc; }
-    .spec-preview img { width: var(--preview); height: var(--preview); object-fit: contain; }
-    .spec-meta { display: grid; gap: 9px; margin: 0; }
-    .spec-meta div { display: flex; justify-content: space-between; gap: 20px; padding-top: 9px; border-top: 1px solid var(--border); }
-    .spec-meta dt { color: var(--quiet); font: 700 9px/1.45 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
-    .spec-meta dd { margin: 0; color: var(--muted); font-size: 12px; text-align: right; }
-    .clearspace-board { display: grid; grid-template-columns: minmax(320px, .78fr) 1.22fr; border: 1px solid var(--border); }
-    .clearspace-visual { position: relative; min-height: 490px; display: grid; place-items: center; overflow: hidden; background: #02040a; }
-    .clearspace-visual::before { content: ""; position: absolute; width: 62%; aspect-ratio: 1; border: 1px dashed var(--blue); }
-    .clearspace-visual::after { content: "1×"; position: absolute; top: 17%; left: 18%; color: var(--blue); font: 800 11px/1 var(--mono); }
-    .clearspace-visual img { width: 48%; height: 48%; object-fit: contain; }
-    .clearspace-copy { padding: clamp(34px, 5vw, 74px); border-left: 1px solid var(--border); }
-    .clearspace-copy h3 { margin: 0 0 20px; font: 400 clamp(36px, 4vw, 56px)/1 var(--display); letter-spacing: -.045em; }
-    .clearspace-copy > p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
-    .measure-list { display: grid; gap: 0; margin: 35px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
-    .measure-list li { display: grid; grid-template-columns: 90px 1fr; gap: 18px; padding: 15px 0; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .measure-list b { color: var(--fg); font: 800 11px/1.5 var(--mono); }
-    .palette { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
-    .swatch { min-width: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .swatch-color { height: 152px; background: var(--swatch); }
-    .swatch-copy { min-height: 168px; padding: 19px 17px; }
-    .swatch h3 { margin: 0 0 9px; font: 600 14px/1.25 var(--body); }
-    .swatch p { margin: 0; color: var(--muted); font: 10px/1.65 var(--mono); overflow-wrap: anywhere; }
-    .swatch small { display: block; margin-top: 13px; color: var(--quiet); font-size: 11px; line-height: 1.5; }
-    .color-contracts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-left: 1px solid var(--border); }
-    .color-contract { min-height: 220px; padding: 28px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .color-contract b { display: block; margin-bottom: 25px; color: var(--blue); font: 800 9px/1 var(--mono); letter-spacing: .15em; }
-    .color-contract h3 { margin: 0 0 11px; font: 400 26px/1.1 var(--display); }
-    .color-contract p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-    .usage-wrap { overflow-x: auto; border: 1px solid var(--border); }
-    .usage-table { width: 100%; min-width: 880px; border-collapse: collapse; }
-    .usage-table th, .usage-table td { padding: 18px 20px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-    .usage-table th { color: var(--quiet); font: 800 9px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
-    .usage-table td { color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .usage-table td:first-child { color: var(--fg); font-weight: 650; }
-    .usage-table tr:last-child td { border-bottom: 0; }
-    .asset-code { color: var(--cyan); font: 11px/1.5 var(--mono); }
-    .dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--dot); vertical-align: 1px; }
-    .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 96px; border-left: 1px solid var(--border); }
-    .rule { min-height: 230px; padding: 30px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); }
-    .rule b { display: block; margin-bottom: 36px; color: var(--blue); font: 800 10px/1 var(--mono); letter-spacing: .16em; }
-    .rule h3 { margin: 0 0 12px; font: 400 27px/1.1 var(--display); }
-    .rule p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-    footer { min-height: 120px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); color: var(--quiet); font: 700 10px/1.5 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
-    @media (max-width: 980px) {
-      .hero, .section-head, .context-grid { grid-template-columns: 1fr; }
-      .hero { padding-top: 62px; }
-      .hero-mark { min-height: 520px; }
-      .variant-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .spec-grid { grid-template-columns: 1fr; }
-      .clearspace-board { grid-template-columns: 1fr; }
-      .clearspace-copy { border-left: 0; border-top: 1px solid var(--border); }
-      .palette { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      .context-column + .context-column { border-left: 0; border-top: 1px solid var(--border); }
-    }
-    @media (max-width: 680px) {
-      .wrap { width: min(100% - 28px, 1420px); }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 28px, 680px); }
       .meta { display: none; }
-      .hero { min-height: 0; grid-template-columns: minmax(0, 1fr); gap: 48px; }
-      .hero-mark { min-height: 410px; }
-      .section-head { padding-top: 72px; }
-      .variant-grid, .color-contracts { grid-template-columns: 1fr; }
-      .palette { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .clearspace-visual { min-height: 360px; }
-      .social { grid-template-columns: 92px 1fr; }
-      .avatar { width: 92px; }
-      .readme-lockup { align-items: flex-start; }
-      .readme-lockup img { width: 64px; height: 64px; }
-      .rules { grid-template-columns: 1fr; }
+      .hero { padding: 48px 0 60px; }
+      .hero-points, .tier-grid { grid-template-columns: 1fr; }
+      .hero-points li { display: grid; grid-template-columns: 92px 1fr; gap: 12px; }
+      section { padding: 60px 0; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 18px; text-align: left; }
+      .asset-grid, .scene-grid, .rule-grid { grid-template-columns: 1fr; }
+      .avatar-scene { grid-column: auto; }
+      .palette { grid-template-columns: repeat(2, 1fr); }
+      .asset-copy p, .tier p { min-height: 0; }
+      .mode-switch { left: 12px; top: 12px; }
+      .mode-btn { min-height: 34px; padding: 0 9px; }
+    }
+    @media (max-width: 480px) {
+      .shell { width: min(100% - 20px, 440px); }
+      .topbar { min-height: 66px; }
+      .hero-stage { border-radius: 24px; }
+      .hero-stage::before { display: none; }
+      .mode-note { display: none; }
+      .palette { grid-template-columns: 1fr; }
+      .readme-lockup { align-items: flex-start; flex-direction: column; }
       footer { align-items: flex-start; flex-direction: column; justify-content: center; }
     }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .hero-mark { animation: none; } }
   </style>
 </head>
 <body>
-  <header class="wrap topbar">
-    <div class="brand"><img src="../../web/public/brand/ariel-logo-micro.svg" alt="" /><strong>Ariel</strong></div>
-    <div class="meta">Mythic Ariel · size &amp; color system · 2026</div>
-  </header>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="返回 Ariel 风之信使品牌系统顶部"><img src="../../web/public/brand/ariel-logo-wind-messenger-micro.svg" alt="" /><strong>Ariel</strong></a>
+      <div class="meta">Wind messenger · identity system · 2026</div>
+    </header>
 
-  <main class="wrap">
-    <section class="hero">
-      <div>
-        <p class="eyebrow">Adopted mark · size &amp; color system</p>
-        <h1>一位信使，<br />多处回响。</h1>
-        <p class="lead">以《暴风雨》中 Ariel 化身鹰身女妖、在多处替 Prospero 传令的典故为核心。<strong>彩色与单色共用同一位神话信使：胸前唯一 relay core 向十处发令，单色稿只减线，不换形象。</strong></p>
-        <ul class="principle">
-          <li><b>01</b><span>人物保持中性、冷静，不做天使、女神或攻击性怪物。</span></li>
-          <li><b>02</b><span>彩色只存在于神话主版，不再派生卡通化产品彩色稿。</span></li>
-          <li><b>03</b><span>单色稿保留面孔、羽翼与十路传令，只删除纹理、光影和重复羽线。</span></li>
-        </ul>
-        <div class="mode-row" role="group" aria-label="切换 Logo 版本">
-          <button class="mode-btn" type="button" data-mode="master" aria-pressed="true">神话彩色主版</button>
-          <button class="mode-btn" type="button" data-mode="mono" aria-pressed="false">简化单色神话版</button>
-        </div>
-      </div>
-      <div class="hero-mark" id="hero-mark" data-mode="master">
-        <img id="hero-logo" src="../../web/public/brand/ariel-logo-mythic-color.png" alt="Ariel 风暴鹰身鲜明彩色主徽记" />
-        <span class="mark-note" id="mark-note">Mythic vivid · social / launch</span>
-      </div>
-    </section>
-
-    <section aria-labelledby="variants-title">
-      <div class="section-head">
-        <h2 id="variants-title">同一位神话信使，三种媒介表达。</h2>
-        <p>彩色主版负责完整叙事；深墨与反白单色版都由原始神话形象直接减线而来，不再保留独立的产品彩色版本。</p>
-      </div>
-      <div class="variant-grid">
-        <article class="variant">
-          <div class="variant-art mythic"><img src="../../web/public/brand/ariel-logo-mythic-color.png" alt="神话鲜明彩色主徽记" /></div>
-          <div class="variant-body">
-            <span class="variant-kicker">Hero · mythic color</span>
-            <h3>神话鲜明彩色主版</h3>
-            <p>品牌首选。冷银与高饱和风暴蓝建立形体，金色命令源驱动十路传令，适用于发布首图、头像与演示封面。</p>
-            <div class="asset-actions"><a class="asset-link primary" href="../../web/public/brand/ariel-logo-mythic-color.png" download>PNG · 1254</a></div>
-          </div>
-        </article>
-        <article class="variant">
-          <div class="variant-art paper"><img src="../../web/public/brand/ariel-logo-mythic-ink.png" alt="浅色背景简化单色神话徽记" /></div>
-          <div class="variant-body">
-            <span class="variant-kicker">Primary mono · dark ink</span>
-            <h3>神话单色深墨版</h3>
-            <p>由原始灰阶神话版直接减线。保留正面凝视、鹰翼包围与十路传令，用于浅色 README、文档和印刷。</p>
-            <div class="asset-actions"><a class="asset-link primary" href="../../web/public/brand/ariel-logo-mythic-ink.png" download>PNG · 1254</a></div>
-          </div>
-        </article>
-        <article class="variant">
-          <div class="variant-art indigo"><img src="../../web/public/brand/ariel-logo-mythic-white.png" alt="深色背景简化单色神话徽记" /></div>
-          <div class="variant-body">
-            <span class="variant-kicker">Primary mono · reverse</span>
-            <h3>神话单色反白版</h3>
-            <p>与深墨版结构完全一致，仅反转为风暴银。用于深色终端、夜间控制台、水印与单色物料。</p>
-            <div class="asset-actions"><a class="asset-link primary" href="../../web/public/brand/ariel-logo-mythic-white.png" download>PNG · 1254</a></div>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section aria-labelledby="size-title">
-      <div class="section-head">
-        <h2 id="size-title">尺寸不是缩放问题，而是细节切换。</h2>
-        <p>以最终显示宽度为准，不以源文件像素为准。跨越阈值时替换资产，不对复杂主版做无限缩小，也不把微标放大成主视觉。</p>
-      </div>
-      <div class="spec-grid">
-        <article class="spec-card primary">
-          <span class="spec-kicker">Tier 01 · narrative</span>
-          <h3>神话主版</h3>
-          <div class="spec-range">≥ 320 px</div>
-          <p>保留完整绘制、明暗层次与风暴氛围。适合需要先讲清典故、再建立品牌记忆的高关注场景。</p>
-          <div class="spec-preview"><img style="--preview:320px" src="../../web/public/brand/ariel-logo-mythic-color.png" alt="神话主版尺寸预览" /></div>
-          <dl class="spec-meta">
-            <div><dt>数字端最小</dt><dd>320 × 320 px</dd></div>
-            <div><dt>印刷端最小</dt><dd>60 × 60 mm</dd></div>
-            <div><dt>推荐导出</dt><dd>512 / 1024 / 2048 px</dd></div>
-          </dl>
-        </article>
-        <article class="spec-card">
-          <span class="spec-kicker">Tier 02 · mythic mono</span>
-          <h3>简化单色神话版</h3>
-          <div class="spec-range">128—319 px</div>
-          <p>人物、羽翼、风暴尖角与十路传令全部保留；删除材质纹理、渐变光效、重复轮廓和过细羽线。</p>
-          <div class="spec-preview paper-preview"><img style="--preview:128px" src="../../web/public/brand/ariel-logo-mythic-ink.png" alt="简化单色神话标志尺寸预览" /></div>
-          <dl class="spec-meta">
-            <div><dt>数字端最小</dt><dd>128 × 128 px</dd></div>
-            <div><dt>印刷端最小</dt><dd>24 × 24 mm</dd></div>
-            <div><dt>推荐格式</dt><dd>透明 PNG</dd></div>
-          </dl>
-        </article>
-        <article class="spec-card">
-          <span class="spec-kicker">Tier 03 · mono micro</span>
-          <h3>神话微标</h3>
-          <div class="spec-range">16—127 px</div>
-          <p>不再缩小人物五官，只提取上下风暴尖角、双翼包围和中心六路分发，严格保持单色。</p>
-          <div class="spec-preview paper-preview"><img style="--preview:48px" src="../../web/public/brand/ariel-logo-micro.svg" alt="单色神话微标尺寸预览" /></div>
-          <dl class="spec-meta">
-            <div><dt>绝对最小</dt><dd>16 × 16 px</dd></div>
-            <div><dt>常用尺寸</dt><dd>24 / 32 / 48 px</dd></div>
-            <div><dt>推荐格式</dt><dd>SVG / PNG-64</dd></div>
-          </dl>
-        </article>
-      </div>
-
-      <div class="section-head">
-        <h2>净空与裁切</h2>
-        <p>把中心 relay core 的直径定义为 1×。任何文字、边框、头像裁切或相邻图形，都不得侵入这圈保护区。</p>
-      </div>
-      <div class="clearspace-board">
-        <div class="clearspace-visual"><img src="../../web/public/brand/ariel-logo-mythic-white.png" alt="Ariel 单色神话 Logo 净空示意" /></div>
-        <div class="clearspace-copy">
-          <h3>四周至少留 1×</h3>
-          <p>净空规则统一适用于彩色神话主版与简化单色神话版。方形头像允许让外轮廓占画布宽度的 72%—78%，但必须完整保留上下风暴尖角与两侧端点。</p>
-          <ul class="measure-list">
-            <li><b>1×</b><span>中心 relay core 的完整直径；这是最小净空单位。</span></li>
-            <li><b>头像</b><span>Logo 视觉占比 72%—78%，居中，不裁切外轮廓。</span></li>
-            <li><b>与字标</b><span>图形与 “Ariel” 间距为 0.75×；字标垂直居中于徽记。</span></li>
-            <li><b>禁止</b><span>不可只截取人物脸部，不可压扁，不可旋转，不可把端点挪出外框。</span></li>
+    <main id="top">
+      <div class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Adopted direction · the wind messenger</p>
+          <h1>风之信使</h1>
+          <p class="lead">Ariel 不再是令人畏惧的风暴化身，而是<strong>从晨风中接令、向六处持续送信的空气精灵</strong>。打开的羽翼表达自由，中央晨星表达唯一命令源，六条风带对应多个 Codex App。</p>
+          <ul class="hero-points">
+            <li><b>浪漫</b><span>侧身、闭目与晨光，去掉凝视和威慑</span></li>
+            <li><b>可靠</b><span>六路都从同一个 relay core 清晰出发</span></li>
+            <li><b>克制</b><span>金色只标记命令与接收，不做装饰</span></li>
           </ul>
         </div>
-      </div>
-    </section>
 
-    <section aria-labelledby="color-title">
-      <div class="section-head">
-        <h2 id="color-title">色彩承担语义，不承担装饰。</h2>
-        <p>午夜、饱和蓝与冷银构成人物；蓝青描述“正在传令”；金色标记命令源，珊瑚只勾勒两处风暴闪光。绘画感神话主版允许明暗变化，工程色值以这组锚点色为准。</p>
+        <figure class="hero-stage" id="hero-stage" aria-label="Ariel 风之信使 Logo 版本预览">
+          <div class="mode-switch" role="group" aria-label="切换 Logo 版本">
+            <button class="mode-btn" type="button" data-mode="color" aria-pressed="true">彩色主版</button>
+            <button class="mode-btn" type="button" data-mode="ink" aria-pressed="false">深墨单色</button>
+            <button class="mode-btn" type="button" data-mode="white" aria-pressed="false">反白单色</button>
+            <button class="mode-btn" type="button" data-mode="micro" aria-pressed="false">微标</button>
+          </div>
+          <img class="hero-mark" id="hero-mark" src="../../web/public/brand/ariel-logo-wind-messenger-color.png" alt="Ariel 风之信使彩色主标：侧身空气精灵展开双翼，从中央晨星向六处传令" />
+          <figcaption class="mode-note" id="mode-note">Mythic color · ≥ 320 px</figcaption>
+        </figure>
       </div>
-      <div class="palette">
-        <article class="swatch"><div class="swatch-color" style="--swatch:#02040a"></div><div class="swatch-copy"><h3>Night Canvas</h3><p>#02040A<br />oklch(10.71% 0.0194 262.03)</p><small>主背景、头像底色</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#071a3d"></div><div class="swatch-copy"><h3>Tempest Navy</h3><p>#071A3D<br />oklch(22.63% 0.0719 261.12)</p><small>外轮廓、人物主体</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#0b4f9c"></div><div class="swatch-copy"><h3>Wing Cobalt</h3><p>#0B4F9C<br />oklch(43.53% 0.1404 256.01)</p><small>羽翼层次、内部线条</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#f2faff"></div><div class="swatch-copy"><h3>Storm Silver</h3><p>#F2FAFF<br />oklch(98.05% 0.0108 234.81)</p><small>面部、羽翼高光</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#00a8ff"></div><div class="swatch-copy"><h3>Relay Azure</h3><p>#00A8FF<br />oklch(70.26% 0.1696 242.92)</p><small>中心、传令风路、端点</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#63f4ff"></div><div class="swatch-copy"><h3>Air Cyan</h3><p>#63F4FF<br />oklch(89.33% 0.1238 202.21)</p><small>信号高光，仅作点睛</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#ffc247"></div><div class="swatch-copy"><h3>Command Gold</h3><p>#FFC247<br />oklch(84.87% 0.1508 81.27)</p><small>命令源、核心内环</small></div></article>
-        <article class="swatch"><div class="swatch-color" style="--swatch:#ff5a47"></div><div class="swatch-copy"><h3>Tempest Coral</h3><p>#FF5A47<br />oklch(68.57% 0.2038 29.77)</p><small>上下风暴闪光轮廓</small></div></article>
-      </div>
-      <div class="color-contracts">
-        <article class="color-contract"><b>FULL COLOR</b><h3>鲜明彩色版</h3><p>优先放在 Night Canvas 或深靛背景上。Relay Azure 只用于中心、传令风路和端点；与 Night Canvas 的对比度为 7.85:1。Command Gold 只标记命令源。</p></article>
-        <article class="color-contract"><b>MONO · LIGHT</b><h3>浅底单色</h3><p>使用 Deep Ink <span class="asset-code">#111827</span>，背景建议为白色或中性浅灰；对白对比度为 17.74:1。不得保留蓝色端点。</p></article>
-        <article class="color-contract"><b>MONO · DARK</b><h3>深底反白</h3><p>使用 Light Ink <span class="asset-code">#F7F9FC</span>，与 Night Canvas 的对比度为 19.44:1。严格一色，不依赖半透明和灰阶。</p></article>
-      </div>
-    </section>
 
-    <section aria-labelledby="usage-title">
-      <div class="section-head">
-        <h2 id="usage-title">场景选择表</h2>
-        <p>先看最终显示尺寸，再看背景与媒介。若尺寸与叙事需求冲突，以清晰度优先。</p>
-      </div>
-      <div class="usage-wrap">
-        <table class="usage-table">
-          <thead><tr><th>场景</th><th>推荐尺寸</th><th>版本</th><th>背景 / 色彩</th><th>资产</th></tr></thead>
-          <tbody>
-            <tr><td>README 首图 / 发布封面</td><td>≥ 320 px</td><td>神话鲜明彩色主版</td><td><span class="dot" style="--dot:#02040a"></span>Night Canvas</td><td class="asset-code">ariel-logo-mythic-color.png</td></tr>
-            <tr><td>社交头像 / GitHub Org</td><td>320—1024 px</td><td>神话彩色主版</td><td><span class="dot" style="--dot:#02040a"></span>深色方形画布</td><td class="asset-code">ariel-logo-mythic-color.png</td></tr>
-            <tr><td>README 中等展示 / 登录页</td><td>128—319 px</td><td>简化单色神话版</td><td><span class="dot" style="--dot:#f8fafc"></span>按背景选择深墨或反白</td><td class="asset-code">ariel-logo-mythic-ink.png / ariel-logo-mythic-white.png</td></tr>
-            <tr><td>Web 控制台导航</td><td>24—64 px</td><td>单色神话微标</td><td><span class="dot" style="--dot:#02040a"></span>按背景反相</td><td class="asset-code">ariel-logo-micro.svg</td></tr>
-            <tr><td>Favicon / 状态栏</td><td>16 / 32 / 48 px</td><td>单色神话微标</td><td><span class="dot" style="--dot:#f8fafc"></span>黑白均可</td><td class="asset-code">ariel-logo-micro.svg</td></tr>
-            <tr><td>浅色文档 / 印刷</td><td>≥ 128 px / ≥ 24 mm</td><td>神话单色深墨版</td><td><span class="dot" style="--dot:#f8fafc"></span>白或中性浅灰</td><td class="asset-code">ariel-logo-mythic-ink.png</td></tr>
-            <tr><td>深色终端 / 水印</td><td>≥ 128 px</td><td>神话单色反白版</td><td><span class="dot" style="--dot:#13213b"></span>黑或深靛</td><td class="asset-code">ariel-logo-mythic-white.png</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section aria-labelledby="contexts-title">
-      <div class="section-head">
-        <h2 id="contexts-title">放进真实场景，仍然是 Ariel。</h2>
-        <p>同一套识别不追求“所有尺寸完全一样”，而是保持四个不可丢的基因：菱圆外轮廓、中性面孔、翼形包围、中心向多处传令。</p>
-      </div>
-      <div class="context-grid">
-        <div class="context-column">
-          <article class="scene github">
-            <span class="scene-label">GitHub · light</span>
-            <div class="repo-line"><i class="repo-dot"></i><span>wu8685 / Ariel</span></div>
-            <div class="readme-lockup"><img src="../../web/public/brand/ariel-logo-mythic-ink.png" alt="" /><div><strong>Ariel</strong><span>Continue your Codex session from anywhere.</span></div></div>
-          </article>
-          <article class="scene console">
-            <span class="scene-label">Console · night</span>
-            <div class="console-bar"><div class="console-brand"><img src="../../web/public/brand/ariel-logo-micro.svg" alt="" /><strong>Ariel</strong></div><span class="connected">relay active</span></div>
-            <div class="relay-panel"><p>ACTIVE SESSION<b>Mac Studio → iPhone → Web</b></p><i class="pulse"></i></div>
-          </article>
+      <section aria-labelledby="assets-title">
+        <div class="section-head">
+          <h2 id="assets-title">同一位信使，四种交付资产。</h2>
+          <p>图形不再分裂成不同风格。彩色版负责完整叙事，单双色版只减色与减线，微标只保留打开双翼、中央星与六路接收。</p>
         </div>
-        <div class="context-column">
-          <article class="scene social">
-            <span class="scene-label">Social avatar</span>
-            <div class="avatar"><img src="../../web/public/brand/ariel-logo-mythic-white.png" alt="" /></div>
-            <div><h3>识别靠轮廓，记忆靠传令。</h3><p>头像裁切保留完整菱圆边界，不单独裁人物脸部。</p></div>
-          </article>
-          <article class="scene micro-scene">
-            <span class="scene-label">Micro · 16—48 px</span>
-            <div class="micro-row">
-              <span class="micro-item" style="--size:16px"><img src="../../web/public/brand/ariel-logo-micro.svg" alt="" />16</span>
-              <span class="micro-item" style="--size:24px"><img src="../../web/public/brand/ariel-logo-micro.svg" alt="" />24</span>
-              <span class="micro-item" style="--size:32px"><img src="../../web/public/brand/ariel-logo-micro.svg" alt="" />32</span>
-              <span class="micro-item" style="--size:48px"><img src="../../web/public/brand/ariel-logo-micro.svg" alt="" />48</span>
-            </div>
-          </article>
+        <div class="asset-grid">
+          <article class="asset-card"><div class="asset-art airy"><img src="../../web/public/brand/ariel-logo-wind-messenger-color-512.png" alt="风之信使彩色主版" /></div><div class="asset-copy"><small>Hero · full color</small><h3>彩色主版</h3><p>珍珠白、群青、天蓝、鸢尾紫与晨金。用于 README 首图、官网 Hero、发布物料与社交主视觉。</p><a class="download" href="../../web/public/brand/ariel-logo-wind-messenger-color.png" download>下载 PNG · 1254</a></div></article>
+          <article class="asset-card"><div class="asset-art"><img src="../../web/public/brand/ariel-logo-wind-messenger-ink.png" alt="风之信使深墨单色版" /></div><div class="asset-copy"><small>Mono · light surface</small><h3>深墨单色</h3><p>直接继承侧身、双翼与六路传令，以单一 Wind Indigo 用于浅底文档、锁屏与中等尺寸品牌区。</p><a class="download" href="../../web/public/brand/ariel-logo-wind-messenger-ink.png" download>下载 PNG · 1254</a></div></article>
+          <article class="asset-card"><div class="asset-art night"><img src="../../web/public/brand/ariel-logo-wind-messenger-white.png" alt="风之信使反白单色版" /></div><div class="asset-copy"><small>Mono · dark surface</small><h3>反白单色</h3><p>与深墨版完全同构，使用 Cloud White。用于深色产品背景、终端、演示封面与受限颜色媒介。</p><a class="download" href="../../web/public/brand/ariel-logo-wind-messenger-white.png" download>下载 PNG · 1254</a></div></article>
+          <article class="asset-card micro"><div class="asset-art"><img src="../../web/public/brand/ariel-logo-wind-messenger-micro.svg" alt="风之信使微标" /></div><div class="asset-copy"><small>Micro · 16–127 px</small><h3>六路微标</h3><p>小尺寸不硬缩人物；用双翼、中央命令星和六个接收点维持品牌语义。用于导航、favicon 与头像。</p><a class="download" href="../../web/public/brand/ariel-logo-wind-messenger-micro.svg" download>下载 SVG</a></div></article>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section aria-labelledby="rules-title">
-      <div class="section-head">
-        <h2 id="rules-title">使用边界</h2>
-        <p>这枚徽记的复杂度来自神话叙事，不来自装饰。控制色彩与尺寸，才能让它既像古老使者，也像现代 relay service。</p>
-      </div>
-      <div class="rules">
-        <article class="rule"><b>COLOR</b><h3>彩色只属于神话主版</h3><p>不再制作独立产品彩色稿。需要色彩时使用完整神话主版；日常识别、文档与受限媒介统一使用单色神话稿。</p></article>
-        <article class="rule"><b>SCALE</b><h3>跨阈值就换细节层级</h3><p>320 px 以下切换简化单色神话版，128 px 以下切换单色 micro。不要锐化或加粗人物五官来挽救错误尺寸。</p></article>
-        <article class="rule"><b>SPACE</b><h3>至少留一个核心直径</h3><p>Logo 四周净空不得小于中心 relay core 的直径。头像中不可切断上下风暴尖角。</p></article>
-      </div>
-    </section>
-  </main>
+      <section aria-labelledby="size-title">
+        <div class="section-head">
+          <h2 id="size-title">尺寸改变时，细节层级也要改变。</h2>
+          <p>阈值按最终显示宽度判断，不按源文件分辨率判断。清晰度优先于“所有场景都长得完全一样”。</p>
+        </div>
+        <div class="tier-grid">
+          <article class="tier primary"><span class="tier-index">TIER 01</span><h3>彩色主版</h3><p class="range">≥ 320 px</p><p>完整保留人物、羽翼、色彩与六条传令路径。适合品牌叙事，不用于导航或 favicon。</p><div class="tier-preview"><span class="size-item" style="--size:150px"><img src="../../web/public/brand/ariel-logo-wind-messenger-color-512.png" alt="彩色主版 320 像素以上预览" />320+</span></div></article>
+          <article class="tier"><span class="tier-index">TIER 02</span><h3>单色主版</h3><p class="range">128–319 px</p><p>中尺寸使用同源单色稿。浅底用深墨，深底用反白；不得把彩色主版滤镜化。</p><div class="tier-preview"><span class="size-item" style="--size:128px"><img src="../../web/public/brand/ariel-logo-wind-messenger-ink.png" alt="单色主版 128 像素预览" />128</span></div></article>
+          <article class="tier"><span class="tier-index">TIER 03</span><h3>六路微标</h3><p class="range">16–127 px</p><p>导航常用 24/32 px，应用图标常用 64/96 px。16 px 为绝对数字下限。</p><div class="tier-preview"><span class="size-item" style="--size:16px"><img src="../../web/public/brand/ariel-logo-wind-messenger-micro.svg" alt="微标 16 像素预览" />16</span><span class="size-item" style="--size:32px"><img src="../../web/public/brand/ariel-logo-wind-messenger-micro.svg" alt="微标 32 像素预览" />32</span><span class="size-item" style="--size:64px"><img src="../../web/public/brand/ariel-logo-wind-messenger-micro.svg" alt="微标 64 像素预览" />64</span></div></article>
+        </div>
+      </section>
 
-  <footer class="wrap"><span>Ariel · storm harpy identity</span><span>one messenger · many destinations</span></footer>
+      <section aria-labelledby="color-title">
+        <div class="section-head">
+          <h2 id="color-title">清晨的风，不是糖果色。</h2>
+          <p>冷色承担空气、稳定与软件感；晨金只标记“命令从哪里发出、被哪里接收”。不使用霓虹描边、卡通高光或全幅渐变。</p>
+        </div>
+        <div class="palette">
+          <article class="swatch"><div class="swatch-color" style="--swatch:#F7FBFF"></div><div class="swatch-copy"><h3>Cloud White</h3><p>#F7FBFF</p><small>浅色基底、羽翼留白</small></div></article>
+          <article class="swatch"><div class="swatch-color" style="--swatch:#162B5C"></div><div class="swatch-copy"><h3>Wind Indigo</h3><p>#162B5C</p><small>轮廓、单色主标</small></div></article>
+          <article class="swatch"><div class="swatch-color" style="--swatch:#246BFD"></div><div class="swatch-copy"><h3>Relay Blue</h3><p>#246BFD</p><small>主行动、深层羽翼</small></div></article>
+          <article class="swatch"><div class="swatch-color" style="--swatch:#72C7FF"></div><div class="swatch-copy"><h3>Open Sky</h3><p>#72C7FF</p><small>风带、轻层次</small></div></article>
+          <article class="swatch"><div class="swatch-color" style="--swatch:#7A72E8"></div><div class="swatch-copy"><h3>Iris Air</h3><p>#7A72E8</p><small>次级风带，限量使用</small></div></article>
+          <article class="swatch"><div class="swatch-color" style="--swatch:#F6B942"></div><div class="swatch-copy"><h3>Dawn Gold</h3><p>#F6B942</p><small>命令源与六个接收点</small></div></article>
+        </div>
+      </section>
+
+      <section aria-labelledby="scene-title">
+        <div class="section-head">
+          <h2 id="scene-title">进入产品后，Logo 应当安静下来。</h2>
+          <p>主标负责讲故事；产品导航只负责识别。不同媒介使用不同层级，避免把完整人物塞进 24 px。</p>
+        </div>
+        <div class="scene-grid">
+          <article class="scene readme"><span class="scene-label">GitHub / README</span><div class="repo">wu8685 / Ariel</div><div class="readme-lockup"><img src="../../web/public/brand/ariel-logo-wind-messenger-ink.png" alt="" /><div><strong>Ariel</strong><span>A persistent relay for multiple Codex Apps.</span></div></div></article>
+          <article class="scene console"><span class="scene-label">Product / dark</span><div class="console-bar"><div class="console-brand"><img src="../../web/public/brand/ariel-logo-wind-messenger-micro-white.svg" alt="" /><strong>Ariel</strong></div><span class="online">relay active</span></div><div class="relay-card"><small>Connected session</small><b>Continue from any device</b></div></article>
+          <article class="scene avatar-scene"><span class="scene-label">Avatar / 512</span><div class="avatar"><img src="../../web/public/brand/ariel-logo-wind-messenger-color-512.png" alt="Ariel 风之信使头像效果" /></div></article>
+        </div>
+      </section>
+
+      <section aria-labelledby="rules-title">
+        <div class="section-head">
+          <h2 id="rules-title">四条规则，守住浪漫而不失专业。</h2>
+          <p>净空以中央晨星直径为 1×。主标四周至少保留 1×，头像中图形占画布宽度 76%–82%。</p>
+        </div>
+        <div class="rule-grid">
+          <article class="rule"><b>01 · SOURCE</b><h3>只有一个命令源</h3><p>中央晨星是唯一金色源点。不得增加第二个中心、额外光环或装饰星群。</p></article>
+          <article class="rule"><b>02 · ROUTES</b><h3>始终保留六路</h3><p>六条路径对应多 Codex App。不得删成单一路径，也不要添加更多造成噪声。</p></article>
+          <article class="rule"><b>03 · COLOR</b><h3>单色必须真一色</h3><p>浅底使用 #162B5C，深底使用 #F7F9FC。不要用 CSS filter 临时生成单色。</p></article>
+          <article class="rule"><b>04 · TONE</b><h3>不回到卡通或暗黑</h3><p>不加大眼、表情、爪、武器、霓虹外发光、黑暗面具或游戏阵营式徽章。</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer><span>Ariel · the wind messenger</span><span>Color / mono / micro · production-ready assets</span></footer>
+  </div>
 
   <script>
     (function () {
       const modes = {
-        master: { src: "../../web/public/brand/ariel-logo-mythic-color.png", alt: "Ariel 风暴鹰身神话鲜明彩色主徽记", note: "Mythic vivid · social / launch" },
-        mono: { src: "../../web/public/brand/ariel-logo-mythic-ink.png", alt: "Ariel 风暴鹰身简化单色神话徽记", note: "Mythic mono · README / print" }
+        color: { src: "../../web/public/brand/ariel-logo-wind-messenger-color.png", alt: "Ariel 风之信使彩色主标：侧身空气精灵展开双翼，从中央晨星向六处传令", stage: "", note: "Mythic color · ≥ 320 px" },
+        ink: { src: "../../web/public/brand/ariel-logo-wind-messenger-ink.png", alt: "Ariel 风之信使深墨单色主标", stage: "paper", note: "Mono ink · 128–319 px" },
+        white: { src: "../../web/public/brand/ariel-logo-wind-messenger-white.png", alt: "Ariel 风之信使反白单色主标", stage: "night", note: "Mono reverse · 128–319 px" },
+        micro: { src: "../../web/public/brand/ariel-logo-wind-messenger-micro.svg", alt: "Ariel 风之信使六路微标", stage: "paper", note: "Micro · 16–127 px" }
       };
-      const stage = document.getElementById("hero-mark");
-      const image = document.getElementById("hero-logo");
-      const note = document.getElementById("mark-note");
+      const stage = document.getElementById("hero-stage");
+      const mark = document.getElementById("hero-mark");
+      const note = document.getElementById("mode-note");
       document.querySelectorAll(".mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
-          const key = button.dataset.mode;
-          const mode = modes[key];
+          const next = modes[button.dataset.mode];
           document.querySelectorAll(".mode-btn").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
-          image.style.opacity = "0";
-          window.setTimeout(() => {
-            stage.dataset.mode = key;
-            image.src = mode.src;
-            image.alt = mode.alt;
-            note.textContent = mode.note;
-            image.style.opacity = "1";
-          }, 170);
+          stage.className = "hero-stage" + (next.stage ? " " + next.stage : "");
+          mark.src = next.src;
+          mark.alt = next.alt;
+          mark.style.width = button.dataset.mode === "micro" ? "28%" : "91%";
+          note.textContent = next.note;
         });
       });
     })();

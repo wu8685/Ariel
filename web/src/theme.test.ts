@@ -55,12 +55,11 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/prefers-reduced-motion/);
   });
 
-  it("uses the formal currentColor micro logo and a mobile-only dismissible sidebar backdrop", () => {
-    expect(token("color-logo")).toBe("#b8b8b8");
-    expect(style).toMatch(/\.ariel-logo--micro\s*\{[^}]*background:\s*currentColor;[^}]*mask:[^}]*ariel-logo-micro\.svg/s);
-    expect(style).toMatch(/\.brand-logo\s*\{[^}]*color:\s*var\(--color-logo\)/s);
+  it("uses the formal image assets without CSS recoloring and a mobile-only dismissible sidebar backdrop", () => {
+    expect(style).toMatch(/\.ariel-logo\s+img\s*\{[^}]*object-fit:\s*contain/s);
+    expect(style).not.toMatch(/\.ariel-logo[^}]*mask:/s);
     expect(style).not.toMatch(/\.ariel-logo[^}]*filter:/s);
-    expect(html).toContain('rel="icon" type="image/svg+xml" href="/brand/ariel-logo-micro.svg"');
+    expect(html).toContain('rel="icon" type="image/svg+xml" href="/brand/ariel-logo-wind-messenger-micro.svg"');
     expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*none/s);
     expect(style).toMatch(/@media\s*\(max-width:\s*800px\)[\s\S]*\.sidebar-backdrop\s*\{[^}]*display:\s*block/s);
     expect(app).toMatch(/aria-label="关闭会话列表遮罩"[^>]*onClick=\{\(\) => setShowList\(false\)\}/);
@@ -139,7 +138,7 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.message\.assistant\s+\.message-body\s*\{[^}]*background:\s*var\(--color-panel\)/s);
     expect(style).toMatch(/\.message\.user\s*\{[^}]*justify-content:\s*flex-end/s);
     expect(style).toMatch(/\.eyebrow\s*\{[^}]*color:\s*var\(--color-subtle\)/s);
-    expect(style).toMatch(/\.empty-symbol\s+\.session-loading-logo\s*\{[^}]*color:\s*var\(--color-accent\)/s);
+    expect(app).toMatch(/tone="white"[^>]*session-loading-logo/s);
     for (const name of ["color-surface", "color-panel", "color-raised", "color-border"]) {
       const value = token(name).slice(1);
       expect(value.slice(0, 2)).toBe(value.slice(2, 4));

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Ariel wind messenger micro mark</title>
+  <desc id="desc">An eight-point relay star between two open wings, sending six routes to six receivers.</desc>
+  <g fill="none" stroke="#162B5C" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke-width="3.2" d="M29 29C22 26 17 20 14 12c7 2 13 6 18 12M35 29c7-3 12-9 15-17-7 2-13 6-18 12"/>
+    <path stroke-width="2.5" d="M28.5 33.5C21 31 16 24 10.5 17M27.5 35C18 35 14 33 7 32M28.5 37C21 40 16 45 10.5 48M35.5 33.5C43 31 48 24 53.5 17M36.5 35C46 35 50 33 57 32M35.5 37C43 40 48 45 53.5 48"/>
+    <g stroke-width="2.2">
+      <circle cx="8.5" cy="15" r="2.4"/>
+      <circle cx="5.5" cy="32" r="2.4"/>
+      <circle cx="8.5" cy="49" r="2.4"/>
+      <circle cx="55.5" cy="15" r="2.4"/>
+      <circle cx="58.5" cy="32" r="2.4"/>
+      <circle cx="55.5" cy="49" r="2.4"/>
+    </g>
+  </g>
+  <path fill="#162B5C" d="m32 24.5 2.1 5.4 5.4 2.1-5.4 2.1L32 39.5l-2.1-5.4-5.4-2.1 5.4-2.1L32 24.5Z"/>
+</svg>
