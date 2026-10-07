@@ -302,6 +302,26 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByLabelText("排队的后续输入")).toBeNull();
   });
 
+  it("drags a queued item downward even when pointer capture keeps hit-testing the dragged row", async () => {
+    const first = { queueId: "queue-one", clientMessageId: "message-one", text: "第一条", images: [] as [], editable: true };
+    const second = { queueId: "queue-two", clientMessageId: "message-two", text: "第二条", images: [] as [], editable: true };
+    const third = { queueId: "queue-three", clientMessageId: "message-three", text: "第三条", images: [] as [], editable: true };
+    const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active-turn", status: "inProgress", items: [] }], queuedMessages: [first, second, third] };
+    const { requests } = await openFixture(running, true);
+    const handle = screen.getByRole("button", { name: "拖拽排序：第一条" });
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".queue-item[data-queue-id]"));
+    rows.forEach((row, index) => vi.spyOn(row, "getBoundingClientRect").mockReturnValue({ x: 0, y: index * 50, top: index * 50, right: 400, bottom: (index + 1) * 50, left: 0, width: 400, height: 50, toJSON: () => ({}) }));
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: vi.fn(() => handle) });
+
+    fireEvent.pointerDown(handle, { pointerId: 7, clientX: 12, clientY: 25 });
+    fireEvent.pointerMove(handle, { pointerId: 7, clientX: 12, clientY: 140 });
+    fireEvent.pointerUp(handle, { pointerId: 7, clientX: 12, clientY: 140 });
+    delete (document as unknown as { elementFromPoint?: typeof document.elementFromPoint }).elementFromPoint;
+
+    await waitFor(() => expect(requests("queue.reorder")).toHaveLength(1));
+    expect(requests("queue.reorder")[0].params.queueIds).toEqual(["queue-two", "queue-three", "queue-one"]);
+  });
+
   it("keeps a queued item and explains an unsupported guide without mentioning history pagination", async () => {
     const queued = { queueId: "queue-one", clientMessageId: "message-one", text: "继续检查", images: [] as [], editable: true };
     const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active-turn", status: "inProgress", items: [] }], queuedMessages: [queued] };

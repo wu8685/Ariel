@@ -11,6 +11,7 @@ import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
 import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin } from "./projects";
+import { reorderQueueAtPointer } from "./queue-order";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
@@ -936,17 +937,15 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   function updateQueueDrag(event: ReactPointerEvent<HTMLButtonElement>) {
     const drag = queueDrag.current;
-    if (!drag || drag.pointerId !== event.pointerId || Math.abs(event.clientY - drag.startY) < 4 || typeof document.elementFromPoint !== "function") return;
+    if (!drag || drag.pointerId !== event.pointerId || Math.abs(event.clientY - drag.startY) < 4) return;
     event.preventDefault();
     setDraggingQueueId(drag.queueId);
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-queue-id]");
-    const targetID = target?.dataset.queueId;
-    if (!targetID || targetID === drag.queueId) return;
-    const from = drag.order.indexOf(drag.queueId);
-    const to = drag.order.indexOf(targetID);
-    if (from < 0 || to < 0 || from === to) return;
-    const next = [...drag.order];
-    next.splice(to, 0, next.splice(from, 1)[0]);
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".queue-list .queue-item[data-queue-id]"), row => {
+      const rect = row.getBoundingClientRect();
+      return { queueId: row.dataset.queueId || "", top: rect.top, bottom: rect.bottom };
+    });
+    const next = reorderQueueAtPointer(drag.order, drag.queueId, event.clientY, rows);
+    if (next.every((id, index) => id === drag.order[index])) return;
     drag.order = next;
     setDragQueueOrder(next);
   }
