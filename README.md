@@ -36,7 +36,7 @@ flowchart LR
 | 桌面平台 | macOS |
 | Agent App | Codex Desktop |
 | 本机接入 | Codex Desktop 私有 IPC 与内置 Codex App Server |
-| 部署方式 | 单用户、可信局域网 |
+| 部署方式 | 单用户、可信局域网；Relay + Web 可独立容器化 |
 
 这是当前实现矩阵，不是 Ariel 的产品边界。其他桌面平台和 Agent App 尚未适配，也不能由现有测试推断为可用。
 
@@ -85,6 +85,7 @@ Ariel 当前面向单用户、可信局域网使用。默认 HTTP/WebSocket 连�
 ## 深入阅读
 
 - [当前 Codex Adapter 的安装、配置与故障排查](docs/operations/agent-install.md)
+- [用 Docker 部署 Relay + Web](docs/operations/container-deployment.md)
 - [系统架构总览与 Adapter 边界](docs/architecture/overview.md)
 - [当前 Codex Adapter 的兼容性与实测边界](docs/compatibility/2026-10-03-m0.md)
 - [功能规格索引](docs/specs/README.md)

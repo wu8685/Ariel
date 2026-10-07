@@ -71,6 +71,7 @@
 | 0052 | [移动端 Markdown 表格列字体一致](0052-uniform-mobile-markdown-table-type.md) | Implemented（移动截图、自动测试与 production build 已验） | 关闭表格 text inflation，让全部表头与单元格继承统一字号和行高，并补移动端截图回归 |
 | 0053 | [回到最新时稳定恢复会话界面](0053-stable-latest-chrome-restoration.md) | Implemented（自动／真实移动 Chromium／截图已验） | 在 Header／输入区域展开期间持续锚定最新消息，消除布局变化造成的反复收放抖动 |
 | 0054 | [面向 Agent App 的中立产品定位](0054-provider-neutral-public-positioning.md) | Implemented（文档契约／真实浏览器品牌页／build 已验） | 将长期定位与当前 macOS + Codex Desktop Adapter 支持矩阵分层表达，避免用首个实现限制产品边界 |
+| 0055 | [Relay + Web 容器镜像](0055-containerized-relay-image.md) | Implemented（默认 build／隔离 smoke／全量回归已验） | 用多阶段 Dockerfile 构建非 root 的 Relay + Web 镜像，Desktop Agent 保持在桌面宿主机运行 |
 
 ## 设计基线
 
