@@ -1,6 +1,6 @@
 # 0038：排队项双向拖拽排序
 
-- 状态：Implemented（pointer capture 回归、纯排序边界、Web 全量测试与 production build 已验；物理手机待用户复验）。
+- 状态：Implemented（pointer capture／lost capture 回归、390×844 Chromium touch E2E、截图与 production build 已验；物理 iPhone/Safari 待用户复验）。
 - 范围：Web 与手机端排队项左侧手柄的 pointer 拖拽排序。
 
 ## 输入与输出

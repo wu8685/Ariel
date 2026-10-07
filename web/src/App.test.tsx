@@ -302,7 +302,7 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByLabelText("排队的后续输入")).toBeNull();
   });
 
-  it("drags a queued item downward even when pointer capture keeps hit-testing the dragged row", async () => {
+  it("keeps dragging downward after the reordered row loses pointer capture", async () => {
     const first = { queueId: "queue-one", clientMessageId: "message-one", text: "第一条", images: [] as [], editable: true };
     const second = { queueId: "queue-two", clientMessageId: "message-two", text: "第二条", images: [] as [], editable: true };
     const third = { queueId: "queue-three", clientMessageId: "message-three", text: "第三条", images: [] as [], editable: true };
@@ -314,8 +314,10 @@ describe("Ariel app interactions", () => {
     Object.defineProperty(document, "elementFromPoint", { configurable: true, value: vi.fn(() => handle) });
 
     fireEvent.pointerDown(handle, { pointerId: 7, clientX: 12, clientY: 25 });
-    fireEvent.pointerMove(handle, { pointerId: 7, clientX: 12, clientY: 140 });
-    fireEvent.pointerUp(handle, { pointerId: 7, clientX: 12, clientY: 140 });
+    fireEvent.pointerMove(handle, { pointerId: 7, clientX: 12, clientY: 90 });
+    fireEvent.lostPointerCapture(handle, { pointerId: 7, clientX: 12, clientY: 90 });
+    fireEvent.pointerMove(document, { pointerId: 7, clientX: 12, clientY: 140 });
+    fireEvent.pointerUp(document, { pointerId: 7, clientX: 12, clientY: 140 });
     delete (document as unknown as { elementFromPoint?: typeof document.elementFromPoint }).elementFromPoint;
 
     await waitFor(() => expect(requests("queue.reorder")).toHaveLength(1));

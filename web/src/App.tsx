@@ -25,6 +25,7 @@ const latestFollowDistance = 80;
 type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: number; scrollHeight: number };
 type PhonePairing = { credential: string; phase: "confirm" | "connecting" | "error" };
 type PairingInvite = { status: "loading" | "waiting" | "consumed" | "expired" | "error"; credential: string; expiresAt: number; qr: string; message: string };
+type QueueDragState = { pointerId: number; queueId: string; startY: number; order: string[]; cleanup: () => void };
 
 function readingKey(deviceId: string, threadId: string): string { return `${deviceId}\u0000${threadId}`; }
 
@@ -210,7 +211,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const permissionInfoRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pairingGeneration = useRef(0);
-  const queueDrag = useRef<{ pointerId: number; queueId: string; startY: number; order: string[] } | null>(null);
+  const queueDrag = useRef<QueueDragState | null>(null);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
   const allThreadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
@@ -446,7 +447,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
     selection.current = { deviceId: targetDevice, threadId: id, view: null };
-    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
+    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
     const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
@@ -590,7 +591,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -678,11 +679,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (!dragQueueOrder.length) return;
     const current = queuedMessages.map(item => item.queueId);
     if (current.length !== dragQueueOrder.length || current.some(id => !dragQueueOrder.includes(id))) {
-      queueDrag.current = null;
-      setDraggingQueueId("");
-      setDragQueueOrder([]);
+      cancelQueueDrag();
     }
   }, [queuedMessages, dragQueueOrder]);
+
+  useEffect(() => () => { queueDrag.current?.cleanup(); }, []);
 
   useLayoutEffect(() => {
     const input = composerInputRef.current;
@@ -929,13 +930,24 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   function beginQueueDrag(item: QueuedMessage, event: ReactPointerEvent<HTMLButtonElement>) {
     if (working || queueWorking) return;
+    cancelQueueDrag();
     const order = queuedMessages.map(queued => queued.queueId);
-    queueDrag.current = { pointerId: event.pointerId, queueId: item.queueId, startY: event.clientY, order };
+    const move = (pointerEvent: PointerEvent) => updateQueueDrag(pointerEvent);
+    const up = (pointerEvent: PointerEvent) => finishQueueDrag(pointerEvent.pointerId, true);
+    const cancel = (pointerEvent: PointerEvent) => finishQueueDrag(pointerEvent.pointerId, false);
+    const cleanup = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      document.removeEventListener("pointercancel", cancel);
+    };
+    queueDrag.current = { pointerId: event.pointerId, queueId: item.queueId, startY: event.clientY, order, cleanup };
+    document.addEventListener("pointermove", move, { passive: false });
+    document.addEventListener("pointerup", up);
+    document.addEventListener("pointercancel", cancel);
     setQueueMenuId("");
-    event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
-  function updateQueueDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+  function updateQueueDrag(event: PointerEvent) {
     const drag = queueDrag.current;
     if (!drag || drag.pointerId !== event.pointerId || Math.abs(event.clientY - drag.startY) < 4) return;
     event.preventDefault();
@@ -950,13 +962,18 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setDragQueueOrder(next);
   }
 
-  function finishQueueDrag(event: ReactPointerEvent<HTMLButtonElement>, submit: boolean) {
+  function cancelQueueDrag() {
     const drag = queueDrag.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     queueDrag.current = null;
+    drag?.cleanup();
     setDraggingQueueId("");
     setDragQueueOrder([]);
+  }
+
+  function finishQueueDrag(pointerId: number, submit: boolean) {
+    const drag = queueDrag.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+    cancelQueueDrag();
     const current = queuedMessages.map(item => item.queueId);
     if (submit && (drag.order.length !== current.length || drag.order.some((id, index) => id !== current[index]))) {
       void mutateQueue("queue.reorder", { queueIds: drag.order }, `reorder:${drag.queueId}`);
@@ -1077,7 +1094,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
               const busy = !!queueWorking || working || !!draggingQueueId;
               const summary = item.text.trim() || (item.images.length ? `${item.images.length} 张截图` : "无法预览的输入");
               return <li className={`queue-item ${editingQueueId === item.queueId ? "editing" : ""} ${draggingQueueId === item.queueId ? "dragging" : ""}`} key={item.queueId} data-queue-id={item.queueId}>
-                <button className="queue-handle" type="button" aria-label={`拖拽排序：${summary}`} title="拖拽排序；也可用上下方向键" onPointerDown={event => beginQueueDrag(item, event)} onPointerMove={updateQueueDrag} onPointerUp={event => finishQueueDrag(event, true)} onPointerCancel={event => finishQueueDrag(event, false)} onLostPointerCapture={event => finishQueueDrag(event, false)} onKeyDown={event => queueHandleKeyDown(index, event)} disabled={!!queueWorking || working}><QueueHandleIcon /></button>
+                <button className="queue-handle" type="button" aria-label={`拖拽排序：${summary}`} title="拖拽排序；也可用上下方向键" onPointerDown={event => beginQueueDrag(item, event)} onKeyDown={event => queueHandleKeyDown(index, event)} disabled={!!queueWorking || working}><QueueHandleIcon /></button>
                 <div className="queue-content"><span className="queue-text">{summary}</span>{item.images.length > 0 && item.text.trim() && <small>{item.images.length} 张截图</small>}{!item.editable && <small>此输入只能删除或调序</small>}</div>
                 <div className="queue-actions">
                   {item.editable && <button className="queue-guide-action" type="button" aria-label={`引导：${summary}`} title="插入当前思考，不中断 Codex" onClick={() => steerQueuedMessage(item)} disabled={busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /><span>引导</span></button>}

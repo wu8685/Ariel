@@ -20,6 +20,13 @@
 3. Mock 测试不能替代真实 Codex Desktop 兼容性验证；所有写操作只允许作用于隔离 fixture。
 4. 未验证能力必须报告为 `unverified` 或明确错误，不能根据方法名或字段猜测为 supported。
 
+## UI 验收
+
+- 涉及手机布局、遮挡、层叠、尺寸、滚动、streaming 稳定性或 pointer／touch 交互的变更，必须在 jsdom 之外补真实浏览器回归。
+- 高风险静态状态使用固定手机 viewport 的截图基线；行为问题同时断言交互结果和关键几何关系，截图不能代替行为断言。
+- 浏览器测试默认使用隔离 WebSocket fixture，不向真实 Codex 会话发送、删除、重排或审批内容；真实环境只做不改变业务数据的 smoke check。
+- Chromium 手机模拟只能称为真实浏览器 viewport／touch 验收，不能冒充物理 iPhone/Safari。无法完成的物理设备项必须明确保留为待用户复验。
+
 ## 安全与数据边界
 
 - Codex 是会话和执行状态的 SSOT；Ariel 不建立第二套会话数据库、离线队列或正文日志。
