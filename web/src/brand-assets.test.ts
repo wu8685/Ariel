@@ -64,7 +64,8 @@ describe("formal Ariel wind-messenger brand assets", () => {
 
   it("uses repository-relative wind-messenger references in README, docs and web metadata", () => {
     const readme = readFileSync(resolve(root, "README.md"), "utf8");
-    expect(readme).toMatch(/web\/public\/brand\/ariel-logo-wind-messenger-color\.png[^>]*width="480"/);
+    expect(readme).toMatch(/^<p align="center">\n  <img src="web\/public\/brand\/ariel-logo-wind-messenger-color\.png" width="480" alt="Ariel 风之信使彩色主版 Logo" \/>\n<\/p>\n\n# Ariel\n/);
+    expect(readme.match(/ariel-logo-wind-messenger-color\.png/g)).toHaveLength(1);
     expect(readme).toContain("docs/brand/logo-guideline.html");
     expect(readme).toContain("docs/brand/brand-spec.md");
 

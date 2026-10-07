@@ -1,8 +1,8 @@
-# Ariel
-
 <p align="center">
   <img src="web/public/brand/ariel-logo-wind-messenger-color.png" width="480" alt="Ariel 风之信使彩色主版 Logo" />
 </p>
+
+# Ariel
 
 Ariel 的正式品牌标识源自《暴风雨》中的空气精灵“风之信使”：胸前晨星作为唯一 relay core，将六条风带送往多个 Codex App。资产的尺寸选择、配色和禁止事项见[品牌使用规范](docs/brand/logo-guideline.html)与[工程化品牌规范](docs/brand/brand-spec.md)。
 
