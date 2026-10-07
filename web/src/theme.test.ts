@@ -82,9 +82,11 @@ describe("fixed Night appearance", () => {
     expect(mobile).not.toMatch(/\.composer textarea\s*\{[^}]*field-sizing:\s*content/s);
     expect(mobile).toMatch(/\.composer-actions\s*\{[^}]*width:\s*100%/s);
     expect(mobile).toMatch(/\.composer-actions\s*>\s*div\s*\{[^}]*width:\s*100%/s);
-    expect(mobile).toMatch(/\.attach-button\s*\{[^}]*margin-right:\s*auto/s);
-    expect(mobile).toMatch(/\.send-button[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
-    expect(mobile).toMatch(/\.stop-button[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.attach-button\s*\{[^}]*min-width:\s*36px;[^}]*min-height:\s*36px;[^}]*margin-right:\s*auto/s);
+    expect(mobile).toMatch(/\.send-button[^}]*min-width:\s*36px;[^}]*min-height:\s*36px/s);
+    expect(mobile).toMatch(/\.stop-button[^}]*min-width:\s*36px;[^}]*min-height:\s*36px/s);
+    expect(mobile).toMatch(/\.send-glyph[^}]*font-size:\s*16px/s);
+    expect(mobile).toMatch(/\.stop-glyph[^}]*font-size:\s*10px/s);
     expect(mobile).toMatch(/\.stop-label\s*\{[^}]*display:\s*none/s);
     expect(mobile).toMatch(/safe-area-inset-bottom/);
   });

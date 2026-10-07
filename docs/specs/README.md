@@ -48,6 +48,8 @@
 | 0031 | [Codex 原生后续输入队列](0031-codex-follow-up-queue.md) | Implemented（自动／真实 Codex fixture 已验；物理手机拖拽待验） | 运行中排队后续输入；支持引导、编辑、删除和拖拽调整顺序，并保持 Desktop owner 唯一执行权 |
 | 0032 | [左侧会话按项目分组](0032-project-grouped-session-sidebar.md) | Implemented（自动已验；物理手机视觉待验） | 以 Codex 会话 `cwd` 为项目身份，将侧栏改为项目 → 会话两级结构 |
 | 0033 | [在指定项目中新建 Codex 会话](0033-create-thread-in-project.md) | Implemented（自动／真实 Codex 空 thread 已验；物理手机待验） | 选择已有项目或绝对目录创建空 Codex thread，再交由 Desktop owner 接管 |
+| 0034 | [项目会话分组默认收起与按需展开](0034-collapsible-project-session-groups.md) | Implemented（自动测试与 production build 已验；物理手机待验） | 所有项目默认最小化收起，点击项目标题独立展开或再次收起 |
+| 0035 | [队列菜单、引导消息可见性与紧凑输入操作](0035-queue-overlay-steer-visibility-and-compact-actions.md) | Implemented（自动测试与 production build 已验；物理手机待验） | 修复队列更多菜单遮挡和引导消息正文丢失，并缩小手机输入操作 icon |
 
 ## 设计基线
 

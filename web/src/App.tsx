@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
@@ -158,6 +159,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [searchRevision, setSearchRevision] = useState(0);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState("");
+  const [expandedProjectKeys, setExpandedProjectKeys] = useState<Set<string>>(() => new Set());
   const [newThreadOpen, setNewThreadOpen] = useState(false);
   const [newThreadCwd, setNewThreadCwd] = useState("");
   const [newThreadError, setNewThreadError] = useState("");
@@ -182,6 +184,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [queueWorking, setQueueWorking] = useState("");
   const [editingQueueId, setEditingQueueId] = useState("");
   const [queueMenuId, setQueueMenuId] = useState("");
+  const [queueMenuPosition, setQueueMenuPosition] = useState({ left: 0, top: 0, above: false });
   const [draggingQueueId, setDraggingQueueId] = useState("");
   const [dragQueueOrder, setDragQueueOrder] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
@@ -350,6 +353,15 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setNewThreadCwd(view?.thread.cwd || selectedThread?.cwd || threadGroups[0]?.path || "");
     setNewThreadError("");
     setNewThreadOpen(true);
+  }
+
+  function toggleProjectGroup(key: string) {
+    setExpandedProjectKeys(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   function closeNewThreadDialog() {
@@ -575,7 +587,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); setDraggingQueueId(""); setDragQueueOrder([]); queueDrag.current = null; resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -648,12 +660,15 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   useEffect(() => {
     if (!queueMenuId) return;
     const close = (event: PointerEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest(".queue-more-wrap")) setQueueMenuId("");
+      if (!(event.target instanceof Element) || (!event.target.closest(".queue-more-wrap") && !event.target.closest(".queue-menu"))) setQueueMenuId("");
     };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setQueueMenuId(""); };
+    const closeForLayoutChange = () => setQueueMenuId("");
     document.addEventListener("pointerdown", close);
+    document.addEventListener("scroll", closeForLayoutChange, true);
     window.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); };
+    window.addEventListener("resize", closeForLayoutChange);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("scroll", closeForLayoutChange, true); window.removeEventListener("keydown", escape); window.removeEventListener("resize", closeForLayoutChange); };
   }, [queueMenuId]);
 
   useEffect(() => {
@@ -895,6 +910,20 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     void mutateQueue("queue.reorder", { queueIds }, `reorder:${queuedMessages[index].queueId}`);
   }
 
+  function toggleQueueMenu(item: QueuedMessage, event: ReactMouseEvent<HTMLButtonElement>) {
+    if (queueMenuId === item.queueId) { setQueueMenuId(""); return; }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const width = 126;
+    const estimatedHeight = (item.editable ? 3 : 2) * 36 + 12;
+    const above = rect.top >= estimatedHeight + 8;
+    setQueueMenuPosition({
+      left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+      top: above ? rect.top - 4 : rect.bottom + 4,
+      above,
+    });
+    setQueueMenuId(item.queueId);
+  }
+
   function beginQueueDrag(item: QueuedMessage, event: ReactPointerEvent<HTMLButtonElement>) {
     if (working || queueWorking) return;
     const order = queuedMessages.map(queued => queued.queueId);
@@ -1010,10 +1039,14 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
         <div className="sidebar-search"><span className="search-glyph" aria-hidden="true">⌕</span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button type="button" aria-label="清空搜索" onClick={() => updateSearch("")}>×</button>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
-        <div className="thread-list">{threadGroups.map(group => <section className="project-group" aria-label={`项目 ${group.name}`} key={group.key}>
-          <header className="project-heading"><div><h3 className="project-name">{group.name}</h3><span className="project-path" title={group.path}>{group.path}</span></div><span className="project-count" aria-label={`${group.threads.length} 个会话`}>{group.threads.length}</span></header>
-          <div className="project-threads">{group.threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
-        </section>)}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
+        <div className="thread-list">{threadGroups.map((group, index) => {
+          const expanded = expandedProjectKeys.has(group.key);
+          const projectThreadsID = `project-threads-${index}`;
+          return <section className={`project-group ${expanded ? "expanded" : "collapsed"}`} aria-label={`项目 ${group.name}`} key={group.key}>
+            <header className="project-heading"><button className="project-toggle" type="button" aria-expanded={expanded} aria-controls={projectThreadsID} aria-label={`${expanded ? "收起" : "展开"}项目 ${group.name}，${group.path}`} onClick={() => toggleProjectGroup(group.key)}><span className={`project-chevron ${expanded ? "expanded" : ""}`} aria-hidden="true">›</span><span className="project-copy"><span className="project-name">{group.name}</span><span className="project-path" title={group.path}>{group.path}</span></span><span className="project-count" aria-hidden="true">{group.threads.length}</span></button></header>
+            <div id={projectThreadsID} className="project-threads" hidden={!expanded}>{expanded && group.threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
+          </section>;
+        })}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
@@ -1049,12 +1082,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
                   {item.editable && <button className="queue-guide-action" type="button" aria-label={`引导：${summary}`} title="插入当前思考，不中断 Codex" onClick={() => steerQueuedMessage(item)} disabled={busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /><span>引导</span></button>}
                   <button className="queue-icon-action" type="button" aria-label={`删除排队消息：${summary}`} title="删除" onClick={() => deleteQueuedMessage(item)} disabled={busy}><QueueTrashIcon /></button>
                   <div className="queue-more-wrap">
-                    <button className="queue-more-action" type="button" aria-label={`更多选项：${summary}`} title="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={() => setQueueMenuId(current => current === item.queueId ? "" : item.queueId)} disabled={busy}>•••</button>
-                    {queueMenuId === item.queueId && <div className="queue-menu" role="menu" aria-label={`排队消息选项：${summary}`}>
+                    <button className="queue-more-action" type="button" aria-label={`更多选项：${summary}`} title="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={event => toggleQueueMenu(item, event)} disabled={busy}>•••</button>
+                    {queueMenuId === item.queueId && createPortal(<div className="queue-menu" role="menu" aria-label={`排队消息选项：${summary}`} style={{ left: queueMenuPosition.left, top: queueMenuPosition.top, transform: queueMenuPosition.above ? "translateY(-100%)" : undefined }}>
                       {item.editable && <button type="button" role="menuitem" onClick={() => editQueuedMessage(item)}>编辑</button>}
                       <button type="button" role="menuitem" onClick={() => moveQueuedMessage(index, -1)} disabled={index === 0}>上移</button>
                       <button type="button" role="menuitem" onClick={() => moveQueuedMessage(index, 1)} disabled={index === renderedQueuedMessages.length - 1}>下移</button>
-                    </div>}
+                    </div>, document.body)}
                   </div>
                 </div>
               </li>;

@@ -52,6 +52,34 @@ func TestNormalizeStoredThreadPreservesIdentityAndText(t *testing.T) {
 	}
 }
 
+func TestNormalizeAcceptedSteeringMessageAsUserContent(t *testing.T) {
+	item := json.RawMessage(`{"id":"steer-1","type":"steeringUserMessage","status":"accepted","input":[{"type":"text","text":"补充检查这个边界"},{"type":"image","url":"data:image/png;base64,AAAA"}]}`)
+	turn, err := normalizeTurn("turn-1", "inProgress", []json.RawMessage{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := turn["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("accepted steering message missing: %v", items)
+	}
+	got := items[0].(map[string]any)
+	if got["role"] != "user" || got["text"] != "补充检查这个边界" {
+		t.Fatalf("steering content not projected as user message: %v", got)
+	}
+	if images, ok := got["images"].([]any); !ok || len(images) != 1 {
+		t.Fatalf("steering image missing: %v", got["images"])
+	}
+
+	pending := json.RawMessage(`{"id":"steer-2","type":"steeringUserMessage","status":"pending","input":[{"type":"text","text":"尚未确认"}]}`)
+	turn, err = normalizeTurn("turn-1", "inProgress", []json.RawMessage{pending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := turn["items"].([]any); len(got) != 0 {
+		t.Fatalf("pending steering message shown as accepted: %v", got)
+	}
+}
+
 func TestNormalizeLiveExposesCurrentOwnerPermissions(t *testing.T) {
 	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[],"latestThreadSettings":{"approvalPolicy":"on-request","sandboxPolicy":{"type":"dangerFullAccess"}}}`)
 	thread, err := NormalizeLive("thread", "Title", "/fixture", state)

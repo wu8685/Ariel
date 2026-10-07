@@ -32,14 +32,19 @@ func nativeImageSources(raw json.RawMessage) []imageSource {
 		Result    string                             `json:"result"`
 		SavedPath string                             `json:"savedPath"`
 		Content   []struct{ Type, URL, Path string } `json:"content"`
+		Input     []struct{ Type, URL, Path string } `json:"input"`
 	}
 	if json.Unmarshal(raw, &item) != nil {
 		return nil
 	}
 	sources := []imageSource{}
 	switch item.Type {
-	case "userMessage":
-		for _, c := range item.Content {
+	case "userMessage", "steeringUserMessage":
+		content := item.Content
+		if item.Type == "steeringUserMessage" {
+			content = item.Input
+		}
+		for _, c := range content {
 			if len(sources) >= 24 {
 				break
 			}

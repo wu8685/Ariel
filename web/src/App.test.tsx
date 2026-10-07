@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "./App";
 import type { Thread } from "./generated/protocol";
+import { normalizeProjectPath, projectName } from "./projects";
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];
@@ -41,6 +42,11 @@ afterEach(() => {
 
 const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
 
+async function expandProject(cwd: string) {
+  const path = normalizeProjectPath(cwd) || "路径未知";
+  fireEvent.click(await screen.findByRole("button", { name: `展开项目 ${projectName(cwd)}，${path}` }));
+}
+
 async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
@@ -54,6 +60,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
+  await expandProject(thread.cwd);
   fireEvent.click((await screen.findByText(thread.title)).closest("button")!);
   await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
@@ -86,7 +93,7 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByText("Older hit")).toBeNull();
   });
 
-  it("groups sidebar sessions by project cwd without changing their recency order", async () => {
+  it("groups sessions by project and keeps every project collapsed until independently expanded", async () => {
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "project" } });
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
@@ -101,11 +108,28 @@ describe("Ariel app interactions", () => {
     expect(groups[0].querySelector(".project-name")?.textContent).toBe("alpha");
     expect(groups[0].querySelector(".project-path")?.textContent).toBe("/work/alpha");
     expect(groups[0].querySelector(".project-count")?.textContent).toBe("2");
-    expect(groups[0].textContent).toContain("Alpha new");
-    expect(groups[0].textContent).toContain("Alpha old");
     expect(groups[1].querySelector(".project-name")?.textContent).toBe("beta");
     expect(sidebar.querySelector(".list-caption")?.textContent).toContain("2 个项目");
     expect(sidebar.querySelector(".list-caption")?.textContent).toContain("3 个会话");
+    const alphaToggle = screen.getByRole("button", { name: "展开项目 alpha，/work/alpha" });
+    const betaToggle = screen.getByRole("button", { name: "展开项目 beta，/work/beta" });
+    const alphaThreads = document.getElementById(alphaToggle.getAttribute("aria-controls")!);
+    expect(alphaToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(betaToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(alphaThreads?.hidden).toBe(true);
+    expect(screen.queryByText("Alpha new")).toBeNull();
+    expect(screen.queryByText("Beta task")).toBeNull();
+
+    fireEvent.click(alphaToggle);
+    expect(screen.getByRole("button", { name: "收起项目 alpha，/work/alpha" }).getAttribute("aria-expanded")).toBe("true");
+    expect(alphaThreads?.hidden).toBe(false);
+    expect(screen.getByText("Alpha new")).toBeTruthy();
+    expect(screen.getByText("Alpha old")).toBeTruthy();
+    expect(screen.queryByText("Beta task")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "收起项目 alpha，/work/alpha" }));
+    expect(screen.getByRole("button", { name: "展开项目 alpha，/work/alpha" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha new")).toBeNull();
   });
 
   it("creates an empty thread in the chosen project and hands it to the normal subscription flow", async () => {
@@ -220,6 +244,9 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText(/共 2 条，最上方优先执行/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "更多选项：第一条" }));
+    const queueMenu = screen.getByRole("menu", { name: "排队消息选项：第一条" });
+    expect(queueMenu.parentElement).toBe(document.body);
+    expect(queueMenu.closest(".queue-panel")).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "编辑" }));
     expect((input as HTMLTextAreaElement).value).toBe("第一条");
     fireEvent.change(input, { target: { value: "第一条（已修改）" } });
@@ -272,6 +299,7 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }] } }));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
     fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "HISTORY_TOO_LARGE", message: "HISTORY_TOO_LARGE" } }));
@@ -295,6 +323,7 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }] } }));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
     fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "HISTORY_TOO_LARGE", message: "HISTORY_TOO_LARGE" } }));
@@ -930,6 +959,7 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requestFor("thread.list")).toBeTruthy());
     const thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
     act(() => socket.message({ type: "response", v: 1, requestId: requestFor("thread.list").requestId, outcome: "accepted", data: { threads: [thread] } }));
+    await expandProject(thread.cwd);
     fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
     expect(screen.getByLabelText("会话列表").classList.contains("open")).toBe(false);
     expect(document.querySelector(".conversation-head .head-path")?.textContent).toBe("/tmp/fixture");
@@ -953,6 +983,7 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
     const thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
     act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
+    await expandProject(thread.cwd);
     fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
     expect(requests("thread.subscribe")[0].deviceId).toBe("mac");
@@ -992,6 +1023,7 @@ describe("Ariel app interactions", () => {
     expect(requests("thread.list")[1].deviceId).toBe("mac-b");
     const makeThread = (threadId: string, title: string) => ({ threadId, title, cwd: `/tmp/${threadId}`, updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] });
     act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [makeThread("b", "Thread B")] } }));
+    await expandProject("/tmp/b");
     expect(await screen.findByText("Thread B")).toBeTruthy();
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [makeThread("a", "Thread A")] } }));
     expect(screen.queryByText("Thread A")).toBeNull();

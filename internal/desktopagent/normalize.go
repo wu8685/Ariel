@@ -250,6 +250,12 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 				URL  string `json:"url"`
 				Path string `json:"path"`
 			} `json:"content"`
+			Input []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+				URL  string `json:"url"`
+				Path string `json:"path"`
+			} `json:"input"`
 			Command    string          `json:"command"`
 			Status     string          `json:"status"`
 			Server     json.RawMessage `json:"server"`
@@ -284,6 +290,22 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 					parts = append(parts, "[图片暂不可用]")
 				} else if c.Type != "image" && c.Type != "localImage" {
 					parts = append(parts, "[非文本输入: "+c.Type+"]")
+				}
+			}
+			text = strings.Join(parts, "\n")
+		case "steeringUserMessage":
+			if item.Status != "accepted" {
+				continue
+			}
+			role = "user"
+			parts := make([]string, 0, len(item.Input))
+			for _, input := range item.Input {
+				if input.Type == "text" {
+					parts = append(parts, input.Text)
+				} else if (input.Type == "image" && !strings.HasPrefix(input.URL, "data:image/")) || (input.Type == "localImage" && input.Path == "") {
+					parts = append(parts, "[图片暂不可用]")
+				} else if input.Type != "image" && input.Type != "localImage" {
+					parts = append(parts, "[非文本输入: "+input.Type+"]")
 				}
 			}
 			text = strings.Join(parts, "\n")
