@@ -1,7 +1,7 @@
 {
-  "name": "Ariel — Codex 随身工作台",
+  "name": "Ariel — Agent 联络中继器",
   "short_name": "Ariel",
-  "description": "在可信局域网中从手机继续使用 Mac 上的 Codex 会话。",
+  "description": "在浏览器中完成与桌面端 Agent App 的远程会话。",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",

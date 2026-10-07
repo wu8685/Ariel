@@ -138,7 +138,7 @@ describe("formal Ariel wind-messenger brand assets", () => {
     for (const heading of ["## Ariel 是什么", "## 架构", "## 快速开始", "## 基本使用", "## 安全边界", "## 深入阅读"]) {
       expect(readme).toContain(heading);
     }
-    for (const component of ["手机 / 浏览器", "Ariel Relay", "Desktop Agent", "Codex Desktop"]) {
+    for (const component of ["Browser", "Ariel Relay", "Desktop Agent", "Agent App Adapter", "Desktop Agent App"]) {
       expect(readme).toContain(component);
     }
     expect(readme.split("\n").length).toBeLessThanOrEqual(100);
