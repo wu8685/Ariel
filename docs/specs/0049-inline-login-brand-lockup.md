@@ -1,8 +1,9 @@
 # 0049：登录页 Logo 与精简标题同排展示
 
-- 状态：Implemented（138 个 Web 单测、9 个真实 Chromium 用例、桌面与手机截图、production build 已验；物理 iPhone/Safari 待用户复验）。
+- 状态：Superseded（横向 Lockup 保留，标题文案与字号由 0050 调整）。
 - 范围：未连接登录首页的品牌文案、Logo/标题排版、桌面与手机真实浏览器回归。
 - 依赖：[0048 登录页彩色 Logo 恢复紧凑尺寸](0048-compact-color-login-brand-mark.md)；不改变 Logo 资产或显示尺寸。
+- 后续：[0050 登录页标题改为“Agent 联络中继器”](0050-agent-relay-login-heading.md)保留本规格的横向 Lockup，并覆盖标题文案与字号。
 
 ## 用户结果
 

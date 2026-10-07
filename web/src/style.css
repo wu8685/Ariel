@@ -89,7 +89,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-weight: 400;
   line-height: 1.24;
   letter-spacing: -2px;
-  font-size: clamp(34px, 3.35vw, 48px);
+  font-size: clamp(24px, 2.4vw, 34px);
   margin: 10px 0 0;
   white-space: nowrap;
 }
@@ -431,7 +431,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .pair-entry { min-height: 44px; }
   .connect-panel { top: 60px; flex-direction: column; gap: 16px; align-items: stretch; overflow: auto; justify-content: flex-start; padding: 10vh 20px 30px; }
   .connect-panel > div, .connect-panel form { max-width: none; flex: none; }
-  .connect-panel h1 { font-size: 34px; }
+  .connect-panel h1 { font-size: 24px; }
   .pairing-confirm { padding-top: 7vh; }
   .pairing-dialog { padding: 26px 18px 22px; }
   .pairing-dialog h2 { font-size: 26px; }

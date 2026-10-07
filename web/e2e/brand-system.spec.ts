@@ -13,7 +13,8 @@ test("desktop login uses the formal color wind-messenger hero and micro navigati
   const heroBox = await hero.boundingBox();
   expect(heroBox?.width || 0).toBe(160);
   expect(heroBox?.height || 0).toBe(160);
-  const title = page.getByRole("heading", { name: "接续 Codex", exact: true });
+  const title = page.getByRole("heading", { name: "Agent 联络中继器", exact: true });
+  await expect(title).toBeVisible();
   const titleBox = await title.boundingBox();
   await expect(title).toHaveCSS("white-space", "nowrap");
   expect((heroBox?.x || 0) + (heroBox?.width || 0)).toBeLessThan(titleBox?.x || 0);

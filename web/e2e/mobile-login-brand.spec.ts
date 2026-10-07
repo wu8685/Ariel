@@ -8,7 +8,8 @@ test("mobile login shows the color hero without horizontal overflow and keeps th
   const box = await hero.boundingBox();
   expect(box?.width || 0).toBe(128);
   expect(box?.height || 0).toBe(128);
-  const title = page.getByRole("heading", { name: "接续 Codex", exact: true });
+  const title = page.getByRole("heading", { name: "Agent 联络中继器", exact: true });
+  await expect(title).toBeVisible();
   const titleBox = await title.boundingBox();
   await expect(title).toHaveCSS("white-space", "nowrap");
   expect((box?.x || 0) + (box?.width || 0)).toBeLessThan(titleBox?.x || 0);
