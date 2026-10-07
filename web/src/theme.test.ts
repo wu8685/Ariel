@@ -154,7 +154,9 @@ describe("fixed Night appearance", () => {
   });
 
   it("contains Markdown tables and code inside bubbles with readable links", () => {
-    expect(style).toMatch(/\.markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(style).toMatch(/\.markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto;[^}]*font-size:\s*13px;[^}]*line-height:\s*1\.55;[^}]*-webkit-text-size-adjust:\s*100%;[^}]*text-size-adjust:\s*100%/s);
+    expect(style).toMatch(/\.markdown-table-scroll table\s*\{[^}]*font:\s*inherit/s);
+    expect(style).toMatch(/\.markdown-table-scroll th,\s*\.markdown-table-scroll td\s*\{[^}]*font:\s*inherit/s);
     expect(style).toMatch(/\.markdown-body pre\s*\{[^}]*overflow-x:\s*auto/s);
     expect(style).toMatch(/\.markdown-body a\s*\{[^}]*text-decoration:\s*underline/s);
     expect(style).toMatch(/\.markdown-body\s*\{[^}]*overflow-wrap:\s*anywhere/s);

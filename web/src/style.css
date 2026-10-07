@@ -325,9 +325,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .markdown-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; background: #00000055; border-radius: 4px; padding: .08em .3em; overflow-wrap: anywhere; }
 .markdown-body pre { max-width: 100%; overflow-x: auto; margin: .65em 0; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-page); white-space: pre; line-height: 1.5; }
 .markdown-body pre code { display: block; padding: 0; background: none; white-space: inherit; overflow-wrap: normal; }
-.markdown-table-scroll { max-width: 100%; overflow-x: auto; margin: .7em 0; border: 1px solid var(--color-border-strong); border-radius: 8px; }
-.markdown-table-scroll table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: .92em; }
-.markdown-table-scroll th, .markdown-table-scroll td { border-bottom: 1px solid var(--color-border); border-right: 1px solid var(--color-border); padding: 6px 9px; text-align: left; vertical-align: top; }
+.markdown-table-scroll { max-width: 100%; overflow-x: auto; font-size: 13px; line-height: 1.55; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; margin: .7em 0; border: 1px solid var(--color-border-strong); border-radius: 8px; }
+.markdown-table-scroll table { border-collapse: collapse; width: max-content; min-width: 100%; font: inherit; }
+.markdown-table-scroll th, .markdown-table-scroll td { border-bottom: 1px solid var(--color-border); border-right: 1px solid var(--color-border); padding: 6px 9px; font: inherit; text-align: left; vertical-align: top; }
 .markdown-table-scroll th { background: #ffffff12; font-weight: 700; }
 .markdown-table-scroll tr:last-child td { border-bottom: 0; }
 .markdown-table-scroll :is(th, td):last-child { border-right: 0; }

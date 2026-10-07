@@ -66,6 +66,7 @@
 | 0049 | [登录页 Logo 与精简标题同排展示](0049-inline-login-brand-lockup.md) | Superseded（横向 Lockup 保留，文案由 0050 调整） | 建立 Logo 与标题同排的品牌 Lockup；原“接续 Codex”文案已被覆盖 |
 | 0050 | [登录页标题改为“Agent 联络中继器”](0050-agent-relay-login-heading.md) | Implemented（桌面／移动截图、自动测试与 production build 已验） | 用产品定位标题替换“接续 Codex”，并保持桌面和手机同排展示 |
 | 0051 | [面向使用者的精简 README](0051-readable-project-readme.md) | Implemented（Logo 像素透明度、README 链接与 Web 全量测试已验） | 用背景、架构、快速开始、基本使用和文档导航重写项目入口，并验证新版 Logo 透明背景 |
+| 0052 | [移动端 Markdown 表格列字体一致](0052-uniform-mobile-markdown-table-type.md) | Implemented（移动截图、自动测试与 production build 已验） | 关闭表格 text inflation，让全部表头与单元格继承统一字号和行高，并补移动端截图回归 |
 
 ## 设计基线
 
