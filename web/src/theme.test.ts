@@ -55,13 +55,12 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/prefers-reduced-motion/);
   });
 
-  it("uses the formal image assets without CSS recoloring and a mobile-only dismissible sidebar backdrop", () => {
+  it("uses the formal image assets without CSS recoloring and a cross-device dismissible sidebar backdrop", () => {
     expect(style).toMatch(/\.ariel-logo\s+img\s*\{[^}]*object-fit:\s*contain/s);
     expect(style).not.toMatch(/\.ariel-logo[^}]*mask:/s);
     expect(style).not.toMatch(/\.ariel-logo[^}]*filter:/s);
     expect(html).toContain('rel="icon" type="image/svg+xml" href="/brand/ariel-logo-wind-messenger-micro.svg"');
-    expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*none/s);
-    expect(style).toMatch(/@media\s*\(max-width:\s*800px\)[\s\S]*\.sidebar-backdrop\s*\{[^}]*display:\s*block/s);
+    expect(style).toMatch(/\.sidebar-backdrop\s*\{[^}]*display:\s*block/s);
     expect(app).toMatch(/aria-label="关闭会话列表遮罩"[^>]*onClick=\{\(\) => setShowList\(false\)\}/);
     expect(app).toMatch(/aria-expanded=\{showList\}/);
     expect(app).toMatch(/key === "Escape"[^}]*setShowList\(false\)/);
@@ -97,6 +96,26 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/\.stop-glyph[^}]*font-size:\s*10px/s);
     expect(mobile).toMatch(/\.stop-label\s*\{[^}]*display:\s*none/s);
     expect(mobile).toMatch(/safe-area-inset-bottom/);
+  });
+
+  it("reuses the compact mobile conversation shell on desktop", () => {
+    const desktop = style.split(/@media\s*\(max-width:\s*800px\)/)[0];
+    expect(desktop).toMatch(/\.app-shell\.connected\s+\.masthead\s*\{[^}]*display:\s*none/s);
+    expect(desktop).toMatch(/\.workspace\s*\{[^}]*display:\s*block;[^}]*position:\s*relative/s);
+    expect(desktop).toMatch(/\.sidebar\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-101%\)/s);
+    expect(desktop).toMatch(/\.sidebar\.open\s*\{[^}]*transform:\s*translateX\(0\)/s);
+    expect(desktop).toMatch(/\.mobile-list\s*\{[^}]*display:\s*grid;[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
+    expect(desktop).toMatch(/\.conversation-head\s*\{[^}]*height:\s*66px;[^}]*padding:\s*9px\s+12px/s);
+    expect(desktop).toMatch(/\.permission-info\s*\{[^}]*display:\s*block/s);
+    expect(desktop).toMatch(/\.permission-strip\s*\{[^}]*display:\s*none/s);
+    expect(desktop).toMatch(/\.composer\s*\{[^}]*flex-direction:\s*column;[^}]*border-radius:\s*27px/s);
+    expect(desktop).toMatch(/\.composer textarea\s*\{[^}]*min-height:\s*44px;[^}]*font-size:\s*14px/s);
+    expect(desktop).toMatch(/\.send-label,\s*\.stop-label\s*\{[^}]*display:\s*none/s);
+  });
+
+  it("shows labels for icon controls only through hover or keyboard focus tooltips", () => {
+    expect(style).toMatch(/\.icon-control\[data-tooltip\]::after\s*\{[^}]*content:\s*attr\(data-tooltip\);[^}]*opacity:\s*0;[^}]*visibility:\s*hidden/s);
+    expect(style).toMatch(/@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*\.icon-control\[data-tooltip\]:is\(:hover,\s*:focus-visible\)::after\s*\{[^}]*opacity:\s*1;[^}]*visibility:\s*visible/s);
   });
 
   it("matches the mobile composer font size to conversation text", () => {

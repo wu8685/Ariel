@@ -5,6 +5,10 @@ export type ScreenshotDraft = { name: string; bytes: number; dataUri: string };
 const maxBytes = 4 << 20;
 const maxCount = 3;
 
+function CloseIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>;
+}
+
 function readAsDataURI(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -62,6 +66,6 @@ export function ConversationImage({ alt, load, autoLoad = true }: { alt: string;
   return <span className="conversation-image">
     {state === "ready" ? <button className="conversation-image-open" type="button" aria-label={`放大截图：${label}`} onClick={() => setExpanded(true)}><img src={uri} alt={label} loading="lazy" /></button>
       : <button ref={control} className="conversation-image-load" type="button" aria-label={`${state === "failed" ? "重试加载截图" : "加载截图"}：${label}`} onClick={() => void fetchImage()} disabled={state === "loading"}>{state === "loading" ? "正在加载截图…" : state === "failed" ? `截图未能加载：${failure || "未知错误"}。点此重试` : `查看截图${alt ? `：${alt}` : ""}`}</button>}
-    {expanded && typeof document !== "undefined" && createPortal(<div className="conversation-image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={() => setExpanded(false)}><button type="button" aria-label="关闭截图" onClick={() => setExpanded(false)}>×</button><img src={uri} alt={label} onClick={event => event.stopPropagation()} /></div>, document.body)}
+    {expanded && typeof document !== "undefined" && createPortal(<div className="conversation-image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={() => setExpanded(false)}><button className="icon-control" type="button" aria-label="关闭截图" data-tooltip="关闭" onClick={() => setExpanded(false)}><CloseIcon /></button><img src={uri} alt={label} onClick={event => event.stopPropagation()} /></div>, document.body)}
   </span>;
 }

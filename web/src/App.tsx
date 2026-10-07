@@ -20,8 +20,8 @@ type Device = { deviceId: string; deviceName: string; agentOnline: boolean; code
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 10;
 const mobileViewportMaxWidth = 800;
-const mobileComposerMinHeight = 44;
-const mobileComposerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
+const composerMinHeight = 44;
+const composerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
 const latestFollowDistance = 80;
 const historyHeaderExpandDistance = 32;
 const latestChromeRestoreDuration = 260;
@@ -109,6 +109,46 @@ function ReturnToLatestIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v16"/><path d="m6 14 6 6 6-6"/></svg>;
 }
 
+function MenuIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M5 7h14M5 12h14M5 17h14"/></svg>;
+}
+
+function CloseIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>;
+}
+
+function PlusIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>;
+}
+
+function RefreshIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19 8a8 8 0 1 0 1 6"/><path d="M19 4v4h-4"/></svg>;
+}
+
+function SearchIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>;
+}
+
+function PairIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="M9 9h6v6H9z"/></svg>;
+}
+
+function DisconnectIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 3v9"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>;
+}
+
+function MoreIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>;
+}
+
+function StopIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><rect x="8" y="8" width="8" height="8" rx="1"/></svg>;
+}
+
+function SendIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5"/><path d="m6.5 10.5 5.5-5.5 5.5 5.5"/></svg>;
+}
+
 function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: PhonePairing; origin: string; onConfirm: () => void; onCancel: () => void }) {
   const error = pairing.phase === "error";
   return <section className="connect-panel pairing-confirm" aria-label="确认扫码登录">
@@ -129,7 +169,7 @@ function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: 
 function PairingDialog({ invite, seconds, onClose, onRegenerate }: { invite: PairingInvite; seconds: number; onClose: () => void; onRegenerate: () => void }) {
   return <div className="pairing-backdrop" role="presentation">
     <section className="pairing-dialog" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
-      <button className="pairing-close icon-button" type="button" aria-label="关闭扫码登录" onClick={onClose}>×</button>
+      <button className="pairing-close icon-button icon-control" type="button" aria-label="关闭扫码登录" data-tooltip="关闭" onClick={onClose}><CloseIcon /></button>
       <span className="eyebrow">ONE-TIME PAIRING</span>
       <h2 id="pairing-title">手机扫码登录</h2>
       {invite.status === "loading" && <div className="pairing-state" role="status">正在生成一次性二维码…</div>}
@@ -799,16 +839,15 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const previousScrollTop = input.scrollTop;
       const caretAtEnd = input.selectionEnd === input.value.length;
       input.style.height = "";
-      if (window.innerWidth > mobileViewportMaxWidth) return;
       if (!input.value) {
-        input.style.height = `${mobileComposerMinHeight}px`;
+        input.style.height = `${composerMinHeight}px`;
         input.scrollTop = 0;
         return;
       }
       input.style.height = "auto";
       const contentHeight = input.scrollHeight;
-      input.style.height = `${Math.max(mobileComposerMinHeight, Math.min(contentHeight, mobileComposerMaxHeight))}px`;
-      input.scrollTop = contentHeight > mobileComposerMaxHeight ? (caretAtEnd ? contentHeight : previousScrollTop) : 0;
+      input.style.height = `${Math.max(composerMinHeight, Math.min(contentHeight, composerMaxHeight))}px`;
+      input.scrollTop = contentHeight > composerMaxHeight ? (caretAtEnd ? contentHeight : previousScrollTop) : 0;
     };
     resize();
     window.addEventListener("resize", resize);
@@ -1133,11 +1172,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   return <div className={`app-shell ${status === "ready" ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
-      <div className="mast-actions">{status === "ready" && <button className="text-button pair-entry" type="button" onClick={() => void openPairingInvite()}>手机扫码登录</button>}<span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="text-button" onClick={disconnect}>断开</button></div>
+      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span></div>
     </header>
     {newThreadOpen && <div className="thread-create-backdrop" role="presentation">
       <section className="thread-create-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-create-title">
-        <button className="thread-create-close icon-button" type="button" aria-label="关闭新建会话" onClick={closeNewThreadDialog} disabled={creatingThread}>×</button>
+        <button className="thread-create-close icon-button icon-control" type="button" aria-label="关闭新建会话" data-tooltip="关闭" onClick={closeNewThreadDialog} disabled={creatingThread}><CloseIcon /></button>
         <span className="eyebrow">NEW CODEX SESSION</span>
         <h2 id="thread-create-title">新建会话</h2>
         <p>选择一个已有项目，或输入这台电脑上的绝对目录。这里只创建空会话，不会自动发送消息。</p>
@@ -1156,11 +1195,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
-        <div className="sidebar-identity"><div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span></div><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><button className="sidebar-disconnect text-button" aria-label="断开" onClick={disconnect}>断开</button></div>
-        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2>{threadCreateEnabled && <button className="icon-button" type="button" aria-label="新建会话" title="新建会话" onClick={openNewThreadDialog}>＋</button>}<button className="icon-button mobile-close" aria-label="关闭会话列表" onClick={() => setShowList(false)}>×</button><button className="icon-button" aria-label="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}>↻</button></div>
+        <div className="sidebar-identity"><div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span></div><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span><div className="sidebar-identity-actions"><button className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></button><button className="sidebar-disconnect icon-button icon-control" aria-label="断开" data-tooltip="断开" onClick={disconnect}><DisconnectIcon /></button></div></div>
+        <div className="sidebar-head"><span className="eyebrow">WORKSPACE</span><h2>会话</h2>{threadCreateEnabled && <button className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></button>}<button className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></button><button className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></button></div>
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
-        <div className="sidebar-search"><span className="search-glyph" aria-hidden="true">⌕</span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button type="button" aria-label="清空搜索" onClick={() => updateSearch("")}>×</button>}</div>
+        <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></button>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
         <div className="thread-list">{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(t => <button key={t.threadId} data-thread-id={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div></section>}{threadGroups.map((group, index) => {
           const expanded = expandedProjectKeys.has(group.key);
@@ -1175,10 +1214,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       </aside>
       <main className="conversation">
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
-          <button className="mobile-list text-button" aria-label={`打开会话列表，${connectionLabel}`} aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><span className="menu-glyph" aria-hidden="true">☰</span><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
+          <button className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
-          {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
+          {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
@@ -1190,8 +1229,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
           {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}
         </div>
-        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
-        <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
+        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
+        <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button className="icon-control" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setNotice("")}><CloseIcon /></button></div>}
           {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">
             {queuePaused && <div className="queue-head"><span>后续输入已暂停</span><small>开始下一轮前可继续调整</small></div>}
             <span className="sr-only">共 {queuedMessages.length} 条，最上方优先执行。</span>
@@ -1202,10 +1241,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
                 <button className="queue-handle" type="button" aria-label={`拖拽排序：${summary}`} title="拖拽排序；也可用上下方向键" onPointerDown={event => beginQueueDrag(item, event)} onKeyDown={event => queueHandleKeyDown(index, event)} disabled={!!queueWorking || working}><QueueHandleIcon /></button>
                 <div className="queue-content"><span className="queue-text">{summary}</span>{item.images.length > 0 && item.text.trim() && <small>{item.images.length} 张截图</small>}{!item.editable && <small>此输入只能删除或调序</small>}</div>
                 <div className="queue-actions">
-                  {item.editable && <button className="queue-guide-action" type="button" aria-label={`引导：${summary}`} title="插入当前思考，不中断 Codex" onClick={() => steerQueuedMessage(item)} disabled={busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /><span>引导</span></button>}
-                  <button className="queue-icon-action" type="button" aria-label={`删除排队消息：${summary}`} title="删除" onClick={() => deleteQueuedMessage(item)} disabled={busy}><QueueTrashIcon /></button>
+                  {item.editable && <button className="queue-guide-action icon-control" type="button" aria-label={`引导：${summary}`} data-tooltip="插入当前" onClick={() => steerQueuedMessage(item)} disabled={busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /></button>}
+                  <button className="queue-icon-action icon-control" type="button" aria-label={`删除排队消息：${summary}`} data-tooltip="删除" onClick={() => deleteQueuedMessage(item)} disabled={busy}><QueueTrashIcon /></button>
                   <div className="queue-more-wrap">
-                    <button className="queue-more-action" type="button" aria-label={`更多选项：${summary}`} title="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={event => toggleQueueMenu(item, event)} disabled={busy}>•••</button>
+                    <button className="queue-more-action icon-control" type="button" aria-label={`更多选项：${summary}`} data-tooltip="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={event => toggleQueueMenu(item, event)} disabled={busy}><MoreIcon /></button>
                     {queueMenuId === item.queueId && createPortal(<div className="queue-menu" role="menu" aria-label={`排队消息选项：${summary}`} style={{ left: queueMenuPosition.left, top: queueMenuPosition.top, transform: queueMenuPosition.above ? "translateY(-100%)" : undefined }}>
                       {item.editable && <button type="button" role="menuitem" onClick={() => editQueuedMessage(item)}>编辑</button>}
                       <button type="button" role="menuitem" onClick={() => moveQueuedMessage(index, -1)} disabled={index === 0}>上移</button>
@@ -1216,14 +1255,14 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
               </li>;
             })}</ol>
           </section>}
-          {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button type="button" aria-label={`移除截图：${image.name}`} onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}>×</button></div>)}</div>}
+          {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></button></div>)}</div>}
           <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || status !== "ready" || readOnlyHistory} rows={1} />
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || status !== "ready" || readOnlyHistory || working} />
-              <button className="attach-button" type="button" aria-label="选择截图" title="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || status !== "ready" || readOnlyHistory || working}>＋</button>
-              {editingQueueId && <button className="queue-cancel-button" type="button" onClick={cancelQueueEdit} disabled={working}>取消编辑</button>}
-              {activeTurn && <button className="stop-button" type="button" aria-label="停止" title="停止" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}><span className="stop-glyph" aria-hidden="true">■</span><span className="stop-label" aria-hidden="true">停止</span></button>}
-              <button className="primary send-button" aria-label={sendAction} title={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working || !!queueWorking, draft, screenshots.length, queueEnabled)}><span className="send-label">{sendAction}</span><span className="send-glyph" aria-hidden="true">↑</span></button>
+              <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || status !== "ready" || readOnlyHistory || working}><PlusIcon /></button>
+              {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
+              {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}><StopIcon /></button>}
+              <button className="primary send-button icon-control" aria-label={sendAction} data-tooltip={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working || !!queueWorking, draft, screenshots.length, queueEnabled)}><SendIcon /></button>
             </div></div></div></div></div>
       </main>
     </div>

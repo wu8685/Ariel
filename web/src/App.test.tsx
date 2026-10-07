@@ -312,6 +312,19 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByLabelText("排队的后续输入")).toBeNull();
   });
 
+  it("uses icon-only functional controls with accessible hover labels", async () => {
+    const queued = { queueId: "queue-one", clientMessageId: "message-one", text: "继续检查", images: [] as [], editable: true };
+    const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active-turn", status: "inProgress", items: [] }], queuedMessages: [queued] };
+    await openFixture(running, true);
+
+    for (const name of ["引导：继续检查", "删除排队消息：继续检查", "更多选项：继续检查", "选择截图", "停止", "加入队列"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control.textContent).toBe("");
+      expect(control.querySelector("svg[aria-hidden='true']")).toBeTruthy();
+      expect(control.getAttribute("data-tooltip")).toBeTruthy();
+    }
+  });
+
   it("keeps dragging downward after the reordered row loses pointer capture", async () => {
     const first = { queueId: "queue-one", clientMessageId: "message-one", text: "第一条", images: [] as [], editable: true };
     const second = { queueId: "queue-two", clientMessageId: "message-two", text: "第二条", images: [] as [], editable: true };
@@ -699,9 +712,14 @@ describe("Ariel app interactions", () => {
     const sidebar = screen.getByLabelText("会话列表");
     expect(sidebar.querySelector(".brand")?.textContent).toContain("Ariel");
     expect(sidebar.querySelector(".connection")?.textContent).toContain("Relay 已连接");
-    expect(sidebar.querySelector("button[aria-label='断开']")).toBeTruthy();
+    const disconnect = sidebar.querySelector("button[aria-label='断开']")!;
+    expect(disconnect.textContent).toBe("");
+    expect(disconnect.querySelector("svg[aria-hidden='true']")).toBeTruthy();
+    expect(disconnect.getAttribute("data-tooltip")).toBe("断开");
     const menu = screen.getByRole("button", { name: /打开会话列表.*Relay 已连接/ });
-    expect(menu.querySelector(".menu-glyph")?.textContent).toBe("☰");
+    expect(menu.textContent).toBe("");
+    expect(menu.querySelector("svg[aria-hidden='true']")).toBeTruthy();
+    expect(menu.getAttribute("data-tooltip")).toBe("会话列表");
     expect(menu.querySelector(".status-dot")).toBeTruthy();
     expect(menu.getAttribute("aria-controls")).toBe("session-sidebar");
     expect(sidebar.classList.contains("open")).toBe(false);
@@ -935,7 +953,7 @@ describe("Ariel app interactions", () => {
       expect(input.scrollTop).toBe(0);
       Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
       fireEvent(window, new Event("resize"));
-      expect(input.style.height).toBe("");
+      expect(input.style.height).toBe("44px");
     } finally {
       Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
       if (originalScrollHeight) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", originalScrollHeight);
@@ -1267,8 +1285,9 @@ describe("Ariel app interactions", () => {
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
     expect(await screen.findByText("Working")).toBeTruthy();
     const stop = screen.getByRole("button", { name: "停止" });
-    expect(stop.querySelector(".stop-glyph")?.textContent).toBe("■");
-    expect(stop.getAttribute("title")).toBe("停止");
+    expect(stop.textContent).toBe("");
+    expect(stop.querySelector("svg[aria-hidden='true']")).toBeTruthy();
+    expect(stop.getAttribute("data-tooltip")).toBe("停止");
     fireEvent.click(stop);
     expect(requests("turn.interrupt")).toHaveLength(1);
     expect(requests("turn.interrupt")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", expectedTurnId: "turn-1" } });
