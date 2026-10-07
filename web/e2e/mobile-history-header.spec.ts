@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Thread } from "../src/generated/protocol";
 
+test.use({ reducedMotion: "no-preference" });
+
 const sessionToken = `s_${"c".repeat(64)}`;
 const fixtureThread: Thread = {
   threadId: "history-fixture",
@@ -92,4 +94,48 @@ test("scrolling into history fully collapses the chrome and gives its height to 
   await expect(head.locator(".head-path")).toBeVisible();
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
   await expect(page.getByRole("textbox", { name: "发送消息" })).toBeVisible();
+});
+
+test("returning to latest restores the chrome once without oscillation", async ({ page }) => {
+  await openHistoryFixture(page);
+  const head = page.locator(".conversation-head");
+  const transcript = page.locator(".transcript");
+  const composerWrap = page.locator(".composer-wrap");
+
+  await transcript.evaluate(element => {
+    element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500);
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(head).toHaveAttribute("data-history-collapsed", "true");
+  await expect(head).toHaveCSS("height", "0px");
+
+  await page.evaluate(() => {
+    const head = document.querySelector(".conversation-head");
+    const states: string[] = [];
+    (window as unknown as { __arielHistoryChromeStates: string[] }).__arielHistoryChromeStates = states;
+    if (!head) return;
+    new MutationObserver(() => states.push(head.getAttribute("data-history-collapsed") || "")).observe(head, { attributes: true, attributeFilter: ["data-history-collapsed"] });
+  });
+  await transcript.evaluate(element => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+
+  await expect(head).toHaveAttribute("data-history-collapsed", "false");
+  await page.waitForTimeout(550);
+  const settled = await page.evaluate(() => {
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    return {
+      states: (window as unknown as { __arielHistoryChromeStates: string[] }).__arielHistoryChromeStates,
+      distanceFromLatest: transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop,
+      headHeight: document.querySelector(".conversation-head")?.getBoundingClientRect().height || 0,
+      composerHeight: document.querySelector(".composer-wrap")?.getBoundingClientRect().height || 0,
+    };
+  });
+  expect(settled.states).toEqual(["false"]);
+  expect(settled.distanceFromLatest).toBeLessThanOrEqual(1);
+  expect(settled.headHeight).toBe(66);
+  expect(settled.composerHeight).toBeGreaterThan(0);
+  await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
+  await expect(page).toHaveScreenshot("mobile-history-latest-stable.png", { animations: "disabled", caret: "hide" });
 });

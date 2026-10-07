@@ -490,6 +490,37 @@ describe("Ariel app interactions", () => {
     expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
   });
 
+  it("keeps the latest message anchored while the restored chrome shrinks the transcript", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
+    await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
+    let clientHeight = 200;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, get: () => clientHeight });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    transcript.scrollTop = 800;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
+
+    clientHeight = 100;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
+    expect(transcript.scrollTop).toBe(900);
+
+    transcript.scrollTop = 700;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(true);
+  });
+
   it("expands the history header immediately when selecting another thread", async () => {
     const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
     const another: Thread = { ...fixtureThread, threadId: "another", title: "Another", cwd: "/tmp/another" };

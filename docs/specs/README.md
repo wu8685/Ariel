@@ -67,6 +67,7 @@
 | 0050 | [登录页标题改为“Agent 联络中继器”](0050-agent-relay-login-heading.md) | Implemented（桌面／移动截图、自动测试与 production build 已验） | 用产品定位标题替换“接续 Codex”，并保持桌面和手机同排展示 |
 | 0051 | [面向使用者的精简 README](0051-readable-project-readme.md) | Implemented（Logo 像素透明度、README 链接与 Web 全量测试已验） | 用背景、架构、快速开始、基本使用和文档导航重写项目入口，并验证新版 Logo 透明背景 |
 | 0052 | [移动端 Markdown 表格列字体一致](0052-uniform-mobile-markdown-table-type.md) | Implemented（移动截图、自动测试与 production build 已验） | 关闭表格 text inflation，让全部表头与单元格继承统一字号和行高，并补移动端截图回归 |
+| 0053 | [回到最新时稳定恢复会话界面](0053-stable-latest-chrome-restoration.md) | Implemented（自动／真实移动 Chromium／截图已验） | 在 Header／输入区域展开期间持续锚定最新消息，消除布局变化造成的反复收放抖动 |
 
 ## 设计基线
 

@@ -24,6 +24,7 @@ const mobileComposerMinHeight = 44;
 const mobileComposerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
 const latestFollowDistance = 80;
 const historyHeaderExpandDistance = 32;
+const latestChromeRestoreDuration = 260;
 const queueMenuWidth = 108;
 const queueMenuRowHeight = 34;
 type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: number; scrollHeight: number };
@@ -205,6 +206,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const lastTranscriptScrollTop = useRef(0);
+  const latestChromeRestoreDeadline = useRef(0);
+  const latestChromeRestoreTimer = useRef<number | null>(null);
   const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
   const resumeReadingAnchor = useRef<ReadingAnchor | null>(null);
   const lastPaint = useRef<{ key: string; seq: number; marker: ContentMarker | null }>({ key: "", seq: -1, marker: null });
@@ -254,9 +257,49 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (anchor) resumeReadingAnchor.current = anchor;
   }
 
+  function cancelLatestChromeRestore() {
+    latestChromeRestoreDeadline.current = 0;
+    if (latestChromeRestoreTimer.current !== null) window.clearTimeout(latestChromeRestoreTimer.current);
+    latestChromeRestoreTimer.current = null;
+  }
+
+  function pinLatestUntilChromeSettles() {
+    const container = transcriptRef.current;
+    if (!container || !latestChromeRestoreDeadline.current) { cancelLatestChromeRestore(); return; }
+    scrollToLatest(container);
+    lastTranscriptScrollTop.current = container.scrollTop;
+    if (performance.now() >= latestChromeRestoreDeadline.current) { cancelLatestChromeRestore(); return; }
+    latestChromeRestoreTimer.current = window.setTimeout(pinLatestUntilChromeSettles, 16);
+  }
+
+  function restoreLatestChrome(container = transcriptRef.current) {
+    const stabilizeLayout = historyChromeCollapsed || latestChromeRestoreDeadline.current > 0;
+    cancelLatestChromeRestore();
+    followLatestRef.current = true;
+    setShowReturnToLatest(false);
+    if (stabilizeLayout) latestChromeRestoreDeadline.current = performance.now() + latestChromeRestoreDuration;
+    setHistoryChromeCollapsed(false);
+    if (container) {
+      scrollToLatest(container);
+      lastTranscriptScrollTop.current = container.scrollTop;
+    }
+    if (stabilizeLayout) latestChromeRestoreTimer.current = window.setTimeout(pinLatestUntilChromeSettles, 0);
+  }
+
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container) return;
+    if (latestChromeRestoreDeadline.current) {
+      const userScrolledUp = container.scrollTop < lastTranscriptScrollTop.current - 1;
+      if (!userScrolledUp) {
+        scrollToLatest(container);
+        lastTranscriptScrollTop.current = container.scrollTop;
+        followLatestRef.current = true;
+        setShowReturnToLatest(false);
+        return;
+      }
+      cancelLatestChromeRestore();
+    }
     const scrollingTowardLatest = container.scrollTop > lastTranscriptScrollTop.current + 1;
     lastTranscriptScrollTop.current = container.scrollTop;
     const distanceFromLatest = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop);
@@ -264,8 +307,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const returnedToLatest = scrollingTowardLatest && distanceFromLatest <= historyHeaderExpandDistance;
       followLatestRef.current = returnedToLatest;
       if (returnedToLatest) {
-        setHistoryChromeCollapsed(false);
-        setShowReturnToLatest(false);
+        restoreLatestChrome(container);
       }
       return;
     }
@@ -279,11 +321,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   function returnToLatest() {
-    followLatestRef.current = true;
-    setShowReturnToLatest(false);
-    setHistoryChromeCollapsed(false);
-    const container = transcriptRef.current;
-    if (container) { scrollToLatest(container); lastTranscriptScrollTop.current = container.scrollTop; }
+    restoreLatestChrome();
   }
 
   function disconnect() {
@@ -456,7 +494,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function selectThread(id: string, targetDevice = deviceId) {
     if (!targetDevice) return;
     if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
-    else { resumeReadingAnchor.current = null; followLatestRef.current = true; lastTranscriptScrollTop.current = 0; setShowReturnToLatest(false); setHistoryChromeCollapsed(false); }
+    else { resumeReadingAnchor.current = null; lastTranscriptScrollTop.current = 0; restoreLatestChrome(); }
     pendingReadingAnchor.current = null;
     blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
@@ -703,6 +741,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   useEffect(() => () => { queueDrag.current?.cleanup(); }, []);
 
+  useEffect(() => () => cancelLatestChromeRestore(), []);
+
   useLayoutEffect(() => {
     const input = composerInputRef.current;
     if (!input) return;
@@ -765,16 +805,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const resume = resumeReadingAnchor.current;
     if (resume?.key === key) {
       if (restoreReadingAnchor(container, resume)) { followLatestRef.current = false; setHistoryChromeCollapsed(true); }
-      else { followLatestRef.current = true; setHistoryChromeCollapsed(false); scrollToLatest(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
+      else { restoreLatestChrome(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
       resumeReadingAnchor.current = null;
       lastPaint.current = { key, seq: view.seq, marker };
       return;
     }
     if (lastPaint.current.key !== key) {
-      followLatestRef.current = true;
-      setShowReturnToLatest(false);
-      setHistoryChromeCollapsed(false);
-      scrollToLatest(container);
+      restoreLatestChrome(container);
     } else if (lastPaint.current.seq !== view.seq) {
       if (followLatestRef.current) scrollToLatest(container);
       else if (hasNewVisibleContent(lastPaint.current.marker, marker)) setShowReturnToLatest(true);
