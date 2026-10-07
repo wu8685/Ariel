@@ -203,6 +203,7 @@
       "properties": {
         "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" }, "searchSnippet": { "type": "string", "maxLength": 400 },
         "cwd": { "type": "string" }, "updatedAt": { "type": "string" },
+        "isPinned": { "type": "boolean" },
         "runtime": { "enum": ["idle", "inProgress", "notLoaded", "unknown"] },
         "historyComplete": { "type": "boolean" },
         "recentComplete": { "type": "boolean" },

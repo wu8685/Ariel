@@ -18,6 +18,7 @@ type Thread struct {
 	UpdatedAt int64           `json:"updatedAt"`
 	Status    json.RawMessage `json:"status"`
 	Turns     []Turn          `json:"turns"`
+	IsPinned  *bool           `json:"isPinned,omitempty"`
 }
 type Turn struct {
 	ID     string            `json:"id"`
@@ -65,6 +66,33 @@ func (h HistoryReader) List(ctx context.Context, cursor string, limit int) (Page
 	}
 	err := h.RPC.Call(ctx, "thread/list", params, &out)
 	return out, err
+}
+
+// ListPinned uses the public persisted pin filter. A response item without a
+// positive isPinned marker means an older server ignored the unknown filter;
+// fail closed instead of presenting ordinary sessions as pinned.
+func (h HistoryReader) ListPinned(ctx context.Context, limit int) (Page, error) {
+	var out Page
+	if limit < 1 || limit > 100 {
+		return out, ErrProtocol
+	}
+	params := map[string]any{
+		"limit":         limit,
+		"sortKey":       "updated_at",
+		"sortDirection": "desc",
+		"isPinned":      true,
+		"sourceKinds":   []string{"cli", "vscode", "appServer"},
+		"archived":      false,
+	}
+	if err := h.RPC.Call(ctx, "thread/list", params, &out); err != nil {
+		return out, err
+	}
+	for _, thread := range out.Data {
+		if thread.IsPinned == nil || !*thread.IsPinned {
+			return Page{}, ErrInvalidArgument
+		}
+	}
+	return out, nil
 }
 
 func (h HistoryReader) Search(ctx context.Context, query, cursor string, limit int) (SearchPage, error) {

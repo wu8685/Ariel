@@ -231,6 +231,30 @@ func TestHistoryReaderUsesOnlyReadMethods(t *testing.T) {
 	}
 }
 
+func TestHistoryReaderListsPinnedThreadsInNativeSidebarOrder(t *testing.T) {
+	f := &fakeRPC{}
+	h := HistoryReader{RPC: f}
+	page, err := h.ListPinned(context.Background(), 100)
+	if err != nil || len(page.Data) != 1 || page.Data[0].IsPinned == nil || !*page.Data[0].IsPinned {
+		t.Fatalf("pinned page: %+v, %v", page, err)
+	}
+	if len(f.methods) != 1 || f.methods[0] != "thread/list" {
+		t.Fatalf("not native pinned list: %v", f.methods)
+	}
+	params := f.params[0].(map[string]any)
+	if params["isPinned"] != true || params["sortKey"] != "updated_at" || params["sortDirection"] != "desc" || params["archived"] != false || params["limit"] != 100 {
+		t.Fatalf("wrong pinned list params: %#v", params)
+	}
+}
+
+func TestHistoryReaderRejectsIgnoredPinnedFilter(t *testing.T) {
+	f := &fakeRPC{unmarkedPinned: true}
+	_, err := (HistoryReader{RPC: f}).ListPinned(context.Background(), 100)
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("unmarked result was trusted as pinned: %v", err)
+	}
+}
+
 func TestHistoryReaderSearchUsesNativeFullTextAndCursor(t *testing.T) {
 	f := &fakeRPC{}
 	h := HistoryReader{RPC: f}
@@ -345,8 +369,9 @@ func TestHistoryReaderRejectsInvalidPageRequestsBeforeRPC(t *testing.T) {
 }
 
 type fakeRPC struct {
-	methods []string
-	params  []any
+	methods        []string
+	params         []any
+	unmarkedPinned bool
 }
 
 func (f *fakeRPC) Call(ctx context.Context, method string, params any, result any) error {
@@ -355,7 +380,15 @@ func (f *fakeRPC) Call(ctx context.Context, method string, params any, result an
 	var body string
 	switch method {
 	case "thread/list":
-		body = `{"data":[],"nextCursor":null}`
+		if values, ok := params.(map[string]any); ok && values["isPinned"] == true {
+			if f.unmarkedPinned {
+				body = `{"data":[{"id":"ordinary-thread","name":"Ordinary","cwd":"/fixture","status":{"type":"idle"}}],"nextCursor":null}`
+			} else {
+				body = `{"data":[{"id":"pinned-thread","name":"Pinned","cwd":"/fixture","isPinned":true,"status":{"type":"idle"}}],"nextCursor":null}`
+			}
+		} else {
+			body = `{"data":[],"nextCursor":null}`
+		}
 	case "thread/search":
 		body = `{"data":[{"thread":{"id":"fixture-thread","name":"Fixture","cwd":"/fixture","status":{"type":"idle"}},"snippet":"matched text"}],"nextCursor":"next","backwardsCursor":null}`
 	case "thread/read":

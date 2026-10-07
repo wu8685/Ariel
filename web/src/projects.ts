@@ -36,3 +36,18 @@ export function groupThreadsByProject<T extends { cwd: string }>(threads: readon
   }
   return groups;
 }
+
+export function partitionThreadsByPin<T extends { isPinned?: boolean }>(threads: readonly T[]): { pinned: T[]; regular: T[] } {
+  const pinned: T[] = [];
+  const regular: T[] = [];
+  for (const thread of threads) (thread.isPinned === true ? pinned : regular).push(thread);
+  return { pinned, regular };
+}
+
+export function mergeThreadPages<T extends { threadId: string }>(current: readonly T[], incoming: readonly T[]): T[] {
+  const updates = new Map(incoming.map(thread => [thread.threadId, thread]));
+  const merged = current.map(thread => updates.get(thread.threadId) || thread);
+  const known = new Set(current.map(thread => thread.threadId));
+  for (const thread of incoming) if (!known.has(thread.threadId)) merged.push(thread);
+  return merged;
+}

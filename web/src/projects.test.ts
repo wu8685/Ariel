@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupThreadsByProject, normalizeProjectPath, projectName } from "./projects";
+import { groupThreadsByProject, mergeThreadPages, normalizeProjectPath, partitionThreadsByPin, projectName } from "./projects";
 
 type Session = { threadId: string; cwd: string };
 
@@ -33,5 +33,20 @@ describe("project session grouping", () => {
     expect(projectName("/")).toBe("/");
     expect(projectName("C:\\")).toBe("C:\\");
     expect(projectName("")).toBe("未知项目");
+  });
+
+  it("partitions pinned sessions without changing either native order", () => {
+    const sessions = [
+      { threadId: "pin-one", cwd: "/one", isPinned: true },
+      { threadId: "regular", cwd: "/regular" },
+      { threadId: "pin-two", cwd: "/two", isPinned: true },
+    ];
+    expect(partitionThreadsByPin(sessions)).toEqual({ pinned: [sessions[0], sessions[2]], regular: [sessions[1]] });
+  });
+
+  it("merges paged sessions by thread identity while refreshing known entries", () => {
+    const current = [{ threadId: "pin", cwd: "/old", isPinned: true }, { threadId: "regular", cwd: "/regular" }];
+    const incoming = [{ threadId: "pin", cwd: "/new", isPinned: true }, { threadId: "older", cwd: "/older" }];
+    expect(mergeThreadPages(current, incoming)).toEqual([incoming[0], current[1], incoming[1]]);
   });
 });

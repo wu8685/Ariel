@@ -20,6 +20,42 @@ type anyThreadHistory struct{}
 
 type searchableHistory struct{ fakeHistory }
 
+type pinnedHistory struct{ fakeHistory }
+
+func (pinnedHistory) List(_ context.Context, cursor string, limit int) (appserver.Page, error) {
+	if cursor != "" || limit != 50 {
+		return appserver.Page{}, fmt.Errorf("unexpected regular list args")
+	}
+	next := "regular-next"
+	return appserver.Page{Data: []appserver.Thread{
+		{ID: "pinned-one", Name: "duplicate pin", CWD: "/one", Status: json.RawMessage(`{"type":"idle"}`)},
+		{ID: "regular", Name: "Regular", CWD: "/regular", Status: json.RawMessage(`{"type":"idle"}`)},
+	}, NextCursor: &next}, nil
+}
+
+func (pinnedHistory) ListPinned(_ context.Context, limit int) (appserver.Page, error) {
+	if limit != 100 {
+		return appserver.Page{}, fmt.Errorf("unexpected pinned limit: %d", limit)
+	}
+	return appserver.Page{Data: []appserver.Thread{
+		{ID: "pinned-two", Name: "Second", CWD: "/two", Status: json.RawMessage(`{"type":"idle"}`)},
+		{ID: "pinned-one", Name: "First", CWD: "/one", Status: json.RawMessage(`{"type":"idle"}`)},
+	}}, nil
+}
+
+type unsupportedPinnedHistory struct{ fakeHistory }
+
+func (unsupportedPinnedHistory) ListPinned(context.Context, int) (appserver.Page, error) {
+	return appserver.Page{}, appserver.ErrInvalidArgument
+}
+
+type overflowingPinnedHistory struct{ fakeHistory }
+
+func (overflowingPinnedHistory) ListPinned(context.Context, int) (appserver.Page, error) {
+	next := "too-many"
+	return appserver.Page{NextCursor: &next}, nil
+}
+
 func (searchableHistory) Search(_ context.Context, query, cursor string, limit int) (appserver.SearchPage, error) {
 	if query != "Ariel" || cursor != "" || limit != 50 {
 		return appserver.SearchPage{}, fmt.Errorf("unexpected native search args")
@@ -43,6 +79,35 @@ func TestServiceSearchReportsUnsupportedNativeAPI(t *testing.T) {
 	s := NewService(fakeHistory{}, nil)
 	if _, _, err := s.Search(context.Background(), "Ariel", 50, ""); !errors.Is(err, appserver.ErrMethodUnavailable) {
 		t.Fatalf("unsupported search: %v", err)
+	}
+}
+
+func TestServiceListPrependsNativePinsAndDeduplicatesRegularPage(t *testing.T) {
+	s := NewService(pinnedHistory{}, nil)
+	results, next, err := s.List(context.Background(), 50, "")
+	if err != nil || next != "regular-next" || len(results) != 3 {
+		t.Fatalf("list: count=%d next=%q err=%v", len(results), next, err)
+	}
+	if results[0]["threadId"] != "pinned-two" || results[1]["threadId"] != "pinned-one" || results[2]["threadId"] != "regular" {
+		t.Fatalf("native pin order or deduplication lost: %+v", results)
+	}
+	if results[0]["isPinned"] != true || results[1]["isPinned"] != true || results[2]["isPinned"] != false {
+		t.Fatalf("pin projection invalid: %+v", results)
+	}
+}
+
+func TestServiceListFallsBackWhenPinnedFilterIsUnsupported(t *testing.T) {
+	s := NewService(unsupportedPinnedHistory{}, nil)
+	results, _, err := s.List(context.Background(), 50, "")
+	if err != nil || len(results) != 1 || results[0]["threadId"] != "thread" {
+		t.Fatalf("unsupported pinned filter blocked regular list: %+v %v", results, err)
+	}
+}
+
+func TestServiceListRejectsPinnedResultsBeyondBoundedFirstPage(t *testing.T) {
+	s := NewService(overflowingPinnedHistory{}, nil)
+	if _, _, err := s.List(context.Background(), 50, ""); err == nil || err.Error() != "OVERLOADED" {
+		t.Fatalf("unbounded pinned list was accepted: %v", err)
 	}
 }
 

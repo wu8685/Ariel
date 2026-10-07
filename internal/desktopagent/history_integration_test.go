@@ -2,6 +2,7 @@ package desktopagent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -41,6 +42,37 @@ func TestReadOnlyNativeSearchAgainstInstalledCodex(t *testing.T) {
 		}
 	}
 	t.Logf("read-only native search verified: results=%d", len(results))
+}
+
+func TestReadOnlyPinnedThreadsAgainstInstalledCodex(t *testing.T) {
+	if os.Getenv("ARIEL_READONLY_PINNED") != "1" {
+		t.Skip("set ARIEL_READONLY_PINNED=1 for a read-only native pinned-thread check")
+	}
+	defaults, err := probe.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	process, err := appserver.Start(ctx, probe.BundledBinary(defaults.AppPath), os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer process.Close()
+	page, err := (appserver.HistoryReader{RPC: process.Session}).ListPinned(ctx, 100)
+	if errors.Is(err, appserver.ErrInvalidArgument) || errors.Is(err, appserver.ErrMethodUnavailable) {
+		t.Log("installed Codex does not expose public isPinned metadata")
+		return
+	}
+	if err != nil {
+		t.Fatalf("native pinned list failed: %v", err)
+	}
+	for _, thread := range page.Data {
+		if thread.ID == "" || thread.IsPinned == nil || !*thread.IsPinned {
+			t.Fatal("native pinned result missing identity or pin marker")
+		}
+	}
+	t.Logf("read-only native pinned list verified: results=%d", len(page.Data))
 }
 
 func TestReadOnlyPagedHistoryAgainstInstalledCodex(t *testing.T) {

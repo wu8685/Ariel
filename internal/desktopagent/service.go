@@ -26,6 +26,10 @@ type SearchHistory interface {
 	Search(context.Context, string, string, int) (appserver.SearchPage, error)
 }
 
+type PinnedHistory interface {
+	ListPinned(context.Context, int) (appserver.Page, error)
+}
+
 type PagedHistory interface {
 	Turns(context.Context, string, string, int, string) (appserver.TurnPage, error)
 	Items(context.Context, string, string, string, int) (appserver.ItemPage, error)
@@ -50,6 +54,7 @@ const maxHistoryPageBytes = 6 << 20
 const maxThreadControllers = 64
 const maxSubscriptionsPerThread = 16
 const maxRecentMessageIDs = 4096
+const maxPinnedThreads = 100
 
 func checkThreadSize(thread map[string]any) error {
 	return checkPayloadSize(thread, maxThreadPayloadBytes)
@@ -229,8 +234,34 @@ func (s *Service) List(ctx context.Context, limit int, cursor string) ([]map[str
 	if err != nil {
 		return nil, "", err
 	}
-	threads := make([]map[string]any, 0, len(page.Data))
-	for _, source := range page.Data {
+	sources := page.Data
+	if cursor == "" {
+		if reader, ok := s.history.(PinnedHistory); ok {
+			pinned, pinnedErr := reader.ListPinned(ctx, maxPinnedThreads)
+			switch {
+			case pinnedErr == nil:
+				if pinned.NextCursor != nil {
+					return nil, "", errors.New("OVERLOADED")
+				}
+				isPinned := true
+				for index := range pinned.Data {
+					pinned.Data[index].IsPinned = &isPinned
+				}
+				sources = append(append(make([]appserver.Thread, 0, len(pinned.Data)+len(page.Data)), pinned.Data...), page.Data...)
+			case errors.Is(pinnedErr, appserver.ErrMethodUnavailable), errors.Is(pinnedErr, appserver.ErrInvalidArgument):
+				// Older App Server builds do not expose persisted pin metadata.
+			default:
+				return nil, "", pinnedErr
+			}
+		}
+	}
+	threads := make([]map[string]any, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		if _, duplicate := seen[source.ID]; duplicate {
+			continue
+		}
+		seen[source.ID] = struct{}{}
 		// List is an index, not a second history transport. Some App Server
 		// versions may include turns in list entries, so omit them explicitly.
 		source.Turns = nil

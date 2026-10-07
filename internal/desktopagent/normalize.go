@@ -40,7 +40,8 @@ func NormalizeStored(source appserver.Thread) (map[string]any, error) {
 	if source.UpdatedAt == 0 {
 		updated = time.Now().UTC()
 	}
-	return map[string]any{"threadId": source.ID, "title": source.Name, "cwd": source.CWD, "updatedAt": updated.Format(time.RFC3339Nano), "runtime": runtime, "turns": turns, "pendingInteractions": []any{}, "permissions": map[string]any{"sandbox": "unknown", "approval": "unknown"}}, nil
+	isPinned := source.IsPinned != nil && *source.IsPinned
+	return map[string]any{"threadId": source.ID, "title": source.Name, "cwd": source.CWD, "updatedAt": updated.Format(time.RFC3339Nano), "runtime": runtime, "isPinned": isPinned, "turns": turns, "pendingInteractions": []any{}, "permissions": map[string]any{"sandbox": "unknown", "approval": "unknown"}}, nil
 }
 
 func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[string]any, error) {

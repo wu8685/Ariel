@@ -10,7 +10,7 @@ import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
-import { groupThreadsByProject } from "./projects";
+import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin } from "./projects";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
@@ -212,7 +212,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const queueDrag = useRef<{ pointerId: number; queueId: string; startY: number; order: string[] } | null>(null);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
-  const threadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
+  const allThreadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
+  const { pinned: pinnedThreads, regular: regularThreads } = useMemo(() => partitionThreadsByPin(threads), [threads]);
+  const threadGroups = useMemo(() => groupThreadsByProject(regularThreads), [regularThreads]);
   const mock = device?.adapterVersion?.startsWith("mock-") ?? false;
   const activeTurn = view?.thread.turns.findLast(t => t.status === "inProgress");
   const queuedMessages = view?.thread.queuedMessages || [];
@@ -344,13 +346,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       return;
     }
     const page = (response.data?.threads as Thread[] | undefined) || [];
-    setThreads(current => next ? [...current, ...page] : page);
+    setThreads(current => next ? mergeThreadPages(current, page) : page);
     setCursor(String(response.data?.nextCursor || ""));
   }
 
   function openNewThreadDialog() {
     if (!threadCreateEnabled || !deviceId) return;
-    setNewThreadCwd(view?.thread.cwd || selectedThread?.cwd || threadGroups[0]?.path || "");
+    setNewThreadCwd(view?.thread.cwd || selectedThread?.cwd || allThreadGroups[0]?.path || "");
     setNewThreadError("");
     setNewThreadOpen(true);
   }
@@ -1019,9 +1021,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <h2 id="thread-create-title">新建会话</h2>
         <p>选择一个已有项目，或输入这台电脑上的绝对目录。这里只创建空会话，不会自动发送消息。</p>
         <label htmlFor="known-project">已有项目</label>
-        <select id="known-project" aria-label="选择已有项目" value={threadGroups.some(group => group.path === newThreadCwd) ? newThreadCwd : ""} onChange={event => { if (event.target.value) setNewThreadCwd(event.target.value); }} disabled={creatingThread}>
+        <select id="known-project" aria-label="选择已有项目" value={allThreadGroups.some(group => group.path === newThreadCwd) ? newThreadCwd : ""} onChange={event => { if (event.target.value) setNewThreadCwd(event.target.value); }} disabled={creatingThread}>
           <option value="">手动输入其他目录</option>
-          {threadGroups.filter(group => group.path !== "路径未知").map(group => <option key={group.key} value={group.path}>{group.name} — {group.path}</option>)}
+          {allThreadGroups.filter(group => group.path !== "路径未知").map(group => <option key={group.key} value={group.path}>{group.name} — {group.path}</option>)}
         </select>
         <label htmlFor="thread-create-cwd">项目目录</label>
         <input id="thread-create-cwd" aria-label="项目目录" value={newThreadCwd} maxLength={4096} onChange={event => setNewThreadCwd(event.target.value)} placeholder="/Users/me/workspace/project" disabled={creatingThread} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
@@ -1038,13 +1040,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <label className="device-label" htmlFor="device">设备</label><select id="device" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select>
         {device && <div className="device-meta"><span className={`status-dot ${device.agentOnline ? "online" : ""}`} />{device.agentOnline ? "Agent 在线" : "Agent 离线"}<span>·</span>{device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}</div>}
         <div className="sidebar-search"><span className="search-glyph" aria-hidden="true">⌕</span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button type="button" aria-label="清空搜索" onClick={() => updateSearch("")}>×</button>}</div>
-        <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
-        <div className="thread-list">{threadGroups.map((group, index) => {
+        <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
+        <div className="thread-list">{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(t => <button key={t.threadId} data-thread-id={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div></section>}{threadGroups.map((group, index) => {
           const expanded = expandedProjectKeys.has(group.key);
           const projectThreadsID = `project-threads-${index}`;
           return <section className={`project-group ${expanded ? "expanded" : "collapsed"}`} aria-label={`项目 ${group.name}`} key={group.key}>
             <header className="project-heading"><button className="project-toggle" type="button" aria-expanded={expanded} aria-controls={projectThreadsID} aria-label={`${expanded ? "收起" : "展开"}项目 ${group.name}，${group.path}`} onClick={() => toggleProjectGroup(group.key)}><span className={`project-chevron ${expanded ? "expanded" : ""}`} aria-hidden="true">›</span><span className="project-copy"><span className="project-name">{group.name}</span><span className="project-path" title={group.path}>{group.path}</span></span><span className="project-count" aria-hidden="true">{group.threads.length}</span></button></header>
-            <div id={projectThreadsID} className="project-threads" hidden={!expanded}>{expanded && group.threads.map(t => <button key={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
+            <div id={projectThreadsID} className="project-threads" hidden={!expanded}>{expanded && group.threads.map(t => <button key={t.threadId} data-thread-id={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
           </section>;
         })}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}

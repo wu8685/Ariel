@@ -139,6 +139,7 @@ export interface Thread {
   searchSnippet?: string;
   cwd: string;
   updatedAt: string;
+  isPinned?: boolean;
   runtime: "idle" | "inProgress" | "notLoaded" | "unknown";
   historyComplete?: boolean;
   recentComplete?: boolean;

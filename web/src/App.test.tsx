@@ -132,6 +132,35 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByText("Alpha new")).toBeNull();
   });
 
+  it("shows native pinned sessions before projects without duplicating them in project groups", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, true);
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "pin" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    const pinnedAlpha: Thread = { ...fixtureThread, threadId: "pinned-alpha", title: "Pinned alpha", cwd: "/work/alpha", isPinned: true };
+    const regularAlpha: Thread = { ...fixtureThread, threadId: "regular-alpha", title: "Regular alpha", cwd: "/work/alpha" };
+    const pinnedOnly: Thread = { ...fixtureThread, threadId: "pinned-only", title: "Pinned only", cwd: "/work/pinned-only", isPinned: true };
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [pinnedAlpha, regularAlpha, pinnedOnly], nextCursor: "more" } }));
+
+    const sidebar = screen.getByLabelText("会话列表");
+    const pinned = await screen.findByRole("region", { name: "置顶会话" });
+    const alphaGroup = await screen.findByRole("region", { name: "项目 alpha" });
+    expect(pinned.compareDocumentPosition(alphaGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pinned.textContent).toContain("Pinned alpha");
+    expect(pinned.textContent).toContain("Pinned only");
+    expect(alphaGroup.querySelector(".project-count")?.textContent).toBe("1");
+    expect(alphaGroup.textContent).not.toContain("Pinned alpha");
+    expect(sidebar.querySelectorAll(".thread-row[data-thread-id='pinned-alpha']")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多 →" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(3));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[2].requestId, outcome: "accepted", data: { threads: [pinnedAlpha], nextCursor: "" } }));
+    await waitFor(() => expect(sidebar.querySelectorAll(".thread-row[data-thread-id='pinned-alpha']")).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
+    const projects = screen.getByRole("combobox", { name: "选择已有项目" }) as HTMLSelectElement;
+    expect([...projects.options].some(option => option.value === "/work/pinned-only")).toBe(true);
+  });
+
   it("creates an empty thread in the chosen project and hands it to the normal subscription flow", async () => {
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
