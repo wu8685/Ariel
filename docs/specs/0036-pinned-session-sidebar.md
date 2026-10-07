@@ -1,6 +1,6 @@
 # 0036：置顶会话独立展示并从项目分组去重
 
-- 状态：Implemented（自动测试、production build、官方文档与 bundled Codex 0.160.0 只读兼容检查已验；0.160.0 尚不暴露 `isPinned`，升级到支持该字段的 bundled Codex 后自动生效）。
+- 状态：Implemented（自动测试、production build 与官方文档已验；bundled Codex 0.160.0 的 section 兼容由 0040 补齐并完成真实只读验证）。
 - 前置：0032 以会话 `cwd` 生成项目分组；0034 让项目默认收起。
 - 原则：Codex 仍是置顶状态和排序的 SSOT，Ariel 只读取并投影，不建立自己的置顶数据。
 - 接口依据：[Codex App Server 官方文档](https://developers.openai.com/codex/app-server) 的 `thread/list.isPinned` 与 thread `isPinned` 字段。
@@ -9,7 +9,7 @@
 
 1. Desktop Agent 通过官方 App Server 的 `thread/list` + `isPinned: true` 读取置顶会话，并以 `updated_at` 倒序展示；Web 协议只暴露统一的可选布尔字段 `isPinned`。
 2. Adapter 同时解码普通 `thread/list`／`thread/search` 返回的 `isPinned` 字段；只有原生字段明确为 `true` 时才认定置顶。
-3. 若当前 bundled Codex 不支持 `isPinned` 筛选或返回项缺少可靠的正向标记，普通会话列表仍必须可用；Adapter 不猜测置顶状态，也不读取 Desktop 私有数据库。
+3. 若当前 bundled Codex 不支持 `isPinned` 筛选或返回项缺少可靠的正向标记，按 0040 读取 App Server 保留的 `Pinned` section；Adapter 不猜测置顶状态，也不读取 Desktop 私有数据库。
 4. 初次加载最多读取 100 个置顶会话；超过该有界容量时返回显式容量错误，不无限分页或建立本地数据库。
 
 ## 用户可见行为
@@ -30,7 +30,7 @@
 
 ## 错误处理
 
-- 置顶筛选返回“方法不存在”“参数不支持”，或疑似忽略筛选且结果缺少 `isPinned: true` 时，降级为普通列表，不阻断会话导航。
+- 置顶筛选返回“方法不存在”“参数不支持”，或疑似忽略筛选且结果缺少 `isPinned: true` 时，先尝试 0040 的 section 兼容；两种原生能力都不可用才降级为普通列表。
 - 其他原生错误按既有 `thread.list` 错误边界返回，避免展示可能错误的置顶状态。
 - 任何缺少可靠原生证据的会话按未置顶处理。
 

@@ -247,11 +247,26 @@ func TestHistoryReaderListsPinnedThreadsInNativeSidebarOrder(t *testing.T) {
 	}
 }
 
-func TestHistoryReaderRejectsIgnoredPinnedFilter(t *testing.T) {
+func TestHistoryReaderFallsBackToBundledPinnedSectionWhenFilterIsIgnored(t *testing.T) {
+	f := &fakeRPC{unmarkedPinned: true, sectionPinned: true}
+	page, err := (HistoryReader{RPC: f}).ListPinned(context.Background(), 100)
+	if err != nil || len(page.Data) != 1 || page.Data[0].ID != "section-pinned" || page.Data[0].IsPinned == nil || !*page.Data[0].IsPinned {
+		t.Fatalf("section fallback: %+v, %v", page, err)
+	}
+	if len(f.methods) != 2 || f.methods[0] != "thread/list" || f.methods[1] != "thread/list" {
+		t.Fatalf("fallback methods: %v", f.methods)
+	}
+	params := f.params[1].(map[string]any)
+	if params["sectionId"] != "01984de2-8f74-7c91-a3b2-5c5e937cf318" || params["sortKey"] != "section_position" || params["useStateDbOnly"] != true || params["archived"] != false || params["limit"] != 100 {
+		t.Fatalf("wrong section fallback params: %#v", params)
+	}
+}
+
+func TestHistoryReaderRejectsSectionResultsWithoutPinnedSectionEvidence(t *testing.T) {
 	f := &fakeRPC{unmarkedPinned: true}
 	_, err := (HistoryReader{RPC: f}).ListPinned(context.Background(), 100)
 	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("unmarked result was trusted as pinned: %v", err)
+		t.Fatalf("unmarked fallback result was trusted as pinned: %v", err)
 	}
 }
 
@@ -372,6 +387,7 @@ type fakeRPC struct {
 	methods        []string
 	params         []any
 	unmarkedPinned bool
+	sectionPinned  bool
 }
 
 func (f *fakeRPC) Call(ctx context.Context, method string, params any, result any) error {
@@ -385,6 +401,12 @@ func (f *fakeRPC) Call(ctx context.Context, method string, params any, result an
 				body = `{"data":[{"id":"ordinary-thread","name":"Ordinary","cwd":"/fixture","status":{"type":"idle"}}],"nextCursor":null}`
 			} else {
 				body = `{"data":[{"id":"pinned-thread","name":"Pinned","cwd":"/fixture","isPinned":true,"status":{"type":"idle"}}],"nextCursor":null}`
+			}
+		} else if values, ok := params.(map[string]any); ok && values["sectionId"] == "01984de2-8f74-7c91-a3b2-5c5e937cf318" {
+			if f.sectionPinned {
+				body = `{"data":[{"id":"section-pinned","name":"Pinned","cwd":"/fixture","section":{"id":"01984de2-8f74-7c91-a3b2-5c5e937cf318","name":"Pinned"},"status":{"type":"idle"}}],"nextCursor":null}`
+			} else {
+				body = `{"data":[{"id":"ordinary-thread","name":"Ordinary","cwd":"/fixture","status":{"type":"idle"}}],"nextCursor":null}`
 			}
 		} else {
 			body = `{"data":[],"nextCursor":null}`

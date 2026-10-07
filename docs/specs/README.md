@@ -50,10 +50,12 @@
 | 0033 | [在指定项目中新建 Codex 会话](0033-create-thread-in-project.md) | Implemented（自动／真实 Codex 空 thread 已验；物理手机待验） | 选择已有项目或绝对目录创建空 Codex thread，再交由 Desktop owner 接管 |
 | 0034 | [项目会话分组默认收起与按需展开](0034-collapsible-project-session-groups.md) | Implemented（自动测试与 production build 已验；物理手机待验） | 所有项目默认最小化收起，点击项目标题独立展开或再次收起 |
 | 0035 | [队列菜单、引导消息可见性与紧凑输入操作](0035-queue-overlay-steer-visibility-and-compact-actions.md) | Implemented（自动测试与 production build 已验；物理手机待验） | 修复队列更多菜单遮挡和引导消息正文丢失，并缩小手机输入操作 icon |
-| 0036 | [置顶会话独立展示并从项目分组去重](0036-pinned-session-sidebar.md) | Implemented（自动／官方文档／0.160.0 降级已验） | 读取 Codex 原生置顶状态，在侧栏顶部独立展示，并从项目分组移除重复会话；当前 bundled 0.160.0 待上游字段落地 |
+| 0036 | [置顶会话独立展示并从项目分组去重](0036-pinned-session-sidebar.md) | Implemented（自动／官方文档／0040 兼容已验） | 读取 Codex 原生置顶状态，在侧栏顶部独立展示，并从项目分组移除重复会话 |
 | 0037 | [会话加载占位标识使用蓝色](0037-blue-session-loading-mark.md) | Implemented（主题契约、Web 全量测试与 production build 已验；物理手机待用户复验） | 将“正在同步会话”页面中央的占位标识从原颜色改为 Ariel 蓝色强调色 |
 | 0038 | [排队项双向拖拽排序](0038-bidirectional-queue-drag.md) | Implemented（pointer capture／lost capture 回归、390×844 Chromium touch E2E、截图与 production build 已验；物理 iPhone/Safari 待用户复验） | 修复手机 pointer capture 下排队项只能向上提前、不能向下后移的问题 |
 | 0039 | [真实浏览器手机 UI 与截图回归](0039-real-browser-mobile-ui-regression.md) | Implemented（真实 Chromium touch、布局几何与两张截图基线已验；物理 iPhone/Safari 不在本规格验收范围内） | 用隔离 WebSocket fixture、真实 touch 事件和截图基线覆盖关键手机 UI |
+| 0040 | [兼容 bundled Codex 的原生置顶分区](0040-bundled-codex-pinned-section-compatibility.md) | Implemented（真实 Codex／自动／移动截图已验） | 在较新 `isPinned` 字段之外兼容 0.160.0 的保留 `Pinned` section，让现有置顶会话立即可见 |
+| 0041 | [会话加载标识改为可靠的蓝色矢量图](0041-vector-blue-session-loading-mark.md) | Implemented（自动／移动截图已验） | 用 `currentColor` SVG 替代可能被 Safari 渲染成绿色 emoji 的 Unicode 占位标识 |
 
 ## 设计基线
 

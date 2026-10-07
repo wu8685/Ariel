@@ -63,6 +63,16 @@ func TestNormalizeStoredThreadProjectsNativePinnedState(t *testing.T) {
 	}
 }
 
+func TestNormalizeStoredThreadProjectsBundledPinnedSectionState(t *testing.T) {
+	thread, err := NormalizeStored(appserver.Thread{ID: "pinned-section", Name: "Pinned", CWD: "/fixture", Section: &appserver.ThreadSection{ID: appserver.PinnedSectionID, Name: "Pinned"}, Status: json.RawMessage(`{"type":"idle"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread["isPinned"] != true {
+		t.Fatalf("bundled section pin was not projected: %+v", thread)
+	}
+}
+
 func TestNormalizeAcceptedSteeringMessageAsUserContent(t *testing.T) {
 	item := json.RawMessage(`{"id":"steer-1","type":"steeringUserMessage","status":"accepted","input":[{"type":"text","text":"补充检查这个边界"},{"type":"image","url":"data:image/png;base64,AAAA"}]}`)
 	turn, err := normalizeTurn("turn-1", "inProgress", []json.RawMessage{item})

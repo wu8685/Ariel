@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"unicode/utf8"
 )
@@ -11,6 +12,10 @@ type RPC interface {
 	Call(context.Context, string, any, any) error
 }
 type HistoryReader struct{ RPC RPC }
+type ThreadSection struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 type Thread struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
@@ -19,6 +24,7 @@ type Thread struct {
 	Status    json.RawMessage `json:"status"`
 	Turns     []Turn          `json:"turns"`
 	IsPinned  *bool           `json:"isPinned,omitempty"`
+	Section   *ThreadSection  `json:"section,omitempty"`
 }
 type Turn struct {
 	ID     string            `json:"id"`
@@ -53,6 +59,7 @@ type ItemPage struct {
 const (
 	TurnItemsFull      = "full"
 	TurnItemsNotLoaded = "notLoaded"
+	PinnedSectionID    = "01984de2-8f74-7c91-a3b2-5c5e937cf318"
 )
 
 func (h HistoryReader) List(ctx context.Context, cursor string, limit int) (Page, error) {
@@ -84,13 +91,46 @@ func (h HistoryReader) ListPinned(ctx context.Context, limit int) (Page, error) 
 		"sourceKinds":   []string{"cli", "vscode", "appServer"},
 		"archived":      false,
 	}
-	if err := h.RPC.Call(ctx, "thread/list", params, &out); err != nil {
+	err := h.RPC.Call(ctx, "thread/list", params, &out)
+	if err == nil {
+		modern := true
+		for _, thread := range out.Data {
+			if thread.IsPinned == nil || !*thread.IsPinned {
+				modern = false
+				break
+			}
+		}
+		if modern {
+			return out, nil
+		}
+	} else if !errors.Is(err, ErrMethodUnavailable) && !errors.Is(err, ErrInvalidArgument) {
 		return out, err
 	}
+
+	// Codex 0.160.0 persists pins in the reserved Pinned section rather than
+	// exposing isPinned. This remains App Server-owned state and preserves its
+	// manual sidebar order.
+	out = Page{}
+	sectionParams := map[string]any{
+		"limit":          limit,
+		"sortKey":        "section_position",
+		"sectionId":      PinnedSectionID,
+		"sourceKinds":    []string{"cli", "vscode", "appServer"},
+		"modelProviders": []string{},
+		"archived":       false,
+		"useStateDbOnly": true,
+	}
+	if err := h.RPC.Call(ctx, "thread/list", sectionParams, &out); err != nil {
+		return out, err
+	}
+	isPinned := true
 	for _, thread := range out.Data {
-		if thread.IsPinned == nil || !*thread.IsPinned {
+		if thread.Section == nil || thread.Section.ID != PinnedSectionID {
 			return Page{}, ErrInvalidArgument
 		}
+	}
+	for index := range out.Data {
+		out.Data[index].IsPinned = &isPinned
 	}
 	return out, nil
 }
