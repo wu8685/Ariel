@@ -74,6 +74,8 @@ test("mobile queue and overlay remain clear above the composer", async ({ page }
   }));
   expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.queueBottom).toBeLessThanOrEqual(geometry.composerTop);
+  await expect(page.locator(".queue-panel")).toHaveCSS("border-radius", "16px");
+  await expect(page.locator(".composer")).toHaveCSS("border-radius", "16px");
   await expect(page.locator(".queue-text").first()).toHaveCSS("font-size", "12px");
   await expect(page.locator(".composer textarea")).toHaveCSS("font-size", "14px");
 

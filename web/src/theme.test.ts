@@ -81,7 +81,7 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/\.permission-info-button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.sidebar-disconnect\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.permission-strip\s*\{[^}]*display:\s*none/s);
-    expect(mobile).toMatch(/\.composer\s*\{[^}]*border-radius:\s*\d+px/s);
+    expect(mobile).toMatch(/\.composer\s*\{[^}]*border-radius:\s*var\(--radius-work-item\)/s);
     expect(mobile).toMatch(/\.composer\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*stretch/s);
     expect(mobile).toMatch(/\.composer textarea\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
     expect(mobile).toMatch(/\.composer textarea\s*\{[^}]*max-height:\s*212px/s);
@@ -108,9 +108,19 @@ describe("fixed Night appearance", () => {
     expect(desktop).toMatch(/\.conversation-head\s*\{[^}]*height:\s*66px;[^}]*padding:\s*9px\s+12px/s);
     expect(desktop).toMatch(/\.permission-info\s*\{[^}]*display:\s*block/s);
     expect(desktop).toMatch(/\.permission-strip\s*\{[^}]*display:\s*none/s);
-    expect(desktop).toMatch(/\.composer\s*\{[^}]*flex-direction:\s*column;[^}]*border-radius:\s*27px/s);
+    expect(desktop).toMatch(/\.composer\s*\{[^}]*flex-direction:\s*column;[^}]*border-radius:\s*var\(--radius-work-item\)/s);
     expect(desktop).toMatch(/\.composer textarea\s*\{[^}]*min-height:\s*44px;[^}]*font-size:\s*14px/s);
     expect(desktop).toMatch(/\.send-label,\s*\.stop-label\s*\{[^}]*display:\s*none/s);
+  });
+
+  it("shares one work-item corner radius between the queue and composer", () => {
+    const desktop = style.split(/@media\s*\(max-width:\s*800px\)/)[0];
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(style).toMatch(/--radius-work-item:\s*16px;/);
+    expect(desktop).toMatch(/\.queue-panel\s*\{[^}]*border-radius:\s*var\(--radius-work-item\)/s);
+    expect(desktop).toMatch(/\.composer\s*\{[^}]*border-radius:\s*var\(--radius-work-item\)/s);
+    expect(mobile).toMatch(/\.queue-panel\s*\{[^}]*border-radius:\s*var\(--radius-work-item\)/s);
+    expect(mobile).toMatch(/\.composer\s*\{[^}]*border-radius:\s*var\(--radius-work-item\)/s);
   });
 
   it("shows labels for icon controls only through hover or keyboard focus tooltips", () => {

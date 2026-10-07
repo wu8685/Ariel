@@ -19,6 +19,7 @@
   --color-warning: #f6b983;
   --color-warning-surface: #241a15;
   --color-warning-border: #704a35;
+  --radius-work-item: 16px;
   color: var(--color-text);
   background: var(--color-page);
 }
@@ -410,7 +411,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .notice span { font-weight: 700; }
 .notice button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; background: none; margin-left: auto; color: inherit; }
 .notice button svg { width: 16px; height: 16px; }
-.queue-panel { max-height: min(34dvh, 320px); margin-bottom: 7px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-panel); }
+.queue-panel { max-height: min(34dvh, 320px); margin-bottom: 7px; border: 1px solid var(--color-border); border-radius: var(--radius-work-item); background: var(--color-panel); }
 .queue-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--color-border); color: var(--color-muted); font-size: 11px; font-weight: 600; }
 .queue-head small { color: var(--color-subtle); font-size: 10px; font-weight: 400; }
 .queue-list { max-height: min(28dvh, 260px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
@@ -437,7 +438,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queue-menu button { width: 100%; min-height: 34px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--color-muted); font-size: inherit; line-height: inherit; text-align: left; }
 .queue-menu button:hover:not(:disabled) { background: #ffffff0a; color: var(--color-text); }
 .queue-menu button:disabled { color: var(--color-subtle); opacity: .45; }
-.composer { display: flex; flex-direction: column; align-items: stretch; border: 1px solid var(--color-border-strong); background: var(--color-panel); box-shadow: 0 8px 28px #00000040; border-radius: 27px; overflow: hidden; }
+.composer { display: flex; flex-direction: column; align-items: stretch; border: 1px solid var(--color-border-strong); background: var(--color-panel); box-shadow: 0 8px 28px #00000040; border-radius: var(--radius-work-item); overflow: hidden; }
 .composer:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
 .composer textarea { display: block; flex: none; width: 100%; min-width: 0; min-height: 44px; max-height: 212px; padding: 10px 16px; border: 0; resize: none; outline: 0; overflow-y: auto; background: transparent; color: var(--color-text); font-size: 14px; line-height: 24px; }
 .composer textarea::placeholder { color: var(--color-subtle); }
@@ -524,7 +525,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .message-body { max-width: 88%; }
   .message-text { overflow-wrap: anywhere; }
   .composer-wrap { padding: 6px 10px max(12px, env(safe-area-inset-bottom)); background: var(--color-page); }
-  .queue-panel { max-height: min(36dvh, 300px); margin-bottom: 6px; border-radius: 16px; }
+  .queue-panel { max-height: min(36dvh, 300px); margin-bottom: 6px; border-radius: var(--radius-work-item); }
   .queue-head { padding: 8px 11px; }
   .queue-list { max-height: min(30dvh, 250px); }
   .queue-item { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 4px; min-height: 51px; padding: 6px 7px; }
@@ -533,7 +534,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .queue-actions { justify-content: flex-end; }
   .queue-actions button { min-width: 38px; min-height: 40px; padding: 4px 6px; }
   .queue-guide-action { min-width: auto !important; }
-  .composer { display: flex; flex-direction: column; align-items: stretch; border-radius: 27px; background: var(--color-panel); border-color: var(--color-border-strong); }
+  .composer { display: flex; flex-direction: column; align-items: stretch; border-radius: var(--radius-work-item); background: var(--color-panel); border-color: var(--color-border-strong); }
   .composer textarea { flex: none; width: 100%; min-width: 0; min-height: 44px; max-height: 212px; padding: 10px 16px; font-size: 14px; line-height: 24px; overflow-y: auto; }
   .composer-actions > span { display: none; }
   .composer-actions { width: 100%; justify-content: flex-end; flex: none; padding: 0 4px 4px; }

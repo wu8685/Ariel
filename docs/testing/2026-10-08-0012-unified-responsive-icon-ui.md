@@ -19,7 +19,7 @@
 ### Green
 
 - 相关 Vitest：78 项通过。
-- Web 全量 Vitest：20 个文件、151 项通过。
+- Web 全量 Vitest：20 个文件、152 项通过。
 - Playwright：14 项通过，包含新增桌面端 fixture 与全部既有移动端行为／截图回归。
 - `npm run build`：通过；保留既有单 chunk 超过 500 kB 的 Vite 提示。
 - `go test ./...`：通过。
@@ -31,7 +31,7 @@
 
 - 已连接 masthead 隐藏；会话主区域 `x = 0`、宽度 `1280px`。
 - Header 高度 `66px`；权限入口可见，常驻权限文字条隐藏。
-- textarea 字号 `14px`、初始高度 `44px`；composer 圆角 `27px`。
+- textarea 字号 `14px`、初始高度 `44px`；composer 与排队 work item 圆角均为 `16px`。
 - 队列引导、附件、停止和发送均为 icon-only；发送按钮 hover 后 tooltip opacity 为 `1`。
 - 会话抽屉打开时覆盖主区域，遮罩可点击关闭，不改变对话区固有宽度。
 
@@ -43,6 +43,13 @@
 ### 390×844 移动端
 
 重新运行并人工检查了登录、会话 Header、滚动收放、队列菜单／拖拽、置顶侧栏、Markdown 表格与会话图片截图。icon 替换后未出现横向溢出、按钮遮挡、菜单层级退化或输入区高度回退。
+
+## 圆角一致性补充验收
+
+- Red：样式契约与桌面／移动 Playwright 先要求 composer 和 queue panel 均为 `16px`，旧实现因 composer `27px`、桌面 queue panel `12px` 而失败。
+- Green：新增 `--radius-work-item: 16px`；queue panel 与 composer 在基础样式和移动断点中均只引用该 token。
+- 1280×720 桌面 Chromium 与 390×844 移动 Chromium 的计算样式断言均通过；队列菜单、拖拽、历史收放、Markdown 表格、会话图片和加载状态截图基线同步更新并完成全量复跑。
+- 人工复核桌面紧凑主界面和移动队列菜单截图，输入框四角与排队 work item 外框弧度一致，没有新增溢出或遮挡。
 
 ## 保留项
 

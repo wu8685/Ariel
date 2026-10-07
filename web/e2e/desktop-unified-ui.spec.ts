@@ -51,8 +51,10 @@ test("desktop reuses the compact mobile shell and icon controls", async ({ page 
   expect(conversationBox?.width).toBe(1280);
 
   const composer = page.locator(".composer");
+  const queuePanel = page.locator(".queue-panel");
   const textarea = page.getByRole("textbox", { name: "发送消息" });
-  await expect(composer).toHaveCSS("border-radius", "27px");
+  await expect(queuePanel).toHaveCSS("border-radius", "16px");
+  await expect(composer).toHaveCSS("border-radius", "16px");
   await expect(textarea).toHaveCSS("font-size", "14px");
   expect((await textarea.boundingBox())?.height).toBe(44);
   await expect(page.locator(".composer-actions > span")).toBeHidden();
