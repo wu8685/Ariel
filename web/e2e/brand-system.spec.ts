@@ -2,18 +2,17 @@ import { expect, test } from "@playwright/test";
 
 test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
 
-test("desktop login uses the formal wind-messenger medium and micro marks", async ({ page }) => {
+test("desktop login uses the formal color wind-messenger hero and micro navigation mark", async ({ page }) => {
   await page.goto("/");
-  const medium = page.locator(".connect-logo.ariel-logo--mono");
+  const hero = page.locator(".connect-logo.ariel-logo--color");
   const micro = page.locator(".masthead .brand-logo.ariel-logo--micro");
-  await expect(medium).toBeVisible();
-  await expect(medium.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-white.png");
+  await expect(hero).toBeVisible();
+  await expect(hero.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-color.png");
   await expect(micro).toBeVisible();
   await expect(micro.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-micro-white.svg");
-  const mediumBox = await medium.boundingBox();
-  expect(mediumBox?.width || 0).toBeGreaterThanOrEqual(128);
-  expect(mediumBox?.width || 0).toBeLessThan(320);
-  expect(Math.abs((mediumBox?.width || 0) - (mediumBox?.height || 0))).toBeLessThanOrEqual(1);
+  const heroBox = await hero.boundingBox();
+  expect(heroBox?.width || 0).toBe(320);
+  expect(heroBox?.height || 0).toBe(320);
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-micro.svg");
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-color-512.png");
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
