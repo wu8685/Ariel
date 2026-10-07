@@ -27,6 +27,11 @@
 - 浏览器测试默认使用隔离 WebSocket fixture，不向真实 Codex 会话发送、删除、重排或审批内容；真实环境只做不改变业务数据的 smoke check。
 - Chromium 手机模拟只能称为真实浏览器 viewport／touch 验收，不能冒充物理 iPhone/Safari。无法完成的物理设备项必须明确保留为待用户复验。
 
+## 本地部署交付
+
+- 每次本地部署或重启成功后，运行 `GO111MODULE=on ./scripts/ariel.sh show-pin`，在最终回复中同时展示当前 LAN 地址和 6 位连接码，不再只提示用户自行查询。
+- 连接码只在当次对话回复中展示，不写入仓库文档、测试 fixture、commit message 或其他持久化日志。
+
 ## 安全与数据边界
 
 - Codex 是会话和执行状态的 SSOT；Ariel 不建立第二套会话数据库、离线队列或正文日志。
