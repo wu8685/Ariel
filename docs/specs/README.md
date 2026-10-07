@@ -74,6 +74,7 @@
 | 0055 | [Relay + Web 容器镜像](0055-containerized-relay-image.md) | Implemented（默认 build／隔离 smoke／全量回归已验） | 用多阶段 Dockerfile 构建非 root 的 Relay + Web 镜像，Desktop Agent 保持在桌面宿主机运行 |
 | 0056 | [超高分辨率会话图片按需生成安全预览](0056-large-conversation-image-preview.md) | Implemented（真实大图／自动／移动 Chromium／截图已验） | 保留来源像素硬上限，在 Desktop Agent 端把可接受的大图缩成移动端安全预览，并显示明确失败原因 |
 | 0057 | [手动滚到最新时可靠恢复会话界面](0057-manual-scroll-restores-conversation-chrome.md) | Implemented（自动／移动 Chromium／截图已验） | 记住连续滚动方向并识别触摸／滚轮意图，修复到底后仍不恢复 Header 与输入区的问题 |
+| 0058 | [纯图标“回到最新”控件](0058-icon-only-return-to-latest-control.md) | Implemented（自动／移动 Chromium／截图已验） | 用标准向下箭头替换右下角可见文字，保留无障碍名称与原有恢复行为 |
 
 ## 设计基线
 

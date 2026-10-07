@@ -462,8 +462,10 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(300);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
     expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(earlierScrollCalls);
-    expect(screen.getByRole("button", { name: "回到最新" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "回到最新" }));
+    const returnToLatest = screen.getByRole("button", { name: "回到最新" });
+    expect(returnToLatest.textContent).toBe("");
+    expect(returnToLatest.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+    fireEvent.click(returnToLatest);
     expect(transcript.scrollTop).toBe(800);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     expect(conversationHead.dataset.historyCollapsed).toBe("false");

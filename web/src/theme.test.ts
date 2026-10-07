@@ -76,6 +76,8 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.composer-wrap\s*\{[^}]*display:\s*grid;[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/s);
     expect(style).toMatch(/\.composer-wrap\.history-collapsed\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*0fr\);[^}]*padding-top:\s*0;[^}]*padding-bottom:\s*0;[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none/s);
     expect(style).toMatch(/\.return-latest-bar\.history-overlay\s*\{[^}]*position:\s*absolute;[^}]*bottom:\s*max\([^}]*safe-area-inset-bottom/s);
+    expect(style).toMatch(/\.return-latest-bar button\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*width:\s*40px;[^}]*height:\s*40px;[^}]*padding:\s*0;/s);
+    expect(style).toMatch(/\.return-latest-bar button svg\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px/s);
     expect(mobile).toMatch(/\.mobile-list\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.permission-info-button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.sidebar-disconnect\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);

@@ -105,6 +105,10 @@ function QueueTrashIcon() {
   return <svg aria-hidden="true" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 5h11M7 2.75h4M5 5l.7 10h6.6L13 5M7.5 7.5v5M10.5 7.5v5"/></svg>;
 }
 
+function ReturnToLatestIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v16"/><path d="m6 14 6 6 6-6"/></svg>;
+}
+
 function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: PhonePairing; origin: string; onConfirm: () => void; onCancel: () => void }) {
   const error = pairing.phase === "error";
   return <section className="connect-panel pairing-confirm" aria-label="确认扫码登录">
@@ -1186,7 +1190,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
           {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}
         </div>
-        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} onClick={returnToLatest}>回到最新</button></div>}
+        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
         <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
           {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">
             {queuePaused && <div className="queue-head"><span>后续输入已暂停</span><small>开始下一轮前可继续调整</small></div>}

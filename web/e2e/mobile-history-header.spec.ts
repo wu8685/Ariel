@@ -84,6 +84,11 @@ test("scrolling into history fully collapses the chrome and gives its height to 
   expect(collapsed.transcriptHeight - initial.transcriptHeight).toBeGreaterThanOrEqual(initial.headHeight + initial.composerHeight);
   const restore = page.getByRole("button", { name: "恢复输入区并回到最新" });
   await expect(restore).toBeVisible();
+  await expect(restore).toHaveText("");
+  await expect(restore.locator("svg")).toBeVisible();
+  const restoreBox = await restore.boundingBox();
+  expect(restoreBox?.width).toBe(40);
+  expect(restoreBox?.height).toBe(40);
   await expect(restore.locator("..")).toHaveCSS("position", "absolute");
   await expect(page).toHaveScreenshot("mobile-history-header-collapsed.png", { animations: "disabled", caret: "hide" });
 
