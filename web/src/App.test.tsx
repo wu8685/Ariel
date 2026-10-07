@@ -529,19 +529,20 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(400);
   });
 
-  it("renders every brand mark as a monochrome vector instead of an emoji glyph", async () => {
+  it("renders every product mark from the formal monochrome micro asset", async () => {
     const { requests } = await openFixture();
     fireEvent.click(document.querySelector(`.thread-row[data-thread-id="${fixtureThread.threadId}"]`)!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
-    const marks = [...document.querySelectorAll(".brand-mark")];
+    const marks = [...document.querySelectorAll(".ariel-logo--micro")];
     expect(marks).toHaveLength(3);
     for (const mark of marks) {
-      expect(mark.tagName.toLowerCase()).toBe("svg");
-      expect(mark.querySelectorAll("path").length).toBeGreaterThan(0);
+      expect(mark.getAttribute("data-variant")).toBe("micro");
+      expect(mark.getAttribute("aria-hidden")).toBe("true");
       expect(mark.textContent).toBe("");
     }
     const loading = document.querySelector(".empty-symbol");
-    expect(loading?.querySelector("svg.brand-mark")).toBeTruthy();
+    expect(loading?.querySelector(".session-loading-logo.ariel-logo--micro")).toBeTruthy();
+    expect(document.querySelector("svg.brand-mark")).toBeNull();
     expect(loading?.textContent).not.toContain("✳");
   });
 

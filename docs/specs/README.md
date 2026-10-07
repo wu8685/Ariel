@@ -57,6 +57,7 @@
 | 0040 | [兼容 bundled Codex 的原生置顶分区](0040-bundled-codex-pinned-section-compatibility.md) | Implemented（真实 Codex／自动／移动截图已验） | 在较新 `isPinned` 字段之外兼容 0.160.0 的保留 `Pinned` section，让现有置顶会话立即可见 |
 | 0041 | [会话加载标识改为可靠的蓝色矢量图](0041-vector-blue-session-loading-mark.md) | Implemented（自动／移动截图已验） | 用 `currentColor` SVG 替代可能被 Safari 渲染成绿色 emoji 的 Unicode 占位标识 |
 | 0042 | [排队项更多菜单的紧凑字体与排版](0042-compact-queue-menu-typography.md) | Implemented（自动／移动截图已验） | 修复 Portal 菜单继承断开导致的 16px 原生按钮，并统一队列区视觉层级 |
+| 0043 | [正式风暴鹰身 Logo 系统](0043-formal-logo-system.md) | Implemented（资产完整性／自动／桌面与移动截图已验） | 集成三档正式品牌资产、可复用组件、favicon、README、规范文档与视觉回归 |
 
 ## 设计基线
 

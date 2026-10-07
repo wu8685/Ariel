@@ -1,5 +1,7 @@
 # 0041：会话加载标识改为可靠的蓝色矢量图
 
+> 原八向星形矢量已由 [0043 正式风暴鹰身 Logo 系统](0043-formal-logo-system.md)中的单色微标取代；`currentColor` 与非 emoji 的兼容要求继续有效。
+
 - 状态：Implemented（组件／主题测试、390×844 Chromium 计算色值与截图、Web 全量测试和 production build 已验；物理 iPhone/Safari 待用户复验）。
 - 修复：0037 只给 Unicode `✳` 设置 CSS 颜色；移动 Safari 可能把它作为彩色 emoji 字形渲染，忽略 `color`，因此仍可能显示绿色。
 

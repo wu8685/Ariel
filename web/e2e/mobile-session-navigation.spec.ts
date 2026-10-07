@@ -53,9 +53,11 @@ test("session loading mark is a blue vector rather than a color emoji", async ({
   await page.getByRole("button", { name: /展开项目 brain-spark/ }).click();
   await page.getByText("普通项目会话").click();
   await expect(page.getByRole("heading", { name: "正在同步会话…" })).toBeVisible();
-  const mark = page.locator(".empty-symbol svg.brand-mark");
+  const mark = page.locator(".empty-symbol .session-loading-logo.ariel-logo--micro");
   await expect(mark).toBeVisible();
   await expect(mark).toHaveCSS("color", "rgb(111, 169, 255)");
+  await expect(mark).toHaveCSS("width", "50px");
+  await expect(mark).toHaveCSS("height", "50px");
   await expect(page.locator(".empty-symbol")).not.toContainText("✳");
   await expect(page).toHaveScreenshot("mobile-session-loading-blue.png", { animations: "disabled", caret: "hide" });
 });
