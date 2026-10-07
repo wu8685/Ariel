@@ -1,9 +1,13 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +15,34 @@ import (
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/probe"
 )
+
+// Opt-in and read-only: validates a real high-resolution PNG/JPEG named by the caller.
+func TestRealLargeConversationImagePreview(t *testing.T) {
+	path := os.Getenv("ARIEL_TEST_LARGE_IMAGE")
+	if path == "" {
+		t.Skip("requires a real high-resolution image fixture")
+	}
+	raw, err := json.Marshal(map[string]any{"id": "large-image", "type": "agentMessage", "text": "![large](" + path + ")"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri, err := imageFromNativeItem(raw, "/", 0)
+	if err != nil {
+		t.Fatalf("large image preview failed: %v", err)
+	}
+	prefix := "data:image/png;base64,"
+	if strings.HasPrefix(uri, "data:image/jpeg;base64,") {
+		prefix = "data:image/jpeg;base64,"
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(uri, prefix))
+	if err != nil || len(data) > maxScreenshotBytes {
+		t.Fatalf("preview payload: bytes=%d err=%v", len(data), err)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width > defaultImagePresentationLimits.maxDimension || config.Height > defaultImagePresentationLimits.maxDimension || int64(config.Width)*int64(config.Height) > defaultImagePresentationLimits.maxRenderedPixels {
+		t.Fatalf("preview dimensions = %dx%d err=%v", config.Width, config.Height, err)
+	}
+}
 
 // Opt-in: this sends exactly one screenshot to a manifest-guarded fixture.
 func TestRealDesktopScreenshotTurn(t *testing.T) {

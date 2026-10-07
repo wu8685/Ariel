@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export type ScreenshotDraft = { name: string; bytes: number; dataUri: string };
 const maxBytes = 4 << 20;
@@ -32,6 +33,7 @@ export async function readScreenshotFiles(existing: ScreenshotDraft[], files: It
 export function ConversationImage({ alt, load, autoLoad = true }: { alt: string; load: () => Promise<string>; autoLoad?: boolean }) {
   const [state, setState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [uri, setUri] = useState("");
+  const [failure, setFailure] = useState("");
   const [expanded, setExpanded] = useState(false);
   const control = useRef<HTMLButtonElement>(null);
   const pending = useRef(false);
@@ -39,12 +41,16 @@ export function ConversationImage({ alt, load, autoLoad = true }: { alt: string;
   async function fetchImage() {
     if (pending.current || state === "ready") return;
     pending.current = true;
+    setFailure("");
     setState("loading");
     try {
       const value = await load();
       if (!/^data:image\/(png|jpeg);base64,[a-z\d+/]+=*$/iu.test(value) || value.length > 5_600_000) throw new Error("图片数据无效");
       setUri(value); setState("ready");
-    } catch { setState("failed"); }
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim() ? error.message.trim() : "未知错误";
+      setFailure(message.slice(0, 120)); setState("failed");
+    }
     finally { pending.current = false; }
   }
   useEffect(() => {
@@ -55,7 +61,7 @@ export function ConversationImage({ alt, load, autoLoad = true }: { alt: string;
   }, [autoLoad]);
   return <span className="conversation-image">
     {state === "ready" ? <button className="conversation-image-open" type="button" aria-label={`放大截图：${label}`} onClick={() => setExpanded(true)}><img src={uri} alt={label} loading="lazy" /></button>
-      : <button ref={control} className="conversation-image-load" type="button" aria-label={`${state === "failed" ? "重试加载截图" : "加载截图"}：${label}`} onClick={() => void fetchImage()} disabled={state === "loading"}>{state === "loading" ? "正在加载截图…" : state === "failed" ? "截图未能加载，点此重试" : `查看截图${alt ? `：${alt}` : ""}`}</button>}
-    {expanded && <div className="conversation-image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={() => setExpanded(false)}><button type="button" aria-label="关闭截图" onClick={() => setExpanded(false)}>×</button><img src={uri} alt={label} onClick={event => event.stopPropagation()} /></div>}
+      : <button ref={control} className="conversation-image-load" type="button" aria-label={`${state === "failed" ? "重试加载截图" : "加载截图"}：${label}`} onClick={() => void fetchImage()} disabled={state === "loading"}>{state === "loading" ? "正在加载截图…" : state === "failed" ? `截图未能加载：${failure || "未知错误"}。点此重试` : `查看截图${alt ? `：${alt}` : ""}`}</button>}
+    {expanded && typeof document !== "undefined" && createPortal(<div className="conversation-image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={() => setExpanded(false)}><button type="button" aria-label="关闭截图" onClick={() => setExpanded(false)}>×</button><img src={uri} alt={label} onClick={event => event.stopPropagation()} /></div>, document.body)}
   </span>;
 }

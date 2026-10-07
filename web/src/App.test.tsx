@@ -256,6 +256,16 @@ describe("Ariel app interactions", () => {
     expect(requests("turn.start")[0].params.images[0]).toMatch(/^data:image\/png;base64,/);
   });
 
+  it("maps a rejected conversation image to a safe actionable reason", async () => {
+    const thread: Thread = { ...fixtureThread, turns: [{ turnId: "turn-image-failure", status: "completed", items: [{ itemId: "reply-image-failure", role: "assistant", text: "![large](large.png)", images: [{ index: 0, kind: "markdown", alt: "large", source: "large.png" }] }] }] };
+    const { socket, requests } = await openFixture(thread);
+    fireEvent.click(screen.getByRole("button", { name: "加载截图：large" }));
+    await waitFor(() => expect(requests("thread.image")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.image")[0].requestId, outcome: "rejected", error: { code: "INVALID_ARGUMENT", message: "INVALID_ARGUMENT" } }));
+    expect(await screen.findByText("截图未能加载：图片格式、尺寸或内容不受支持。点此重试")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("/Users/");
+  });
+
   it("queues follow-ups while running and supports edit, reorder, delete, and steer", async () => {
     const first = { queueId: "queue-one", clientMessageId: "message-one", text: "第一条", images: [] as [], editable: true };
     const second = { queueId: "queue-two", clientMessageId: "message-two", text: "第二条", images: [] as [], editable: true };

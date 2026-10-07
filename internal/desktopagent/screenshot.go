@@ -7,19 +7,36 @@ import (
 	"encoding/json"
 	"errors"
 	"image"
-	_ "image/jpeg"
-	_ "image/png"
+	"image/jpeg"
+	"image/png"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 const maxScreenshotBytes = 4 << 20
 const maxScreenshotPixels = 25_000_000
 const maxScreenshotCount = 3
+const maxConversationImageSourcePixels = 64_000_000
+const maxConversationImageDimension = 4096
+
+type imagePresentationLimits struct {
+	maxSourcePixels   int64
+	maxRenderedPixels int64
+	maxDimension      int
+}
+
+var defaultImagePresentationLimits = imagePresentationLimits{
+	maxSourcePixels:   maxConversationImageSourcePixels,
+	maxRenderedPixels: maxScreenshotPixels,
+	maxDimension:      maxConversationImageDimension,
+}
 
 var markdownImage = regexp.MustCompile(`!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+"[^"]*")?\)`)
 
@@ -100,7 +117,7 @@ func validateImageBytes(data []byte) (string, error) {
 		return "", errors.New("INVALID_ARGUMENT")
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width < 1 || config.Height < 1 || int64(config.Width)*int64(config.Height) > maxScreenshotPixels {
+	if err != nil || config.Width < 1 || config.Height < 1 || int64(config.Width) > maxScreenshotPixels || int64(config.Height) > maxScreenshotPixels || int64(config.Width)*int64(config.Height) > maxScreenshotPixels {
 		return "", errors.New("INVALID_ARGUMENT")
 	}
 	switch format {
@@ -112,7 +129,7 @@ func validateImageBytes(data []byte) (string, error) {
 	return "", errors.New("INVALID_ARGUMENT")
 }
 
-func decodeImageURI(value string) ([]byte, string, error) {
+func decodeImageData(value string) ([]byte, string, error) {
 	mime := ""
 	switch {
 	case strings.HasPrefix(value, "data:image/png;base64,"):
@@ -129,6 +146,17 @@ func decodeImageURI(value string) ([]byte, string, error) {
 	data, err := base64.StdEncoding.Strict().DecodeString(raw)
 	if err != nil {
 		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	if len(data) == 0 || len(data) > maxScreenshotBytes {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	return data, mime, nil
+}
+
+func decodeImageURI(value string) ([]byte, string, error) {
+	data, mime, err := decodeImageData(value)
+	if err != nil {
+		return nil, "", err
 	}
 	actual, err := validateImageBytes(data)
 	if err != nil || actual != mime {
@@ -155,6 +183,82 @@ func validateUploadImages(images []string) error {
 	return nil
 }
 
+func presentationDimensions(width, height int, limits imagePresentationLimits) (int, int, error) {
+	if width < 1 || height < 1 || limits.maxSourcePixels < 1 || limits.maxRenderedPixels < 1 || limits.maxDimension < 1 {
+		return 0, 0, errors.New("INVALID_ARGUMENT")
+	}
+	if int64(width) > limits.maxSourcePixels || int64(height) > limits.maxSourcePixels {
+		return 0, 0, errors.New("INVALID_ARGUMENT")
+	}
+	pixels := int64(width) * int64(height)
+	if pixels > limits.maxSourcePixels {
+		return 0, 0, errors.New("INVALID_ARGUMENT")
+	}
+	if pixels <= limits.maxRenderedPixels && width <= limits.maxDimension && height <= limits.maxDimension {
+		return width, height, nil
+	}
+	scale := math.Min(float64(limits.maxDimension)/float64(width), float64(limits.maxDimension)/float64(height))
+	scale = math.Min(scale, math.Sqrt(float64(limits.maxRenderedPixels)/float64(pixels)))
+	outputWidth := max(1, int(math.Round(float64(width)*scale)))
+	outputHeight := max(1, int(math.Round(float64(height)*scale)))
+	for int64(outputWidth)*int64(outputHeight) > limits.maxRenderedPixels {
+		if outputWidth >= outputHeight && outputWidth > 1 {
+			outputWidth--
+		} else if outputHeight > 1 {
+			outputHeight--
+		} else {
+			return 0, 0, errors.New("INVALID_ARGUMENT")
+		}
+	}
+	return outputWidth, outputHeight, nil
+}
+
+func prepareImageForPresentation(data []byte, limits imagePresentationLimits) ([]byte, string, error) {
+	if len(data) == 0 || len(data) > maxScreenshotBytes {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	mime := ""
+	switch format {
+	case "png":
+		mime = "image/png"
+	case "jpeg":
+		mime = "image/jpeg"
+	default:
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	width, height, err := presentationDimensions(config.Width, config.Height, limits)
+	if err != nil {
+		return nil, "", err
+	}
+	if width == config.Width && height == config.Height {
+		return data, mime, nil
+	}
+	source, decodedFormat, err := image.Decode(bytes.NewReader(data))
+	if err != nil || decodedFormat != format {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	target := image.NewRGBA(image.Rect(0, 0, width, height))
+	xdraw.ApproxBiLinear.Scale(target, target.Bounds(), source, source.Bounds(), xdraw.Over, nil)
+	var encoded bytes.Buffer
+	switch format {
+	case "png":
+		err = png.Encode(&encoded, target)
+	case "jpeg":
+		err = jpeg.Encode(&encoded, target, &jpeg.Options{Quality: 90})
+	}
+	if err != nil || encoded.Len() == 0 || encoded.Len() > maxScreenshotBytes {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	if actual, err := validateImageBytes(encoded.Bytes()); err != nil || actual != mime {
+		return nil, "", errors.New("INVALID_ARGUMENT")
+	}
+	return encoded.Bytes(), mime, nil
+}
+
 func imageFromNativeItem(raw json.RawMessage, cwd string, index int) (string, error) {
 	sources := nativeImageSources(raw)
 	if index < 0 || index >= len(sources) {
@@ -162,9 +266,13 @@ func imageFromNativeItem(raw json.RawMessage, cwd string, index int) (string, er
 	}
 	source := sources[index].value
 	if strings.HasPrefix(source, "data:") {
-		data, mime, err := decodeImageURI(source)
+		data, declaredMime, err := decodeImageData(source)
 		if err != nil {
 			return "", err
+		}
+		data, mime, err := prepareImageForPresentation(data, defaultImagePresentationLimits)
+		if err != nil || mime != declaredMime {
+			return "", errors.New("INVALID_ARGUMENT")
 		}
 		return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 	}
@@ -188,7 +296,7 @@ func imageFromNativeItem(raw json.RawMessage, cwd string, index int) (string, er
 	if err != nil {
 		return "", errors.New("NOT_FOUND")
 	}
-	mime, err := validateImageBytes(data)
+	data, mime, err := prepareImageForPresentation(data, defaultImagePresentationLimits)
 	if err != nil {
 		return "", err
 	}
@@ -246,6 +354,8 @@ func (s *Service) Image(ctx context.Context, threadID, turnID, itemID string, in
 	if threadID == "" || turnID == "" || itemID == "" || index < 0 || index >= maxScreenshotCount*8 {
 		return "", errors.New("INVALID_ARGUMENT")
 	}
+	s.imageMu.Lock()
+	defer s.imageMu.Unlock()
 	source, err := s.history.Read(ctx, threadID)
 	if err != nil {
 		return "", err

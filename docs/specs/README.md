@@ -72,6 +72,7 @@
 | 0053 | [回到最新时稳定恢复会话界面](0053-stable-latest-chrome-restoration.md) | Implemented（自动／真实移动 Chromium／截图已验） | 在 Header／输入区域展开期间持续锚定最新消息，消除布局变化造成的反复收放抖动 |
 | 0054 | [面向 Agent App 的中立产品定位](0054-provider-neutral-public-positioning.md) | Implemented（文档契约／真实浏览器品牌页／build 已验） | 将长期定位与当前 macOS + Codex Desktop Adapter 支持矩阵分层表达，避免用首个实现限制产品边界 |
 | 0055 | [Relay + Web 容器镜像](0055-containerized-relay-image.md) | Implemented（默认 build／隔离 smoke／全量回归已验） | 用多阶段 Dockerfile 构建非 root 的 Relay + Web 镜像，Desktop Agent 保持在桌面宿主机运行 |
+| 0056 | [超高分辨率会话图片按需生成安全预览](0056-large-conversation-image-preview.md) | Implemented（真实大图／自动／移动 Chromium／截图已验） | 保留来源像素硬上限，在 Desktop Agent 端把可接受的大图缩成移动端安全预览，并显示明确失败原因 |
 
 ## 设计基线
 

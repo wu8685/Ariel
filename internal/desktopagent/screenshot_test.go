@@ -1,17 +1,53 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/wu8685/Ariel/internal/codex/appserver"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
 
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+
+func TestLargeConversationImageIsDownscaledForPresentation(t *testing.T) {
+	source := image.NewNRGBA(image.Rect(0, 0, 8, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 8; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: uint8(x * 24), G: uint8(y * 48), B: 120, A: 255})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, source); err != nil {
+		t.Fatal(err)
+	}
+	data, mime, err := prepareImageForPresentation(encoded.Bytes(), imagePresentationLimits{maxSourcePixels: 64, maxRenderedPixels: 8, maxDimension: 4})
+	if err != nil || mime != "image/png" {
+		t.Fatalf("prepare preview: mime=%q err=%v", mime, err)
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || format != "png" || config.Width != 4 || config.Height != 2 {
+		t.Fatalf("preview = %dx%d %s, err=%v", config.Width, config.Height, format, err)
+	}
+}
+
+func TestPresentationDimensionsBoundCurrentFailureShapeAndSourceMemory(t *testing.T) {
+	width, height, err := presentationDimensions(7990, 7225, defaultImagePresentationLimits)
+	if err != nil || width != 4096 || height != 3704 || int64(width)*int64(height) > defaultImagePresentationLimits.maxRenderedPixels {
+		t.Fatalf("current fixture preview = %dx%d, err=%v", width, height, err)
+	}
+	if _, _, err := presentationDimensions(9000, 8000, defaultImagePresentationLimits); err == nil {
+		t.Fatal("accepted a source above the bounded decode budget")
+	}
+}
 
 func TestScreenshotReferencesStayOutOfSnapshotAndResolveFromNativeItem(t *testing.T) {
 	dir := t.TempDir()

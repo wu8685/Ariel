@@ -73,6 +73,15 @@ function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
 }
 
+function imageErrorText(response: Response): string {
+  switch (response.error?.code) {
+    case "NOT_FOUND": return "原图片文件已不存在";
+    case "INVALID_ARGUMENT": return "图片格式、尺寸或内容不受支持";
+    case "HISTORY_TOO_LARGE": return "图片超过安全传输上限";
+    default: return response.error ? resultText[response.error.code] || "图片暂时无法读取" : "图片暂时无法读取";
+  }
+}
+
 function responseQueue(response: Response): QueuedMessage[] | null {
   const items = response.data?.queuedMessages;
   if (!Array.isArray(items)) return null;
@@ -1058,7 +1067,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function loadImage(turnId: string, itemId: string, imageIndex: number): Promise<string> {
     if (!view || !deviceId) throw new Error("会话已切换");
     const response = await client.request("thread.image", deviceId, { threadId: view.threadId, turnId, itemId, imageIndex });
-    if (response.outcome !== "accepted" || typeof response.data?.dataUri !== "string") throw new Error(errorText(response));
+    if (response.outcome !== "accepted" || typeof response.data?.dataUri !== "string") throw new Error(imageErrorText(response));
     return response.data.dataUri;
   }
 

@@ -24,11 +24,12 @@ describe("conversation screenshots", () => {
     expect(screen.queryByRole("dialog", { name: "result" })).toBeNull();
   });
 
-  it("keeps a retry control after image load failure", async () => {
-    const load = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce("data:image/jpeg;base64,AAAA");
+  it("keeps a retry control and explains an image load failure", async () => {
+    const load = vi.fn().mockRejectedValueOnce(new Error("图片格式、尺寸或内容不受支持")).mockResolvedValueOnce("data:image/jpeg;base64,AAAA");
     render(<ConversationImage alt="failed" load={load} />);
     fireEvent.click(screen.getByRole("button", { name: "加载截图：failed" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "重试加载截图：failed" })).toBeTruthy());
+    expect(screen.getByText("截图未能加载：图片格式、尺寸或内容不受支持。点此重试")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试加载截图：failed" }));
     await waitFor(() => expect(screen.getByRole("img", { name: "failed" })).toBeTruthy());
   });

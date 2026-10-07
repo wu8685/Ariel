@@ -104,6 +104,7 @@ type Service struct {
 	attach           LiveFactory
 	mu               sync.Mutex
 	queueMu          sync.Mutex
+	imageMu          sync.Mutex
 	queueCache       map[string]queueCacheEntry
 	threads          map[string]*threadController
 	clock            uint64
