@@ -13,6 +13,12 @@ test("desktop login uses the formal color wind-messenger hero and micro navigati
   const heroBox = await hero.boundingBox();
   expect(heroBox?.width || 0).toBe(160);
   expect(heroBox?.height || 0).toBe(160);
+  const title = page.getByRole("heading", { name: "接续 Codex", exact: true });
+  const titleBox = await title.boundingBox();
+  await expect(title).toHaveCSS("white-space", "nowrap");
+  expect((heroBox?.x || 0) + (heroBox?.width || 0)).toBeLessThan(titleBox?.x || 0);
+  expect(titleBox?.y || 0).toBeLessThan((heroBox?.y || 0) + (heroBox?.height || 0));
+  expect((titleBox?.y || 0) + (titleBox?.height || 0)).toBeGreaterThan(heroBox?.y || 0);
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-micro.svg");
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-color-512.png");
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");

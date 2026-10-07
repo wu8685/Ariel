@@ -81,14 +81,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 32px;
 }
 .connect-panel > div, .connect-panel form { max-width: 460px; flex: 1; }
-.connect-logo { display: block; margin: 0 0 22px; }
+.connect-hero { display: flex; align-items: center; flex-wrap: nowrap; gap: clamp(16px, 2.4vw, 28px); }
+.connect-hero-copy { min-width: 0; }
+.connect-logo { display: block; margin: 0; }
 .connect-panel h1 {
   font-family: Georgia, "Songti SC", serif;
   font-weight: 400;
   line-height: 1.24;
   letter-spacing: -2px;
-  font-size: clamp(40px, 4vw, 64px);
-  margin: 20px 0;
+  font-size: clamp(34px, 3.35vw, 48px);
+  margin: 10px 0 0;
+  white-space: nowrap;
 }
 .connect-panel p { color: var(--color-muted); line-height: 1.8; }
 .connect-panel form {
@@ -428,7 +431,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .pair-entry { min-height: 44px; }
   .connect-panel { top: 60px; flex-direction: column; gap: 16px; align-items: stretch; overflow: auto; justify-content: flex-start; padding: 10vh 20px 30px; }
   .connect-panel > div, .connect-panel form { max-width: none; flex: none; }
-  .connect-panel h1 { font-size: 39px; }
+  .connect-panel h1 { font-size: 34px; }
   .pairing-confirm { padding-top: 7vh; }
   .pairing-dialog { padding: 26px 18px 22px; }
   .pairing-dialog h2 { font-size: 26px; }

@@ -8,6 +8,12 @@ test("mobile login shows the color hero without horizontal overflow and keeps th
   const box = await hero.boundingBox();
   expect(box?.width || 0).toBe(128);
   expect(box?.height || 0).toBe(128);
+  const title = page.getByRole("heading", { name: "接续 Codex", exact: true });
+  const titleBox = await title.boundingBox();
+  await expect(title).toHaveCSS("white-space", "nowrap");
+  expect((box?.x || 0) + (box?.width || 0)).toBeLessThan(titleBox?.x || 0);
+  expect(titleBox?.y || 0).toBeLessThan((box?.y || 0) + (box?.height || 0));
+  expect((titleBox?.y || 0) + (titleBox?.height || 0)).toBeGreaterThan(box?.y || 0);
   const geometry = await page.evaluate(() => ({ viewportWidth: window.innerWidth, bodyWidth: document.body.scrollWidth }));
   expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   const pin = page.getByLabel("6 位连接码");

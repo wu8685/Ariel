@@ -63,6 +63,7 @@
 | 0046 | [登录页使用彩色“风之信使”主标](0046-color-login-brand-mark.md) | Superseded（彩色资产保留，尺寸由 0048 调整） | 未连接登录页改用彩色正式主版；固定 320px 要求已被后续紧凑尺寸覆盖 |
 | 0047 | [README 顶部居中展示正式 Logo](0047-centered-readme-brand-header.md) | Implemented（品牌专项与 Web 全量自动测试已验） | README 以 480px 彩色正式主标开头并居中展示，标题与正文随后出现 |
 | 0048 | [登录页彩色 Logo 恢复紧凑尺寸](0048-compact-color-login-brand-mark.md) | Implemented（桌面／移动截图、自动测试与 production build 已验） | 保留彩色正式资产，将首页 Logo 恢复到原黑白版的 128–160px 响应式尺寸 |
+| 0049 | [登录页 Logo 与精简标题同排展示](0049-inline-login-brand-lockup.md) | Implemented（桌面／移动截图、自动测试与 production build 已验） | 大标题精简为“接续 Codex”，与彩色 Logo 在桌面和手机上组成单行品牌 Lockup |
 
 ## 设计基线
 
