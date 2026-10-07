@@ -6,8 +6,8 @@ test("mobile login shows the color hero without horizontal overflow and keeps th
   await expect(hero).toBeVisible();
   await expect(hero.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-color.png");
   const box = await hero.boundingBox();
-  expect(box?.width || 0).toBe(320);
-  expect(box?.height || 0).toBe(320);
+  expect(box?.width || 0).toBe(128);
+  expect(box?.height || 0).toBe(128);
   const geometry = await page.evaluate(() => ({ viewportWidth: window.innerWidth, bodyWidth: document.body.scrollWidth }));
   expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   const pin = page.getByLabel("6 位连接码");

@@ -1,8 +1,9 @@
 # 0046：登录页使用彩色“风之信使”主标
 
-- 状态：Implemented（138 个 Web 单测、9 个真实 Chromium 用例、桌面与手机登录截图、production build 已验；物理 iPhone/Safari 待用户复验）。
+- 状态：Superseded（彩色资产选择保留，固定 320px 显示尺寸由 0048 调整）。
 - 范围：未连接状态的 Ariel 登录页、桌面与手机真实浏览器截图、品牌使用映射。
 - 覆盖：[0044 正式“风之信使”Logo 系统](0044-wind-messenger-logo-system.md)中“登录页使用 white 单色主版”的产品调用点；其他尺寸规则、导航微标和资产约束保持不变。
+- 后续：[0048 登录页彩色 Logo 恢复紧凑尺寸](0048-compact-color-login-brand-mark.md)保留本规格的彩色资产选择，并恢复原黑白 Logo 的响应式显示尺寸。
 
 ## 用户结果
 

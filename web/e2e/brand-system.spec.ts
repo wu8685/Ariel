@@ -11,8 +11,8 @@ test("desktop login uses the formal color wind-messenger hero and micro navigati
   await expect(micro).toBeVisible();
   await expect(micro.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-micro-white.svg");
   const heroBox = await hero.boundingBox();
-  expect(heroBox?.width || 0).toBe(320);
-  expect(heroBox?.height || 0).toBe(320);
+  expect(heroBox?.width || 0).toBe(160);
+  expect(heroBox?.height || 0).toBe(160);
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-micro.svg");
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-color-512.png");
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
