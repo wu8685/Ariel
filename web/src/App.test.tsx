@@ -500,6 +500,51 @@ describe("Ariel app interactions", () => {
     expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
   });
 
+  it("keeps the toward-latest intent when the final scroll step is only one pixel", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
+    await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    transcript.scrollTop = 767;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    transcript.scrollTop = 768;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
+  });
+
+  it("restores collapsed chrome from an explicit toward-latest touch at the bottom", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
+    await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    transcript.scrollTop = 800;
+    fireEvent.touchStart(transcript, { touches: [{ clientY: 250 }] });
+    fireEvent.touchMove(transcript, { touches: [{ clientY: 300 }] });
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    fireEvent.touchEnd(transcript);
+    fireEvent.touchStart(transcript, { touches: [{ clientY: 300 }] });
+    fireEvent.touchMove(transcript, { touches: [{ clientY: 250 }] });
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+  });
+
   it("keeps the latest message anchored while the restored chrome shrinks the transcript", async () => {
     const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
     await openFixture(recent);
@@ -525,6 +570,7 @@ describe("Ariel app interactions", () => {
     expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
     expect(transcript.scrollTop).toBe(900);
 
+    fireEvent.wheel(transcript, { deltaY: -100 });
     transcript.scrollTop = 700;
     fireEvent.scroll(transcript);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(true);

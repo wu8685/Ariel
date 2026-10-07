@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
@@ -215,6 +215,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const lastTranscriptScrollTop = useRef(0);
+  const historyReturnIntent = useRef(false);
+  const transcriptTouchY = useRef<number | null>(null);
   const latestChromeRestoreDeadline = useRef(0);
   const latestChromeRestoreTimer = useRef<number | null>(null);
   const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
@@ -270,6 +272,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     latestChromeRestoreDeadline.current = 0;
     if (latestChromeRestoreTimer.current !== null) window.clearTimeout(latestChromeRestoreTimer.current);
     latestChromeRestoreTimer.current = null;
+    historyReturnIntent.current = false;
   }
 
   function pinLatestUntilChromeSettles() {
@@ -285,6 +288,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const stabilizeLayout = historyChromeCollapsed || latestChromeRestoreDeadline.current > 0;
     cancelLatestChromeRestore();
     followLatestRef.current = true;
+    historyReturnIntent.current = stabilizeLayout;
+    transcriptTouchY.current = null;
     setShowReturnToLatest(false);
     if (stabilizeLayout) latestChromeRestoreDeadline.current = performance.now() + latestChromeRestoreDuration;
     setHistoryChromeCollapsed(false);
@@ -299,7 +304,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const container = transcriptRef.current;
     if (!container) return;
     if (latestChromeRestoreDeadline.current) {
-      const userScrolledUp = container.scrollTop < lastTranscriptScrollTop.current - 1;
+      const userScrolledUp = !historyReturnIntent.current && container.scrollTop < lastTranscriptScrollTop.current - 1;
       if (!userScrolledUp) {
         scrollToLatest(container);
         lastTranscriptScrollTop.current = container.scrollTop;
@@ -309,11 +314,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       }
       cancelLatestChromeRestore();
     }
-    const scrollingTowardLatest = container.scrollTop > lastTranscriptScrollTop.current + 1;
+    const scrollDelta = container.scrollTop - lastTranscriptScrollTop.current;
+    if (scrollDelta > 0) historyReturnIntent.current = true;
+    else if (scrollDelta < 0) historyReturnIntent.current = false;
     lastTranscriptScrollTop.current = container.scrollTop;
     const distanceFromLatest = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop);
     if (historyChromeCollapsed) {
-      const returnedToLatest = scrollingTowardLatest && distanceFromLatest <= historyHeaderExpandDistance;
+      const returnedToLatest = historyReturnIntent.current && distanceFromLatest <= historyHeaderExpandDistance;
       followLatestRef.current = returnedToLatest;
       if (returnedToLatest) {
         restoreLatestChrome(container);
@@ -327,6 +334,35 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       ? distanceFromLatest > historyHeaderExpandDistance
       : distanceFromLatest > latestFollowDistance);
     if (followLatestRef.current) setShowReturnToLatest(false);
+  }
+
+  function applyHistoryReturnGesture(towardLatest: boolean) {
+    historyReturnIntent.current = towardLatest;
+    const container = transcriptRef.current;
+    if (!towardLatest || !historyChromeCollapsed || !container) return;
+    const distanceFromLatest = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop);
+    if (distanceFromLatest <= historyHeaderExpandDistance) restoreLatestChrome(container);
+  }
+
+  function onTranscriptWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (event.deltaY !== 0) applyHistoryReturnGesture(event.deltaY > 0);
+  }
+
+  function onTranscriptTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    transcriptTouchY.current = event.touches[0]?.clientY ?? null;
+  }
+
+  function onTranscriptTouchMove(event: ReactTouchEvent<HTMLDivElement>) {
+    const currentY = event.touches[0]?.clientY;
+    const previousY = transcriptTouchY.current;
+    if (currentY === undefined) return;
+    transcriptTouchY.current = currentY;
+    if (previousY === null || currentY === previousY) return;
+    applyHistoryReturnGesture(currentY < previousY);
+  }
+
+  function onTranscriptTouchEnd() {
+    transcriptTouchY.current = null;
   }
 
   function returnToLatest() {
@@ -1142,7 +1178,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
-        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} aria-live="polite">
+        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
           {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
