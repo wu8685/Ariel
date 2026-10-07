@@ -1,116 +1,79 @@
 <p align="center">
-  <img src="web/public/brand/ariel-logo-wind-messenger-color.png" width="480" alt="Ariel 风之信使彩色主版 Logo" />
+  <img src="web/public/brand/ariel-logo-wind-messenger-color.png" width="360" alt="Ariel" />
 </p>
 
-# Ariel
+<h1 align="center">Ariel</h1>
 
-Ariel 的正式品牌标识源自《暴风雨》中的空气精灵“风之信使”：胸前晨星作为唯一 relay core，将六条风带送往多个 Codex App。资产的尺寸选择、配色和禁止事项见[品牌使用规范](docs/brand/logo-guideline.html)与[工程化品牌规范](docs/brand/brand-spec.md)。
+<p align="center">在手机浏览器中接续 Mac 上的 Codex Desktop 会话。</p>
 
-Ariel 让你离开电脑后，仍能从手机浏览器接着使用 Mac 上的 Codex Desktop 会话。点开已有会话就自动加载原会话；历史、实时回复和运行状态在手机上继续显示。你可以发送消息、停止当前任务、处理命令或文件审批，并回答 Codex 的补充问题。
+## Ariel 是什么
 
-Ariel 不建立另一份聊天记录。原会话、工作目录和执行权限仍属于本机 Codex。
+Ariel 是一个运行在可信局域网内的 Codex Desktop 联络中继器。离开电脑后，你仍可以在手机上查看原会话的历史与实时输出、继续发送消息、停止任务、处理审批与补充问题，也可以管理排队输入或在指定项目中新建会话。
 
-左侧菜单可搜索当前设备的会话标题和消息内容，结果显示匹配摘要；旧结果可继续分页，清空搜索即可回到最近会话。搜索使用本机 Codex 的实验性接口，若版本不支持，页面会明确提示，普通会话列表仍可用。
+Ariel 不复制会话，不接管工作目录，也不建立另一套聊天记录。Codex Desktop 始终是会话和执行状态的唯一来源。
 
-界面默认采用 Night 配色：深色背景、浅色文字和蓝色操作高亮。
+## 架构
 
-自动加载后以 **Desktop 当前权限**运行，不保证沿用会话最初创建时的 sandbox；页面会显示当前权限。若出现 Full Access 警示，仍可发送，请先确认你愿意让该会话按当前 Desktop 权限继续。
+```mermaid
+flowchart LR
+  Browser["手机 / 浏览器"] <-->|HTTP + WebSocket| Relay["Ariel Relay"]
+  Relay <-->|WebSocket| Agent["Desktop Agent"]
+  Agent <-->|本机 IPC| Codex["Codex Desktop"]
+```
 
-## 当前可用范围
+- **Web** 提供适配手机和桌面的会话界面。
+- **Relay** 负责浏览器认证、连接管理和消息转发。
+- **Desktop Agent** 运行在 Mac 上，把 Relay 请求转换为 Codex Desktop 的本机操作。
 
-已在本机 Desktop `26.930.31730` / 内置 Codex `0.160.0` 的隔离会话上验证：自动加载旧会话、原 owner 实时同步、发送、精确停止、命令单次允许与拒绝并停止、文件变更单次允许与拒绝、多问题的选项与自由文本回答。Relay／Agent 断开后，页面会重新订阅原会话；不缓存离线指令，也不自动重发结果不确定的操作。
+所有运行状态都来自 Codex Desktop；Relay 不持久化第二份会话正文，也不会自动重放结果不确定的操作。
 
-启动门禁采用最低版本：Desktop 不低于 `26.930.31730`、内置 Codex CLI 不低于 `0.160.0` 即可运行。高于基线的版本会显示“未逐版本验证”提示；若私有 IPC 实际发生不兼容，Ariel 会让当前操作显式失败，不猜测成功，也不自动重放不确定的写操作。2026-10-06 使用 Desktop `26.930.51102` / Codex `0.160.0` 通过了启动与只读 detect／history 探针，写操作的完整实测基线仍是上一段所列版本。
+## 快速开始
 
-权限请求的展示与原请求范围内的单轮响应已有协议和单元测试，但当前 Codex 的 `request_permissions_tool` 默认关闭，尚未取得真实 Desktop 待审批样例。这一项在真实环境中未完成验收；见[测试记录](docs/testing/2026-10-04-m1-m4.md)。其他未验收边界也列在该记录中。
-
-若 Codex 返回无法确认的原生会话状态，Ariel 会暂停该会话的远程操作并给出提示，不会猜测发送成功或反复重试。隔离并发实验已观察到这种状态，详见测试记录。
-
-首版只面向同一可信局域网、单用户和已存在的本机会话。没有新建会话、文件上传、后台通知或公网部署支持。
-
-## 一键启动（推荐）
-
-在已安装兼容 Codex Desktop、Go 1.26+ 和 Node.js/npm 的 Mac 上，选择可信局域网网卡地址，一条命令构建并后台启动 Web、Relay 和 Desktop Agent：
+准备一台正在运行 Codex Desktop 的 Mac，并安装 Go 1.26+、Node.js 和 npm。手机与 Mac 需要连接同一个可信局域网。
 
 ```sh
-./scripts/ariel.sh up local --listen '<Mac-LAN-IP>:8080' --device-id 'my-mac' --device-name '我的 Mac'
+git clone https://github.com/wu8685/Ariel.git
+cd Ariel
+./scripts/ariel.sh up local \
+  --listen '<Mac-LAN-IP>:8080' \
+  --device-id 'my-mac' \
+  --device-name '我的 Mac'
+```
+
+脚本会构建 Web、Relay 和 Desktop Agent，并在成功后输出手机可访问的地址。查看运行状态和六位连接码：
+
+```sh
 ./scripts/ariel.sh status
+./scripts/ariel.sh show-pin
 ```
 
-手机打开脚本输出的 URL；需要连接码时，在可信本机终端运行 `./scripts/ariel.sh show-pin`。再次启动只需 `./scripts/ariel.sh up`，停止用 `./scripts/ariel.sh stop`。脚本不会接管已经手工运行的同端口服务。
+## 基本使用
 
-切换 Wi-Fi、手机热点或其他局域网后，不必手动查询新 IP。运行下面一条命令即可发现当前默认私有 IPv4、保留原 token／PIN 和设备身份，并安全重建、重启与核验本地 Relay／Agent：
+1. 在手机浏览器中打开启动脚本输出的地址。
+2. 输入六位连接码，选择已有会话或创建新会话。
+3. 浏览器已连接时，可以使用“手机扫码登录”为另一台手机生成一次性登录二维码。
+4. 切换 Wi-Fi 或手机热点后，运行 `./scripts/ariel.sh restart-local` 自动发现新的局域网地址并重启。
+
+常用命令：
 
 ```sh
-./scripts/ariel.sh restart-local
+./scripts/ariel.sh up             # 使用已保存的配置启动
+./scripts/ariel.sh status         # 查看 Relay、Agent 和 Codex 状态
+./scripts/ariel.sh restart-local  # 换网后发现新地址并重启
+./scripts/ariel.sh stop           # 停止 Ariel 管理的本地进程
 ```
 
-命令只适用于已经完成首次 `up local` 的配置，只接受 RFC1918 私有 IPv4；不会绑定公网地址、`0.0.0.0`，也不会停止占用目标端口的外部进程。
+## 安全边界
 
-浏览器已经连接后，可点击页头的“手机扫码登录”，让新手机用系统相机扫描二维码。手机必须再点击一次“确认在此手机登录”，随后会直接进入 Ariel，不必输入 6 位连接码。二维码只含两分钟有效、只能使用一次的配对凭据，不包含 PIN、Agent token 或可复用 Web Session；关闭二维码、原浏览器断开、超时或 Relay 重启都会使它失效。
+Ariel 当前面向单用户、可信局域网使用。默认 HTTP/WebSocket 连接未加密，不要直接暴露到公网或不可信网络。
 
-如果 Relay 已在别处，只安装并注册本机 Agent：
+远程操作使用 Codex Desktop 当前权限；页面出现 Full Access 提示时，请先确认你接受该权限范围。Ariel 依赖 Desktop 的本机 IPC，版本变化可能造成兼容性问题；不兼容操作会显式失败，不会被当作成功或自动重试。
 
-```sh
-./scripts/ariel.sh up agent --relay-url 'wss://relay.example.com/ws' --device-id 'my-mac' --device-name '我的 Mac' --token-file '/path/to/private/relay-agent-token'
-```
+## 深入阅读
 
-完整的自动安装输入、凭据边界、外部 Relay 要求与排障步骤见[供 Agent 执行的安装指南](docs/operations/agent-install.md)。
-
-## 手动启动（故障排查）
-
-需要 Go 1.26+、Node.js/npm，以及已启动且达到上述最低版本的 Codex Desktop。以下命令在项目根目录运行；把 `<Mac-LAN-IP>` 换成 Mac 在局域网中的地址，`<long-random-token>` 换成仅自己知道的高强度随机 Agent 口令，`<six-digit-pin>` 换成你设置的固定 6 位数字连接码（可以以 0 开头）。两者必须不同。
-
-先构建 Web 和稳定路径的本地可执行文件（便于 macOS 防火墙按程序放行）：
-
-```sh
-cd web
-npm ci
-npm run build
-cd ..
-mkdir -p .local/bin
-go build -o .local/bin/ariel-relay ./cmd/relay
-go build -o .local/bin/ariel-desktop-agent ./cmd/desktop-agent
-```
-
-终端 1 启动 Relay：
-
-```sh
-ARIEL_TOKEN='<long-random-token>' \
-ARIEL_WEB_PIN='<six-digit-pin>' \
-ARIEL_ORIGINS='http://<Mac-LAN-IP>:8080' \
-ARIEL_LISTEN='<Mac-LAN-IP>:8080' \
-./.local/bin/ariel-relay
-```
-
-终端 2 启动 Desktop Agent：
-
-```sh
-ARIEL_TOKEN='<long-random-token>' \
-ARIEL_RELAY_URL='ws://<Mac-LAN-IP>:8080/ws' \
-ARIEL_DEVICE_ID='my-mac' \
-ARIEL_DEVICE_NAME='我的 Mac' \
-./.local/bin/ariel-desktop-agent
-```
-
-`ARIEL_RELAY_URL` 必须指向 Relay 实际监听的地址；按上面的局域网 IP 绑定方式运行时，不能改用 `127.0.0.1:8080`。
-
-手机连接同一局域网，打开 `http://<Mac-LAN-IP>:8080`，输入 6 位连接码。连接码长期有效，但不会存入浏览器；Relay 会签发随机 session 凭据，保存在当前标签页的 `sessionStorage` 中，因此刷新可自动连接。新标签页、主动断开、Relay 重启或 session 超过 24 小时后需重新输入。累计 10 次连接码错误会锁定新的 Web 连接，需重启 Relay 才能解锁；已连接的会话不受影响。Relay 的 HTTP/WS 通信未加密，6 位数字也不能抵御同网段窃听；不要在不可信网络或公网直接暴露端口。
-
-运行前可用 `openssl rand -hex 32` 生成一次随机口令。确认 Mac 的局域网 IP 后，优先把 `ARIEL_LISTEN` 设为该 IP 的 `:8080`，只监听当前可信网卡；若用 `0.0.0.0`，也应确认没有接入不可信网络。macOS 防火墙开启时，应仅允许 Relay 可执行文件的入站连接，不要为了测试关闭整个防火墙。`lsof -nP -iTCP:8080 -sTCP:LISTEN` 可检查监听地址；手机与 Mac 需在可互访的局域网，访客 Wi-Fi 或 AP 隔离可能阻断访问。
-
-若页面可打开但显示“Relay 未连接”，检查网络和 `ARIEL_ORIGINS` 是否精确等于手机地址栏的 Origin（协议、IP、端口均一致）。若提示“连接码未通过”，检查 `ARIEL_WEB_PIN`，错误过多则重启 Relay。若 Relay 已连接但 Agent 离线，检查第二个终端与 `ARIEL_RELAY_URL`、`ARIEL_TOKEN`；若 Codex 未就绪，先检查 Desktop 正在运行以及 [兼容性版本](docs/compatibility/2026-10-03-m0.md)。两个进程都可在各自终端按 `Ctrl+C` 停止；Ariel 不安装后台常驻服务。
-
-第二台 Mac 也可运行 Agent，但本阶段未做跨设备调度；每台设备要使用不同的 `ARIEL_DEVICE_ID`。当前版本对 Desktop 与 Codex CLI 采用最低版本门禁；升级后可直接启动，遇到实际 IPC 不兼容时会按当前操作报错，仍建议先跑只读兼容性探针。
-
-## 开发验证
-
-```sh
-go test -race ./...
-go vet ./...
-cd web && npm test && npm run build
-```
-
-只读兼容性探针：`go run ./cmd/probe detect`、`go run ./cmd/probe history`。会产生真实 turn 的隔离 fixture 操作另见[探针说明](docs/compatibility/probe-usage.md)，不要对业务会话执行写测试。
-
-规格见[索引](docs/specs/README.md)，当前限制与实测证据见[测试记录](docs/testing/2026-10-04-m1-m4.md)，待办见[项目 TODO](docs/TODO.md)。后续文档只在 Ariel 仓库维护。
+- [安装、配置与故障排查](docs/operations/agent-install.md)
+- [系统架构设计](docs/specs/baseline/2026-10-03-codex-remote-architecture.md)
+- [Desktop 兼容性与实测边界](docs/compatibility/2026-10-03-m0.md)
+- [功能规格索引](docs/specs/README.md)
+- [MVP 验收记录](docs/testing/2026-10-04-mvp-acceptance-audit.md)
+- [项目待办](docs/TODO.md)

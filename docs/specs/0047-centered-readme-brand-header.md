@@ -1,8 +1,9 @@
 # 0047：README 顶部居中展示正式 Logo
 
-- 状态：Implemented（品牌资产专项 5 项、Web 全量 138 项自动测试已验）。
+- 状态：Superseded（顶部居中规则保留，首图尺寸与 README 信息架构由 0051 调整）。
 - 范围：仓库根 `README.md` 的顶部品牌区域与对应资产回归测试。
 - 依赖：[0044 正式“风之信使”Logo 系统](0044-wind-messenger-logo-system.md)；不改变正式资产、产品 UI 或运行时资源。
+- 后续：[0051 面向使用者的精简 README](0051-readable-project-readme.md)保留新版透明首图与居中规则，将宽度调整为 360px，并重写项目入口内容。
 
 ## 用户结果
 

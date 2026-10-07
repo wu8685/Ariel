@@ -61,10 +61,11 @@
 | 0044 | [正式“风之信使” Logo 系统](0044-wind-messenger-logo-system.md) | Implemented（资产完整性／自动／桌面与移动截图已验） | 全面替换为风之信使资产，升级组件、图标元数据、品牌文档与视觉回归 |
 | 0045 | [阅读历史时自动收起会话 Header](0045-collapse-conversation-header-while-reading-history.md) | Implemented（上下两层 0px／真实移动 Chromium／截图已验） | 离开最新消息时将 Header 与输入区完全收起，把全部垂直空间交给对话历史；回到最新或切换会话后恢复 |
 | 0046 | [登录页使用彩色“风之信使”主标](0046-color-login-brand-mark.md) | Superseded（彩色资产保留，尺寸由 0048 调整） | 未连接登录页改用彩色正式主版；固定 320px 要求已被后续紧凑尺寸覆盖 |
-| 0047 | [README 顶部居中展示正式 Logo](0047-centered-readme-brand-header.md) | Implemented（品牌专项与 Web 全量自动测试已验） | README 以 480px 彩色正式主标开头并居中展示，标题与正文随后出现 |
+| 0047 | [README 顶部居中展示正式 Logo](0047-centered-readme-brand-header.md) | Superseded（居中规则保留，尺寸与内容由 0051 调整） | 历史上将新版 Logo 移到 README 首部；后续由精简入口页规格覆盖 |
 | 0048 | [登录页彩色 Logo 恢复紧凑尺寸](0048-compact-color-login-brand-mark.md) | Implemented（桌面／移动截图、自动测试与 production build 已验） | 保留彩色正式资产，将首页 Logo 恢复到原黑白版的 128–160px 响应式尺寸 |
 | 0049 | [登录页 Logo 与精简标题同排展示](0049-inline-login-brand-lockup.md) | Superseded（横向 Lockup 保留，文案由 0050 调整） | 建立 Logo 与标题同排的品牌 Lockup；原“接续 Codex”文案已被覆盖 |
 | 0050 | [登录页标题改为“Agent 联络中继器”](0050-agent-relay-login-heading.md) | Implemented（桌面／移动截图、自动测试与 production build 已验） | 用产品定位标题替换“接续 Codex”，并保持桌面和手机同排展示 |
+| 0051 | [面向使用者的精简 README](0051-readable-project-readme.md) | Implemented（Logo 像素透明度、README 链接与 Web 全量测试已验） | 用背景、架构、快速开始、基本使用和文档导航重写项目入口，并验证新版 Logo 透明背景 |
 
 ## 设计基线
 

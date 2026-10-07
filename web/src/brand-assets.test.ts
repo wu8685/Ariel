@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(process.cwd(), "..");
@@ -23,6 +24,63 @@ function walkText(directory: string): string {
     if (entry.name === "brand-assets.test.ts") return [];
     return /\.(?:md|html|ts|tsx|css|json|webmanifest)$/.test(entry.name) ? [readFileSync(path, "utf8")] : [];
   }).join("\n");
+}
+
+function paeth(left: number, above: number, upperLeft: number): number {
+  const estimate = left + above - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const aboveDistance = Math.abs(estimate - above);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
+  return aboveDistance <= upperLeftDistance ? above : upperLeft;
+}
+
+function rgbaAlphaStats(png: Buffer) {
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const chunks: Buffer[] = [];
+  for (let offset = 8; offset + 12 <= png.length;) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    if (type === "IDAT") chunks.push(png.subarray(offset + 8, offset + 8 + length));
+    offset += length + 12;
+  }
+  const decoded = inflateSync(Buffer.concat(chunks));
+  const bytesPerPixel = 4;
+  const stride = width * bytesPerPixel;
+  let cursor = 0;
+  let previous = Buffer.alloc(stride);
+  let transparent = 0;
+  let opaque = 0;
+  const corners: number[] = [];
+  for (let y = 0; y < height; y += 1) {
+    const filter = decoded[cursor];
+    cursor += 1;
+    const source = decoded.subarray(cursor, cursor + stride);
+    cursor += stride;
+    const row = Buffer.alloc(stride);
+    for (let index = 0; index < stride; index += 1) {
+      const left = index >= bytesPerPixel ? row[index - bytesPerPixel] : 0;
+      const above = previous[index];
+      const upperLeft = index >= bytesPerPixel ? previous[index - bytesPerPixel] : 0;
+      const predictor = filter === 0 ? 0
+        : filter === 1 ? left
+          : filter === 2 ? above
+            : filter === 3 ? Math.floor((left + above) / 2)
+              : filter === 4 ? paeth(left, above, upperLeft)
+                : Number.NaN;
+      if (!Number.isFinite(predictor)) throw new Error(`Unsupported PNG filter ${filter}`);
+      row[index] = (source[index] + predictor) & 0xff;
+    }
+    for (let x = 0; x < width; x += 1) {
+      const alpha = row[x * bytesPerPixel + 3];
+      if (alpha === 0) transparent += 1;
+      if (alpha === 255) opaque += 1;
+      if ((x === 0 || x === width - 1) && (y === 0 || y === height - 1)) corners.push(alpha);
+    }
+    previous = row;
+  }
+  return { corners, opaque, transparent, total: width * height };
 }
 
 describe("formal Ariel wind-messenger brand assets", () => {
@@ -51,6 +109,15 @@ describe("formal Ariel wind-messenger brand assets", () => {
     }
   });
 
+  it("keeps both color masters genuinely transparent rather than painting a fixed background", () => {
+    for (const name of ["ariel-logo-wind-messenger-color.png", "ariel-logo-wind-messenger-color-512.png"]) {
+      const stats = rgbaAlphaStats(readFileSync(resolve(brand, name)));
+      expect(stats.corners, name).toEqual([0, 0, 0, 0]);
+      expect(stats.transparent, name).toBeGreaterThan(stats.total / 2);
+      expect(stats.opaque, name).toBeGreaterThan(0);
+    }
+  });
+
   it("ships parseable ink and white micro marks with one core and six receivers", () => {
     for (const name of ["ariel-logo-wind-messenger-micro.svg", "ariel-logo-wind-messenger-micro-white.svg"]) {
       const svg = readFileSync(resolve(brand, name), "utf8");
@@ -64,10 +131,17 @@ describe("formal Ariel wind-messenger brand assets", () => {
 
   it("uses repository-relative wind-messenger references in README, docs and web metadata", () => {
     const readme = readFileSync(resolve(root, "README.md"), "utf8");
-    expect(readme).toMatch(/^<p align="center">\n  <img src="web\/public\/brand\/ariel-logo-wind-messenger-color\.png" width="480" alt="Ariel 风之信使彩色主版 Logo" \/>\n<\/p>\n\n# Ariel\n/);
+    expect(readme).toMatch(/^<p align="center">\n  <img src="web\/public\/brand\/ariel-logo-wind-messenger-color\.png" width="360" alt="Ariel" \/>\n<\/p>\n\n<h1 align="center">Ariel<\/h1>\n/);
     expect(readme.match(/ariel-logo-wind-messenger-color\.png/g)).toHaveLength(1);
-    expect(readme).toContain("docs/brand/logo-guideline.html");
-    expect(readme).toContain("docs/brand/brand-spec.md");
+    expect(readme).not.toMatch(/background(?:-color)?\s*[:=]/i);
+    expect(readme).not.toMatch(/正式品牌标识|品牌使用规范|工程化品牌规范|风之信使/);
+    for (const heading of ["## Ariel 是什么", "## 架构", "## 快速开始", "## 基本使用", "## 安全边界", "## 深入阅读"]) {
+      expect(readme).toContain(heading);
+    }
+    for (const component of ["手机 / 浏览器", "Ariel Relay", "Desktop Agent", "Codex Desktop"]) {
+      expect(readme).toContain(component);
+    }
+    expect(readme.split("\n").length).toBeLessThanOrEqual(100);
 
     const guideline = readFileSync(resolve(root, "docs/brand/logo-guideline.html"), "utf8");
     const spec = readFileSync(resolve(root, "docs/brand/brand-spec.md"), "utf8");
