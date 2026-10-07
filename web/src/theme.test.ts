@@ -123,7 +123,7 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.message\.assistant\s+\.message-body\s*\{[^}]*background:\s*var\(--color-panel\)/s);
     expect(style).toMatch(/\.message\.user\s*\{[^}]*justify-content:\s*flex-end/s);
     expect(style).toMatch(/\.eyebrow\s*\{[^}]*color:\s*var\(--color-subtle\)/s);
-    expect(style).toMatch(/\.empty-symbol\s*\{[^}]*color:\s*var\(--color-logo\)/s);
+    expect(style).toMatch(/\.empty-symbol\s*\{[^}]*color:\s*var\(--color-accent\)/s);
     for (const name of ["color-surface", "color-panel", "color-raised", "color-border"]) {
       const value = token(name).slice(1);
       expect(value.slice(0, 2)).toBe(value.slice(2, 4));

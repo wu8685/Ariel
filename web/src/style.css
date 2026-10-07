@@ -267,7 +267,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .history-gap { color: var(--color-subtle); text-align: center; font-size: 11px; border-top: 1px dashed var(--color-border); padding: 12px 0 22px; }
 .history-gap button { border: 0; background: none; color: var(--color-muted); text-decoration: underline; text-underline-offset: 3px; }
 .empty { text-align: center; padding: 10vh 12px; color: var(--color-muted); }
-.empty-symbol { font-size: 50px; color: var(--color-logo); }
+.empty-symbol { font-size: 50px; color: var(--color-accent); }
 .empty h3 { font-family: Georgia, "Songti SC", serif; color: var(--color-text); font-size: 30px; font-weight: 400; margin: 14px 0; }
 .empty p { font-size: 13px; line-height: 1.8; }
 .turn { margin-bottom: 36px; }

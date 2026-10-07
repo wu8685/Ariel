@@ -51,6 +51,7 @@
 | 0034 | [项目会话分组默认收起与按需展开](0034-collapsible-project-session-groups.md) | Implemented（自动测试与 production build 已验；物理手机待验） | 所有项目默认最小化收起，点击项目标题独立展开或再次收起 |
 | 0035 | [队列菜单、引导消息可见性与紧凑输入操作](0035-queue-overlay-steer-visibility-and-compact-actions.md) | Implemented（自动测试与 production build 已验；物理手机待验） | 修复队列更多菜单遮挡和引导消息正文丢失，并缩小手机输入操作 icon |
 | 0036 | [置顶会话独立展示并从项目分组去重](0036-pinned-session-sidebar.md) | Implemented（自动／官方文档／0.160.0 降级已验） | 读取 Codex 原生置顶状态，在侧栏顶部独立展示，并从项目分组移除重复会话；当前 bundled 0.160.0 待上游字段落地 |
+| 0037 | [会话加载占位标识使用蓝色](0037-blue-session-loading-mark.md) | Implemented（主题契约、Web 全量测试与 production build 已验；物理手机待用户复验） | 将“正在同步会话”页面中央的占位标识从原颜色改为 Ariel 蓝色强调色 |
 
 ## 设计基线
 
