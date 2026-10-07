@@ -190,7 +190,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [stopping, setStopping] = useState(false);
   const [showList, setShowList] = useState(true);
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
-  const [historyHeaderCollapsed, setHistoryHeaderCollapsed] = useState(false);
+  const [historyChromeCollapsed, setHistoryChromeCollapsed] = useState(false);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
@@ -204,6 +204,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const resuming = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
+  const lastTranscriptScrollTop = useRef(0);
   const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
   const resumeReadingAnchor = useRef<ReadingAnchor | null>(null);
   const lastPaint = useRef<{ key: string; seq: number; marker: ContentMarker | null }>({ key: "", seq: -1, marker: null });
@@ -256,11 +257,22 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container) return;
+    const scrollingTowardLatest = container.scrollTop > lastTranscriptScrollTop.current + 1;
+    lastTranscriptScrollTop.current = container.scrollTop;
     const distanceFromLatest = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop);
+    if (historyChromeCollapsed) {
+      const returnedToLatest = scrollingTowardLatest && distanceFromLatest <= historyHeaderExpandDistance;
+      followLatestRef.current = returnedToLatest;
+      if (returnedToLatest) {
+        setHistoryChromeCollapsed(false);
+        setShowReturnToLatest(false);
+      }
+      return;
+    }
     followLatestRef.current = followLatestRef.current
       ? distanceFromLatest <= latestFollowDistance
       : distanceFromLatest <= historyHeaderExpandDistance;
-    setHistoryHeaderCollapsed(collapsed => collapsed
+    setHistoryChromeCollapsed(collapsed => collapsed
       ? distanceFromLatest > historyHeaderExpandDistance
       : distanceFromLatest > latestFollowDistance);
     if (followLatestRef.current) setShowReturnToLatest(false);
@@ -269,9 +281,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function returnToLatest() {
     followLatestRef.current = true;
     setShowReturnToLatest(false);
-    setHistoryHeaderCollapsed(false);
+    setHistoryChromeCollapsed(false);
     const container = transcriptRef.current;
-    if (container) scrollToLatest(container);
+    if (container) { scrollToLatest(container); lastTranscriptScrollTop.current = container.scrollTop; }
   }
 
   function disconnect() {
@@ -444,7 +456,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function selectThread(id: string, targetDevice = deviceId) {
     if (!targetDevice) return;
     if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
-    else { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); setHistoryHeaderCollapsed(false); }
+    else { resumeReadingAnchor.current = null; followLatestRef.current = true; lastTranscriptScrollTop.current = 0; setShowReturnToLatest(false); setHistoryChromeCollapsed(false); }
     pendingReadingAnchor.current = null;
     blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
@@ -752,8 +764,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     }
     const resume = resumeReadingAnchor.current;
     if (resume?.key === key) {
-      if (restoreReadingAnchor(container, resume)) { followLatestRef.current = false; setHistoryHeaderCollapsed(true); }
-      else { followLatestRef.current = true; setHistoryHeaderCollapsed(false); scrollToLatest(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
+      if (restoreReadingAnchor(container, resume)) { followLatestRef.current = false; setHistoryChromeCollapsed(true); }
+      else { followLatestRef.current = true; setHistoryChromeCollapsed(false); scrollToLatest(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
       resumeReadingAnchor.current = null;
       lastPaint.current = { key, seq: view.seq, marker };
       return;
@@ -761,7 +773,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (lastPaint.current.key !== key) {
       followLatestRef.current = true;
       setShowReturnToLatest(false);
-      setHistoryHeaderCollapsed(false);
+      setHistoryChromeCollapsed(false);
       scrollToLatest(container);
     } else if (lastPaint.current.seq !== view.seq) {
       if (followLatestRef.current) scrollToLatest(container);
@@ -1076,7 +1088,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
       <main className="conversation">
-        <div className={`conversation-head ${historyHeaderCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyHeaderCollapsed}>
+        <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
           <button className="mobile-list text-button" aria-label={`打开会话列表，${connectionLabel}`} aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><span className="menu-glyph" aria-hidden="true">☰</span><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
@@ -1092,8 +1104,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
           {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={status === "ready" && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working} />)}
         </div>
-        {showReturnToLatest && view && <div className="return-latest-bar"><button type="button" onClick={returnToLatest}>回到最新</button></div>}
-        <div className="composer-wrap">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
+        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} onClick={returnToLatest}>回到最新</button></div>}
+        <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
           {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">
             {queuePaused && <div className="queue-head"><span>后续输入已暂停</span><small>开始下一轮前可继续调整</small></div>}
             <span className="sr-only">共 {queuedMessages.length} 条，最上方优先执行。</span>
@@ -1126,7 +1138,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
               {editingQueueId && <button className="queue-cancel-button" type="button" onClick={cancelQueueEdit} disabled={working}>取消编辑</button>}
               {activeTurn && <button className="stop-button" type="button" aria-label="停止" title="停止" onClick={() => void stop()} disabled={stopping || status !== "ready" || readOnlyHistory}><span className="stop-glyph" aria-hidden="true">■</span><span className="stop-label" aria-hidden="true">停止</span></button>}
               <button className="primary send-button" aria-label={sendAction} title={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, status === "ready", working || !!queueWorking, draft, screenshots.length, queueEnabled)}><span className="send-label">{sendAction}</span><span className="send-glyph" aria-hidden="true">↑</span></button>
-            </div></div></div></div>
+            </div></div></div></div></div>
       </main>
     </div>
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}

@@ -59,7 +59,7 @@
 | 0042 | [排队项更多菜单的紧凑字体与排版](0042-compact-queue-menu-typography.md) | Implemented（自动／移动截图已验） | 修复 Portal 菜单继承断开导致的 16px 原生按钮，并统一队列区视觉层级 |
 | 0043 | [前一版正式 Logo 系统](0043-formal-logo-system.md) | Superseded（由 0044 取代） | 保留前一版品牌集成的历史规格 |
 | 0044 | [正式“风之信使” Logo 系统](0044-wind-messenger-logo-system.md) | Implemented（资产完整性／自动／桌面与移动截图已验） | 全面替换为风之信使资产，升级组件、图标元数据、品牌文档与视觉回归 |
-| 0045 | [阅读历史时自动收起会话 Header](0045-collapse-conversation-header-while-reading-history.md) | Implemented（自动／真实移动 Chromium／截图已验） | 离开最新消息时缩短 Header，把垂直空间交给对话历史；回到底部或切换会话后恢复 |
+| 0045 | [阅读历史时自动收起会话 Header](0045-collapse-conversation-header-while-reading-history.md) | Implemented（上下两层 0px／真实移动 Chromium／截图已验） | 离开最新消息时将 Header 与输入区完全收起，把全部垂直空间交给对话历史；回到最新或切换会话后恢复 |
 
 ## 设计基线
 

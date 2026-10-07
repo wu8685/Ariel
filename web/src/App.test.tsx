@@ -441,8 +441,11 @@ describe("Ariel app interactions", () => {
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
     const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
     expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
     expect(conversationHead.dataset.historyCollapsed).toBe("true");
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(true);
+    expect(composerWrap.dataset.historyCollapsed).toBe("true");
     const earlierScrollCalls = vi.mocked(Element.prototype.scrollIntoView).mock.calls.length;
     const updated: Thread = { ...recent, turns: [{ ...recent.turns[0], items: [{ itemId: "answer", role: "assistant", text: "partial and more" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
@@ -454,20 +457,24 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(800);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     expect(conversationHead.dataset.historyCollapsed).toBe("false");
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
+    expect(composerWrap.dataset.historyCollapsed).toBe("false");
     expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
   });
 
-  it("uses hysteresis before expanding the compact history header near the latest messages", async () => {
+  it("uses hysteresis before expanding the collapsed history chrome near the latest messages", async () => {
     const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
     const { socket } = await openFixture(recent);
     const transcript = document.querySelector(".transcript") as HTMLElement;
     const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
     Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
     Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
 
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(true);
 
     transcript.scrollTop = 730;
     fireEvent.scroll(transcript);
@@ -480,6 +487,7 @@ describe("Ariel app interactions", () => {
     transcript.scrollTop = 780;
     fireEvent.scroll(transcript);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+    expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
   });
 
   it("expands the history header immediately when selecting another thread", async () => {

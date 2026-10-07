@@ -67,13 +67,15 @@ describe("fixed Night appearance", () => {
     expect(app).toMatch(/key === "Escape"[^}]*setShowList\(false\)/);
   });
 
-  it("compacts only connected mobile conversation chrome and keeps touch targets", () => {
+  it("fully collapses the mobile conversation header while keeping expanded touch targets", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(mobile).toMatch(/\.app-shell\.connected\s+\.masthead\s*\{[^}]*display:\s*none/s);
     expect(mobile).toMatch(/\.conversation-head\s*\{[^}]*height:\s*6[4-8]px/s);
-    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*height:\s*46px/s);
-    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s+\.head-path\s*\{[^}]*display:\s*none/s);
-    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s+\.mobile-list[^}]*min-width:\s*44px/s);
+    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*height:\s*0;[^}]*padding:\s*0\s+12px;[^}]*border-bottom-width:\s*0;[^}]*border-bottom-color:\s*transparent/s);
+    expect(style).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;[^}]*overflow:\s*hidden/s);
+    expect(style).toMatch(/\.composer-wrap\s*\{[^}]*display:\s*grid;[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/s);
+    expect(style).toMatch(/\.composer-wrap\.history-collapsed\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*0fr\);[^}]*padding-top:\s*0;[^}]*padding-bottom:\s*0;[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none/s);
+    expect(style).toMatch(/\.return-latest-bar\.history-overlay\s*\{[^}]*position:\s*absolute;[^}]*bottom:\s*max\([^}]*safe-area-inset-bottom/s);
     expect(mobile).toMatch(/\.mobile-list\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.permission-info-button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.sidebar-disconnect\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
