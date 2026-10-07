@@ -71,6 +71,9 @@ describe("fixed Night appearance", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(mobile).toMatch(/\.app-shell\.connected\s+\.masthead\s*\{[^}]*display:\s*none/s);
     expect(mobile).toMatch(/\.conversation-head\s*\{[^}]*height:\s*6[4-8]px/s);
+    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*height:\s*46px/s);
+    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s+\.head-path\s*\{[^}]*display:\s*none/s);
+    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s+\.mobile-list[^}]*min-width:\s*44px/s);
     expect(mobile).toMatch(/\.mobile-list\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.permission-info-button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
     expect(mobile).toMatch(/\.sidebar-disconnect\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);

@@ -23,6 +23,7 @@ const mobileViewportMaxWidth = 800;
 const mobileComposerMinHeight = 44;
 const mobileComposerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
 const latestFollowDistance = 80;
+const historyHeaderExpandDistance = 32;
 const queueMenuWidth = 108;
 const queueMenuRowHeight = 34;
 type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: number; scrollHeight: number };
@@ -189,6 +190,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [stopping, setStopping] = useState(false);
   const [showList, setShowList] = useState(true);
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
+  const [historyHeaderCollapsed, setHistoryHeaderCollapsed] = useState(false);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
@@ -254,13 +256,20 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container) return;
-    followLatestRef.current = container.scrollHeight - container.clientHeight - container.scrollTop <= latestFollowDistance;
+    const distanceFromLatest = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop);
+    followLatestRef.current = followLatestRef.current
+      ? distanceFromLatest <= latestFollowDistance
+      : distanceFromLatest <= historyHeaderExpandDistance;
+    setHistoryHeaderCollapsed(collapsed => collapsed
+      ? distanceFromLatest > historyHeaderExpandDistance
+      : distanceFromLatest > latestFollowDistance);
     if (followLatestRef.current) setShowReturnToLatest(false);
   }
 
   function returnToLatest() {
     followLatestRef.current = true;
     setShowReturnToLatest(false);
+    setHistoryHeaderCollapsed(false);
     const container = transcriptRef.current;
     if (container) scrollToLatest(container);
   }
@@ -435,7 +444,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function selectThread(id: string, targetDevice = deviceId) {
     if (!targetDevice) return;
     if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
-    else { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); }
+    else { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); setHistoryHeaderCollapsed(false); }
     pendingReadingAnchor.current = null;
     blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
@@ -743,8 +752,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     }
     const resume = resumeReadingAnchor.current;
     if (resume?.key === key) {
-      if (restoreReadingAnchor(container, resume)) followLatestRef.current = false;
-      else { followLatestRef.current = true; scrollToLatest(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
+      if (restoreReadingAnchor(container, resume)) { followLatestRef.current = false; setHistoryHeaderCollapsed(true); }
+      else { followLatestRef.current = true; setHistoryHeaderCollapsed(false); scrollToLatest(container); setNotice("原阅读位置已不在当前历史窗口，已回到最新消息。"); }
       resumeReadingAnchor.current = null;
       lastPaint.current = { key, seq: view.seq, marker };
       return;
@@ -752,6 +761,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (lastPaint.current.key !== key) {
       followLatestRef.current = true;
       setShowReturnToLatest(false);
+      setHistoryHeaderCollapsed(false);
       scrollToLatest(container);
     } else if (lastPaint.current.seq !== view.seq) {
       if (followLatestRef.current) scrollToLatest(container);
@@ -1066,7 +1076,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
       <main className="conversation">
-        <div className="conversation-head">
+        <div className={`conversation-head ${historyHeaderCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyHeaderCollapsed}>
           <button className="mobile-list text-button" aria-label={`打开会话列表，${connectionLabel}`} aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><span className="menu-glyph" aria-hidden="true">☰</span><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>

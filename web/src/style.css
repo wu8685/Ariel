@@ -248,7 +248,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 24px 48px;
   border-bottom: 1px solid var(--color-border);
   flex: none;
+  transition: height .18s ease, padding .18s ease;
 }
+.conversation-head.history-collapsed { height: 58px; padding-top: 8px; padding-bottom: 8px; }
+.conversation-head.history-collapsed .conversation-title .eyebrow,
+.conversation-head.history-collapsed .head-path { display: none; }
+.conversation-head.history-collapsed h2 { margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-title { min-width: 0; flex: 1; }
 .permission-info { display: none; }
 .send-glyph { display: none; }
@@ -441,6 +446,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .sidebar-search { margin: 0 18px 10px; }
   .conversation { height: 100%; }
   .conversation-head { height: 66px; padding: 9px 12px; gap: 11px; z-index: 3; background: var(--color-page); border-bottom-color: var(--color-border); }
+  .conversation-head.history-collapsed { height: 46px; padding: 1px 12px; }
+  .conversation-head.history-collapsed .head-path { display: none; }
+  .conversation-head.history-collapsed .mobile-list { min-width: 44px; min-height: 44px; }
+  .conversation-head.history-collapsed h2 { margin: 0; font-size: 14px; }
   .conversation-title { min-width: 0; flex: 1; }
   .conversation-title .eyebrow { display: none; }
   .conversation-head h2, .head-path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

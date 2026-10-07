@@ -47,7 +47,7 @@ async function expandProject(cwd: string) {
   fireEvent.click(await screen.findByRole("button", { name: `展开项目 ${projectName(cwd)}，${path}` }));
 }
 
-async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false) {
+async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread]) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -59,7 +59,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
     { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
-  await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [thread] } }));
+  await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
   await expandProject(thread.cwd);
   fireEvent.click((await screen.findByText(thread.title)).closest("button")!);
   await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
@@ -440,15 +440,64 @@ describe("Ariel app interactions", () => {
     Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
+    const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.dataset.historyCollapsed).toBe("true");
     const earlierScrollCalls = vi.mocked(Element.prototype.scrollIntoView).mock.calls.length;
     const updated: Thread = { ...recent, turns: [{ ...recent.turns[0], items: [{ itemId: "answer", role: "assistant", text: "partial and more" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
     expect(transcript.scrollTop).toBe(300);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
     expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(earlierScrollCalls);
     expect(screen.getByRole("button", { name: "回到最新" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "回到最新" }));
     expect(transcript.scrollTop).toBe(800);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+    expect(conversationHead.dataset.historyCollapsed).toBe("false");
     expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
+  });
+
+  it("uses hysteresis before expanding the compact history header near the latest messages", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
+    const { socket } = await openFixture(recent);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    transcript.scrollTop = 730;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    const updated: Thread = { ...recent, turns: [{ ...recent.turns[0], items: [{ itemId: "answer", role: "assistant", text: "history with streamed update" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
+    expect(transcript.scrollTop).toBe(730);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    transcript.scrollTop = 780;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+  });
+
+  it("expands the history header immediately when selecting another thread", async () => {
+    const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
+    const another: Thread = { ...fixtureThread, threadId: "another", title: "Another", cwd: "/tmp/another" };
+    await openFixture(recent, false, false, [recent, another]);
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
+    Object.defineProperty(transcript, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    await expandProject(another.cwd);
+    fireEvent.click(screen.getByText("Another").closest("button")!);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
   });
 
   it("does not announce a new message for a status-only update while reading older content", async () => {
