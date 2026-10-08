@@ -130,6 +130,15 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.list-caption\s*\{[^}]*padding:\s*5px\s+12px\s+6px/s);
   });
 
+  it("keeps each conversation item dense on desktop and mobile", () => {
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(style).toMatch(/\.thread-row\s*\{[^}]*padding:\s*7px\s+12px;[^}]*margin:\s*1px\s+0/s);
+    expect(style).toMatch(/\.thread-title\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*1\.3/s);
+    expect(style).toMatch(/\.thread-snippet\s*\{[^}]*margin-top:\s*3px;[^}]*line-height:\s*1\.3/s);
+    expect(style).toMatch(/\.thread-date\s*\{[^}]*font-size:\s*9px;[^}]*margin-top:\s*3px;[^}]*line-height:\s*1\.3/s);
+    expect(mobile).not.toMatch(/\.thread-row\s*\{[^}]*padding:\s*15px/s);
+  });
+
   it("shows labels for icon controls only through hover or keyboard focus tooltips", () => {
     expect(style).toMatch(/\.icon-control\[data-tooltip\]::after\s*\{[^}]*content:\s*attr\(data-tooltip\);[^}]*opacity:\s*0;[^}]*visibility:\s*hidden/s);
     expect(style).toMatch(/@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*\.icon-control\[data-tooltip\]:is\(:hover,\s*:focus-visible\)::after\s*\{[^}]*opacity:\s*1;[^}]*visibility:\s*visible/s);

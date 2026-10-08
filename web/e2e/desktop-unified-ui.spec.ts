@@ -76,6 +76,7 @@ test("desktop reuses the compact mobile shell and icon controls", async ({ page 
   await expect(page.getByRole("button", { name: "关闭会话列表遮罩" })).toBeVisible();
   expect((await sidebar.locator(".thread-list").boundingBox())?.y).toBeLessThanOrEqual(190);
   await expect(sidebar.locator(".sidebar-head, .device-label, .device-meta")).toHaveCount(0);
+  expect((await sidebar.locator('[data-thread-id="desktop-unified"]').boundingBox())?.height).toBeLessThanOrEqual(52);
   await expect(page).toHaveScreenshot("desktop-unified-sidebar.png", { animations: "disabled", caret: "hide" });
   await page.getByRole("button", { name: "关闭会话列表遮罩" }).click();
   await expect(sidebar).not.toHaveClass(/\bopen\b/);

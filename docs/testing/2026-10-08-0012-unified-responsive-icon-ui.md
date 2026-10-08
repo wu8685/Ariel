@@ -18,8 +18,8 @@
 
 ### Green
 
-- 相关 Vitest：81 项通过。
-- Web 全量 Vitest：20 个文件、154 项通过。
+- 相关 Vitest：82 项通过。
+- Web 全量 Vitest：20 个文件、155 项通过。
 - Playwright：14 项通过，包含新增桌面端 fixture 与全部既有移动端行为／截图回归。
 - `npm run build`：通过；保留既有单 chunk 超过 500 kB 的 Vite 提示。
 - `go test ./...`：通过。
@@ -58,6 +58,12 @@
 - 1280×720 桌面与 390×844 移动 Chromium 均确认 `.thread-list` 顶部不超过 `190px`，相比原约 340px 的顶部堆叠显著增加可见会话空间；设备离线竞态、扫码、刷新、新建、断开和关闭的既有测试全部通过。
 - [桌面侧栏截图](../../web/e2e/desktop-unified-ui.spec.ts-snapshots/desktop-unified-sidebar-darwin.png)
 - [移动侧栏截图](../../web/e2e/mobile-session-navigation.spec.ts-snapshots/mobile-pinned-sidebar-darwin.png)
+
+## 会话 item 信息密度补充验收
+
+- Red：样式契约因 `.thread-row` 仍为 `11px 14px`、手机断点仍覆盖为 `15px` padding 而失败；真实浏览器测得普通会话 item 高度为桌面 `65px`、手机 `73px`，均超过 `52px` 上限。
+- Green：基础样式统一为 `7px 12px` padding、`1px 0` margin；标题为 `13px`，时间为 `9px`，标题／时间／搜索摘要间距同步收紧；移除手机端宽松 padding 覆盖。
+- 桌面选中会话与手机置顶会话均通过 `≤52px` 几何断言；项目分组按钮未修改。两端截图确认标题和时间未裁切，选中边框、置顶区和项目分隔仍清晰。
 
 ## 保留项
 

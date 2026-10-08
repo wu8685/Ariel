@@ -28,7 +28,7 @@
 | 0009 | [手机侧栏收起与灰色 logo](0009-mobile-drawer-and-logo.md) | Approved（用户已确认） | 手机侧栏点空白处收起，logo 用中性灰 |
 | 0010 | [刷新页面复用 Web session](0010-browser-relay-session.md) | Approved（用户已确认） | 浏览器与 Relay 内存 session 免刷新重输连接码 |
 | 0011 | [手机会话紧凑布局与 Night 视觉](0011-compact-mobile-conversation-header.md) | Approved（Web／浏览器已验；物理手机待验） | 缩小顶部区域，参考 Codex 手机版的视觉层级优化对话与输入区 |
-| 0012 | [电脑浏览器紧凑会话布局](0012-compact-desktop-conversation.md) | Implemented（侧栏紧凑化、跨端圆角、桌面／移动 Chromium 与截图已验） | 沿用手机紧凑布局与 icon 操作体系，缩小桌面顶部、侧栏与输入区，侧栏按需展开 |
+| 0012 | [电脑浏览器紧凑会话布局](0012-compact-desktop-conversation.md) | Implemented（侧栏顶部／会话 item 紧凑化、跨端圆角与截图已验） | 沿用手机紧凑布局与 icon 操作体系，缩小桌面顶部、侧栏与输入区，侧栏按需展开 |
 | 0013 | [大会话最近十回合与 64 MiB 有界同步](0013-paged-history-and-large-owner.md) | Approved（已实现并验证；物理手机旧页待验） | 默认最近 10 turn、旧历史按需分页，本机原会话上限 64 MiB |
 | 0014 | [手机输入框回车换行与八行自适应](0014-mobile-composer-newline-and-eight-lines.md) | Approved（Web／物理手机已验） | 手机 Enter 仅换行，按钮发送；输入框一至八行增长并在超出后内部滚动 |
 | 0015 | [工具活动默认折叠，按需查看每段调用](0015-compact-tool-activity-in-conversation.md) | Approved（用户已确认） | 一组工具调用默认单行摘要，点击查看各调用；运行状态轻量呈现 |

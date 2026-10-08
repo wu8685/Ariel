@@ -48,6 +48,7 @@ test("pinned sessions are visible before collapsed project groups", async ({ pag
   const sidebar = page.locator(".sidebar");
   expect((await sidebar.locator(".thread-list").boundingBox())?.y).toBeLessThanOrEqual(190);
   await expect(sidebar.locator(".sidebar-head, .device-label, .device-meta")).toHaveCount(0);
+  expect((await page.locator('[data-thread-id="pinned-thread"]').boundingBox())?.height).toBeLessThanOrEqual(52);
   await expect(page).toHaveScreenshot("mobile-pinned-sidebar.png", { animations: "disabled", caret: "hide" });
 });
 
