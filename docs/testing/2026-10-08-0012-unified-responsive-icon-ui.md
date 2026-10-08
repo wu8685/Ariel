@@ -18,8 +18,8 @@
 
 ### Green
 
-- 相关 Vitest：78 项通过。
-- Web 全量 Vitest：20 个文件、152 项通过。
+- 相关 Vitest：81 项通过。
+- Web 全量 Vitest：20 个文件、154 项通过。
 - Playwright：14 项通过，包含新增桌面端 fixture 与全部既有移动端行为／截图回归。
 - `npm run build`：通过；保留既有单 chunk 超过 500 kB 的 Vite 提示。
 - `go test ./...`：通过。
@@ -50,6 +50,14 @@
 - Green：新增 `--radius-work-item: 16px`；queue panel 与 composer 在基础样式和移动断点中均只引用该 token。
 - 1280×720 桌面 Chromium 与 390×844 移动 Chromium 的计算样式断言均通过；队列菜单、拖拽、历史收放、Markdown 表格、会话图片和加载状态截图基线同步更新并完成全量复跑。
 - 人工复核桌面紧凑主界面和移动队列菜单截图，输入框四角与排队 work item 外框弧度一致，没有新增溢出或遮挡。
+
+## 会话侧栏紧凑化补充验收
+
+- Red：DOM 契约因不存在 `.sidebar-toolbar`、仍保留独立 `.sidebar-head`／`.device-label`／`.device-meta` 而失败；样式契约因顶部仍为多段大间距布局而失败。浏览器几何断言先于实现加入，旧截图基线准确暴露了布局变化。
+- Green：品牌、Relay 状态、新建、扫码、刷新、断开与关闭合并为单行工具栏；设备选择和 readiness 合并为 36px 单行；搜索收紧为第三行，统计下沉到紧邻列表的轻量标题。低频状态文字改为状态点和 `aria-label`，功能与无障碍名称均保留。
+- 1280×720 桌面与 390×844 移动 Chromium 均确认 `.thread-list` 顶部不超过 `190px`，相比原约 340px 的顶部堆叠显著增加可见会话空间；设备离线竞态、扫码、刷新、新建、断开和关闭的既有测试全部通过。
+- [桌面侧栏截图](../../web/e2e/desktop-unified-ui.spec.ts-snapshots/desktop-unified-sidebar-darwin.png)
+- [移动侧栏截图](../../web/e2e/mobile-session-navigation.spec.ts-snapshots/mobile-pinned-sidebar-darwin.png)
 
 ## 保留项
 

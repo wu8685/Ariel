@@ -71,11 +71,14 @@ test("desktop reuses the compact mobile shell and icon controls", async ({ page 
 
   const menu = page.getByRole("button", { name: /打开会话列表/ });
   await menu.click();
-  await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);
+  const sidebar = page.locator(".sidebar");
+  await expect(sidebar).toHaveClass(/\bopen\b/);
   await expect(page.getByRole("button", { name: "关闭会话列表遮罩" })).toBeVisible();
+  expect((await sidebar.locator(".thread-list").boundingBox())?.y).toBeLessThanOrEqual(190);
+  await expect(sidebar.locator(".sidebar-head, .device-label, .device-meta")).toHaveCount(0);
   await expect(page).toHaveScreenshot("desktop-unified-sidebar.png", { animations: "disabled", caret: "hide" });
   await page.getByRole("button", { name: "关闭会话列表遮罩" }).click();
-  await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
+  await expect(sidebar).not.toHaveClass(/\bopen\b/);
 
   await send.hover();
   await expect(page).toHaveScreenshot("desktop-unified-compact-ui.png", { animations: "disabled", caret: "hide" });

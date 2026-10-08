@@ -45,6 +45,9 @@ test("pinned sessions are visible before collapsed project groups", async ({ pag
   await expect(projectRegion).toBeVisible();
   await expect(projectRegion.getByRole("button", { name: /展开项目 brain-spark/ })).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator('[data-thread-id="pinned-thread"]')).toHaveCount(1);
+  const sidebar = page.locator(".sidebar");
+  expect((await sidebar.locator(".thread-list").boundingBox())?.y).toBeLessThanOrEqual(190);
+  await expect(sidebar.locator(".sidebar-head, .device-label, .device-meta")).toHaveCount(0);
   await expect(page).toHaveScreenshot("mobile-pinned-sidebar.png", { animations: "disabled", caret: "hide" });
 });
 

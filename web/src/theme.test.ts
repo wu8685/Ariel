@@ -123,6 +123,13 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/\.composer\s*\{[^}]*border-radius:\s*var\(--radius-work-item\)/s);
   });
 
+  it("gives the conversation list most of the sidebar with a compact three-row header", () => {
+    expect(style).toMatch(/\.sidebar-toolbar\s*\{[^}]*min-height:\s*52px;[^}]*padding:\s*6px\s+10px/s);
+    expect(style).toMatch(/\.sidebar-device-row\s*\{[^}]*height:\s*36px;[^}]*margin:\s*0\s+12px\s+6px/s);
+    expect(style).toMatch(/\.sidebar-search\s*\{[^}]*height:\s*36px;[^}]*margin:\s*0\s+12px\s+6px/s);
+    expect(style).toMatch(/\.list-caption\s*\{[^}]*padding:\s*5px\s+12px\s+6px/s);
+  });
+
   it("shows labels for icon controls only through hover or keyboard focus tooltips", () => {
     expect(style).toMatch(/\.icon-control\[data-tooltip\]::after\s*\{[^}]*content:\s*attr\(data-tooltip\);[^}]*opacity:\s*0;[^}]*visibility:\s*hidden/s);
     expect(style).toMatch(/@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*\.icon-control\[data-tooltip\]:is\(:hover,\s*:focus-visible\)::after\s*\{[^}]*opacity:\s*1;[^}]*visibility:\s*visible/s);

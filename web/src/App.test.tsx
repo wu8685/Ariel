@@ -70,6 +70,21 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+  it("keeps every sidebar action in a compact header without repeated labels or status rows", async () => {
+    await openFixture(fixtureThread, false, true);
+    const sidebar = screen.getByLabelText("会话列表");
+    expect(sidebar.querySelector(".sidebar-toolbar")).toBeTruthy();
+    expect(sidebar.querySelector(".sidebar-identity")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-head")).toBeNull();
+    expect(sidebar.querySelector(".device-label")).toBeNull();
+    expect(sidebar.querySelector(".device-meta")).toBeNull();
+    expect(sidebar.querySelector("#sidebar-device-status")?.textContent).toContain("Agent 在线，Codex 就绪");
+    expect(screen.getByLabelText("设备").getAttribute("aria-describedby")).toBe("sidebar-device-status");
+    for (const label of ["新建会话", "手机扫码登录", "刷新会话", "断开", "关闭会话列表"]) {
+      expect(sidebar.querySelector(`button[aria-label='${label}']`)).toBeTruthy();
+    }
+  });
+
   it("searches all native sessions with a debounced query, shows snippets, pages, and restores recents", async () => {
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "Ariel" } });
@@ -1264,9 +1279,9 @@ describe("Ariel app interactions", () => {
     expect(updatedRequests).toHaveLength(2);
     const device = (agentOnline: boolean) => ({ deviceId: "mac", deviceName: "昊天的 Mac", agentOnline, codexReady: agentOnline, capabilities: { autoLoad: true } });
     await act(async () => socket.message({ type: "response", v: 1, requestId: updatedRequests[1].requestId, outcome: "accepted", data: { devices: [device(false)] } }));
-    expect(screen.getByLabelText("会话列表").querySelector(".device-meta")?.textContent).toContain("Agent 离线");
+    expect(screen.getByLabelText("会话列表").querySelector("#sidebar-device-status")?.textContent).toContain("Agent 离线");
     await act(async () => socket.message({ type: "response", v: 1, requestId: updatedRequests[0].requestId, outcome: "accepted", data: { devices: [device(true)] } }));
-    expect(screen.getByLabelText("会话列表").querySelector(".device-meta")?.textContent).toContain("Agent 离线");
+    expect(screen.getByLabelText("会话列表").querySelector("#sidebar-device-status")?.textContent).toContain("Agent 离线");
   });
 
   it("sends a message only after a selected owner snapshot and stops the exact active turn", async () => {
