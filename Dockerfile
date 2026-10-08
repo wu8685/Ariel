@@ -17,6 +17,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/relay/ ./cmd/relay/
 COPY internal/relay/ ./internal/relay/
+COPY internal/webauth/ ./internal/webauth/
 COPY protocol/ ./protocol/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ariel-relay ./cmd/relay
 
@@ -24,7 +25,7 @@ FROM alpine:3.23 AS runtime
 RUN addgroup -S -g 10001 ariel \
     && adduser -S -D -H -u 10001 -G ariel ariel
 WORKDIR /app
-RUN mkdir -p /app/web/dist
+RUN mkdir -p /app/web/dist /data && chown ariel:ariel /data
 COPY --from=relay-build /out/ariel-relay /app/ariel-relay
 COPY --from=web-build /src/web/dist/ /app/web/dist/
 

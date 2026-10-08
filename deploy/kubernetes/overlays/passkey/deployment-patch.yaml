@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ariel-relay
+spec:
+  template:
+    spec:
+      containers:
+        - name: ariel-relay
+          volumeMounts:
+            - name: auth-data
+              mountPath: /data
+      volumes:
+        - name: auth-data
+          persistentVolumeClaim:
+            claimName: ariel-auth

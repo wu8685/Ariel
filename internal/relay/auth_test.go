@@ -2,12 +2,63 @@ package relay
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )
+
+func TestPasskeyModeAcceptsOnlyVerifiedCookieForWebAndKeepsAgentToken(t *testing.T) {
+	r, err := New(Config{
+		Token:          "agent-secret",
+		WebAuthMode:    WebAuthPasskey,
+		AllowedOrigins: []string{testOrigin},
+		WebSessionVerifier: func(req *http.Request) bool {
+			cookie, err := req.Cookie("ariel-test-session")
+			return err == nil && cookie.Value == "valid"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+
+	tryWeb := func(cookie, token string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		header := http.Header{"Origin": {testOrigin}}
+		if cookie != "" {
+			header.Set("Cookie", "ariel-test-session="+cookie)
+		}
+		c, _, err := websocket.Dial(ctx, strings.Replace(s.URL, "http://", "ws://", 1)+"/ws", &websocket.DialOptions{HTTPHeader: header})
+		if err != nil {
+			return false
+		}
+		defer c.CloseNow()
+		if err := wsjson.Write(ctx, c, map[string]any{"type": "hello", "v": 1, "role": "web", "token": token}); err != nil {
+			return false
+		}
+		var got map[string]any
+		return wsjson.Read(ctx, c, &got) == nil && got["type"] == "hello.ok"
+	}
+	if tryWeb("", "012345") || tryWeb("", "s_"+strings.Repeat("a", 64)) || tryWeb("", "p_"+strings.Repeat("a", 64)) {
+		t.Fatal("passkey mode accepted a legacy Web credential")
+	}
+	if !tryWeb("valid", "cookie") {
+		t.Fatal("verified Web session cookie was rejected")
+	}
+
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, map[string]any{"type": "hello", "v": 1, "role": "agent", "token": "agent-secret", "deviceId": "mac", "deviceName": "Mac", "agentEpoch": "epoch", "adapterVersion": "test", "capabilities": map[string]bool{"autoLoad": false, "codexReady": true}})
+	if got := readJSON(t, agent); got["type"] != "hello.ok" {
+		t.Fatalf("Agent token rejected: %+v", got)
+	}
+}
 
 func TestWebPINIsSeparateFromAgentToken(t *testing.T) {
 	if _, err := New(Config{Token: "012345", WebPIN: "012345", AllowedOrigins: []string{testOrigin}}); err == nil {

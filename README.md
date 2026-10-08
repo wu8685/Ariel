@@ -36,7 +36,7 @@ flowchart LR
 | 桌面平台 | macOS |
 | Agent App | Codex Desktop |
 | 本机接入 | Codex Desktop 私有 IPC 与内置 Codex App Server |
-| 部署方式 | 单用户、可信局域网；Relay + Web 可独立容器化 |
+| 部署方式 | 单用户；可信局域网可用 6 位 PIN，公网可用原生 Passkey；Relay + Web 可用 Docker、ECS 单机脚本或 Kubernetes 交付 |
 
 这是当前实现矩阵，不是 Ariel 的产品边界。其他桌面平台和 Agent App 尚未适配，也不能由现有测试推断为可用。
 
@@ -78,7 +78,7 @@ cd Ariel
 
 ## 安全边界
 
-Ariel 当前面向单用户、可信局域网使用。默认 HTTP/WebSocket 连接未加密，不要直接暴露到公网或不可信网络。
+Ariel 当前采用单用户模型：登录者可操作全部会话，不提供 RBAC。可信局域网可以继续使用默认 6 位 PIN；公网部署必须使用 HTTPS/WSS，并把 Web 认证切换为 Passkey。Passkey 凭据保存在 Relay 的私有 JSON 文件中，会话使用加密 `HttpOnly` Cookie，因此不需要数据库或外部 OIDC。Agent 跨公网连接 Relay 时仍使用独立高熵 token。
 
 远程操作沿用目标 Agent App 的当前权限；页面出现高权限提示时，请先确认你接受该权限范围。当前 Codex Adapter 依赖 Desktop 私有 IPC，版本变化可能造成兼容性问题；不兼容操作会显式失败，不会被当作成功或自动重试。
 
@@ -86,6 +86,9 @@ Ariel 当前面向单用户、可信局域网使用。默认 HTTP/WebSocket 连�
 
 - [当前 Codex Adapter 的安装、配置与故障排查](docs/operations/agent-install.md)
 - [用 Docker 部署 Relay + Web](docs/operations/container-deployment.md)
+- [在单台 ECS 上一键部署 Relay + Web](docs/operations/ecs-single-node-deployment.md)
+- [用 Kubernetes 快速交付 Relay + Web](docs/operations/kubernetes-deployment.md)
+- [公网 Passkey 部署与安全边界](docs/operations/public-passkey-deployment.md)
 - [系统架构总览与 Adapter 边界](docs/architecture/overview.md)
 - [当前 Codex Adapter 的兼容性与实测边界](docs/compatibility/2026-10-03-m0.md)
 - [功能规格索引](docs/specs/README.md)

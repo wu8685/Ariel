@@ -30,6 +30,14 @@ flowchart LR
 4. 写操作结果不确定时不自动重放；Ariel 重新读取 Agent App 的权威状态。
 5. Web 与 Relay 使用 Ariel 自有协议，不接触某个 Agent App 的私有方法名。
 
+## 认证边界
+
+- Browser → Relay：可信局域网可选择 6 位 PIN；公网使用原生 Passkey 和加密 `HttpOnly` Cookie。两种模式互斥，Passkey 模式不接受 PIN、旧 Web Session 或二维码配对凭据降级。
+- Desktop Agent → Relay：始终使用独立高熵 Agent token；跨公网时必须使用 WSS。
+- Desktop Agent → 本机 Agent App：由具体 Adapter 使用目标产品的本机集成能力，不复用 Relay 登录。
+
+Passkey 公钥记录保存在小型私有 JSON 文件中，属于认证配置，不是会话数据库。Relay 仍不保存会话正文、离线任务或服务端 Web Session；需要全局注销浏览器时轮换 Cookie key。完整部署边界见[公网 Passkey 部署](../operations/public-passkey-deployment.md)。
+
 ## Agent App Adapter 边界
 
 一个 Adapter 可以按目标产品能力提供以下子集：

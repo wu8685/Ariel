@@ -33,6 +33,7 @@ func TestContainerImageBuildsRelayAndWebOnly(t *testing.T) {
 		"FROM golang:1.26-alpine AS relay-build",
 		"go build",
 		"./cmd/relay",
+		"COPY internal/webauth/ ./internal/webauth/",
 		"ARIEL_LISTEN=0.0.0.0:8080",
 		"ARIEL_WEB_DIST=/app/web/dist",
 		"EXPOSE 8080",
@@ -81,8 +82,10 @@ func TestContainerDocumentationKeepsDesktopAgentOnHost(t *testing.T) {
 		"ARIEL_TOKEN",
 		"ARIEL_WEB_PIN",
 		"ARIEL_ORIGINS",
+		"ARIEL_WEB_AUTH",
+		"Passkey",
 		"--allow-insecure-ws",
-		"不要直接暴露到公网",
+		"不要把 PIN 模式直接暴露到公网",
 	} {
 		if !strings.Contains(doc, required) {
 			t.Errorf("container deployment guide missing %q", required)

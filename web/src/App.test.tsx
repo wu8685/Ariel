@@ -38,6 +38,7 @@ afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
   vi.restoreAllMocks();
   delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
+	 document.querySelector("meta[name='ariel-auth-mode']")?.remove();
 });
 
 const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
@@ -70,6 +71,33 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+	it("uses Passkey mode without exposing a PIN fallback", async () => {
+		const meta = document.createElement("meta");
+		meta.name = "ariel-auth-mode";
+		meta.content = "passkey";
+		document.head.append(meta);
+		vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+			if (url === "/api/auth/status") return new Response(JSON.stringify({ mode: "passkey", authenticated: false, enrollmentRequired: false }), { status: 200 });
+			if (url.endsWith("/options")) return new Response(JSON.stringify({ publicKey: { challenge: "AQI", rpId: "ariel.example.com", allowCredentials: [], userVerification: "required" } }), { status: 200 });
+			return new Response(JSON.stringify({ ok: true }), { status: 200 });
+		}));
+		Object.defineProperty(navigator, "credentials", {
+			configurable: true,
+			value: { get: vi.fn(async () => ({
+				id: "credential", type: "public-key", rawId: new Uint8Array([1]).buffer,
+				authenticatorAttachment: "platform", getClientExtensionResults: () => ({}),
+				response: { clientDataJSON: new Uint8Array([2]).buffer, authenticatorData: new Uint8Array([3]).buffer, signature: new Uint8Array([4]).buffer, userHandle: null },
+			} as unknown as PublicKeyCredential)) },
+		});
+
+		render(<App />);
+		expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeTruthy();
+		expect(screen.queryByLabelText("6 位连接码")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "使用 Passkey 登录" }));
+		await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(1));
+		BrowserSocket.sockets[0].onopen?.(new Event("open"));
+		expect(JSON.parse(BrowserSocket.sockets[0].sent[0]).token).toBe("cookie");
+	});
   it("keeps every sidebar action in a compact header without repeated labels or status rows", async () => {
     await openFixture(fixtureThread, false, true);
     const sidebar = screen.getByLabelText("会话列表");

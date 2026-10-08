@@ -13,6 +13,7 @@ import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential }
 import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin } from "./projects";
 import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
+import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
@@ -31,6 +32,12 @@ type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: numb
 type PhonePairing = { credential: string; phase: "confirm" | "connecting" | "error" };
 type PairingInvite = { status: "loading" | "waiting" | "consumed" | "expired" | "error"; credential: string; expiresAt: number; qr: string; message: string };
 type QueueDragState = { pointerId: number; queueId: string; startY: number; order: string[]; cleanup: () => void };
+type WebAuthMode = "pin" | "passkey";
+type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
+
+function webAuthModeFromDocument(): WebAuthMode {
+  return document.querySelector<HTMLMetaElement>('meta[name="ariel-auth-mode"]')?.content === "passkey" ? "passkey" : "pin";
+}
 
 function readingKey(deviceId: string, threadId: string): string { return `${deviceId}\u0000${threadId}`; }
 
@@ -133,6 +140,10 @@ function PairIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="M9 9h6v6H9z"/></svg>;
 }
 
+function PasskeyIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="12" r="4"/><path d="M12 12h8M17 12v3M20 12v2"/></svg>;
+}
+
 function DisconnectIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 3v9"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>;
 }
@@ -193,8 +204,13 @@ function PairingDialog({ invite, seconds, onClose, onRegenerate }: { invite: Pai
 export function App({ initialPairingCredential }: { initialPairingCredential?: string } = {}) {
   const client = useMemo(() => new ArielSocket(wsURL), []);
   const webSession = useMemo(() => new WebSession(() => window.sessionStorage), []);
+  const [webAuthMode] = useState<WebAuthMode>(webAuthModeFromDocument);
+  const [passkeyAuth, setPasskeyAuth] = useState<PasskeyAuthState>({ loaded: false, enrollmentRequired: false, error: "" });
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [setupToken, setSetupToken] = useState("");
   const [phonePairing, setPhonePairing] = useState<PhonePairing | null>(() => {
     const credential = initialPairingCredential ?? takePairingCredential(window.location, window.history);
+    if (webAuthModeFromDocument() !== "pin") return null;
     return credential ? { credential, phase: "confirm" } : null;
   });
   const pairingAttempt = useRef(false);
@@ -416,6 +432,50 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function disconnect() {
     closePairingInvite();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
+    if (webAuthMode === "passkey") {
+      setPasskeyAuth(current => ({ ...current, loaded: true, error: "" }));
+      setPasskeyBusy(true);
+      void logoutPasskey()
+        .catch(error => setPasskeyAuth(current => ({ ...current, error: error instanceof Error ? error.message : "退出失败，请重试。" })))
+        .finally(() => setPasskeyBusy(false));
+    }
+  }
+
+  async function authenticateWithPasskey() {
+    if (passkeyBusy) return;
+    setPasskeyBusy(true);
+    setPasskeyAuth(current => ({ ...current, error: "" }));
+    try {
+      if (passkeyAuth.enrollmentRequired) await registerPasskey(setupToken);
+      else await loginWithPasskey();
+      setSetupToken("");
+      setPasskeyAuth({ loaded: true, enrollmentRequired: false, error: "" });
+      client.connect("cookie");
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "NotAllowedError"
+        ? "Passkey 操作已取消；你可以重新尝试。"
+        : error instanceof Error ? error.message : "Passkey 操作失败，请重试。";
+      setPasskeyAuth(current => ({ ...current, error: message }));
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  async function addPasskey() {
+    if (passkeyBusy || webAuthMode !== "passkey") return;
+    setPasskeyBusy(true);
+    setNotice("");
+    try {
+      await registerPasskey("");
+      setNotice("新的 Passkey 已添加。建议保留至少一个可用的备用凭据。");
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "NotAllowedError"
+        ? "Passkey 操作已取消；你可以重新尝试。"
+        : error instanceof Error ? error.message : "Passkey 操作失败，请重试。";
+      setNotice(message);
+    } finally {
+      setPasskeyBusy(false);
+    }
   }
 
   function cancelPairingCredential(credential: string) {
@@ -637,20 +697,24 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     client.onStatus = next => {
       setStatus(next);
       if (next === "invalid") {
-        webSession.rejected();
-        if (pairingAttempt.current) {
-          setPhonePairing(current => current ? { credential: "", phase: "error" } : current);
-        } else if (savedSessionAttempt.current) setSessionExpired(true);
+        if (webAuthMode === "passkey") {
+          setPasskeyAuth(current => ({ ...current, loaded: true, error: "登录会话已失效，请重新使用 Passkey。" }));
+        } else {
+          webSession.rejected();
+          if (pairingAttempt.current) {
+            setPhonePairing(current => current ? { credential: "", phase: "error" } : current);
+          } else if (savedSessionAttempt.current) setSessionExpired(true);
+        }
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
       if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
-      if (sessionToken) webSession.accepted(sessionToken);
+      if (webAuthMode === "pin" && sessionToken) webSession.accepted(sessionToken);
       if (pairingAttempt.current) setPhonePairing(null);
       pairingAttempt.current = false;
-      savedSessionAttempt.current = Boolean(sessionToken);
+      savedSessionAttempt.current = webAuthMode === "pin" && Boolean(sessionToken);
       setSessionExpired(false);
       expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory();
       void refreshDevices().then(online => void resumeSelected(online));
@@ -705,12 +769,26 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
       }
     };
-    if (!phonePairing) {
+    if (webAuthMode === "pin" && !phonePairing) {
       const saved = webSession.saved();
       if (saved) { savedSessionAttempt.current = true; client.connect(saved); }
     }
     return () => client.disconnect();
-  }, [client]);
+  }, [client, webAuthMode]);
+
+  useEffect(() => {
+    if (webAuthMode !== "passkey") return;
+    let active = true;
+    void loadAuthStatus().then(auth => {
+      if (!active) return;
+      if (auth.mode !== "passkey") throw new Error("Relay 返回了不一致的认证模式。");
+      setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: "" });
+      if (auth.authenticated) client.connect("cookie");
+    }).catch(error => {
+      if (active) setPasskeyAuth({ loaded: true, enrollmentRequired: false, error: error instanceof Error ? error.message : "无法读取认证状态。" });
+    });
+    return () => { active = false; };
+  }, [client, webAuthMode]);
 
   useEffect(() => {
     if (pairingInvite?.status !== "waiting") { setPairingSeconds(0); return; }
@@ -1169,6 +1247,16 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (response.outcome !== "accepted") setNotice(errorText(response));
   }
 
+  const accessHero = <div><div className="connect-hero"><ArielLogo size="clamp(128px, 12vw, 160px)" variant="color" decorative priority className="connect-logo" /><div className="connect-hero-copy"><span className="eyebrow">PRIVATE ACCESS</span><h1>Agent 联络中继器</h1></div></div><p>{webAuthMode === "passkey" ? "使用此设备上的 Passkey 安全登录。会话凭据仅保存在受保护的浏览器 Cookie 中。" : "输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。"}</p></div>;
+  const accessPanel = webAuthMode === "passkey" ? <section className="connect-panel" aria-label="Passkey 登录">{accessHero}
+    {!passkeyAuth.loaded ? <div className="auth-loading" role="status">正在检查登录状态…</div> : <form onSubmit={event => { event.preventDefault(); void authenticateWithPasskey(); }}>
+      {passkeyAuth.enrollmentRequired && <><label htmlFor="setup-token">首次设置密钥</label><input id="setup-token" type="password" value={setupToken} onChange={event => setSetupToken(event.target.value)} minLength={32} autoComplete="off" placeholder="输入部署时配置的 setup token" required /></>}
+      <button className="primary passkey-action" type="submit" disabled={passkeyBusy || status === "connecting" || (passkeyAuth.enrollmentRequired && setupToken.length < 32)}>{passkeyBusy || status === "connecting" ? "正在处理…" : passkeyAuth.enrollmentRequired ? "创建 Passkey" : "使用 Passkey 登录"}</button>
+      {passkeyAuth.error && <p role="alert" className="connect-error">{passkeyAuth.error}</p>}
+      <small>{passkeyAuth.enrollmentRequired ? "首次登记成功后，请从云端部署 Secret 中移除 setup token。" : "Passkey 会校验当前 HTTPS 域名，不使用共享密码。"}</small>
+    </form>}
+  </section> : phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay">{accessHero}<form onSubmit={event => { event.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>;
+
   return <div className={`app-shell ${status === "ready" ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
@@ -1191,11 +1279,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <div className="thread-create-actions"><button className="secondary" type="button" onClick={closeNewThreadDialog} disabled={creatingThread}>取消</button><button className="primary" type="button" aria-label="创建会话" onClick={() => void createThread()} disabled={creatingThread || !newThreadCwd.trim()}>{creatingThread ? "正在创建…" : "创建"}</button></div>
       </section>
     </div>}
-    {status !== "ready" && (phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay"><div><div className="connect-hero"><ArielLogo size="clamp(128px, 12vw, 160px)" variant="color" decorative priority className="connect-logo" /><div className="connect-hero-copy"><span className="eyebrow">PRIVATE ACCESS</span><h1>Agent 联络中继器</h1></div></div><p>输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。</p></div><form onSubmit={e => { e.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={e => setToken(e.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>)}
+    {status !== "ready" && accessPanel}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
-        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <button className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></button>}<button className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></button><button className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></button><button className="sidebar-disconnect icon-button icon-control" aria-label="断开" data-tooltip="断开" onClick={disconnect}><DisconnectIcon /></button><button className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></button></div></div>
+        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <button className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></button>}{webAuthMode === "pin" ? <button className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></button> : <button className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></button>}<button className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></button><button className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></button><button className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></button></div></div>
         <div className="sidebar-device-row"><span className={`status-dot ${device?.agentOnline ? "online" : ""}`} aria-hidden="true" /><select id="device" aria-label="设备" aria-describedby="sidebar-device-status" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select><span id="sidebar-device-status" className="sr-only">{device ? `${device.deviceName}，${device.agentOnline ? "Agent 在线" : "Agent 离线"}，${device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}` : "未选择设备"}</span></div>
         <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></button>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>

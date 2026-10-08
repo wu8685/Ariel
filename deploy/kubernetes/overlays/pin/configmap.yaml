@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ariel-relay-config
+data:
+  ARIEL_WEB_AUTH: pin
+  ARIEL_ORIGINS: http://ariel.lan

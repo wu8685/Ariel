@@ -120,7 +120,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--color-text);
   padding: 13px;
 }
-.connect-row input::placeholder { color: var(--color-subtle); }
+.connect-row input::placeholder, .connect-panel form > input::placeholder { color: var(--color-subtle); }
+.connect-panel form > input {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-page);
+  color: var(--color-text);
+  padding: 13px;
+}
+.connect-panel .passkey-action { width: 100%; margin-top: 16px; }
+.connect-panel .auth-loading { max-width: 460px; padding: 34px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-muted); }
 .connect-panel small { display: block; color: var(--color-muted); line-height: 1.6; margin-top: 18px; }
 .connect-panel .connect-error { color: var(--color-warning); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
 .primary {

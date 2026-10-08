@@ -21,6 +21,8 @@ import (
 type Config struct {
 	Token               string
 	WebPIN              string
+	WebAuthMode         string
+	WebSessionVerifier  func(*http.Request) bool
 	AllowedOrigins      []string
 	HelloTimeout        time.Duration
 	MaxFrameBytes       int64
@@ -30,6 +32,11 @@ type Config struct {
 	HeartbeatInterval   time.Duration
 	HeartbeatTimeout    time.Duration
 }
+
+const (
+	WebAuthPIN     = "pin"
+	WebAuthPasskey = "passkey"
+)
 
 const maxWebSubscriptions = 32
 const maxWebSessions = 32
@@ -95,11 +102,26 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Token == "" || len(cfg.AllowedOrigins) == 0 {
 		return nil, errors.New("relay requires token and web origin allowlist")
 	}
-	if !ValidWebPIN(cfg.WebPIN) {
-		return nil, errors.New("ARIEL_WEB_PIN must be exactly 6 ASCII digits")
+	if cfg.WebAuthMode == "" {
+		cfg.WebAuthMode = WebAuthPIN
 	}
-	if cfg.Token == cfg.WebPIN {
-		return nil, errors.New("Agent token and Web PIN must differ")
+	switch cfg.WebAuthMode {
+	case WebAuthPIN:
+		if !ValidWebPIN(cfg.WebPIN) {
+			return nil, errors.New("ARIEL_WEB_PIN must be exactly 6 ASCII digits")
+		}
+		if cfg.Token == cfg.WebPIN {
+			return nil, errors.New("Agent token and Web PIN must differ")
+		}
+	case WebAuthPasskey:
+		if cfg.WebPIN != "" {
+			return nil, errors.New("ARIEL_WEB_PIN is forbidden in passkey mode")
+		}
+		if cfg.WebSessionVerifier == nil {
+			return nil, errors.New("passkey mode requires a Web session verifier")
+		}
+	default:
+		return nil, errors.New("unknown Web authentication mode")
 	}
 	origins := make(map[string]struct{}, len(cfg.AllowedOrigins))
 	for _, origin := range cfg.AllowedOrigins {
@@ -198,12 +220,15 @@ func (s *Server) issueWebSessionLocked() (string, bool) {
 	return sessionToken, true
 }
 
-func (s *Server) authorize(role, token string) (string, *peer, bool) {
+func (s *Server) authorize(role, token string, passkeySession bool) (string, *peer, bool) {
 	if role == "agent" {
 		return "", nil, subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
 	}
 	if role != "web" {
 		return "", nil, false
+	}
+	if s.cfg.WebAuthMode == WebAuthPasskey {
+		return "", nil, passkeySession
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,6 +289,10 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	passkeySession := false
+	if s.cfg.WebAuthMode == WebAuthPasskey {
+		passkeySession = s.cfg.WebSessionVerifier(r)
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
@@ -293,7 +322,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
-	sessionToken, pairingCreator, authorized := s.authorize(hello.Role, hello.Token)
+	sessionToken, pairingCreator, authorized := s.authorize(hello.Role, hello.Token, passkeySession)
 	if !authorized {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
@@ -313,7 +342,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	defer s.removePeer(p)
 	ack := map[string]any{"type": "hello.ok", "v": 1, "connectionId": p.id, "relayEpoch": s.epoch}
-	if p.role == "web" {
+	if p.role == "web" && sessionToken != "" {
 		ack["sessionToken"] = sessionToken
 	}
 	if err := p.send(ctx, ack); err != nil {
@@ -529,6 +558,10 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		return false
 	}
 	if msg.Method == "auth.pair.create" || msg.Method == "auth.pair.cancel" {
+		if s.cfg.WebAuthMode != WebAuthPIN {
+			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "UNSUPPORTED", "pairing is available only in PIN mode"))
+			return true
+		}
 		if msg.DeviceID != "relay" {
 			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "INVALID_ARGUMENT", "pairing requests target relay"))
 			return true

@@ -75,6 +75,9 @@
 | 0056 | [超高分辨率会话图片按需生成安全预览](0056-large-conversation-image-preview.md) | Implemented（真实大图／自动／移动 Chromium／截图已验） | 保留来源像素硬上限，在 Desktop Agent 端把可接受的大图缩成移动端安全预览，并显示明确失败原因 |
 | 0057 | [手动滚到最新时可靠恢复会话界面](0057-manual-scroll-restores-conversation-chrome.md) | Implemented（自动／移动 Chromium／截图已验） | 记住连续滚动方向并识别触摸／滚轮意图，修复到底后仍不恢复 Header 与输入区的问题 |
 | 0058 | [纯图标“回到最新”控件](0058-icon-only-return-to-latest-control.md) | Implemented（自动／移动 Chromium／截图已验） | 用标准向下箭头替换右下角可见文字，保留无障碍名称与原有恢复行为 |
+| 0059 | [无数据库的单用户 PIN / Passkey 双认证](0059-native-single-user-passkey-auth.md) | Implemented（自动／race／真实 Chromium virtual authenticator／Docker 双模式 smoke 已验） | 局域网保留 6 位 PIN；公网模式使用原生 Passkey、加密 HttpOnly Cookie 与文件化公钥凭据，不依赖 OIDC 或数据库 |
+| 0060 | [Kubernetes 快速交付 Relay + Web](0060-kubernetes-relay-delivery.md) | Implemented（契约／双 overlay 渲染／client dry-run／受限容器 smoke 已验） | 用安全 base 和 PIN／Passkey overlays 固化 Secret、Ingress、探针与 Passkey 持久化，支持标准 `kubectl apply -k` 交付 |
+| 0061 | [ECS 单机一键部署 Relay + Web](0061-ecs-single-node-one-command.md) | Implemented（契约／双模式真实 Docker／HTTPS 反代／全量回归已验） | 用一个脚本在单台 Linux ECS 上安全生成凭据并拉起 PIN 或 Caddy + Passkey 拓扑 |
 
 ## 设计基线
 

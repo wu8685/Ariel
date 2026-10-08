@@ -1,5 +1,7 @@
 # 用 Docker 部署 Relay + Web
 
+部署到单台 Linux ECS 时，优先使用[ECS 单机一键部署指南](ecs-single-node-deployment.md)；需要集群化交付时，使用[Kubernetes 部署指南](kubernetes-deployment.md)及仓库中的 Kustomize overlays。
+
 Ariel 的镜像只包含 **Relay + Web**。Desktop Agent 仍要运行在能访问目标 Agent App 的桌面宿主机上，再主动连接容器里的 Relay；当前 Codex Adapter 依赖 macOS 本机能力，不能放进 Linux 容器。
 
 ## 适用拓扑
@@ -24,7 +26,7 @@ docker build -t ariel-relay:local .
 
 镜像构建分为 Web、Relay 和最小 runtime 三个 stage。最终镜像不包含 Node.js、Go toolchain、Desktop Agent、Codex Adapter、本机 `.local` 数据或开发依赖。
 
-## 启动 Relay
+## 在可信局域网启动 Relay（PIN）
 
 先在当前 shell 生成 Agent 长口令，并由你输入一个六位 Web 连接码。浏览器 Origin 必须和实际访问地址完全一致；如果需要接受多个入口，用英文逗号分隔。
 
@@ -43,7 +45,7 @@ docker run -d \
   ariel-relay:local
 ```
 
-`ARIEL_TOKEN`、`ARIEL_WEB_PIN` 和 `ARIEL_ORIGINS` 是必填项。镜像内已把 `ARIEL_LISTEN` 默认设为 `0.0.0.0:8080`，把 `ARIEL_WEB_DIST` 设为 production Web 目录；需要时仍可用 `-e` 覆盖。
+`ARIEL_TOKEN`、`ARIEL_WEB_PIN` 和 `ARIEL_ORIGINS` 是 PIN 模式必填项。`ARIEL_WEB_AUTH` 未配置时默认使用 `pin`，兼容既有部署。镜像内已把 `ARIEL_LISTEN` 默认设为 `0.0.0.0:8080`，把 `ARIEL_WEB_DIST` 设为 production Web 目录；需要时仍可用 `-e` 覆盖。
 
 不要把真实 token 或连接码写入 Dockerfile、镜像 build args、仓库文件或命令示例。上述 `-e NAME` 形式从当前 shell 传值，不会把值直接写入 shell history；但具有 Docker daemon 管理权限的同机用户仍可能检查容器环境变量。
 
@@ -83,7 +85,7 @@ docker rm ariel-relay
 
 ## 网络与安全边界
 
-- 只在单用户、可信局域网内直接发布 8080 端口，**不要直接暴露到公网**。
-- 跨越不可信网络时，在 Relay 前使用支持 WebSocket 的 TLS 反向代理，并把 `ARIEL_ORIGINS` 设置为浏览器实际使用的精确 `https://` Origin。
+- PIN 模式只在单用户、可信局域网内直接发布 8080 端口，**不要把 PIN 模式直接暴露到公网**。
+- 公网部署在 Relay 前使用支持 WebSocket 的 TLS 反向代理，并按[公网 Passkey 部署指南](public-passkey-deployment.md)切换到 `ARIEL_WEB_AUTH=passkey`。
 - 不要把 `ARIEL_ORIGINS=*` 当作简化配置；Relay 要求明确白名单。
 - 容器只解决 Relay + Web 的交付，不改变当前 Adapter 的平台与版本兼容范围。

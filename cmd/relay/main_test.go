@@ -23,7 +23,7 @@ func TestConfigurationRequiresTokenOriginAndBuiltWeb(t *testing.T) {
 
 func TestHandlerServesWebWithoutExposingToken(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>Ariel</html>"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<html><meta name="ariel-auth-mode" content="__ARIEL_WEB_AUTH__">Ariel</html>`), 0644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := configFrom("secret", "012345", "http://localhost:8080", dir, "127.0.0.1:8080")
@@ -36,7 +36,7 @@ func TestHandlerServesWebWithoutExposingToken(t *testing.T) {
 	}
 	r := httptest.NewRecorder()
 	handler.ServeHTTP(r, httptest.NewRequest("GET", "/", nil))
-	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "Ariel") || strings.Contains(r.Body.String(), "secret") {
+	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "Ariel") || !strings.Contains(r.Body.String(), `content="pin"`) || strings.Contains(r.Body.String(), "__ARIEL_WEB_AUTH__") || strings.Contains(r.Body.String(), "secret") {
 		t.Fatalf("response: %d %s", r.Code, r.Body.String())
 	}
 }
@@ -79,5 +79,41 @@ func TestConfigurationRequiresSixASCIIDigitWebPIN(t *testing.T) {
 	}
 	if _, err := configFrom("012345", "012345", "http://localhost:8080", dir, "127.0.0.1:8080"); err == nil {
 		t.Fatal("Agent token and Web PIN may not be identical")
+	}
+}
+
+func TestPasskeyConfigurationIsMutuallyExclusiveAndComplete(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	valid := configInput{
+		token: "agent-secret", webAuth: "passkey", origins: "https://ariel.example.com", dist: dir, listen: "127.0.0.1:8080",
+		publicOrigin: "https://ariel.example.com", rpID: "ariel.example.com", credentialsFile: filepath.Join(t.TempDir(), "auth.json"),
+		sessionKey: strings.Repeat("00", 32), setupToken: strings.Repeat("s", 32),
+	}
+	cfg, err := configFromInput(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.webAuth != "passkey" || len(cfg.sessionKey) != 32 {
+		t.Fatalf("passkey config = %+v", cfg)
+	}
+
+	for name, mutate := range map[string]func(*configInput){
+		"pin-fallback": func(in *configInput) { in.webPIN = "012345" },
+		"http-origin":  func(in *configInput) { in.publicOrigin = "http://ariel.example.com" },
+		"origin-list":  func(in *configInput) { in.origins = "https://other.example.com" },
+		"rp-id":        func(in *configInput) { in.rpID = "evil.example" },
+		"key":          func(in *configInput) { in.sessionKey = "abcd" },
+		"setup":        func(in *configInput) { in.setupToken = "short" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := valid
+			mutate(&input)
+			if _, err := configFromInput(input); err == nil {
+				t.Fatal("invalid passkey configuration accepted")
+			}
+		})
 	}
 }
