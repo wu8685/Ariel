@@ -6,6 +6,10 @@
 
 <p align="center">在浏览器中完成与桌面端 Agent App 的远程会话。</p>
 
+## 20 秒了解 Ariel
+
+https://github.com/user-attachments/assets/0f0abfb1-7ee0-4bbe-a6ee-a5a9d36728ee
+
 ## Ariel 是什么
 
 Ariel 是一个面向桌面端 Agent App 的浏览器远程会话中继器。离开桌面端后，你仍可以在手机或其他浏览器中查看原会话的历史与实时输出、继续发送消息、停止任务、处理审批与补充问题，也可以管理排队输入或在指定项目中新建会话。
