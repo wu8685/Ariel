@@ -277,6 +277,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const lastTranscriptScrollTop = useRef(0);
   const historyReturnIntent = useRef(false);
   const transcriptTouchY = useRef<number | null>(null);
+  const keyboardViewportActive = useRef(false);
   const latestChromeRestoreDeadline = useRef(0);
   const latestChromeRestoreTimer = useRef<number | null>(null);
   const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
@@ -363,6 +364,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container) return;
+    if (keyboardViewportActive.current && document.activeElement === composerInputRef.current && followLatestRef.current && transcriptTouchY.current === null) {
+      scrollToLatest(container);
+      lastTranscriptScrollTop.current = container.scrollTop;
+      setShowReturnToLatest(false);
+      return;
+    }
     if (latestChromeRestoreDeadline.current) {
       const userScrolledUp = !historyReturnIntent.current && container.scrollTop < lastTranscriptScrollTop.current - 1;
       if (!userScrolledUp) {
@@ -939,9 +946,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const sync = () => {
       const visibleBottom = viewport.offsetTop + viewport.height;
       const keyboardVisible = window.innerWidth <= 800 && document.activeElement === input && visibleBottom < window.innerHeight - 80;
+      keyboardViewportActive.current = keyboardVisible;
       setVisualViewportHeight(keyboardVisible ? Math.round(visibleBottom) : null);
     };
-    const onBlur = () => setVisualViewportHeight(null);
+    const onBlur = () => {
+      keyboardViewportActive.current = false;
+      setVisualViewportHeight(null);
+    };
     viewport.addEventListener("resize", sync);
     viewport.addEventListener("scroll", sync);
     window.addEventListener("resize", sync);

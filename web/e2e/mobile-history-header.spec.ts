@@ -22,8 +22,16 @@ const fixtureThread: Thread = {
   pendingInteractions: [],
 };
 
-async function openHistoryFixture(page: Page) {
+async function openHistoryFixture(page: Page, thread: Thread = fixtureThread, fakeVisualViewport = false) {
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
+  if (fakeVisualViewport) await page.addInitScript(() => {
+    const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+    (window as unknown as { __resizeArielViewport: (height: number) => void }).__resizeArielViewport = height => {
+      viewport.height = height;
+      viewport.dispatchEvent(new Event("resize"));
+    };
+  });
   await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
     const message = JSON.parse(String(raw));
     if (message.type === "hello") {
@@ -33,18 +41,47 @@ async function openHistoryFixture(page: Page) {
     if (message.type !== "request") return;
     let data: Record<string, unknown> = {};
     if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "历史测试 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }] };
-    if (message.method === "thread.list") data = { threads: [fixtureThread], nextCursor: "" };
+    if (message.method === "thread.list") data = { threads: [thread], nextCursor: "" };
     if (message.method === "thread.subscribe") data = { subscriptionId: "sub" };
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
-    if (message.method === "thread.subscribe") socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: fixtureThread.threadId, subscriptionId: "sub", streamId: "stream", seq: 1, thread: fixtureThread }));
+    if (message.method === "thread.subscribe") socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub", streamId: "stream", seq: 1, thread }));
   }));
 
   await page.goto("/");
   await page.getByRole("button", { name: "展开项目 history-fixture，/tmp/history-fixture" }).click();
-  await page.getByText(fixtureThread.title).click();
-  await expect(page.getByRole("heading", { name: fixtureThread.title })).toBeVisible();
+  await page.getByText(thread.title).click();
+  await expect(page.getByRole("heading", { name: thread.title })).toBeVisible();
   await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
 }
+
+test("the running composer stays visible when the mobile keyboard shrinks the viewport", async ({ page }) => {
+  const running: Thread = {
+    ...fixtureThread,
+    runtime: "inProgress",
+    turns: fixtureThread.turns.map((turn, index) => index === fixtureThread.turns.length - 1 ? { ...turn, status: "inProgress" } : turn),
+  };
+  await openHistoryFixture(page, running, true);
+  const input = page.getByRole("textbox", { name: "发送消息" });
+  const composerWrap = page.locator(".composer-wrap");
+
+  await input.focus();
+  await input.fill("处理中也要保留的草稿");
+  await page.evaluate(() => {
+    (window as unknown as { __resizeArielViewport: (height: number) => void }).__resizeArielViewport(500);
+    document.querySelector(".transcript")?.dispatchEvent(new Event("scroll"));
+  });
+
+  await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
+  await expect(input).toBeVisible();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("处理中也要保留的草稿");
+  const geometry = await page.evaluate(() => ({
+    shellHeight: document.querySelector(".app-shell")?.getBoundingClientRect().height || 0,
+    composerBottom: document.querySelector(".composer-wrap")?.getBoundingClientRect().bottom || 0,
+  }));
+  expect(geometry.shellHeight).toBe(500);
+  expect(geometry.composerBottom).toBeLessThanOrEqual(500);
+});
 
 test("scrolling into history fully collapses the chrome and gives its height to the transcript", async ({ page }) => {
   await openHistoryFixture(page);

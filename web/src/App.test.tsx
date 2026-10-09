@@ -1087,6 +1087,45 @@ describe("Ariel app interactions", () => {
       else delete (window as unknown as Record<string, unknown>).visualViewport;
     }
   });
+
+  it("keeps a focused running composer visible when the mobile keyboard resizes the transcript", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    const originalHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    const originalViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 844 });
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+      const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "partial" }] }] };
+      await openFixture(running);
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      const transcript = document.querySelector(".transcript") as HTMLElement;
+      const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
+      let transcriptHeight = 600;
+      Object.defineProperty(transcript, "clientHeight", { configurable: true, get: () => transcriptHeight });
+      Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+      transcript.scrollTop = 400;
+
+      input.focus();
+      fireEvent.change(input, { target: { value: "处理中也要保留的草稿" } });
+      viewport.height = 500;
+      transcriptHeight = 500;
+      act(() => viewport.dispatchEvent(new Event("resize")));
+      fireEvent.scroll(transcript);
+
+      expect(input.value).toBe("处理中也要保留的草稿");
+      expect(document.activeElement).toBe(input);
+      expect(composerWrap.dataset.historyCollapsed).toBe("false");
+      expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+      if (originalHeight) Object.defineProperty(window, "innerHeight", originalHeight);
+      if (originalViewport) Object.defineProperty(window, "visualViewport", originalViewport);
+      else delete (window as unknown as Record<string, unknown>).visualViewport;
+    }
+  });
+
   it("dismisses the mobile sidebar on backdrop or Escape, but not inside the sidebar", () => {
     render(<App />);
     const sidebar = screen.getByLabelText("会话列表");
