@@ -118,6 +118,7 @@ export interface DeviceStatus {
   v: 1;
   event: "device.status";
   deviceId: Id;
+  agentEpoch?: Id;
   agentOnline: boolean;
   codexReady: boolean;
   capabilities?: Capabilities;

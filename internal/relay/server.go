@@ -50,6 +50,7 @@ type Server struct {
 	now            func() time.Time
 	origins        map[string]struct{}
 	mu             sync.Mutex
+	deviceStatusMu sync.Mutex
 	webPINFailures int
 	webSessions    map[[32]byte]time.Time
 	sessionOrder   [][32]byte
@@ -352,7 +353,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		_ = pairingCreator.send(ctx, map[string]any{"type": "event", "v": 1, "event": "auth.pair.consumed"})
 	}
 	if p.role == "agent" {
-		s.broadcastDevice(p, true)
+		s.broadcastDevice(p.deviceID, p)
 	}
 	go s.heartbeat(ctx, p)
 	for {
@@ -460,7 +461,7 @@ func (s *Server) removePeer(p *peer) {
 		pending.web.send(context.Background(), responseError(pending.webID, "unknown", "OUTCOME_UNKNOWN", "agent disconnected after forwarding"))
 	}
 	if p.role == "agent" {
-		s.broadcastDevice(p, false)
+		s.broadcastDevice(p.deviceID, p)
 	}
 }
 
@@ -520,14 +521,30 @@ func sendUnsubscribe(ctx context.Context, agent *peer, subscriptionID string) er
 	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": newRequestID(), "deviceId": agent.deviceID, "method": "thread.unsubscribe", "params": map[string]string{"subscriptionId": subscriptionID}})
 }
 
-func (s *Server) broadcastDevice(agent *peer, online bool) {
+func (s *Server) currentDeviceStatus(deviceID string, departed *peer) map[string]any {
+	s.mu.Lock()
+	current := s.agents[deviceID]
+	s.mu.Unlock()
+	if current != nil {
+		return map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": deviceID, "agentEpoch": current.agentEpoch, "agentOnline": true, "codexReady": current.capabilities["codexReady"], "capabilities": current.capabilities}
+	}
+	status := map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": deviceID, "agentOnline": false, "codexReady": false}
+	if departed != nil && departed.agentEpoch != "" {
+		status["agentEpoch"] = departed.agentEpoch
+	}
+	return status
+}
+
+func (s *Server) broadcastDevice(deviceID string, departed *peer) {
+	s.deviceStatusMu.Lock()
+	defer s.deviceStatusMu.Unlock()
 	s.mu.Lock()
 	webs := make([]*peer, 0, len(s.webs))
 	for p := range s.webs {
 		webs = append(webs, p)
 	}
 	s.mu.Unlock()
-	status := map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": agent.deviceID, "agentOnline": online, "codexReady": online && agent.capabilities["codexReady"], "capabilities": agent.capabilities}
+	status := s.currentDeviceStatus(deviceID, departed)
 	for _, p := range webs {
 		p.send(context.Background(), status)
 	}

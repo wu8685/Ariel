@@ -271,6 +271,7 @@
       "properties": {
         "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "device.status" },
         "deviceId": { "$ref": "#/$defs/id" },
+        "agentEpoch": { "$ref": "#/$defs/id" },
         "agentOnline": { "type": "boolean" }, "codexReady": { "type": "boolean" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }

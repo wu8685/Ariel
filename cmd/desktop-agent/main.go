@@ -18,6 +18,22 @@ import (
 
 type config struct{ url, token, deviceID, deviceName, appPath, socket string }
 
+type reconnectBackoff struct{ next time.Duration }
+
+func newReconnectBackoff() *reconnectBackoff {
+	return &reconnectBackoff{next: time.Second}
+}
+
+func (b *reconnectBackoff) connected() {
+	b.next = time.Second
+}
+
+func (b *reconnectBackoff) nextDelay(random float64) time.Duration {
+	current := b.next
+	b.next = min(b.next*2, 15*time.Second)
+	return time.Duration(float64(current) * (0.8 + random*0.4))
+}
+
 func configFrom(relayURL, token, deviceID, deviceName, appPath, socket string) (config, error) {
 	if relayURL == "" || token == "" || deviceID == "" || deviceName == "" || appPath == "" || socket == "" {
 		return config{}, errors.New("Relay URL, token, device ID/name, app path and IPC socket are required")
@@ -63,7 +79,7 @@ func main() {
 	if profileStatus == probe.IPCProfileUnverified {
 		log.Printf("compatibility warning: Desktop %s / Codex %s is above the minimum profile and has not been verified version-by-version; incompatible IPC operations will fail", desktopVersion, cliVersion)
 	}
-	backoff := time.Second
+	backoff := newReconnectBackoff()
 	readyFile := os.Getenv("ARIEL_READY_FILE")
 	if readyFile != "" {
 		_ = os.Remove(readyFile)
@@ -81,12 +97,19 @@ func main() {
 	}
 	defer clearReady()
 	for ctx.Err() == nil {
-		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, OnReady: markReady, OnNotReady: clearReady})
+		onReady := func() error {
+			if err := markReady(); err != nil {
+				return err
+			}
+			backoff.connected()
+			return nil
+		}
+		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, OnReady: onReady, OnNotReady: clearReady})
 		if ctx.Err() != nil {
 			break
 		}
 		log.Printf("Desktop Agent disconnected: %v; reconnecting", err)
-		wait := time.Duration(float64(backoff) * (0.8 + rand.Float64()*0.4))
+		wait := backoff.nextDelay(rand.Float64())
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -94,6 +117,5 @@ func main() {
 			return
 		case <-timer.C:
 		}
-		backoff = min(backoff*2, 15*time.Second)
 	}
 }

@@ -79,6 +79,7 @@
 | 0060 | [Kubernetes 快速交付 Relay + Web](0060-kubernetes-relay-delivery.md) | Implemented（契约／双 overlay 渲染／client dry-run／受限容器 smoke 已验） | 用安全 base 和 PIN／Passkey overlays 固化 Secret、Ingress、探针与 Passkey 持久化，支持标准 `kubectl apply -k` 交付 |
 | 0061 | [ECS 单机一键部署 Relay + Web](0061-ecs-single-node-one-command.md) | Implemented（契约／双模式真实 Docker／HTTPS 反代／全量回归已验） | 用一个脚本在单台 Linux ECS 上安全生成凭据并拉起 PIN 或 Caddy + Passkey 拓扑 |
 | 0062 | [Web 端有界会话历史缓存](0062-bounded-web-history-cache.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 在同一页面与 Agent epoch 内复用已下载旧页，减少会话往返时的重复下载 |
+| 0063 | [Agent 重连状态 fencing 与会话恢复](0063-agent-reconnect-state-fencing.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 防止旧 epoch offline／stream 事件污染新连接，并保证短暂断线后最终恢复当前会话 |
 
 ## 设计基线
 

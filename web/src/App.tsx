@@ -279,9 +279,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const deviceListGeneration = useRef(0);
   const threadListGeneration = useRef(0);
   const threadCreateGeneration = useRef(0);
-  const resuming = useRef(false);
   const offlineDevice = useRef("");
   const offlineDeviceTimer = useRef<number | null>(null);
+  const observedAgentEpochs = useRef(new Map<string, string>());
+  const recoveryGeneration = useRef(0);
+  const recoveryRunning = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const lastTranscriptScrollTop = useRef(0);
@@ -418,6 +420,18 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     replaceItemOverrides({});
     restoredHistoryCache.current = null;
     return true;
+  }
+
+  function invalidateOwnerView(targetDevice: string, message: string) {
+    if (selection.current.deviceId !== targetDevice) return;
+    rememberReadingPosition();
+    pendingSelect.current++;
+    expectedSubscription.current = "";
+    selection.current.view = null;
+    setView(null);
+    setReadOnlyHistory(false);
+    resetHistory();
+    setNotice(message);
   }
 
   function rememberReadingPosition() {
@@ -645,9 +659,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     }
     for (const candidate of found) {
       const previous = devicesRef.current.find(device => device.deviceId === candidate.deviceId);
+      if (candidate.agentEpoch) observedAgentEpochs.current.set(candidate.deviceId, candidate.agentEpoch);
       if (previous?.agentEpoch && previous.agentEpoch !== candidate.agentEpoch) {
         historyCache.current.clearDevice(candidate.deviceId);
         discardRestoredHistory(candidate.deviceId, selection.current.threadId);
+        if (offlineDevice.current !== candidate.deviceId) invalidateOwnerView(candidate.deviceId, "Desktop Agent 已重连，正在重新同步当前会话。");
       }
     }
     const next = keepOfflineDevice(found, devicesRef.current, selection.current.deviceId);
@@ -795,13 +811,22 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     expectedSubscription.current = subID;
   }
 
-  async function resumeSelected(online: Device[]) {
-    const current = selection.current;
-    const target = recoveryTarget(current.deviceId, current.threadId, online, blockedSelection.current);
-    if (!target || current.view || resuming.current) return;
-    resuming.current = true;
-    try { await selectThread(target.threadId, target.deviceId); }
-    finally { resuming.current = false; }
+  async function resumeSelected() {
+    recoveryGeneration.current++;
+    if (recoveryRunning.current) return;
+    recoveryRunning.current = true;
+    try {
+      for (;;) {
+        const generation = recoveryGeneration.current;
+        const current = selection.current;
+        const online = devicesRef.current.filter(candidate => candidate.agentOnline);
+        const target = recoveryTarget(current.deviceId, current.threadId, online, blockedSelection.current);
+        if (target && !current.view) await selectThread(target.threadId, target.deviceId);
+        if (generation === recoveryGeneration.current) return;
+      }
+    } finally {
+      recoveryRunning.current = false;
+    }
   }
 
   async function resync() {
@@ -828,17 +853,18 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); historyCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
       historyCache.current.clear();
+      observedAgentEpochs.current.clear();
       if (webAuthMode === "pin" && sessionToken) webSession.accepted(sessionToken);
       if (pairingAttempt.current) setPhonePairing(null);
       pairingAttempt.current = false;
       savedSessionAttempt.current = webAuthMode === "pin" && Boolean(sessionToken);
       setSessionExpired(false);
       expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory();
-      void refreshDevices().then(online => void resumeSelected(online));
+      void refreshDevices().then(() => void resumeSelected());
     };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
       if (event.type !== "event") return;
@@ -847,11 +873,20 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         return;
       }
       if (event.event === "device.status") {
+        const eventEpoch = event.agentEpoch;
+        const observedEpoch = observedAgentEpochs.current.get(event.deviceId);
+        if (event.agentOnline) {
+          if (eventEpoch) observedAgentEpochs.current.set(event.deviceId, eventEpoch);
+        } else {
+          if (eventEpoch && observedEpoch && eventEpoch !== observedEpoch) return;
+        }
         updateDevicePresence(event);
-        if (!event.agentOnline) historyCache.current.clearDevice(event.deviceId);
-        if (!event.agentOnline && event.deviceId === selection.current.deviceId) {
-          rememberReadingPosition();
-          beginAgentOfflineGrace(event.deviceId);
+        if (!event.agentOnline) {
+          historyCache.current.clearDevice(event.deviceId);
+          if (event.deviceId === selection.current.deviceId) {
+            rememberReadingPosition();
+            beginAgentOfflineGrace(event.deviceId);
+          }
         }
         void refreshDevices().then(online => {
           const recovered = online.some(candidate => candidate.deviceId === event.deviceId && candidate.agentOnline && candidate.codexReady);
@@ -860,7 +895,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
             expectedSubscription.current = "";
             selection.current.view = null;
           }
-          void resumeSelected(online);
+          void resumeSelected();
         });
         return;
       }

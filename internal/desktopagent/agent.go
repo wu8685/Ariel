@@ -128,6 +128,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	heartCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
+	heartbeatFailure := make(chan error, 1)
 	interval, timeout := cfg.HeartbeatInterval, cfg.HeartbeatTimeout
 	if interval <= 0 {
 		interval = 20 * time.Second
@@ -135,10 +136,20 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	go heartbeatRelay(heartCtx, conn, interval, timeout)
+	go func() {
+		if err := heartbeatRelay(heartCtx, conn, interval, timeout); err != nil {
+			heartbeatFailure <- err
+			conn.CloseNow()
+		}
+	}()
 	for {
 		_, body, err = conn.Read(ctx)
 		if err != nil {
+			select {
+			case heartbeatErr := <-heartbeatFailure:
+				return fmt.Errorf("Relay heartbeat failed: %w", heartbeatErr)
+			default:
+			}
 			return err
 		}
 		if err := protocol.Validate(body); err != nil {
@@ -167,20 +178,19 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 }
 
-func heartbeatRelay(ctx context.Context, conn *websocket.Conn, interval, timeout time.Duration) {
+func heartbeatRelay(ctx context.Context, conn *websocket.Conn, interval, timeout time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, timeout)
 			err := conn.Ping(pingCtx)
 			cancel()
 			if err != nil {
-				conn.CloseNow()
-				return
+				return err
 			}
 		}
 	}

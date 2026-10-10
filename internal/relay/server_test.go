@@ -160,11 +160,23 @@ func TestRelayHeartbeatRemovesUnresponsiveAgent(t *testing.T) {
 	a := dialTest(t, s.URL, "")
 	sendJSON(t, a, agentHello())
 	readJSON(t, a) // From here, no Reader processes the Agent's ping frame.
-	if got := readJSON(t, w); got["event"] != "device.status" || got["agentOnline"] != true {
+	if got := readJSON(t, w); got["event"] != "device.status" || got["agentOnline"] != true || got["agentEpoch"] != "epoch-a" {
 		t.Fatalf("missing online status: %v", got["event"])
 	}
-	if got := readJSON(t, w); got["event"] != "device.status" || got["agentOnline"] != false {
+	if got := readJSON(t, w); got["event"] != "device.status" || got["agentOnline"] != false || got["agentEpoch"] != "epoch-a" {
 		t.Fatalf("unresponsive Agent remained online: %v", got["event"])
+	}
+}
+
+func TestRelayStaleAgentCleanupReportsTheCurrentReplacement(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	old := &peer{deviceID: "mock-mac", agentEpoch: "epoch-old", capabilities: map[string]bool{"codexReady": false}}
+	replacement := &peer{deviceID: "mock-mac", agentEpoch: "epoch-new", capabilities: map[string]bool{"codexReady": true}}
+	r.agents[old.deviceID] = replacement
+
+	status := r.currentDeviceStatus(old.deviceID, old)
+	if status["agentOnline"] != true || status["codexReady"] != true || status["agentEpoch"] != "epoch-new" {
+		t.Fatalf("stale cleanup described the departed Agent instead of the replacement: %+v", status)
 	}
 }
 

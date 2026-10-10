@@ -168,6 +168,9 @@ func TestAgentHeartbeatDropsSilentRelay(t *testing.T) {
 	if err == nil || ctx.Err() != nil {
 		t.Fatalf("silent Relay did not cause bounded disconnect: %v", err)
 	}
+	if !strings.Contains(err.Error(), "heartbeat") {
+		t.Fatalf("heartbeat failure lost its cause: %v", err)
+	}
 	if !ready || !notReady {
 		t.Fatalf("handshake readiness lifecycle: ready=%v notReady=%v", ready, notReady)
 	}

@@ -1362,6 +1362,53 @@ describe("Ariel app interactions", () => {
     expect(requests("thread.subscribe")).toHaveLength(2);
   });
 
+  it("fences the old subscription immediately when the current Agent goes offline", async () => {
+    const { socket, requests } = await openFixture();
+    act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentEpoch: "agent-epoch", agentOnline: false, codexReady: false }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(2));
+
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: { ...fixtureThread, runtime: "inProgress" } }));
+    await act(async () => Promise.resolve());
+    expect(requests("thread.subscribe")).toHaveLength(1);
+    expect(screen.queryByText("事件顺序中断，正在重新同步会话…")).toBeNull();
+
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[1].requestId, outcome: "accepted", data: { devices: [] } }));
+    act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentEpoch: "agent-next", agentOnline: true, codexReady: true }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(3));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[2].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-next", capabilities: { autoLoad: true } },
+    ] } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-next" } }));
+    const recovered = { ...fixtureThread, title: "Recovered after reconnect" };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-next", streamId: "stream-next", seq: 1, thread: recovered }));
+    expect(await screen.findByRole("heading", { name: "Recovered after reconnect" })).toBeTruthy();
+  });
+
+  it("runs one follow-up recovery when a newer online epoch arrives during subscribe", async () => {
+    const { socket, requests } = await openFixture();
+    act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentEpoch: "agent-epoch", agentOnline: false, codexReady: false }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[1].requestId, outcome: "accepted", data: { devices: [] } }));
+
+    const comeOnline = async (epoch: string, expectedLists: number) => {
+      act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentEpoch: epoch, agentOnline: true, codexReady: true }));
+      await waitFor(() => expect(requests("device.list")).toHaveLength(expectedLists));
+      await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[expectedLists - 1].requestId, outcome: "accepted", data: { devices: [
+        { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: epoch, capabilities: { autoLoad: true } },
+      ] } }));
+    };
+
+    await comeOnline("agent-next", 3);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await comeOnline("agent-newest", 4);
+    expect(requests("thread.subscribe")).toHaveLength(2);
+
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "rejected", error: { code: "DEVICE_OFFLINE", message: "replaced" } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    expect(requests("thread.subscribe")[2]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture" } });
+  });
+
   it("does not replace the selected device's threads with a late response from the previous device", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);
