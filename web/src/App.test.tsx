@@ -1406,6 +1406,43 @@ describe("Ariel app interactions", () => {
     expect(screen.getByLabelText("会话列表").querySelector("#sidebar-device-status")?.textContent).toContain("Agent 离线");
   });
 
+  it("keeps the selected conversation visible across a transient Agent reconnect and resubscribes without a persistent alert", async () => {
+    const offlineThread: Thread = { ...fixtureThread, turns: [{ turnId: "offline-turn", status: "completed", items: [{ itemId: "offline-message", role: "assistant", text: "Stable history content" }] }] };
+    const { socket, requests } = await openFixture(offlineThread);
+    act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: false, codexReady: false }));
+    expect(screen.getByText("Stable history content")).toBeTruthy();
+    expect(screen.queryByText("Desktop Agent 暂时离线，恢复后会重新同步当前会话。")).toBeNull();
+    const staleThread: Thread = { ...offlineThread, turns: [{ turnId: "offline-turn", status: "completed", items: [{ itemId: "stale-message", role: "assistant", text: "Stale stream content" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: staleThread }));
+    expect(screen.queryByText("Stale stream content")).toBeNull();
+    await waitFor(() => expect(requests("device.list")).toHaveLength(2));
+
+    act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: true, codexReady: true }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(3));
+    const onlineDevice = { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch-2", capabilities: { autoLoad: true } };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[2].requestId, outcome: "accepted", data: { devices: [onlineDevice] } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-recovered" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-recovered", streamId: "stream-recovered", seq: 1, thread: offlineThread }));
+    expect(await screen.findByText("Stable history content")).toBeTruthy();
+    expect(screen.queryByText("Desktop Agent 暂时离线，恢复后会重新同步当前会话。")).toBeNull();
+  });
+
+  it("shows the offline state only after the Agent remains unavailable beyond the reconnect grace period", async () => {
+    const offlineThread: Thread = { ...fixtureThread, turns: [{ turnId: "offline-turn", status: "completed", items: [{ itemId: "offline-message", role: "assistant", text: "Stable history content" }] }] };
+    const { socket } = await openFixture(offlineThread);
+    vi.useFakeTimers();
+    try {
+      act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: false, codexReady: false }));
+      expect(screen.getByText("Stable history content")).toBeTruthy();
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+      expect(screen.queryByText("Stable history content")).toBeNull();
+      expect(screen.getByText("Desktop Agent 暂时离线，恢复后会重新同步当前会话。")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends a message only after a selected owner snapshot and stops the exact active turn", async () => {
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "fixture message" } });

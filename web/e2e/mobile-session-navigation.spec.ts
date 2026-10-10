@@ -65,3 +65,58 @@ test("session loading mark uses the formal reverse micro asset rather than a col
   await expect(page.locator(".empty-symbol")).not.toContainText("✳");
   await expect(page).toHaveScreenshot("mobile-session-loading-wind-messenger.png", { animations: "disabled", caret: "hide" });
 });
+
+test("a transient Agent reconnect keeps the selected conversation visible and read-only until a fresh snapshot arrives", async ({ page }) => {
+  const reconnectThread = {
+    ...regular,
+    threadId: "reconnect-thread",
+    title: "短暂重连会话",
+    turns: [{ turnId: "turn-1", status: "completed", items: [{ itemId: "item-1", role: "assistant", text: "最后确认的会话内容" }] }],
+  };
+  let agentOnline = true;
+  let subscriptions = 0;
+  let pushEvent: (event: Record<string, unknown>) => void = () => { throw new Error("WebSocket fixture 尚未连接"); };
+
+  await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
+  await page.routeWebSocket("**/ws", socket => {
+    pushEvent = event => socket.send(JSON.stringify(event));
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === "hello") {
+        socket.send(JSON.stringify({ type: "hello.ok", v: 1, connectionId: "reconnect", relayEpoch: "reconnect-epoch", sessionToken }));
+        return;
+      }
+      if (message.type !== "request") return;
+      if (message.method === "device.list") {
+        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "重连测试 Mac", agentOnline, codexReady: agentOnline, agentEpoch: agentOnline ? `agent-${subscriptions + 1}` : "agent-offline", capabilities: { autoLoad: true, send: true } }] } }));
+      }
+      if (message.method === "thread.list") {
+        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { threads: [reconnectThread], nextCursor: "" } }));
+      }
+      if (message.method === "thread.subscribe") {
+        subscriptions++;
+        const subscriptionId = `sub-${subscriptions}`;
+        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { subscriptionId } }));
+        socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: reconnectThread.threadId, subscriptionId, streamId: `stream-${subscriptions}`, seq: 1, thread: reconnectThread }));
+      }
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /展开项目 brain-spark/ }).click();
+  await page.getByText(reconnectThread.title).click();
+  await expect(page.getByText("最后确认的会话内容", { exact: true })).toBeVisible();
+
+  agentOnline = false;
+  pushEvent({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: false, codexReady: false });
+  await expect(page.getByText("最后确认的会话内容", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Desktop Agent 正在重连/)).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "发送消息" })).toBeDisabled();
+  await expect(page.getByText("Desktop Agent 暂时离线，恢复后会重新同步当前会话。")).toHaveCount(0);
+
+  agentOnline = true;
+  pushEvent({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: true, codexReady: true });
+  await expect.poll(() => subscriptions).toBe(2);
+  await expect(page.getByText("最后确认的会话内容", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Desktop Agent 正在重连/)).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "发送消息" })).toBeEnabled();
+});

@@ -7,6 +7,7 @@
 ## 行为
 
 - Web 的 socket 临时断开后，在同一页面内保留 token、设备、当前 thread 选择与未确认草稿；自动重连 Relay，读取新 epoch/device 状态，再对原 thread 建新 subscription，从 owner 全量快照恢复。旧 stream/seq 不得混入新视图。
+- 已选 Desktop Agent 单独出现短暂离线时，Web 保留最后确认的会话视图至多 8 秒，并立即把发送、停止、审批和队列变更切为不可用；Agent 在宽限期内恢复后，Web 放弃旧 subscription、重新读取设备状态并建立新 subscription，不显示持久离线错误。只有离线持续超过 8 秒才清空旧视图并显示明确离线提示。宽限期不得把旧视图当作在线状态，也不得缓存或重放写请求。
 - Relay 或 Agent 重启使转发中的变更结果变为 `unknown`，Web 不重发；旧 agentEpoch 的 routes/subscriptions 清理。仍待处理的交互只从新 owner snapshot 重建，已处理的不复活。
 - Relay 对 Web 和 Agent 连接做有界 WebSocket ping；Agent 对 Relay 也做 ping。连接半开且不响应时主动关闭，让离线状态和既有重连逻辑接管，不能长期显示假在线。
 - Desktop 无法访问时不能宣称 `codexReady`。不自动拉起 Desktop。用户可见失败或加载中状态。
@@ -27,6 +28,8 @@
 ## TDD / 验收
 
 1. 先测断开后保留选择、重连重新订阅、旧序列不再应用、新 snapshot 接管。
+   - Agent 短暂离线不足 8 秒时保留最后确认内容且所有写操作禁用；恢复后自动重订阅且不遗留离线提示。
+   - Agent 离线达到 8 秒时才清空旧视图并显示离线提示。
 2. 先测 Relay/Agent 断开路由清理、变更 unknown、慢 Web 写失败的隔离。
 3. 先测超大历史在 Agent 本地得到清楚错误，不先答订阅成功。
 4. 手工在本地 Relay/Agent 重启、真实 fixture 待处理卡片与手机尺寸 Web 中验证；物理手机使用需目标局域网设备配合，不能以仅调窄桌面 viewport 冒称完成。
