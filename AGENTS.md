@@ -32,6 +32,12 @@
 - 每次本地部署或重启成功后，运行 `GO111MODULE=on ./scripts/ariel.sh show-pin`，在最终回复中同时展示当前 LAN 地址和 6 位连接码，不再只提示用户自行查询。
 - 连接码只在当次对话回复中展示，不写入仓库文档、测试 fixture、commit message 或其他持久化日志。
 
+## 公网部署
+
+- Ariel 的公网实例位于 `www.kan.chat`，Relay 与 Web 使用 Docker 容器方式部署在该机器上。
+- 公网升级应先通过 SSH 登录该机器，再沿用现有 Docker 部署目录和容器配置；不要把公网环境误按本机 `ariel.sh up local` 流程处理。
+- 项目配置只记录部署方式和操作边界，不记录 SSH 私钥、口令、token 或其他凭据。当前本机默认 ED25519 key 尚未获得该机器的 SSH 授权；继续部署前需要取得正确的 SSH 用户与私钥路径，或由管理员把本机公钥加入 `authorized_keys`。
+
 ## 安全与数据边界
 
 - Codex 是会话和执行状态的 SSOT；Ariel 不建立第二套会话数据库、离线队列或正文日志。
