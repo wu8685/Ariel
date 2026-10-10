@@ -6,6 +6,7 @@ import { answersForSubmission } from "./interaction";
 import { newRequestID } from "./ids";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
+import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } from "./history-cache";
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
@@ -246,6 +247,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [itemLoading, setItemLoading] = useState("");
   const itemLoadingRef = useRef("");
   const [itemOverrides, setItemOverrides] = useState<Record<string, Turn>>({});
+  const itemOverridesRef = useRef<Record<string, Turn>>({});
   const [draft, setDraft] = useState("");
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
@@ -265,6 +267,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
+  const devicesRef = useRef<Device[]>([]);
+  const historyCache = useRef(new BrowserHistoryCache());
+  const restoredHistoryCache = useRef<HistoryCacheIdentity | null>(null);
   const expectedSubscription = useRef("");
   const blockedSelection = useRef("");
   const pendingSelect = useRef(0);
@@ -320,7 +325,52 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setHistoryLoading(false);
     setItemLoading("");
     itemLoadingRef.current = "";
+    itemOverridesRef.current = {};
     setItemOverrides({});
+    restoredHistoryCache.current = null;
+  }
+
+  function replaceItemOverrides(next: Record<string, Turn>) {
+    itemOverridesRef.current = next;
+    setItemOverrides(next);
+  }
+
+  function historyCacheIdentity(targetDevice: string, targetThread: string): HistoryCacheIdentity | null {
+    const agentEpoch = devicesRef.current.find(candidate => candidate.deviceId === targetDevice)?.agentEpoch;
+    return agentEpoch ? { deviceId: targetDevice, agentEpoch, threadId: targetThread } : null;
+  }
+
+  function cacheCurrentHistory() {
+    const current = selection.current;
+    if (!current.view?.subscriptionId || current.view.deviceId !== current.deviceId || current.view.threadId !== current.threadId) return;
+    const identity = historyCacheIdentity(current.deviceId, current.threadId);
+    if (!identity) return;
+    historyCache.current.set(identity, { history: historyRef.current, itemOverrides: itemOverridesRef.current });
+  }
+
+  function restoreCachedHistory(targetDevice: string, targetThread: string, liveTurns: Turn[]): boolean {
+    const identity = historyCacheIdentity(targetDevice, targetThread);
+    const cached = identity ? historyCache.current.get(identity) : null;
+    if (!identity || !cached) return false;
+    const restored = mergeCachedHistory(cached, liveTurns);
+    if (restored.history.older.length === 0) return false;
+    historyRef.current = restored.history;
+    setHistory(restored.history);
+    replaceItemOverrides(restored.itemOverrides);
+    restoredHistoryCache.current = identity;
+    return true;
+  }
+
+  function discardRestoredHistory(targetDevice: string, targetThread: string): boolean {
+    const restored = restoredHistoryCache.current;
+    if (restored?.deviceId !== targetDevice || restored.threadId !== targetThread) return false;
+    historyCache.current.delete(restored);
+    const empty = emptyHistoryState();
+    historyRef.current = empty;
+    setHistory(empty);
+    replaceItemOverrides({});
+    restoredHistoryCache.current = null;
+    return true;
   }
 
   function rememberReadingPosition() {
@@ -542,7 +592,20 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (generation !== deviceListGeneration.current) return [];
     if (response.outcome !== "accepted") { setNotice(errorText(response)); return []; }
     const found = (response.data?.devices as Device[] | undefined) || [];
-    setDevices(previous => keepOfflineDevice(found, previous, selection.current.deviceId));
+    const foundIDs = new Set(found.map(candidate => candidate.deviceId));
+    for (const previous of devicesRef.current) {
+      if (!foundIDs.has(previous.deviceId)) historyCache.current.clearDevice(previous.deviceId);
+    }
+    for (const candidate of found) {
+      const previous = devicesRef.current.find(device => device.deviceId === candidate.deviceId);
+      if (previous?.agentEpoch && previous.agentEpoch !== candidate.agentEpoch) {
+        historyCache.current.clearDevice(candidate.deviceId);
+        discardRestoredHistory(candidate.deviceId, selection.current.threadId);
+      }
+    }
+    const next = keepOfflineDevice(found, devicesRef.current, selection.current.deviceId);
+    devicesRef.current = next;
+    setDevices(next);
     setDeviceId(current => current || found[0]?.deviceId || "");
     return found;
   }
@@ -647,8 +710,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return true;
   }
 
-  async function selectThread(id: string, targetDevice = deviceId) {
+  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true) {
     if (!targetDevice) return;
+    if (cachePrevious) cacheCurrentHistory();
     if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
     else { resumeReadingAnchor.current = null; lastTranscriptScrollTop.current = 0; restoreLatestChrome(); }
     pendingReadingAnchor.current = null;
@@ -696,8 +760,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function resync() {
     const current = selection.current;
     if (!current.threadId) return;
+    const identity = historyCacheIdentity(current.deviceId, current.threadId);
+    if (identity) historyCache.current.delete(identity);
     setNotice("事件顺序中断，正在重新同步会话…");
-    await selectThread(current.threadId, current.deviceId);
+    await selectThread(current.threadId, current.deviceId, false);
   }
 
   useEffect(() => {
@@ -715,9 +781,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); historyCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
+      historyCache.current.clear();
       if (webAuthMode === "pin" && sessionToken) webSession.accepted(sessionToken);
       if (pairingAttempt.current) setPhonePairing(null);
       pairingAttempt.current = false;
@@ -733,6 +800,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         return;
       }
       if (event.event === "device.status") {
+        if (!event.agentOnline) historyCache.current.clearDevice(event.deviceId);
         if (!event.agentOnline && event.deviceId === selection.current.deviceId) {
           rememberReadingPosition();
           selection.current.view = null;
@@ -750,6 +818,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       if (!belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current)) return;
       if (event.event === "thread.error") {
         if (!current.view || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
+          const identity = historyCacheIdentity(current.deviceId, current.threadId);
+          if (identity) historyCache.current.delete(identity);
           if (event.code === "HISTORY_TOO_LARGE") {
             expectedSubscription.current = "";
             setReadOnlyHistory(true);
@@ -760,7 +830,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
           expectedSubscription.current = "";
           selection.current.view = null;
           setView(null);
-          if (event.code === "RESYNC_REQUIRED") void selectThread(current.threadId, current.deviceId);
+          if (event.code === "RESYNC_REQUIRED") void selectThread(current.threadId, current.deviceId, false);
           else setNotice(resultText[event.code]);
         }
         return;
@@ -768,7 +838,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       if (event.event === "thread.snapshot") {
         if (current.view?.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
-        resetHistory(); selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice("");
+        if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
+        selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice("");
       } else if (event.event === "thread.update") {
         const next = applyThreadEvent(current.view, event);
         if (!next) { void resync(); return; }
@@ -1008,12 +1079,21 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         const current = historyRef.current;
         const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: 10, ...(current.cursor ? { cursor: current.cursor } : {}) });
         if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
-        if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+        if (response.outcome !== "accepted") {
+          if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) continue;
+          setNotice(errorText(response)); return;
+        }
         const turns = response.data?.turns as Turn[] | undefined;
         const nextCursor = response.data?.nextCursor;
-        if (!Array.isArray(turns) || typeof nextCursor !== "string") { setNotice("历史页格式无法识别，已保留当前会话。"); return; }
+        if (!Array.isArray(turns) || typeof nextCursor !== "string") {
+          if (discardRestoredHistory(deviceId, targetThread)) continue;
+          setNotice("历史页格式无法识别，已保留当前会话。"); return;
+        }
         const next = appendOlderPage(current, selection.current.view?.thread.turns || view.thread.turns, { turns, nextCursor });
-        if (next.cursor === current.cursor && !next.exhausted && next.older.length === current.older.length) { setNotice("历史页没有继续前进，请稍后重试。"); return; }
+        if (next.cursor === current.cursor && !next.exhausted && next.older.length === current.older.length) {
+          if (discardRestoredHistory(deviceId, targetThread)) continue;
+          setNotice("历史页没有继续前进，请稍后重试。"); return;
+        }
         pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
         historyRef.current = next;
         setHistory(next);
@@ -1041,13 +1121,18 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     try {
       const response = await client.request("thread.history.items", deviceId, { threadId: targetThread, turnId: turn.turnId, cursor: turn.nextItemCursor, limit: 100 });
       if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
-      if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+      if (response.outcome !== "accepted") {
+        if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) void loadOlder();
+        else setNotice(errorText(response));
+        return;
+      }
       const items = response.data?.items as Item[] | undefined;
       const nextItemCursor = response.data?.nextItemCursor;
       const itemsComplete = response.data?.itemsComplete;
       if (response.data?.turnId !== turn.turnId || !Array.isArray(items) || typeof nextItemCursor !== "string" || typeof itemsComplete !== "boolean") { setNotice("消息页格式无法识别，已保留当前内容。"); return; }
       pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
-      setItemOverrides(current => ({ ...current, [turn.turnId]: prependOlderItems(current[turn.turnId] || turn, items, nextItemCursor, itemsComplete) }));
+      const next = { ...itemOverridesRef.current, [turn.turnId]: prependOlderItems(itemOverridesRef.current[turn.turnId] || turn, items, nextItemCursor, itemsComplete) };
+      replaceItemOverrides(next);
     } finally {
       itemLoadingRef.current = "";
       setItemLoading("");

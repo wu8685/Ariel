@@ -57,7 +57,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
@@ -496,6 +496,61 @@ describe("Ariel app interactions", () => {
     expect(await screen.findByText("本回合更早")).toBeTruthy();
     expect(screen.getByText("本回合最新")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "加载此回合更早内容" })).toBeNull();
+  });
+
+  it("restores downloaded older history after switching away and back within the same agent epoch", async () => {
+    const first: Thread = { ...fixtureThread, title: "First", historyComplete: false, recentComplete: true, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "第一会话最新" }] }] };
+    const second: Thread = { ...fixtureThread, threadId: "second", title: "Second", runtime: "inProgress", turns: [{ turnId: "second-active", status: "inProgress", items: [{ itemId: "second-item", role: "assistant", text: "第二会话运行中" }] }] };
+    const { socket, requests } = await openFixture(first, false, false, [first, second]);
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [first.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "已经下载的旧历史" }] }], nextCursor: "" } }));
+    expect(await screen.findByText("已经下载的旧历史")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Second").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-second" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "second", subscriptionId: "sub-second", streamId: "stream-second", seq: 1, thread: second }));
+    expect(await screen.findByText("第二会话运行中")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("First").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-first-again" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-first-again", streamId: "stream-first-again", seq: 1, thread: first }));
+
+    expect(await screen.findByText("已经下载的旧历史")).toBeTruthy();
+    expect(screen.getByText("第一会话最新")).toBeTruthy();
+    expect(screen.getByText("待命")).toBeTruthy();
+    expect(requests("thread.history")).toHaveLength(1);
+  });
+
+  it("drops a restored cursor once and rebuilds pagination when the Agent rejects it", async () => {
+    const first: Thread = { ...fixtureThread, title: "First", historyComplete: false, recentComplete: true, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "第一会话最新" }] }] };
+    const second: Thread = { ...fixtureThread, threadId: "second", title: "Second" };
+    const { socket, requests } = await openFixture(first, false, false, [first, second]);
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [first.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "缓存旧历史" }] }], nextCursor: "cached-cursor" } }));
+
+    fireEvent.click(screen.getByText("Second").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-second" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "second", subscriptionId: "sub-second", streamId: "stream-second", seq: 1, thread: second }));
+    fireEvent.click(screen.getByText("First").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-first-again" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-first-again", streamId: "stream-first-again", seq: 1, thread: first }));
+    expect(await screen.findByText("缓存旧历史")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(2));
+    expect(requests("thread.history")[1].params.cursor).toBe("cached-cursor");
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[1].requestId, outcome: "rejected", error: { code: "INVALID_ARGUMENT", message: "stale cursor" } }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(3));
+    expect(requests("thread.history")[2].params.cursor).toBeUndefined();
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[2].requestId, outcome: "accepted", data: { turns: [first.turns[0], { turnId: "rebuilt", status: "completed", items: [{ itemId: "rebuilt-item", role: "assistant", text: "重新确认的旧历史" }] }], nextCursor: "" } }));
+    expect(await screen.findByText("重新确认的旧历史")).toBeTruthy();
+    expect(screen.queryByText("缓存旧历史")).toBeNull();
   });
 
   it("keeps the reading position on live updates until the reader chooses to return to latest", async () => {

@@ -78,6 +78,7 @@
 | 0059 | [无数据库的单用户 PIN / Passkey 双认证](0059-native-single-user-passkey-auth.md) | Implemented（自动／race／真实 Chromium virtual authenticator／Docker 双模式 smoke 已验） | 局域网保留 6 位 PIN；公网模式使用原生 Passkey、加密 HttpOnly Cookie 与文件化公钥凭据，不依赖 OIDC 或数据库 |
 | 0060 | [Kubernetes 快速交付 Relay + Web](0060-kubernetes-relay-delivery.md) | Implemented（契约／双 overlay 渲染／client dry-run／受限容器 smoke 已验） | 用安全 base 和 PIN／Passkey overlays 固化 Secret、Ingress、探针与 Passkey 持久化，支持标准 `kubectl apply -k` 交付 |
 | 0061 | [ECS 单机一键部署 Relay + Web](0061-ecs-single-node-one-command.md) | Implemented（契约／双模式真实 Docker／HTTPS 反代／全量回归已验） | 用一个脚本在单台 Linux ECS 上安全生成凭据并拉起 PIN 或 Caddy + Passkey 拓扑 |
+| 0062 | [Web 端有界会话历史缓存](0062-bounded-web-history-cache.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 在同一页面与 Agent epoch 内复用已下载旧页，减少会话往返时的重复下载 |
 
 ## 设计基线
 
