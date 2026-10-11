@@ -89,6 +89,7 @@
 | 0070 | [Agent 只读请求自愈与设备会话列表缓存](0070-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
 | 0071 | [会话操作菜单字体统一](0071-uniform-thread-context-menu-type.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 将“归档”菜单项统一到现有紧凑菜单的 `12px / 1.4` 字体体系，并保持 touch 点击区域 |
 | 0072 | [新会话首屏最近四回合](0072-four-turn-initial-history-window.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | 首次只同步最新 4 个 turn，手动旧页仍保持最多 10 个以减少翻页往返 |
+| 0073 | [会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | item 级增量更新；切换与 resync 保留已确认正文，只在后台同步最新状态 |
 
 ## 设计基线
 

@@ -1,8 +1,8 @@
-import type { Turn } from "./generated/protocol";
+import type { Thread, Turn } from "./generated/protocol";
 import type { HistoryState } from "./history";
 
 export type HistoryCacheIdentity = { deviceId: string; agentEpoch: string; threadId: string };
-export type HistoryCacheValue = { history: HistoryState; itemOverrides: Record<string, Turn> };
+export type HistoryCacheValue = { history: HistoryState; itemOverrides: Record<string, Turn>; thread?: Thread };
 
 type CacheEntry = {
   identity: HistoryCacheIdentity;
@@ -47,7 +47,17 @@ function sanitize(value: HistoryCacheValue): HistoryCacheValue | null {
     if (turn.turnId !== turnID || turn.status !== "completed" || !validItems(turn)) return null;
     itemOverrides[turnID] = turn;
   }
-  return { history: { ...value.history, older: [...value.history.older] }, itemOverrides };
+  let thread: Thread | undefined;
+  if (value.thread) {
+    if (value.thread.turns.length > 4) return null;
+    const recentIDs = new Set<string>();
+    for (const turn of value.thread.turns) {
+      if (!turn.turnId || recentIDs.has(turn.turnId) || !validItems(turn)) return null;
+      recentIDs.add(turn.turnId);
+    }
+    thread = { ...value.thread, turns: [...value.thread.turns] };
+  }
+  return { history: { ...value.history, older: [...value.history.older] }, itemOverrides, ...(thread ? { thread } : {}) };
 }
 
 export class BrowserHistoryCache {
@@ -71,7 +81,7 @@ export class BrowserHistoryCache {
     this.pruneExpired();
     if (!identity.deviceId || !identity.agentEpoch || !identity.threadId) return false;
     const safe = sanitize(value);
-    if (!safe || safe.history.older.length === 0) return false;
+    if (!safe || (safe.history.older.length === 0 && !safe.thread) || (safe.thread && safe.thread.threadId !== identity.threadId)) return false;
     const bytes = new TextEncoder().encode(JSON.stringify({ identity, value: safe })).length;
     if (bytes > this.maxBytes) return false;
     const entry: CacheEntry = { identity: { ...identity }, value: safe, bytes, accessedAt: this.now() };
@@ -140,5 +150,5 @@ export function mergeCachedHistory(value: HistoryCacheValue, liveTurns: Turn[]):
   const older = value.history.older.filter(turn => !liveIDs.has(turn.turnId));
   const olderIDs = new Set(older.map(turn => turn.turnId));
   const itemOverrides = Object.fromEntries(Object.entries(value.itemOverrides).filter(([turnID]) => olderIDs.has(turnID)));
-  return { history: { ...value.history, older }, itemOverrides };
+  return { ...value, history: { ...value.history, older }, itemOverrides };
 }

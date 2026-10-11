@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } from "./history-cache";
 import { emptyHistoryState } from "./history";
-import type { Turn } from "./generated/protocol";
+import type { Thread, Turn } from "./generated/protocol";
 
 const identity = (threadId: string, agentEpoch = "epoch-a"): HistoryCacheIdentity => ({ deviceId: "mac", agentEpoch, threadId });
 const turn = (id: string, text = id): Turn => ({ turnId: id, status: "completed", items: [{ itemId: `${id}-item`, role: "assistant", text }] });
 const value = (id: string, text = id) => ({ history: { ...emptyHistoryState(), older: [turn(id, text)], cursor: `after-${id}`, anchorSeen: true }, itemOverrides: {} });
+const recent = (threadId: string, turns: Turn[] = [turn("recent")]): Thread => ({ threadId, title: "Fixture", cwd: "/fixture", updatedAt: "2026-10-11T00:00:00Z", runtime: "idle", turns, pendingInteractions: [] });
 
 describe("bounded browser history cache", () => {
   it("isolates entries by agent epoch and expires them after five minutes", () => {
@@ -16,6 +17,14 @@ describe("bounded browser history cache", () => {
     expect(cache.get(identity("one", "epoch-b"))).toBeNull();
     now += 5 * 60_000 + 1;
     expect(cache.get(identity("one"))).toBeNull();
+  });
+
+  it("caches a confirmed recent view even when no older page was loaded", () => {
+    const cache = new BrowserHistoryCache({ now: () => 1_000 });
+    expect(cache.set(identity("one"), { history: emptyHistoryState(), itemOverrides: {}, thread: recent("one") })).toBe(true);
+    expect(cache.get(identity("one"))?.thread?.turns[0].turnId).toBe("recent");
+    expect(cache.set(identity("wrong"), { history: emptyHistoryState(), itemOverrides: {}, thread: recent("another") })).toBe(false);
+    expect(cache.set(identity("duplicate"), { history: emptyHistoryState(), itemOverrides: {}, thread: recent("duplicate", [turn("same"), turn("same")]) })).toBe(false);
   });
 
   it("updates an existing key and evicts the least recently used entry", () => {

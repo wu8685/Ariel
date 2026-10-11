@@ -83,7 +83,7 @@
         { "if": { "properties": { "method": { "const": "thread.history" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.history.items" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyItemsParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.image" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/imageParams" } } } },
-        { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/subscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/startParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.interrupt" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/interruptParams" } } } },
@@ -119,6 +119,13 @@
     "threadParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
       "properties": { "threadId": { "$ref": "#/$defs/id" } }
+    },
+    "subscribeParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" },
+        "updateMode": { "enum": ["item-delta-v1"] }
+      }
     },
     "historyParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
@@ -225,6 +232,44 @@
         "queuedMessages": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/queuedMessage" } }
       }
     },
+    "threadState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["threadId", "title", "cwd", "updatedAt", "runtime", "pendingInteractions"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "title": { "type": "string" }, "searchSnippet": { "type": "string", "maxLength": 400 },
+        "cwd": { "type": "string" }, "updatedAt": { "type": "string" },
+        "isPinned": { "type": "boolean" },
+        "runtime": { "enum": ["idle", "inProgress", "notLoaded", "unknown"] },
+        "historyComplete": { "type": "boolean" },
+        "recentComplete": { "type": "boolean" },
+        "permissions": { "type": "object", "additionalProperties": false, "required": ["sandbox", "approval"], "properties": { "sandbox": { "enum": ["read_only", "workspace_write", "full_access", "unknown"] }, "approval": { "enum": ["on_request", "never", "unknown"] } } },
+        "pendingInteractions": { "type": "array", "items": { "$ref": "#/$defs/interaction" } },
+        "queuedMessages": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/queuedMessage" } }
+      }
+    },
+    "turnPatch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["turnId", "status", "itemOrder", "upsertItems", "removedItemIds"],
+      "properties": {
+        "turnId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["inProgress", "completed", "failed", "interrupted"] },
+        "itemsComplete": { "type": "boolean" },
+        "nextItemCursor": { "type": "string" },
+        "itemOrder": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "upsertItems": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+        "removedItemIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      }
+    },
+    "threadPatch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["threadState", "turnOrder", "turnPatches", "removedTurnIds"],
+      "properties": {
+        "threadState": { "$ref": "#/$defs/threadState" },
+        "turnOrder": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "turnPatches": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/turnPatch" } },
+        "removedTurnIds": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      }
+    },
     "queuedMessage": {
       "type": "object", "additionalProperties": false,
       "required": ["queueId", "clientMessageId", "text", "images", "editable"],
@@ -302,15 +347,20 @@
     },
     "threadUpdate": {
       "type": "object", "additionalProperties": false,
-      "required": ["type", "v", "event", "deviceId", "threadId", "subscriptionId", "streamId", "baseSeq", "seq", "thread"],
+      "required": ["type", "v", "event", "deviceId", "threadId", "subscriptionId", "streamId", "baseSeq", "seq"],
       "properties": {
         "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.update" },
         "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
         "subscriptionId": { "$ref": "#/$defs/id" }, "streamId": { "$ref": "#/$defs/id" },
         "baseSeq": { "type": "integer", "minimum": 1 },
         "seq": { "type": "integer", "minimum": 2 },
-        "thread": { "$ref": "#/$defs/thread" }
-      }
+        "thread": { "$ref": "#/$defs/thread" },
+        "patch": { "$ref": "#/$defs/threadPatch" }
+      },
+      "oneOf": [
+        { "required": ["thread"], "not": { "required": ["patch"] } },
+        { "required": ["patch"], "not": { "required": ["thread"] } }
+      ]
     },
     "threadError": {
       "type": "object", "additionalProperties": false,

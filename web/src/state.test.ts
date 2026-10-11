@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ThreadUpdate } from "./generated/protocol";
 import { applyThreadEvent, belongsToSubscription, preserveDraftAfterSend, recoveryTarget, keepOfflineDevice, permissionSummary, canSend, type ThreadView } from "./state";
 
 const thread = { threadId: "t", title: "Same", cwd: "/a", updatedAt: "2026-10-04T00:00:00Z", runtime: "inProgress" as const, turns: [{ turnId: "turn", status: "inProgress" as const, items: [{ itemId: "assistant", role: "assistant" as const, text: "A" }] }], pendingInteractions: [] };
@@ -30,6 +31,42 @@ describe("thread stream state", () => {
     const second = applyThreadEvent(first, update);
     expect(second?.thread.turns[0].items).toHaveLength(1);
     expect(second?.thread.turns[0].items[0].text).toBe("AB");
+  });
+
+  it("applies an item delta atomically and preserves unchanged turn identity", () => {
+    const stableTurn = { turnId: "stable", status: "completed" as const, items: [{ itemId: "stable-item", role: "assistant" as const, text: "unchanged" }] };
+    const liveTurn = thread.turns[0];
+    const baseThread = { ...thread, turns: [stableTurn, liveTurn] };
+    const first = applyThreadEvent(null, { ...snapshot, thread: baseThread }) as ThreadView;
+    const update = {
+      type: "event", v: 1, event: "thread.update", deviceId: "d", threadId: "t", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2,
+      patch: {
+        threadState: { threadId: "t", title: "Same", cwd: "/a", updatedAt: "2026-10-04T00:00:01Z", runtime: "inProgress", pendingInteractions: [], queuedMessages: [] },
+        turnOrder: ["stable", "turn"],
+        turnPatches: [{ turnId: "turn", status: "inProgress", itemOrder: ["assistant"], upsertItems: [{ itemId: "assistant", role: "assistant", text: "AB" }], removedItemIds: [] }],
+        removedTurnIds: [],
+      },
+    } as ThreadUpdate;
+    const second = applyThreadEvent(first, update);
+    expect(second?.thread.turns[0]).toBe(first.thread.turns[0]);
+    expect(second?.thread.turns[1].items[0].text).toBe("AB");
+    expect(second?.thread.updatedAt).toBe("2026-10-04T00:00:01Z");
+  });
+
+  it("rejects a malformed delta without partially changing the confirmed view", () => {
+    const first = applyThreadEvent(null, snapshot) as ThreadView;
+    const malformed = {
+      type: "event", v: 1, event: "thread.update", deviceId: "d", threadId: "t", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2,
+      patch: {
+        threadState: { threadId: "t", title: "Wrong", cwd: "/a", updatedAt: "2026-10-04T00:00:01Z", runtime: "inProgress", pendingInteractions: [] },
+        turnOrder: ["turn"],
+        turnPatches: [{ turnId: "turn", status: "inProgress", itemOrder: ["missing"], upsertItems: [], removedItemIds: [] }],
+        removedTurnIds: [],
+      },
+    } as ThreadUpdate;
+    expect(applyThreadEvent(first, malformed)).toBeNull();
+    expect(first.thread.title).toBe("Same");
+    expect(first.thread.turns[0].items[0].text).toBe("A");
   });
 
   it("rejects gaps and unknown streams to force resubscribe", () => {

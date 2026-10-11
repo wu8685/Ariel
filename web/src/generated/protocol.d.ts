@@ -82,6 +82,22 @@ export type Item = {
     truncated: boolean;
   };
 };
+export type ThreadUpdate = {
+  type: "event";
+  v: 1;
+  event: "thread.update";
+  deviceId: Id;
+  threadId: Id;
+  subscriptionId: Id;
+  streamId: Id;
+  baseSeq: number;
+  seq: number;
+  thread?: Thread;
+  patch?: ThreadPatch;
+} & ThreadUpdate1;
+export type ThreadUpdate1 = {
+  [k: string]: unknown;
+};
 
 export interface WebHello {
   type: "hello";
@@ -209,17 +225,54 @@ export interface QueuedMessage {
   images: [] | [string] | [string, string] | [string, string, string];
   editable: boolean;
 }
-export interface ThreadUpdate {
-  type: "event";
-  v: 1;
-  event: "thread.update";
-  deviceId: Id;
+export interface ThreadPatch {
+  threadState: ThreadState;
+  /**
+   * @maxItems 4
+   */
+  turnOrder: [] | [Id] | [Id, Id] | [Id, Id, Id] | [Id, Id, Id, Id];
+  /**
+   * @maxItems 4
+   */
+  turnPatches:
+    | []
+    | [TurnPatch]
+    | [TurnPatch, TurnPatch]
+    | [TurnPatch, TurnPatch, TurnPatch]
+    | [TurnPatch, TurnPatch, TurnPatch, TurnPatch];
+  /**
+   * @maxItems 4
+   */
+  removedTurnIds: [] | [Id] | [Id, Id] | [Id, Id, Id] | [Id, Id, Id, Id];
+}
+export interface ThreadState {
   threadId: Id;
-  subscriptionId: Id;
-  streamId: Id;
-  baseSeq: number;
-  seq: number;
-  thread: Thread;
+  title: string;
+  searchSnippet?: string;
+  cwd: string;
+  updatedAt: string;
+  isPinned?: boolean;
+  runtime: "idle" | "inProgress" | "notLoaded" | "unknown";
+  historyComplete?: boolean;
+  recentComplete?: boolean;
+  permissions?: {
+    sandbox: "read_only" | "workspace_write" | "full_access" | "unknown";
+    approval: "on_request" | "never" | "unknown";
+  };
+  pendingInteractions: Interaction[];
+  /**
+   * @maxItems 64
+   */
+  queuedMessages?: QueuedMessage[];
+}
+export interface TurnPatch {
+  turnId: Id;
+  status: "inProgress" | "completed" | "failed" | "interrupted";
+  itemsComplete?: boolean;
+  nextItemCursor?: string;
+  itemOrder: Id[];
+  upsertItems: Item[];
+  removedItemIds: Id[];
 }
 export interface ThreadError {
   type: "event";

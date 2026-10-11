@@ -93,6 +93,8 @@ type subscription struct {
 	id, streamID string
 	seq          int
 	active       bool
+	updateMode   string
+	baseline     map[string]any
 	emit         func(map[string]any)
 }
 type threadController struct {
@@ -770,6 +772,21 @@ func (s *Service) pump(c *threadController, live Live) {
 					continue
 				}
 				base := sub.seq
+				if sub.updateMode == "item-delta-v1" {
+					patch, changed, diffErr := buildThreadPatch(sub.baseline, thread)
+					if diffErr != nil {
+						out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "RESYNC_REQUIRED"}})
+						delete(c.subs, sub.id)
+						continue
+					}
+					if !changed {
+						continue
+					}
+					sub.seq++
+					sub.baseline = thread
+					out = append(out, delivery{sub.emit, map[string]any{"event": "thread.update", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "baseSeq": base, "seq": sub.seq, "patch": patch}})
+					continue
+				}
 				sub.seq++
 				out = append(out, delivery{sub.emit, map[string]any{"event": "thread.update", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "baseSeq": base, "seq": sub.seq, "thread": thread}})
 			}
@@ -813,7 +830,14 @@ func (s *Service) invalidateLive(c *threadController, live Live, code string) {
 }
 
 func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string]any)) (string, string, map[string]any, func(), error) {
+	return s.SubscribeWithMode(ctx, id, "", emit)
+}
+
+func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, emit func(map[string]any)) (string, string, map[string]any, func(), error) {
 	if emit == nil {
+		return "", "", nil, nil, errors.New("INVALID_ARGUMENT")
+	}
+	if updateMode != "" && updateMode != "item-delta-v1" {
 		return "", "", nil, nil, errors.New("INVALID_ARGUMENT")
 	}
 	c, err := s.controller(id)
@@ -852,7 +876,7 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
-	sub := &subscription{id: "desktop-sub-" + rand.Text(), streamID: "desktop-stream-" + rand.Text(), seq: 1, emit: emit}
+	sub := &subscription{id: "desktop-sub-" + rand.Text(), streamID: "desktop-stream-" + rand.Text(), seq: 1, updateMode: updateMode, baseline: thread, emit: emit}
 	c.subs[sub.id] = sub
 	c.mu.Unlock()
 	activate := func() {
@@ -880,7 +904,20 @@ func (s *Service) Subscribe(ctx context.Context, id string, emit func(map[string
 				sub.emit(map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "HISTORY_TOO_LARGE"})
 			} else if currentErr == nil && normalizeErr == nil && !sameThreadContent(latest, thread) {
 				sub.seq++
-				sub.emit(map[string]any{"event": "thread.update", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "baseSeq": 1, "seq": sub.seq, "thread": latest})
+				if sub.updateMode == "item-delta-v1" {
+					patch, changed, diffErr := buildThreadPatch(sub.baseline, latest)
+					if diffErr != nil {
+						delete(c.subs, sub.id)
+						sub.emit(map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "RESYNC_REQUIRED"})
+					} else if changed {
+						sub.baseline = latest
+						sub.emit(map[string]any{"event": "thread.update", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "baseSeq": 1, "seq": sub.seq, "patch": patch})
+					} else {
+						sub.seq--
+					}
+				} else {
+					sub.emit(map[string]any{"event": "thread.update", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "baseSeq": 1, "seq": sub.seq, "thread": latest})
+				}
 			}
 		}
 		c.mu.Unlock()

@@ -92,7 +92,7 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 		t.Fatalf("paged history response: %v", got)
 	}
 	requestID = "00000000-0000-4000-8000-000000000002"
-	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "thread"}}); err != nil {
+	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "thread", "updateMode": "item-delta-v1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := wsjson.Read(wctx, w, &got); err != nil {
@@ -121,8 +121,8 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 			break
 		}
 	}
-	thread := got["thread"].(map[string]any)
-	if got["seq"] != float64(2) || got["baseSeq"] != float64(1) || thread["runtime"] != "inProgress" {
+	patch := got["patch"].(map[string]any)
+	if got["seq"] != float64(2) || got["baseSeq"] != float64(1) || patch["threadState"].(map[string]any)["runtime"] != "inProgress" || len(patch["turnPatches"].([]any)) != 1 {
 		t.Fatalf("owner update: %v", got)
 	}
 	w.CloseNow()

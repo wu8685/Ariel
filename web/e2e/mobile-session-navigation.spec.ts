@@ -110,7 +110,8 @@ test("a transient Agent reconnect keeps the selected conversation visible and re
   pushEvent({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: false, codexReady: false });
   await expect(page.getByText("最后确认的会话内容", { exact: true })).toBeVisible();
   await expect(page.getByText(/Desktop Agent 正在重连/)).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "发送消息" })).toBeDisabled();
+  await expect(page.getByRole("textbox", { name: "发送消息" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
   await expect(page.getByText("Desktop Agent 暂时离线，恢复后会重新同步当前会话。")).toHaveCount(0);
 
   agentOnline = true;

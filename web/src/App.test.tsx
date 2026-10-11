@@ -612,6 +612,12 @@ describe("Ariel app interactions", () => {
 
     fireEvent.click(screen.getByText("First").closest("button")!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    expect(screen.getByText("第一会话最新")).toBeTruthy();
+    expect(screen.getByText("已经下载的旧历史")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect(screen.getByText(/正在同步最新状态/)).toBeTruthy();
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-first-again" } }));
     act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-first-again", streamId: "stream-first-again", seq: 1, thread: first }));
 
@@ -883,21 +889,20 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(400);
   });
 
-  it("renders every product mark from the formal monochrome micro asset", async () => {
+  it("keeps formal monochrome product marks without adding a full-page loading mark during cached resync", async () => {
     const { requests } = await openFixture();
     fireEvent.click(document.querySelector(`.thread-row[data-thread-id="${fixtureThread.threadId}"]`)!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
     const marks = [...document.querySelectorAll(".ariel-logo--micro")];
-    expect(marks).toHaveLength(3);
+    expect(marks).toHaveLength(2);
     for (const mark of marks) {
       expect(mark.getAttribute("data-variant")).toBe("micro");
       expect(mark.getAttribute("aria-hidden")).toBe("true");
       expect(mark.textContent).toBe("");
     }
     const loading = document.querySelector(".empty-symbol");
-    expect(loading?.querySelector(".session-loading-logo.ariel-logo--micro")).toBeTruthy();
+    expect(loading).toBeNull();
     expect(document.querySelector("svg.brand-mark")).toBeNull();
-    expect(loading?.textContent).not.toContain("✳");
   });
 
   it("keeps connected brand, status and disconnect in the drawer while the compact menu exposes status", async () => {
@@ -1478,7 +1483,7 @@ describe("Ariel app interactions", () => {
     const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
     await waitFor(() => expect(requests("device.list")).toHaveLength(1));
     act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: {
-      devices: [{ deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } }],
+      devices: [{ deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }],
     } }));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
     const thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
@@ -1487,12 +1492,17 @@ describe("Ariel app interactions", () => {
     fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
     expect(requests("thread.subscribe")[0].deviceId).toBe("mac");
-    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub-1" } }));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub-1" } }));
     act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-1", streamId: "stream-1", seq: 1, thread }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy());
 
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-1", streamId: "stream-1", baseSeq: 1, seq: 3, thread }));
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect(screen.getByText(/正在同步最新状态/)).toBeTruthy();
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
     expect(requests("thread.subscribe")[1]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture" } });
     expect(requests("thread.unsubscribe")).toContainEqual(expect.objectContaining({ deviceId: "mac", params: { subscriptionId: "sub-1" } }));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-2" } }));

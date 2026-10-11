@@ -249,6 +249,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [threadId, setThreadId] = useState("");
   const [view, setView] = useState<ThreadView | null>(null);
   const [readOnlyHistory, setReadOnlyHistory] = useState(false);
+  const [syncingView, setSyncingView] = useState(false);
   const [history, setHistory] = useState<HistoryState>(emptyHistoryState);
   const historyRef = useRef<HistoryState>(emptyHistoryState());
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -328,6 +329,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const threadCreateEnabled = device?.capabilities.threadCreate === true;
   const threadArchiveEnabled = device?.capabilities.threadArchive === true;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
+  const ownerReady = agentReady && !syncingView;
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
   const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
   const renderedQueuedMessages = dragQueueOrder.length === queuedMessages.length
@@ -410,6 +412,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     pendingSelect.current++;
     expectedSubscription.current = "";
     setRecoveringDeviceId(id);
+    setSyncingView(true);
     setNotice(current => current === agentOfflineNotice ? "" : current);
     offlineDeviceTimer.current = window.setTimeout(() => {
       if (offlineDevice.current !== id || selection.current.deviceId !== id) return;
@@ -418,6 +421,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       expectedSubscription.current = "";
       selection.current.view = null;
       setView(null);
+      setSyncingView(false);
       setReadOnlyHistory(false);
       setNotice(agentOfflineNotice);
     }, agentOfflineGraceMs);
@@ -446,7 +450,18 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (!current.view?.subscriptionId || current.view.deviceId !== current.deviceId || current.view.threadId !== current.threadId) return;
     const identity = historyCacheIdentity(current.deviceId, current.threadId);
     if (!identity) return;
-    historyCache.current.set(identity, { history: historyRef.current, itemOverrides: itemOverridesRef.current });
+    historyCache.current.set(identity, { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: current.view.thread });
+  }
+
+  function restoreCachedConversation(targetDevice: string, targetThread: string): ThreadView | null {
+    const identity = historyCacheIdentity(targetDevice, targetThread);
+    const cached = identity ? historyCache.current.get(identity) : null;
+    if (!identity || !cached?.thread || cached.thread.threadId !== targetThread) return null;
+    historyRef.current = cached.history;
+    setHistory(cached.history);
+    replaceItemOverrides(cached.itemOverrides);
+    restoredHistoryCache.current = identity;
+    return { deviceId: targetDevice, threadId: targetThread, subscriptionId: "", streamId: "", seq: 0, thread: cached.thread };
   }
 
   function restoreCachedHistory(targetDevice: string, targetThread: string, liveTurns: Turn[]): boolean {
@@ -481,6 +496,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     expectedSubscription.current = "";
     selection.current.view = null;
     setView(null);
+    setSyncingView(false);
     setReadOnlyHistory(false);
     resetHistory();
     setNotice(message);
@@ -856,6 +872,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const readOnlyView: ThreadView = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: readOnlyThread };
     selection.current.view = readOnlyView;
     setView(readOnlyView);
+    setSyncingView(false);
     setReadOnlyHistory(true);
     setNotice("");
     return true;
@@ -874,8 +891,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const oldDevice = selection.current.deviceId;
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
-    selection.current = { deviceId: targetDevice, threadId: id, view: null };
-    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    const cachedView = restoreCachedConversation(targetDevice, id);
+    selection.current = { deviceId: targetDevice, threadId: id, view: cachedView };
+    setThreadId(id); setView(cachedView); setSyncingView(true); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
+    if (!cachedView) resetHistory();
     if (!sameThread) {
       pendingSubmission.current = null;
       setScreenshots([]);
@@ -883,7 +902,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     }
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
-    let response = await client.request("thread.subscribe", targetDevice, { threadId: id });
+    let response = await client.request("thread.subscribe", targetDevice, { threadId: id, updateMode: "item-delta-v1" });
     if (epoch !== pendingSelect.current) {
       const staleID = response.data?.subscriptionId;
       if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
@@ -892,7 +911,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (retryCreatedSubscribe && response.outcome !== "accepted" && (response.error?.code === "RESYNC_REQUIRED" || response.error?.code === "TIMEOUT")) {
       await new Promise(resolve => window.setTimeout(resolve, 500));
       if (epoch !== pendingSelect.current || selection.current.deviceId !== targetDevice || selection.current.threadId !== id || status !== "ready") return;
-      response = await client.request("thread.subscribe", targetDevice, { threadId: id });
+      response = await client.request("thread.subscribe", targetDevice, { threadId: id, updateMode: "item-delta-v1" });
       if (epoch !== pendingSelect.current) {
         const staleID = response.data?.subscriptionId;
         if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
@@ -936,10 +955,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function resync() {
     const current = selection.current;
     if (!current.threadId) return;
-    const identity = historyCacheIdentity(current.deviceId, current.threadId);
-    if (identity) historyCache.current.delete(identity);
-    setNotice("事件顺序中断，正在重新同步会话…");
-    await selectThread(current.threadId, current.deviceId, false);
+    setNotice("");
+    await selectThread(current.threadId, current.deviceId, true);
   }
 
   useEffect(() => {
@@ -957,7 +974,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
       historyCache.current.clear();
@@ -968,7 +985,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       pairingAttempt.current = false;
       savedSessionAttempt.current = webAuthMode === "pin" && Boolean(sessionToken);
       setSessionExpired(false);
-      expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); resetHistory();
+      expectedSubscription.current = ""; selection.current.view = null; setView(null); setSyncingView(false); setReadOnlyHistory(false); resetHistory();
       void refreshDevices().then(() => void resumeSelected());
     };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
@@ -999,6 +1016,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
             clearAgentOfflineTimer();
             expectedSubscription.current = "";
             selection.current.view = null;
+            setSyncingView(true);
           }
           void resumeSelected();
         });
@@ -1011,35 +1029,44 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const current = selection.current;
       if (!belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current)) return;
       if (event.event === "thread.error") {
-        if (!current.view || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
-          const identity = historyCacheIdentity(current.deviceId, current.threadId);
-          if (identity) historyCache.current.delete(identity);
+        if (!current.view || !current.view.subscriptionId || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
           if (event.code === "HISTORY_TOO_LARGE") {
+            const identity = historyCacheIdentity(current.deviceId, current.threadId);
+            if (identity) historyCache.current.delete(identity);
             expectedSubscription.current = "";
             setReadOnlyHistory(true);
+            setSyncingView(false);
             void showReadOnlyHistory(current.threadId, current.deviceId, pendingSelect.current);
             return;
           }
+          if (event.code === "RESYNC_REQUIRED") {
+            expectedSubscription.current = "";
+            setSyncingView(true);
+            void selectThread(current.threadId, current.deviceId, true);
+            return;
+          }
+          const identity = historyCacheIdentity(current.deviceId, current.threadId);
+          if (identity) historyCache.current.delete(identity);
           if (event.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${current.deviceId}\u0000${current.threadId}`;
           expectedSubscription.current = "";
           selection.current.view = null;
           setView(null);
-          if (event.code === "RESYNC_REQUIRED") void selectThread(current.threadId, current.deviceId, false);
-          else setNotice(resultText[event.code]);
+          setSyncingView(false);
+          setNotice(resultText[event.code]);
         }
         return;
       }
       if (event.event === "thread.snapshot") {
-        if (current.view?.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
+        if (current.view?.subscriptionId && current.view.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
-        selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId); reconcileSubmission(event.thread, event.deviceId, event.threadId);
+        selection.current.view = next; setView(next); setSyncingView(false); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId); reconcileSubmission(event.thread, event.deviceId, event.threadId);
       } else if (event.event === "thread.update") {
         const next = applyThreadEvent(current.view, event);
         if (!next) { void resync(); return; }
         selection.current.view = next; setView(next);
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
-        reconcileSubmission(event.thread, event.deviceId, event.threadId);
+        reconcileSubmission(next.thread, event.deviceId, event.threadId);
       }
     };
     if (webAuthMode === "pin" && !phonePairing) {
@@ -1090,7 +1117,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     selection.current = { deviceId, threadId: "", view: null };
     const cached = threadListIdentity(deviceId, searchTerm);
     const cachedList = cached ? threadListCache.current.get(cached) : null;
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads(cachedList?.value.threads || []); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedList?.value.threads || []); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -1262,6 +1289,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   useLayoutEffect(() => {
     const container = transcriptRef.current;
     if (!container || !view) return;
+    if (syncingView && !view.subscriptionId) return;
     const key = readingKey(view.deviceId, view.threadId);
     const marker = contentMarker(view.thread);
     const pending = pendingReadingAnchor.current;
@@ -1286,7 +1314,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       else if (hasNewVisibleContent(lastPaint.current.marker, marker)) setShowReturnToLatest(true);
     } else if (followLatestRef.current) scrollToLatest(container);
     lastPaint.current = { key, seq: view.seq, marker };
-  }, [view?.seq, view?.threadId, history, itemOverrides]);
+  }, [view?.seq, view?.threadId, history, itemOverrides, syncingView]);
 
   async function loadOlder(additionalTurns = 1, requestLimit = historyTurnPageLimit) {
     if (!view || !deviceId || historyLoadingRef.current || historyRef.current.exhausted) return;
@@ -1371,7 +1399,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   async function send() {
-    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, agentReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)) return;
+    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)) return;
     const text = draft;
     const images = screenshots;
     const targetDevice = deviceId;
@@ -1400,7 +1428,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   function editQueuedMessage(item: QueuedMessage) {
-    if (!item.editable || !agentReady || working || queueWorking) return;
+    if (!item.editable || !ownerReady || working || queueWorking) return;
     if (!editingQueueId && (draft.trim() || screenshots.length)) {
       setNotice("请先发送或清空当前草稿，再编辑排队消息。");
       return;
@@ -1421,7 +1449,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   async function mutateQueue(method: "queue.delete" | "queue.reorder" | "queue.steer", params: Record<string, unknown>, marker: string) {
-    if (!view || !deviceId || !agentReady || working || queueWorking || readOnlyHistory) return;
+    if (!view || !deviceId || !ownerReady || working || queueWorking || readOnlyHistory) return;
     const targetDevice = deviceId;
     const targetThread = view.threadId;
     const targetEpoch = pendingSelect.current;
@@ -1547,7 +1575,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   async function stop() {
-    if (!view || !activeTurn || !agentReady || stopping || readOnlyHistory) return;
+    if (!view || !activeTurn || !ownerReady || stopping || readOnlyHistory) return;
     setStopping(true);
     const response = await client.request("turn.interrupt", deviceId, { threadId: view.threadId, expectedTurnId: activeTurn.turnId });
     setStopping(false);
@@ -1555,7 +1583,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   async function respond(interaction: Interaction, decision: string) {
-    if (!view || !agentReady || working || readOnlyHistory) return;
+    if (!view || !ownerReady || working || readOnlyHistory) return;
     const raw = answers[interaction.interactionId] || {};
     const mapped = decision === "answer" ? answersForSubmission(interaction, raw) : null;
     if (decision === "answer" && !mapped) return;
@@ -1620,6 +1648,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       selection.current = { deviceId: targetDevice, threadId: "", view: null };
       setThreadId("");
       setView(null);
+      setSyncingView(false);
       resetHistory();
       if (subscriptionId) void client.request("thread.unsubscribe", targetDevice, { subscriptionId });
     }
@@ -1714,13 +1743,14 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
+        {syncingView && view && !readOnlyHistory && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={agentReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={agentReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
-          {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !agentReady} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} />)}
         </div>
         {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
         <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button className="icon-control" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setNotice("")}><CloseIcon /></button></div>}
@@ -1732,13 +1762,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
               const busy = !!queueWorking || working || !!draggingQueueId;
               const summary = item.text.trim() || (item.images.length ? `${item.images.length} 张截图` : "无法预览的输入");
               return <li className={`queue-item ${editingQueueId === item.queueId ? "editing" : ""} ${draggingQueueId === item.queueId ? "dragging" : ""}`} key={item.queueId} data-queue-id={item.queueId}>
-                <button className="queue-handle" type="button" aria-label={`拖拽排序：${summary}`} title="拖拽排序；也可用上下方向键" onPointerDown={event => beginQueueDrag(item, event)} onKeyDown={event => queueHandleKeyDown(index, event)} disabled={!agentReady || !!queueWorking || working}><QueueHandleIcon /></button>
+                <button className="queue-handle" type="button" aria-label={`拖拽排序：${summary}`} title="拖拽排序；也可用上下方向键" onPointerDown={event => beginQueueDrag(item, event)} onKeyDown={event => queueHandleKeyDown(index, event)} disabled={!ownerReady || !!queueWorking || working}><QueueHandleIcon /></button>
                 <div className="queue-content"><span className="queue-text">{summary}</span>{item.images.length > 0 && item.text.trim() && <small>{item.images.length} 张截图</small>}{!item.editable && <small>此输入只能删除或调序</small>}</div>
                 <div className="queue-actions">
-                  {item.editable && <button className="queue-guide-action icon-control" type="button" aria-label={`引导：${summary}`} data-tooltip="插入当前" onClick={() => steerQueuedMessage(item)} disabled={!agentReady || busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /></button>}
-                  <button className="queue-icon-action icon-control" type="button" aria-label={`删除排队消息：${summary}`} data-tooltip="删除" onClick={() => deleteQueuedMessage(item)} disabled={!agentReady || busy}><QueueTrashIcon /></button>
+                  {item.editable && <button className="queue-guide-action icon-control" type="button" aria-label={`引导：${summary}`} data-tooltip="插入当前" onClick={() => steerQueuedMessage(item)} disabled={!ownerReady || busy || !activeTurn || !!view?.thread.pendingInteractions.length}><QueueGuideIcon /></button>}
+                  <button className="queue-icon-action icon-control" type="button" aria-label={`删除排队消息：${summary}`} data-tooltip="删除" onClick={() => deleteQueuedMessage(item)} disabled={!ownerReady || busy}><QueueTrashIcon /></button>
                   <div className="queue-more-wrap">
-                    <button className="queue-more-action icon-control" type="button" aria-label={`更多选项：${summary}`} data-tooltip="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={event => toggleQueueMenu(item, event)} disabled={!agentReady || busy}><MoreIcon /></button>
+                    <button className="queue-more-action icon-control" type="button" aria-label={`更多选项：${summary}`} data-tooltip="更多选项" aria-haspopup="menu" aria-expanded={queueMenuId === item.queueId} onClick={event => toggleQueueMenu(item, event)} disabled={!ownerReady || busy}><MoreIcon /></button>
                     {queueMenuId === item.queueId && createPortal(<div className="queue-menu" role="menu" aria-label={`排队消息选项：${summary}`} style={{ left: queueMenuPosition.left, top: queueMenuPosition.top, transform: queueMenuPosition.above ? "translateY(-100%)" : undefined }}>
                       {item.editable && <button type="button" role="menuitem" onClick={() => editQueuedMessage(item)}>编辑</button>}
                       <button type="button" role="menuitem" onClick={() => moveQueuedMessage(index, -1)} disabled={index === 0}>上移</button>
@@ -1750,20 +1780,20 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
             })}</ol>
           </section>}
           {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></button></div>)}</div>}
-          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || !agentReady || readOnlyHistory} rows={1} />
+          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || readOnlyHistory} rows={1} />
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
-              <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || !agentReady || readOnlyHistory || working} />
-              <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || !agentReady || readOnlyHistory || working}><PlusIcon /></button>
+              <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || readOnlyHistory || working} />
+              <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || readOnlyHistory || working}><PlusIcon /></button>
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
-              {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !agentReady || readOnlyHistory}><StopIcon /></button>}
-              <button className="primary send-button icon-control" aria-label={sendAction} data-tooltip={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, agentReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)}><SendIcon /></button>
+              {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
+              <button className="primary send-button icon-control" aria-label={sendAction} data-tooltip={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)}><SendIcon /></button>
             </div></div></div></div></div>
       </main>
     </div>
     {threadMenu && (() => {
       const target = threads.find(candidate => candidate.threadId === threadMenu.threadId);
       if (!target) return null;
-      const archiveAllowed = selection.current.threadId === target.threadId && view?.threadId === target.threadId && view.thread.runtime === "idle";
+      const archiveAllowed = ownerReady && selection.current.threadId === target.threadId && view?.threadId === target.threadId && view.thread.runtime === "idle";
       return createPortal(<div className="thread-context-menu" role="menu" aria-label={`会话操作：${target.title || "未命名会话"}`} style={{ left: threadMenu.left, top: threadMenu.top }}>
         <button ref={threadMenuFirstItem} type="button" role="menuitem" onClick={() => void archiveThread(target)} disabled={!archiveAllowed || threadArchiveWorking === target.threadId}>归档</button>
         {!archiveAllowed && <small>会话处理完成后可归档</small>}

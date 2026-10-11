@@ -239,6 +239,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		CWD             string              `json:"cwd"`
 		Archived        bool                `json:"archived"`
 		OperationID     string              `json:"operationId"`
+		UpdateMode      string              `json:"updateMode"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -298,7 +299,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var subID, streamID string
 		var thread map[string]any
 		var activate func()
-		subID, streamID, thread, activate, err = a.service.Subscribe(loadCtx, p.ThreadID, func(event map[string]any) {
+		subID, streamID, thread, activate, err = a.service.SubscribeWithMode(loadCtx, p.ThreadID, p.UpdateMode, func(event map[string]any) {
 			event["type"] = "event"
 			event["v"] = 1
 			event["deviceId"] = a.deviceID

@@ -690,6 +690,63 @@ func TestServiceSubscriptionActivatesAfterSnapshotAndTracksSequence(t *testing.T
 	}
 }
 
+func TestServiceDeltaSubscriptionEmitsPatchInsteadOfRecentWindow(t *testing.T) {
+	live := &fakeLive{updates: make(chan struct{}, 2)}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	events := make(chan map[string]any, 2)
+	id, _, _, activate, err := s.SubscribeWithMode(context.Background(), "thread", "item-delta-v1", func(m map[string]any) { events <- m })
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	live.mu.Lock()
+	live.busy = true
+	live.mu.Unlock()
+	live.updates <- struct{}{}
+	select {
+	case event := <-events:
+		if event["subscriptionId"] != id || event["baseSeq"] != 1 || event["seq"] != 2 {
+			t.Fatalf("identity or sequence: %#v", event)
+		}
+		if _, full := event["thread"]; full {
+			t.Fatalf("delta subscription received full window: %#v", event)
+		}
+		patch, ok := event["patch"].(map[string]any)
+		if !ok || len(patch["turnPatches"].([]any)) != 1 || patch["threadState"].(map[string]any)["runtime"] != "inProgress" {
+			t.Fatalf("delta patch: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delta update not delivered")
+	}
+}
+
+func TestServiceDeltaActivationCatchesStateChangeFromSnapshotBaseline(t *testing.T) {
+	live := &observedLive{fakeLive: &fakeLive{updates: make(chan struct{}, 2)}, second: make(chan struct{})}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	events := make(chan map[string]any, 2)
+	_, _, snapshot, activate, err := s.SubscribeWithMode(context.Background(), "thread", "item-delta-v1", func(m map[string]any) { events <- m })
+	if err != nil || snapshot["runtime"] != "idle" {
+		t.Fatalf("snapshot: %#v %v", snapshot, err)
+	}
+	live.mu.Lock()
+	live.busy = true
+	live.mu.Unlock()
+	live.updates <- struct{}{}
+	<-live.second
+	activate()
+	select {
+	case event := <-events:
+		patch, ok := event["patch"].(map[string]any)
+		if !ok || event["baseSeq"] != 1 || event["seq"] != 2 || patch["threadState"].(map[string]any)["runtime"] != "inProgress" {
+			t.Fatalf("catch-up delta: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("state changed before activation was lost")
+	}
+}
+
 func TestServiceDeliversUpdateAndAcceptsInterruptDuringSlowStart(t *testing.T) {
 	live := &slowLive{fakeLive: &fakeLive{updates: make(chan struct{}, 2)}, started: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{})}
 	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })

@@ -1,4 +1,4 @@
-import type { Thread, ThreadSnapshot, ThreadUpdate } from "./generated/protocol";
+import type { Item, Thread, ThreadPatch, ThreadSnapshot, ThreadUpdate, Turn, TurnPatch } from "./generated/protocol";
 
 export type ThreadView = {
   deviceId: string;
@@ -19,7 +19,75 @@ export function applyThreadEvent(current: ThreadView | null, event: ThreadSnapsh
     return { deviceId: event.deviceId, threadId: event.threadId, subscriptionId: event.subscriptionId, streamId: event.streamId, seq: 1, thread: event.thread };
   }
   if (!current || current.deviceId !== event.deviceId || current.threadId !== event.threadId || current.subscriptionId !== event.subscriptionId || current.streamId !== event.streamId || event.baseSeq !== current.seq || event.seq !== current.seq + 1) return null;
-  return { ...current, seq: event.seq, thread: event.thread };
+  const full = event.thread;
+  const patch = event.patch;
+  if (full && !patch) return { ...current, seq: event.seq, thread: full };
+  if (!patch || full) return null;
+  const thread = applyThreadPatch(current.thread, patch);
+  return thread ? { ...current, seq: event.seq, thread } : null;
+}
+
+function unique(values: readonly string[]): boolean {
+  return new Set(values).size === values.length && values.every(Boolean);
+}
+
+function applyThreadPatch(current: Thread, patch: ThreadPatch): Thread | null {
+  if (patch.threadState.threadId !== current.threadId || !unique(patch.turnOrder) || !unique(patch.removedTurnIds)) return null;
+  const order = new Set(patch.turnOrder);
+  const removed = new Set(patch.removedTurnIds);
+  if (patch.removedTurnIds.some(id => order.has(id))) return null;
+
+  const existing = new Map(current.turns.map(turn => [turn.turnId, turn]));
+  const expectedRemoved = current.turns.filter(turn => !order.has(turn.turnId)).map(turn => turn.turnId);
+  if (expectedRemoved.length !== removed.size || expectedRemoved.some(id => !removed.has(id))) return null;
+
+  const patches = new Map<string, TurnPatch>();
+  for (const turnPatch of patch.turnPatches) {
+    if (!turnPatch.turnId || patches.has(turnPatch.turnId) || !order.has(turnPatch.turnId)) return null;
+    patches.set(turnPatch.turnId, turnPatch);
+  }
+
+  const turns: Turn[] = [];
+  for (const turnID of patch.turnOrder) {
+    const before = existing.get(turnID);
+    const turnPatch = patches.get(turnID);
+    if (!turnPatch) {
+      if (!before) return null;
+      turns.push(before);
+      continue;
+    }
+    const next = applyTurnPatch(before, turnPatch);
+    if (!next) return null;
+    turns.push(next);
+  }
+  return { ...patch.threadState, turns };
+}
+
+function applyTurnPatch(current: Turn | undefined, patch: TurnPatch): Turn | null {
+  if (!unique(patch.itemOrder) || !unique(patch.removedItemIds)) return null;
+  const order = new Set(patch.itemOrder);
+  const removed = new Set(patch.removedItemIds);
+  if (patch.removedItemIds.some(id => order.has(id))) return null;
+
+  const items = new Map<string, Item>((current?.items || []).map(item => [item.itemId, item]));
+  const expectedRemoved = (current?.items || []).filter(item => !order.has(item.itemId)).map(item => item.itemId);
+  if (expectedRemoved.length !== removed.size || expectedRemoved.some(id => !removed.has(id))) return null;
+  const upserted = new Set<string>();
+  for (const item of patch.upsertItems) {
+    if (!item.itemId || upserted.has(item.itemId) || !order.has(item.itemId)) return null;
+    upserted.add(item.itemId);
+    items.set(item.itemId, item);
+  }
+  const nextItems: Item[] = [];
+  for (const itemID of patch.itemOrder) {
+    const item = items.get(itemID);
+    if (!item) return null;
+    nextItems.push(item);
+  }
+  const next: Turn = { turnId: patch.turnId, status: patch.status, items: nextItems };
+  if (patch.itemsComplete !== undefined) next.itemsComplete = patch.itemsComplete;
+  if (patch.nextItemCursor !== undefined) next.nextItemCursor = patch.nextItemCursor;
+  return next;
 }
 
 export function preserveDraftAfterSend(draft: string, outcome: "accepted" | "rejected" | "unknown" | "not_submitted"): string {
