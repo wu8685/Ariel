@@ -1,6 +1,7 @@
 package desktopagent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
@@ -15,6 +16,7 @@ func TestLargeSessionErrorsAreScopedAndClassified(t *testing.T) {
 		{desktopipc.ErrFrameTooLarge, "HISTORY_TOO_LARGE"},
 		{appserver.ErrResponseTooLarge, "HISTORY_TOO_LARGE"},
 		{desktopipc.ErrOverloaded, "OVERLOADED"},
+		{context.DeadlineExceeded, "TIMEOUT"},
 	} {
 		if got := requestErrorCode(tc.err); got != tc.code {
 			t.Fatalf("%v classified as %s, want %s", tc.err, got, tc.code)

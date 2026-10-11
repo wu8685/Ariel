@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -16,17 +17,26 @@ type ReadOnlyEndpoint interface {
 }
 
 type RestartingRPC struct {
-	parent     context.Context
-	start      func(context.Context) (ReadOnlyEndpoint, error)
-	mu         sync.Mutex
-	current    ReadOnlyEndpoint
-	generation uint64
-	closed     bool
-	closedCh   chan struct{}
+	parent                   context.Context
+	start                    func(context.Context) (ReadOnlyEndpoint, error)
+	threadListAttemptTimeout time.Duration
+	mu                       sync.Mutex
+	current                  ReadOnlyEndpoint
+	generation               uint64
+	closed                   bool
+	closedCh                 chan struct{}
 }
 
 func NewRestartingRPC(parent context.Context, start func(context.Context) (ReadOnlyEndpoint, error)) (*RestartingRPC, error) {
-	r := &RestartingRPC{parent: parent, start: start, closedCh: make(chan struct{})}
+	return NewRestartingRPCWithThreadListTimeout(parent, 0, start)
+}
+
+// NewRestartingRPCWithThreadListTimeout bounds each thread/list attempt. A
+// timed-out read invalidates an otherwise live child and is replayed once on a
+// fresh endpoint. The timeout is intentionally scoped to thread/list: search
+// and history reads retain their larger protocol budgets.
+func NewRestartingRPCWithThreadListTimeout(parent context.Context, timeout time.Duration, start func(context.Context) (ReadOnlyEndpoint, error)) (*RestartingRPC, error) {
+	r := &RestartingRPC{parent: parent, start: start, threadListAttemptTimeout: timeout, closedCh: make(chan struct{})}
 	if _, _, err := r.endpoint(); err != nil {
 		return nil, err
 	}
@@ -109,9 +119,23 @@ func (r *RestartingRPC) Call(ctx context.Context, method string, params any, res
 		if err != nil {
 			return err
 		}
-		err = endpoint.Call(ctx, method, params, result)
+		callCtx := ctx
+		cancel := func() {}
+		if method == "thread/list" && r.threadListAttemptTimeout > 0 {
+			callCtx, cancel = context.WithTimeout(ctx, r.threadListAttemptTimeout)
+		}
+		err = endpoint.Call(callCtx, method, params, result)
+		attemptTimedOut := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		cancel()
 		if err == nil {
 			return nil
+		}
+		if attemptTimedOut {
+			r.invalidate(generation)
+			if retryable && attempt == 0 && ctx.Err() == nil {
+				continue
+			}
+			return err
 		}
 		select {
 		case <-endpoint.Done():

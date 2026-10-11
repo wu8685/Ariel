@@ -7,6 +7,7 @@ import { newRequestID } from "./ids";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
 import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } from "./history-cache";
+import { BrowserThreadListCache, type ThreadListCacheIdentity } from "./thread-list-cache";
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
@@ -77,7 +78,7 @@ function contentMarker(thread: Thread): ContentMarker {
 function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
   return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
 }
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", TIMEOUT: "读取超时，请重试。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。" };
 
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
@@ -272,6 +273,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
   const devicesRef = useRef<Device[]>([]);
   const historyCache = useRef(new BrowserHistoryCache());
+  const threadListCache = useRef(new BrowserThreadListCache());
   const restoredHistoryCache = useRef<HistoryCacheIdentity | null>(null);
   const expectedSubscription = useRef("");
   const blockedSelection = useRef("");
@@ -655,13 +657,17 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const found = (response.data?.devices as Device[] | undefined) || [];
     const foundIDs = new Set(found.map(candidate => candidate.deviceId));
     for (const previous of devicesRef.current) {
-      if (!foundIDs.has(previous.deviceId)) historyCache.current.clearDevice(previous.deviceId);
+      if (!foundIDs.has(previous.deviceId)) {
+        historyCache.current.clearDevice(previous.deviceId);
+        threadListCache.current.clearDevice(previous.deviceId);
+      }
     }
     for (const candidate of found) {
       const previous = devicesRef.current.find(device => device.deviceId === candidate.deviceId);
       if (candidate.agentEpoch) observedAgentEpochs.current.set(candidate.deviceId, candidate.agentEpoch);
       if (previous?.agentEpoch && previous.agentEpoch !== candidate.agentEpoch) {
         historyCache.current.clearDevice(candidate.deviceId);
+        threadListCache.current.clearDevice(candidate.deviceId);
         discardRestoredHistory(candidate.deviceId, selection.current.threadId);
         if (offlineDevice.current !== candidate.deviceId) invalidateOwnerView(candidate.deviceId, "Desktop Agent 已重连，正在重新同步当前会话。");
       }
@@ -673,21 +679,42 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return found;
   }
 
-  async function loadThreads(id: string, next = "", query = searchTerm) {
+  function threadListIdentity(id: string, query: string): ThreadListCacheIdentity | null {
+    const agentEpoch = devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || observedAgentEpochs.current.get(id) || "";
+    return id && agentEpoch ? { deviceId: id, agentEpoch, query } : null;
+  }
+
+  async function loadThreads(id: string, next = "", query = searchTerm, force = false) {
     const generation = ++threadListGeneration.current;
     if (!id) { setThreads([]); setListLoading(false); return; }
+    const identity = threadListIdentity(id, query);
+    if (!next && !force && identity) {
+      const cached = threadListCache.current.get(identity);
+      if (cached) {
+        setThreads(cached.value.threads);
+        setCursor(cached.value.cursor);
+        setListError("");
+        if (cached.fresh) { setListLoading(false); return; }
+      }
+    }
     setListLoading(true);
     setListError("");
     const response = await client.request("thread.list", id, { limit: 50, ...(next ? { cursor: next } : {}), ...(query ? { searchTerm: query } : {}) });
-    if (generation !== threadListGeneration.current || selection.current.deviceId !== id || searchInputRef.current.trim() !== query) return;
+    const currentIdentity = threadListIdentity(id, query);
+    if (generation !== threadListGeneration.current || selection.current.deviceId !== id || searchInputRef.current.trim() !== query || identity?.agentEpoch !== currentIdentity?.agentEpoch) return;
     setListLoading(false);
     if (response.outcome !== "accepted") {
       setListError(query && response.error?.code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : errorText(response));
       return;
     }
     const page = (response.data?.threads as Thread[] | undefined) || [];
-    setThreads(current => next ? mergeThreadPages(current, page) : page);
-    setCursor(String(response.data?.nextCursor || ""));
+    const nextCursor = String(response.data?.nextCursor || "");
+    setThreads(current => {
+      const merged = next ? mergeThreadPages(current, page) : page;
+      if (identity) threadListCache.current.set(identity, { threads: merged, cursor: nextCursor });
+      return merged;
+    });
+    setCursor(nextCursor);
   }
 
   function openNewThreadDialog() {
@@ -853,10 +880,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
       historyCache.current.clear();
+      threadListCache.current.clear();
       observedAgentEpochs.current.clear();
       if (webAuthMode === "pin" && sessionToken) webSession.accepted(sessionToken);
       if (pairingAttempt.current) setPhonePairing(null);
@@ -972,7 +1000,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return () => window.clearInterval(timer);
   }, [pairingInvite?.status, pairingInvite?.credential, pairingInvite?.expiresAt]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     pendingSelect.current++;
     threadListGeneration.current++;
     const oldDevice = selection.current.deviceId;
@@ -982,7 +1010,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads([]); setCursor(""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    const cached = threadListIdentity(deviceId, searchTerm);
+    const cachedList = cached ? threadListCache.current.get(cached) : null;
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setReadOnlyHistory(false); setThreads(cachedList?.value.threads || []); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -995,7 +1025,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }, [searchInput]);
 
   useEffect(() => {
-    if (status === "ready" && deviceId) void loadThreads(deviceId, "", searchTerm);
+    const force = searchInputChanged.current;
+    searchInputChanged.current = false;
+    if (status === "ready" && deviceId) void loadThreads(deviceId, "", searchTerm, force);
   }, [deviceId, status, searchRevision]);
 
   useEffect(() => {
@@ -1469,7 +1501,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
-        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <button className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></button>}{webAuthMode === "pin" ? <button className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></button> : <button className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></button>}<button className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim())} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></button><button className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></button><button className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></button></div></div>
+        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <button className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></button>}{webAuthMode === "pin" ? <button className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></button> : <button className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></button>}<button className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></button><button className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></button><button className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></button></div></div>
         <div className="sidebar-device-row"><span className={`status-dot ${device?.agentOnline ? "online" : ""}`} aria-hidden="true" /><select id="device" aria-label="设备" aria-describedby="sidebar-device-status" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select><span id="sidebar-device-status" className="sr-only">{device ? `${device.deviceName}，${device.agentOnline ? "Agent 在线" : "Agent 离线"}，${device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}` : "未选择设备"}</span></div>
         <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></button>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>

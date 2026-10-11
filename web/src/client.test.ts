@@ -114,6 +114,20 @@ describe("Ariel WebSocket client", () => {
     client.disconnect();
   });
 
+  it("classifies a local thread-list deadline as a retryable timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const client = new ArielSocket("ws://localhost/ws", () => socket as unknown as WebSocket);
+      client.connect("secret"); socket.onopen?.();
+      socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e" });
+      const pending = client.request("thread.list", "device", { limit: 50 });
+      await vi.advanceTimersByTimeAsync(timeoutFor("thread.list"));
+      expect(await pending).toMatchObject({ outcome: "rejected", error: { code: "TIMEOUT" } });
+      client.disconnect();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("reconnects on foreground wake and marks in-flight mutation unknown", async () => {
     const sockets: FakeSocket[] = [];
     const client = new ArielSocket("ws://localhost/ws", () => {

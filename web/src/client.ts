@@ -8,6 +8,10 @@ export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(valu
 type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
+function retryableRead(method: Method): boolean {
+  return method === "thread.list" || method === "thread.read" || method === "thread.history" || method === "thread.history.items" || method === "thread.image";
+}
+
 export function timeoutFor(method: Method, params: Record<string, unknown> = {}): number {
   if (method === "thread.list" && typeof params.searchTerm === "string" && params.searchTerm) return 40000;
   if (method === "thread.subscribe" || method === "thread.history" || method === "thread.history.items" || method === "thread.image") return 35000;
@@ -72,7 +76,9 @@ export class ArielSocket {
     return new Promise(resolve => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        resolve(this.localFailure(requestId, "unknown", "OUTCOME_UNKNOWN"));
+        resolve(retryableRead(method)
+          ? this.localFailure(requestId, "rejected", "TIMEOUT")
+          : this.localFailure(requestId, "unknown", "OUTCOME_UNKNOWN"));
       }, timeoutFor(method, params));
       this.pending.set(requestId, { finish: resolve, timer });
       try { this.ws?.send(JSON.stringify(message)); }
@@ -147,7 +153,7 @@ export class ArielSocket {
     this.pending.clear();
   }
 
-  private localFailure(requestId: string, outcome: "unknown" | "not_submitted", code: "DEVICE_OFFLINE" | "OVERLOADED" | "INVALID_ARGUMENT" | "OUTCOME_UNKNOWN"): Response {
+  private localFailure(requestId: string, outcome: "rejected" | "unknown" | "not_submitted", code: "DEVICE_OFFLINE" | "OVERLOADED" | "INVALID_ARGUMENT" | "OUTCOME_UNKNOWN" | "TIMEOUT"): Response {
     return { type: "response", v: 1, requestId, outcome, error: { code, message: code } };
   }
 }

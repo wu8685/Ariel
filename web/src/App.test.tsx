@@ -1435,6 +1435,36 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("Thread B")).toBeTruthy();
   });
 
+  it("restores a fresh same-epoch thread list without another request when switching devices", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac-a", deviceName: "Mac A", agentOnline: true, codexReady: true, agentEpoch: "epoch-a", capabilities: { autoLoad: true } },
+      { deviceId: "mac-b", deviceName: "Mac B", agentOnline: true, codexReady: true, agentEpoch: "epoch-b", capabilities: { autoLoad: true } },
+    ] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    const makeThread = (threadId: string, title: string) => ({ threadId, title, cwd: `/tmp/${threadId}`, updatedAt: "2026-10-11T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] });
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [makeThread("a", "Cached A")], nextCursor: "" } }));
+    await expandProject("/tmp/a");
+    expect(await screen.findByText("Cached A")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-b" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [makeThread("b", "Thread B")], nextCursor: "" } }));
+    await expandProject("/tmp/b");
+    expect(await screen.findByText("Thread B")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-a" } });
+    await expandProject("/tmp/a");
+    expect(await screen.findByText("Cached A")).toBeTruthy();
+    expect(requests("thread.list")).toHaveLength(2);
+  });
+
   it("does not revive an offline device with an older device list response", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

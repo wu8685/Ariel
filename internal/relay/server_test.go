@@ -344,7 +344,7 @@ func TestRelayCorrelatesSameWebRequestIDAcrossTwoConnections(t *testing.T) {
 	}
 }
 
-func TestRelayRejectsOfflineAndTimesOutForwardedRequestAsUnknown(t *testing.T) {
+func TestRelayRejectsOfflineAndClassifiesReadTimeoutAsRetryable(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 80 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
@@ -366,8 +366,27 @@ func TestRelayRejectsOfflineAndTimesOutForwardedRequestAsUnknown(t *testing.T) {
 	sendJSON(t, w, req)
 	readJSON(t, agent)
 	got := readJSON(t, w)
-	if got["outcome"] != "unknown" || got["error"].(map[string]any)["code"] != "OUTCOME_UNKNOWN" {
+	if got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "TIMEOUT" {
 		t.Fatalf("forwarded timeout misclassified: %+v", got)
+	}
+}
+
+func TestRelayStillClassifiesMutationTimeoutAsUnknown(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, RequestTimeout: 20 * time.Millisecond, MutationTimeout: 40 * time.Millisecond})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+	id := "00000000-0000-4000-8000-000000000072"
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "turn.start", "params": map[string]any{"threadId": "mock-thread-a", "clientMessageId": "00000000-0000-4000-8000-000000000073", "text": "do not replay"}})
+	readJSON(t, agent)
+	got := readJSON(t, web)
+	if got["outcome"] != "unknown" || got["error"].(map[string]any)["code"] != "OUTCOME_UNKNOWN" {
+		t.Fatalf("mutation timeout lost unknown semantics: %+v", got)
 	}
 }
 
