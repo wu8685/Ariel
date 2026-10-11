@@ -81,6 +81,8 @@
 | 0062 | [Web 端有界会话历史缓存](0062-bounded-web-history-cache.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 在同一页面与 Agent epoch 内复用已下载旧页，减少会话往返时的重复下载 |
 | 0063 | [Agent 重连状态 fencing 与会话恢复](0063-agent-reconnect-state-fencing.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 防止旧 epoch offline／stream 事件污染新连接，并保证短暂断线后最终恢复当前会话 |
 | 0064 | [设备切换时的只读请求超时语义](0064-device-switch-read-timeout.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 修复只读列表的跨层 timeout 倒挂，并避免把安全重试的读取失败显示成 mutation unknown |
+| 0065 | [新建会话的 bootstrap 订阅](0065-new-thread-bootstrap-subscription.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 复用已确认创建回执跨过持久化索引可见性窗口，并对首次只读订阅做一次 bounded retry |
+| 0066 | [运行中输入焦点与会话 chrome 稳定性](0066-running-composer-focus-stability.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 输入框聚焦时只接受明确的 transcript 手势进入历史阅读，避免打字／streaming 布局变化收起输入区 |
 
 ## 设计基线
 

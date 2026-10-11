@@ -27,6 +27,7 @@ const composerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding
 const latestFollowDistance = 80;
 const historyHeaderExpandDistance = 32;
 const latestChromeRestoreDuration = 260;
+const transcriptGestureGraceMs = 500;
 const agentOfflineGraceMs = 8_000;
 const agentOfflineNotice = "Desktop Agent 暂时离线，恢复后会重新同步当前会话。";
 const queueMenuWidth = 108;
@@ -289,7 +290,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const lastTranscriptScrollTop = useRef(0);
   const historyReturnIntent = useRef(false);
   const transcriptTouchY = useRef<number | null>(null);
-  const keyboardViewportActive = useRef(false);
+  const transcriptGestureDeadline = useRef(0);
   const latestChromeRestoreDeadline = useRef(0);
   const latestChromeRestoreTimer = useRef<number | null>(null);
   const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
@@ -475,7 +476,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container) return;
-    if (keyboardViewportActive.current && document.activeElement === composerInputRef.current && followLatestRef.current && transcriptTouchY.current === null) {
+    const composerEditingWithoutTranscriptGesture = window.innerWidth <= mobileViewportMaxWidth
+      && document.activeElement === composerInputRef.current
+      && followLatestRef.current
+      && transcriptTouchY.current === null
+      && performance.now() >= transcriptGestureDeadline.current;
+    if (composerEditingWithoutTranscriptGesture) {
       scrollToLatest(container);
       lastTranscriptScrollTop.current = container.scrollTop;
       setShowReturnToLatest(false);
@@ -523,7 +529,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   function onTranscriptWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    if (event.deltaY !== 0) applyHistoryReturnGesture(event.deltaY > 0);
+    if (event.deltaY !== 0) {
+      transcriptGestureDeadline.current = performance.now() + transcriptGestureGraceMs;
+      applyHistoryReturnGesture(event.deltaY > 0);
+    }
   }
 
   function onTranscriptTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
@@ -536,10 +545,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (currentY === undefined) return;
     transcriptTouchY.current = currentY;
     if (previousY === null || currentY === previousY) return;
+    transcriptGestureDeadline.current = performance.now() + transcriptGestureGraceMs;
     applyHistoryReturnGesture(currentY < previousY);
   }
 
   function onTranscriptTouchEnd() {
+    transcriptGestureDeadline.current = performance.now() + transcriptGestureGraceMs;
     transcriptTouchY.current = null;
   }
 
@@ -742,7 +753,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setThreads(current => [created, ...current.filter(thread => thread.threadId !== created.threadId)]);
     setNewThreadOpen(false);
     setShowList(false);
-    await selectThread(created.threadId, targetDevice);
+    await selectThread(created.threadId, targetDevice, true, true);
     composerInputRef.current?.focus();
   }
 
@@ -774,7 +785,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return true;
   }
 
-  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true) {
+  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true, retryCreatedSubscribe = false) {
     if (!targetDevice) return;
     if (cachePrevious) cacheCurrentHistory();
     if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
@@ -790,11 +801,21 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
-    const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
+    let response = await client.request("thread.subscribe", targetDevice, { threadId: id });
     if (epoch !== pendingSelect.current) {
       const staleID = response.data?.subscriptionId;
       if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
       return;
+    }
+    if (retryCreatedSubscribe && response.outcome !== "accepted" && (response.error?.code === "RESYNC_REQUIRED" || response.error?.code === "TIMEOUT")) {
+      await new Promise(resolve => window.setTimeout(resolve, 500));
+      if (epoch !== pendingSelect.current || selection.current.deviceId !== targetDevice || selection.current.threadId !== id || status !== "ready") return;
+      response = await client.request("thread.subscribe", targetDevice, { threadId: id });
+      if (epoch !== pendingSelect.current) {
+        const staleID = response.data?.subscriptionId;
+        if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
+        return;
+      }
     }
     if (response.outcome !== "accepted") {
       if (response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED") {
@@ -1108,11 +1129,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const sync = () => {
       const visibleBottom = viewport.offsetTop + viewport.height;
       const keyboardVisible = window.innerWidth <= 800 && document.activeElement === input && visibleBottom < window.innerHeight - 80;
-      keyboardViewportActive.current = keyboardVisible;
       setVisualViewportHeight(keyboardVisible ? Math.round(visibleBottom) : null);
     };
     const onBlur = () => {
-      keyboardViewportActive.current = false;
       setVisualViewportHeight(null);
     };
     viewport.addEventListener("resize", sync);

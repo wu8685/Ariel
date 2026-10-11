@@ -92,6 +92,7 @@ type threadController struct {
 	mu             sync.Mutex
 	startMu        sync.Mutex
 	id, title, cwd string
+	bootstrap      bool
 	live           Live
 	subs           map[string]*subscription
 	leases         int
@@ -169,6 +170,18 @@ func (s *Service) CreateThread(ctx context.Context, cwd string) (map[string]any,
 	}
 	thread["historyComplete"] = true
 	thread["recentComplete"] = true
+	// thread/start may acknowledge before the new thread reaches the
+	// persistent history index. Keep only the validated routing metadata in
+	// the existing bounded controller cache so the immediate first subscribe
+	// can still attach to the original owner.
+	if controller, controllerErr := s.controller(created.ID); controllerErr == nil {
+		controller.mu.Lock()
+		controller.title = created.Name
+		controller.cwd = canonical
+		controller.bootstrap = true
+		controller.mu.Unlock()
+		s.releaseController(controller)
+	}
 	return thread, nil
 }
 
@@ -577,20 +590,24 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 	if c.live != nil {
 		return nil
 	}
-	source, err := s.history.Read(ctx, c.id)
-	if err != nil {
-		return err
+	title, cwd := c.title, c.cwd
+	if !c.bootstrap {
+		source, err := s.history.Read(ctx, c.id)
+		if err != nil {
+			return err
+		}
+		if source.ID != c.id || source.CWD == "" {
+			return ErrNativeShape
+		}
+		title, cwd = source.Name, source.CWD
 	}
-	if source.ID != c.id || source.CWD == "" {
-		return ErrNativeShape
-	}
-	live, err := s.attach(ctx, c.id, source.CWD)
+	live, err := s.attach(ctx, c.id, cwd)
 	if err != nil {
 		return err
 	}
 	c.live = live
-	c.title = source.Name
-	c.cwd = source.CWD
+	c.title = title
+	c.cwd = cwd
 	go s.pump(c, live)
 	return nil
 }

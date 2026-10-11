@@ -226,6 +226,51 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByRole("dialog", { name: "新建会话" })).toBeNull();
   });
 
+  it("retries only the first subscription when a newly created thread is not immediately visible", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, true);
+    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "项目目录" }), { target: { value: "/work/new-project" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
+    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000098", title: "", cwd: "/work/new-project", updatedAt: "2026-10-11T00:00:00Z" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "accepted", data: { thread: created } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "rejected", error: { code: "RESYNC_REQUIRED", message: "not indexed yet" } }));
+    expect(screen.queryByText("事件顺序发生变化，正在重新同步。")).toBeNull();
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
+
+    expect(requests("thread.create")).toHaveLength(1);
+    expect(requests("thread.subscribe")).toHaveLength(3);
+    expect(requests("thread.subscribe")[2].params.threadId).toBe(created.threadId);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-created-retry" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: created.threadId, subscriptionId: "sub-created-retry", streamId: "stream-created-retry", seq: 1, thread: created }));
+    const input = await screen.findByRole("textbox", { name: "发送消息" });
+    expect(input.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByText("事件顺序发生变化，正在重新同步。")).toBeNull();
+  });
+
+  it("cancels a newly created thread subscription retry after the user switches threads", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, true);
+    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "项目目录" }), { target: { value: "/work/new-project" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
+    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000097", title: "", cwd: "/work/new-project", updatedAt: "2026-10-11T00:00:00Z" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "accepted", data: { thread: created } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "rejected", error: { code: "RESYNC_REQUIRED", message: "not indexed yet" } }));
+
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    fireEvent.click(screen.getByText(fixtureThread.title).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
+
+    expect(requests("thread.create")).toHaveLength(1);
+    expect(requests("thread.subscribe")).toHaveLength(3);
+    expect(requests("thread.subscribe")[2].params.threadId).toBe(fixtureThread.threadId);
+  });
+
   it("keeps the chosen directory visible when thread creation is rejected", async () => {
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
@@ -1173,6 +1218,51 @@ describe("Ariel app interactions", () => {
       expect(document.activeElement).toBe(input);
       expect(composerWrap.dataset.historyCollapsed).toBe("false");
       expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
+    } finally {
+      if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
+      if (originalHeight) Object.defineProperty(window, "innerHeight", originalHeight);
+      if (originalViewport) Object.defineProperty(window, "visualViewport", originalViewport);
+      else delete (window as unknown as Record<string, unknown>).visualViewport;
+    }
+  });
+
+  it("keeps focused draft input stable when Safari shrinks both viewport heights during streaming", async () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    const originalHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    const originalViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    let innerHeight = 844;
+    const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, get: () => innerHeight });
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+      const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "partial" }] }] };
+      const { socket } = await openFixture(running);
+      const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+      const transcript = document.querySelector(".transcript") as HTMLElement;
+      const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
+      let transcriptHeight = 600;
+      Object.defineProperty(transcript, "clientHeight", { configurable: true, get: () => transcriptHeight });
+      Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
+      transcript.scrollTop = 400;
+
+      input.focus();
+      innerHeight = 500;
+      viewport.height = 500;
+      transcriptHeight = 500;
+      act(() => viewport.dispatchEvent(new Event("resize")));
+
+      for (const [index, value] of ["处", "处理", "处理中"].entries()) {
+        fireEvent.change(input, { target: { value } });
+        input.setSelectionRange(value.length, value.length);
+        fireEvent.scroll(transcript);
+        const updated: Thread = { ...running, turns: [{ ...running.turns[0], items: [{ ...running.turns[0].items[0], text: `partial-${index}` }] }] };
+        act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: index + 1, seq: index + 2, thread: updated }));
+        expect(composerWrap.dataset.historyCollapsed).toBe("false");
+        expect(document.activeElement).toBe(input);
+        expect(input.value).toBe(value);
+        expect(input.selectionStart).toBe(value.length);
+      }
     } finally {
       if (originalWidth) Object.defineProperty(window, "innerWidth", originalWidth);
       if (originalHeight) Object.defineProperty(window, "innerHeight", originalHeight);
