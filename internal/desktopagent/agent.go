@@ -63,6 +63,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
 	service.SetThreadCreator(appserver.NewThreadCreator(cfg.Binary))
+	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -104,7 +105,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled()}}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled()}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -231,6 +232,8 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		Decision        string              `json:"decision"`
 		Answers         map[string][]string `json:"answers"`
 		CWD             string              `json:"cwd"`
+		Archived        bool                `json:"archived"`
+		OperationID     string              `json:"operationId"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -243,6 +246,17 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var thread map[string]any
 		thread, err = a.service.CreateThread(ctx, p.CWD)
 		data = map[string]any{"thread": thread}
+	case "thread.archive.update":
+		if !p.Archived {
+			err = errors.New("INVALID_ARGUMENT")
+			break
+		}
+		var operationID string
+		operationID, err = a.service.ArchiveThread(ctx, p.ThreadID)
+		data = map[string]any{"operationId": operationID}
+	case "thread.archive.undo":
+		err = a.service.UndoArchive(ctx, p.ThreadID, p.OperationID)
+		data = map[string]any{}
 	case "thread.list":
 		if p.Limit == 0 {
 			p.Limit = 50

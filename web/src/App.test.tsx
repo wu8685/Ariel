@@ -48,7 +48,7 @@ async function expandProject(cwd: string) {
   fireEvent.click(await screen.findByRole("button", { name: `展开项目 ${projectName(cwd)}，${path}` }));
 }
 
-async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread]) {
+async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -57,7 +57,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
@@ -110,6 +110,56 @@ describe("Ariel app interactions", () => {
     expect(screen.getByLabelText("设备").getAttribute("aria-describedby")).toBe("sidebar-device-status");
     for (const label of ["新建会话", "手机扫码登录", "刷新会话", "断开", "关闭会话列表"]) {
       expect(sidebar.querySelector(`button[aria-label='${label}']`)).toBeTruthy();
+    }
+  });
+
+  it("opens the thread menu by secondary click and archives only a verified idle selection", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread], true);
+    const row = document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!;
+    fireEvent.contextMenu(row, { clientX: 120, clientY: 180 });
+    const archive = await screen.findByRole("menuitem", { name: "归档" });
+    expect((archive as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(archive);
+    expect(requests("thread.archive.update")).toHaveLength(1);
+    expect(requests("thread.archive.update")[0].params).toEqual({ threadId: "fixture", archived: true });
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.archive.update")[0].requestId, outcome: "accepted", data: { operationId: "archive-one" } }));
+    expect(screen.queryByText("Fixture")).toBeNull();
+    expect(screen.getByRole("button", { name: "撤销归档" })).toBeTruthy();
+  });
+
+  it("requires a 500ms stationary long press and suppresses its following click", async () => {
+    const { requests } = await openFixture(fixtureThread, false, false, [fixtureThread], true);
+    const row = document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!;
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(row, { pointerId: 7, clientX: 40, clientY: 80 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+      expect(screen.queryByRole("menu")).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(screen.getByRole("menu")).toBeTruthy();
+      fireEvent.pointerUp(row, { pointerId: 7, clientX: 40, clientY: 80 });
+      fireEvent.click(row);
+      expect(requests("thread.subscribe")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a thread long press after movement and disables archive for an active session", async () => {
+    const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [] }] };
+    await openFixture(running, false, false, [running], true);
+    const row = document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!;
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(row, { pointerId: 8, clientX: 20, clientY: 20 });
+      fireEvent.pointerMove(row, { pointerId: 8, clientX: 31, clientY: 20 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(screen.queryByRole("menu")).toBeNull();
+      fireEvent.contextMenu(row, { clientX: 80, clientY: 120 });
+      expect((screen.getByRole("menuitem", { name: "归档" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByText("会话处理完成后可归档")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -1675,6 +1725,54 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "owner receipt lost" } }));
     expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("do not replay");
     expect(screen.getByRole("alert").textContent).toContain("执行结果不确定");
+    expect(requests("turn.start")).toHaveLength(1);
+  });
+
+  it("clears an accepted send after a same-thread stream resubscription", async () => {
+    const { socket, requests } = await openFixture();
+    const composer = screen.getByLabelText("发送消息") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "survive resync" } });
+    fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+    expect(requests("turn.start")).toHaveLength(1);
+
+    act(() => socket.message({ type: "event", v: 1, event: "thread.error", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", code: "RESYNC_REQUIRED" }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "accepted", data: { turnId: "turn-resynced" } }));
+
+    expect(composer.value).toBe("");
+    expect(requests("turn.start")).toHaveLength(1);
+  });
+
+  it("clears an uncertain send only when the exact client message is observed", async () => {
+    const { socket, requests } = await openFixture();
+    const composer = screen.getByLabelText("发送消息") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "uncertain message" } });
+    fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+    const clientMessageId = requests("turn.start")[0].params.clientMessageId;
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "owner receipt lost" } }));
+
+    const wrongIdentity: Thread = { ...fixtureThread, turns: [{ turnId: "wrong", status: "inProgress", items: [{ itemId: "wrong-user", role: "user", clientMessageId: "11111111-1111-4111-8111-111111111111", text: "uncertain message" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: wrongIdentity }));
+    expect(composer.value).toBe("uncertain message");
+
+    const confirmed: Thread = { ...wrongIdentity, turns: [{ turnId: "confirmed", status: "inProgress", items: [{ itemId: "confirmed-user", role: "user", clientMessageId, text: "uncertain message" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 2, seq: 3, thread: confirmed }));
+    expect(composer.value).toBe("");
+    expect(requests("turn.start")).toHaveLength(1);
+  });
+
+  it("does not clear newer composer edits when an uncertain send is later confirmed", async () => {
+    const { socket, requests } = await openFixture();
+    const composer = screen.getByLabelText("发送消息") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "first message" } });
+    fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+    const clientMessageId = requests("turn.start")[0].params.clientMessageId;
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "owner receipt lost" } }));
+    fireEvent.change(composer, { target: { value: "new draft" } });
+
+    const confirmed: Thread = { ...fixtureThread, turns: [{ turnId: "confirmed", status: "inProgress", items: [{ itemId: "confirmed-user", role: "user", clientMessageId, text: "first message" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: confirmed }));
+    expect(composer.value).toBe("new draft");
     expect(requests("turn.start")).toHaveLength(1);
   });
 

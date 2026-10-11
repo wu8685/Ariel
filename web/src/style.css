@@ -271,6 +271,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .thread-row:hover { background: var(--color-panel); }
 .thread-row.selected { background: var(--color-raised); border-color: var(--color-accent); box-shadow: inset 3px 0 0 var(--color-accent); }
+.thread-context-menu { position: fixed; z-index: 80; width: 172px; padding: 6px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-raised); box-shadow: 0 14px 36px rgba(0,0,0,.42); }
+.thread-context-menu button { width: 100%; min-height: 38px; border: 0; border-radius: 5px; padding: 0 10px; text-align: left; color: var(--color-text); background: transparent; }
+.thread-context-menu button:hover:not(:disabled), .thread-context-menu button:focus-visible { background: var(--color-panel); }
+.thread-context-menu button:disabled { opacity: .48; }
+.thread-context-menu small { display: block; padding: 4px 10px 7px; color: var(--color-muted); line-height: 1.35; }
+.archive-toast { position: fixed; z-index: 85; left: 50%; bottom: 22px; display: flex; align-items: center; gap: 12px; max-width: min(560px, calc(100vw - 28px)); transform: translateX(-50%); padding: 11px 13px; border: 1px solid var(--color-border); border-radius: 8px; color: var(--color-text); background: var(--color-raised); box-shadow: 0 14px 36px rgba(0,0,0,.42); font-size: 12px; }
+.archive-toast button { flex: none; border: 0; color: var(--color-accent); background: transparent; font-weight: 700; }
 .thread-title { font-weight: 600; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
 .thread-snippet { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; width: 100%; margin-top: 3px; color: var(--color-muted); font-size: 11px; line-height: 1.3; }
 .thread-date { font-size: 9px; color: var(--color-subtle); margin-top: 3px; line-height: 1.3; }

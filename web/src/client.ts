@@ -5,13 +5,13 @@ import { isPairingCredential } from "./pairing";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
-type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
+type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.archive.update" | "thread.archive.undo" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {
   if (["thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image"].includes(method)) return 40000;
   if (method === "thread.subscribe") return 35000;
-  if (method === "thread.create" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
+  if (method === "thread.create" || method.startsWith("thread.archive.") || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
   return 12000;
 }
 

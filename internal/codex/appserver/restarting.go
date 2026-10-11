@@ -99,7 +99,7 @@ func (r *RestartingRPC) Call(ctx context.Context, method string, params any, res
 	retryable := true
 	switch method {
 	case "thread/list", "thread/search", "thread/read", "thread/turns/list", "thread/items/list", "thread/queue/list":
-	case "thread/queue/add", "thread/queue/update", "thread/queue/delete", "thread/queue/reorder":
+	case "thread/queue/add", "thread/queue/update", "thread/queue/delete", "thread/queue/reorder", "thread/archive", "thread/unarchive":
 		retryable = false
 	default:
 		return ErrProtocol

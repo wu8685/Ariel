@@ -47,7 +47,14 @@ type ThreadCreator interface {
 	Create(context.Context, string) (appserver.Thread, error)
 }
 
+type ThreadArchiver interface {
+	Archive(context.Context, string) error
+	Unarchive(context.Context, string) error
+}
+
 var ErrHistoryTooLarge = errors.New("HISTORY_TOO_LARGE")
+var ErrArchiveStateUnknown = errors.New("NATIVE_STATE_UNCERTAIN")
+var ErrArchiveUndoInvalid = errors.New("INVALID_ARGUMENT")
 
 const maxThreadPayloadBytes = 7 << 20
 const maxHistoryPageBytes = 6 << 20
@@ -102,8 +109,10 @@ type Service struct {
 	history          History
 	queue            FollowUpQueue
 	creator          ThreadCreator
+	archiver         ThreadArchiver
 	attach           LiveFactory
 	mu               sync.Mutex
+	archiveMu        sync.Mutex
 	queueMu          sync.Mutex
 	imageMu          sync.Mutex
 	queueCache       map[string]queueCacheEntry
@@ -113,6 +122,13 @@ type Service struct {
 	seenOrder        []string
 	closed           bool
 	placeholderGrace time.Duration
+	archiveUndo      []archiveUndoRecord
+}
+
+type archiveUndoRecord struct {
+	operationID string
+	threadID    string
+	expiresAt   time.Time
 }
 
 type queueCacheEntry struct {
@@ -130,8 +146,77 @@ func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Se
 
 func (s *Service) QueueEnabled() bool { return s.queue != nil }
 
-func (s *Service) SetThreadCreator(creator ThreadCreator) { s.creator = creator }
-func (s *Service) ThreadCreationEnabled() bool            { return s.creator != nil }
+func (s *Service) SetThreadCreator(creator ThreadCreator)    { s.creator = creator }
+func (s *Service) ThreadCreationEnabled() bool               { return s.creator != nil }
+func (s *Service) SetThreadArchiver(archiver ThreadArchiver) { s.archiver = archiver }
+func (s *Service) ThreadArchiveEnabled() bool                { return s.archiver != nil }
+
+func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, error) {
+	if s.archiver == nil || !threadIDPattern.MatchString(threadID) {
+		return "", appserver.ErrMethodUnavailable
+	}
+	s.archiveMu.Lock()
+	defer s.archiveMu.Unlock()
+	s.mu.Lock()
+	controller := s.threads[threadID]
+	s.mu.Unlock()
+	if controller == nil {
+		return "", ErrArchiveStateUnknown
+	}
+	controller.mu.Lock()
+	if controller.live == nil {
+		controller.mu.Unlock()
+		return "", ErrArchiveStateUnknown
+	}
+	raw, err := controller.live.Current()
+	if err != nil {
+		controller.mu.Unlock()
+		return "", ErrArchiveStateUnknown
+	}
+	current, err := NormalizeLive(controller.id, controller.title, controller.cwd, raw)
+	controller.mu.Unlock()
+	if err != nil || current["runtime"] != "idle" {
+		return "", ErrArchiveStateUnknown
+	}
+	if err := s.archiver.Archive(ctx, threadID); err != nil {
+		return "", err
+	}
+	now := time.Now()
+	kept := s.archiveUndo[:0]
+	for _, record := range s.archiveUndo {
+		if record.expiresAt.After(now) && record.threadID != threadID {
+			kept = append(kept, record)
+		}
+	}
+	s.archiveUndo = kept
+	if len(s.archiveUndo) >= 16 {
+		s.archiveUndo = s.archiveUndo[len(s.archiveUndo)-15:]
+	}
+	operationID := "archive-" + rand.Text()
+	s.archiveUndo = append(s.archiveUndo, archiveUndoRecord{operationID: operationID, threadID: threadID, expiresAt: now.Add(15 * time.Second)})
+	return operationID, nil
+}
+
+func (s *Service) UndoArchive(ctx context.Context, threadID, operationID string) error {
+	if s.archiver == nil || !threadIDPattern.MatchString(threadID) || operationID == "" {
+		return ErrArchiveUndoInvalid
+	}
+	s.archiveMu.Lock()
+	defer s.archiveMu.Unlock()
+	now := time.Now()
+	index := -1
+	for i, record := range s.archiveUndo {
+		if record.threadID == threadID && record.operationID == operationID && record.expiresAt.After(now) {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return ErrArchiveUndoInvalid
+	}
+	s.archiveUndo = append(s.archiveUndo[:index], s.archiveUndo[index+1:]...)
+	return s.archiver.Unarchive(ctx, threadID)
+}
 
 func canonicalProjectDirectory(cwd string) (string, error) {
 	if cwd == "" || strings.ContainsRune(cwd, 0) || utf8.RuneCountInString(cwd) > 4096 || !filepath.IsAbs(cwd) {
