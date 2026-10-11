@@ -242,9 +242,11 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 	items := make([]any, 0, len(rawItems))
 	for _, raw := range rawItems {
 		var item struct {
-			ID      string `json:"id"`
-			Type    string `json:"type"`
-			Text    string `json:"text"`
+			ID                  string `json:"id"`
+			Type                string `json:"type"`
+			Text                string `json:"text"`
+			ClientID            string `json:"clientId"`
+			ClientUserMessageID string `json:"clientUserMessageId"`
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -398,6 +400,13 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			text, _ = boundedActivityText(512, text)
 		}
 		projected := map[string]any{"itemId": item.ID, "role": role, "text": text}
+		clientMessageID := item.ClientID
+		if item.Type == "steeringUserMessage" {
+			clientMessageID = item.ClientUserMessageID
+		}
+		if role == "user" && clientMessageIDPattern.MatchString(clientMessageID) {
+			projected["clientMessageId"] = clientMessageID
+		}
 		if images := imageReferences(raw); len(images) > 0 {
 			projected["images"] = images
 		}

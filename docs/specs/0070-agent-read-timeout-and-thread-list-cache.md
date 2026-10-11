@@ -3,7 +3,7 @@
 - 状态：Implemented（2026-10-11；Go／Web／race／production build／真实 Chromium 截图回归通过）。
 - 来源：切换到在线设备时会话列表偶发归零，并显示“执行结果不确定”；重启本机 Agent 后可暂时恢复。
 - 跟踪：[GitHub Issue #1](https://github.com/wu8685/Ariel/issues/1)。
-- 范围：Desktop Agent 的 Codex App Server 只读 RPC、Relay／Web 的只读超时语义，以及浏览器内按设备隔离的会话列表缓存；不自动重放任何写操作，不改变 Codex 会话 SSOT。
+- 范围：在 0064 的跨层只读预算之上，补充 Desktop Agent 的 Codex App Server 自愈、Relay／Web 的最终只读超时语义，以及浏览器内按设备隔离的会话列表缓存；不自动重放任何写操作，不改变 Codex 会话 SSOT。
 
 ## 已确认原因
 
@@ -26,9 +26,9 @@
 
 ## 超时预算
 
-- Relay 普通请求默认 10 秒。
-- Agent 的 `thread/list` 单次 App Server deadline 默认 3 秒，最多尝试 2 次；即使 `Service.List` 继续读取置顶分区，也为 Relay 的 10 秒上限保留余量。
-- Web 的 transport timeout 继续略大于 Relay；它只作为最后一道保护，不代替 Agent 自愈。
+- 0064 已将 Relay 只读 route 设为 35 秒、Web 只读等待设为 40 秒。
+- Agent 的 `thread/list` 单次 App Server deadline 默认 3 秒，最多尝试 2 次；即使 `Service.List` 继续读取置顶分区，也远小于 Relay 的 35 秒上限。
+- Web 的 transport timeout 继续晚于 Relay；它只作为最后一道保护，不代替 Agent 自愈。
 - 搜索和历史读取沿用各自已有的较长预算，本规格不把大查询强制压缩到 4 秒。
 
 ## TDD 与验收

@@ -80,6 +80,12 @@
 | 0061 | [ECS 单机一键部署 Relay + Web](0061-ecs-single-node-one-command.md) | Implemented（契约／双模式真实 Docker／HTTPS 反代／全量回归已验） | 用一个脚本在单台 Linux ECS 上安全生成凭据并拉起 PIN 或 Caddy + Passkey 拓扑 |
 | 0062 | [Web 端有界会话历史缓存](0062-bounded-web-history-cache.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 在同一页面与 Agent epoch 内复用已下载旧页，减少会话往返时的重复下载 |
 | 0063 | [Agent 重连状态 fencing 与会话恢复](0063-agent-reconnect-state-fencing.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 防止旧 epoch offline／stream 事件污染新连接，并保证短暂断线后最终恢复当前会话 |
+| 0064 | [设备切换时的只读请求超时语义](0064-device-switch-read-timeout.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 修复只读列表的跨层 timeout 倒挂，并避免把安全重试的读取失败显示成 mutation unknown |
+| 0065 | [新建会话的 bootstrap 订阅](0065-new-thread-bootstrap-subscription.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 复用已确认创建回执跨过持久化索引可见性窗口，并对首次只读订阅做一次 bounded retry |
+| 0066 | [运行中输入焦点与会话 chrome 稳定性](0066-running-composer-focus-stability.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 输入框聚焦时只接受明确的 transcript 手势进入历史阅读，避免打字／streaming 布局变化收起输入区 |
+| 0067 | [侧栏会话运行与未读状态](0067-sidebar-thread-status.md) | Blocked（Desktop 私有 pipe 不支持独立第二 client） | 通过一次批量 Codex App Tool 快照展示运行 spinner／未读蓝点，并以有界缓存和自适应轮询避免逐会话查询 |
+| 0068 | [侧栏会话长按菜单与原生置顶／归档](0068-sidebar-thread-context-actions.md) | Partially implemented（归档／撤销已验；置顶被 0.160.0 schema 阻塞） | 长按／右键会话后安全归档并提供短时撤销；public pin capability 可用后再启用置顶 |
+| 0069 | [已确认发送后可靠清空输入框](0069-confirmed-send-clears-composer.md) | Implemented（Go／Web／真实 Chromium 已验） | 修复同会话 resync 吞掉 accepted 清理，并用 exact clientMessageId 对账 unknown 后的真实送达 |
 | 0070 | [Agent 只读请求自愈与设备会话列表缓存](0070-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
 
 ## 设计基线

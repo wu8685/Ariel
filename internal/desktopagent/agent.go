@@ -31,7 +31,7 @@ type agent struct {
 
 // Service.List may issue two sequential thread/list calls (recent + pinned).
 // Three seconds per attempt leaves enough room for one endpoint rebuild while
-// staying inside Relay's ten-second ordinary read budget.
+// staying well inside Relay's bounded read budget.
 const threadListAttemptTimeout = 3 * time.Second
 
 func Run(ctx context.Context, cfg Config) error {
@@ -68,6 +68,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
 	service.SetThreadCreator(appserver.NewThreadCreator(cfg.Binary))
+	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -109,7 +110,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled()}}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled()}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -178,7 +179,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 				a.handle(requestCtx, req.RequestID, req.Method, req.Params)
 			}()
 		default:
-			a.reply(requestCtx, req.RequestID, nil, errors.New("OVERLOADED"))
+			a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
 		}
 	}
 }
@@ -236,9 +237,11 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		Decision        string              `json:"decision"`
 		Answers         map[string][]string `json:"answers"`
 		CWD             string              `json:"cwd"`
+		Archived        bool                `json:"archived"`
+		OperationID     string              `json:"operationId"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
-		a.reply(ctx, id, nil, errors.New("INVALID_ARGUMENT"))
+		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
 		return
 	}
 	var data map[string]any
@@ -248,6 +251,17 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var thread map[string]any
 		thread, err = a.service.CreateThread(ctx, p.CWD)
 		data = map[string]any{"thread": thread}
+	case "thread.archive.update":
+		if !p.Archived {
+			err = errors.New("INVALID_ARGUMENT")
+			break
+		}
+		var operationID string
+		operationID, err = a.service.ArchiveThread(ctx, p.ThreadID)
+		data = map[string]any{"operationId": operationID}
+	case "thread.archive.undo":
+		err = a.service.UndoArchive(ctx, p.ThreadID, p.OperationID)
+		data = map[string]any{}
 	case "thread.list":
 		if p.Limit == 0 {
 			p.Limit = 50
@@ -292,7 +306,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		})
 		if err == nil {
 			data = map[string]any{"subscriptionId": subID, "streamId": streamID}
-			a.reply(ctx, id, data, nil)
+			a.reply(ctx, id, method, data, nil)
 			_ = a.send(ctx, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": a.deviceID, "threadId": p.ThreadID, "subscriptionId": subID, "streamId": streamID, "seq": 1, "thread": thread})
 			activate()
 			return
@@ -336,16 +350,19 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	default:
 		err = errors.New("INVALID_ARGUMENT")
 	}
-	a.reply(ctx, id, data, err)
+	a.reply(ctx, id, method, data, err)
 }
 
-func (a *agent) reply(ctx context.Context, id string, data map[string]any, err error) {
+func (a *agent) reply(ctx context.Context, id, method string, data map[string]any, err error) {
 	msg := map[string]any{"type": "response", "v": 1, "requestId": id}
 	if err == nil {
 		msg["outcome"] = "accepted"
 		msg["data"] = data
 	} else {
-		outcome, code := "rejected", requestErrorCode(err)
+		outcome, code := "rejected", requestErrorCode(method, err)
+		if code == "OUTCOME_UNKNOWN" {
+			outcome = "unknown"
+		}
 		if errors.Is(err, appserver.ErrOutcomeUnknown) {
 			outcome = "unknown"
 			code = "OUTCOME_UNKNOWN"
@@ -367,10 +384,13 @@ func (a *agent) reply(ctx context.Context, id string, data map[string]any, err e
 	_ = a.send(ctx, msg)
 }
 
-func requestErrorCode(err error) string {
+func requestErrorCode(method string, err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return "TIMEOUT"
+		if isReadRequest(method) {
+			return "TIMEOUT"
+		}
+		return "OUTCOME_UNKNOWN"
 	case errors.Is(err, desktopipc.ErrFrameTooLarge), errors.Is(err, appserver.ErrResponseTooLarge):
 		return "HISTORY_TOO_LARGE"
 	case errors.Is(err, desktopipc.ErrOverloaded):
@@ -379,9 +399,18 @@ func requestErrorCode(err error) string {
 		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
-	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED":
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT":
 		return code
 	default:
 		return "RESYNC_REQUIRED"
+	}
+}
+
+func isReadRequest(method string) bool {
+	switch method {
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe":
+		return true
+	default:
+		return false
 	}
 }

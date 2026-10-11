@@ -63,6 +63,24 @@ func TestNormalizeStoredThreadProjectsNativePinnedState(t *testing.T) {
 	}
 }
 
+func TestNormalizeTurnProjectsExactClientMessageIdentityOnlyForUserItems(t *testing.T) {
+	turn, err := normalizeTurn("turn", "completed", []json.RawMessage{
+		json.RawMessage(`{"type":"userMessage","id":"user","clientId":"00000000-0000-4000-8000-000000000001","content":[{"type":"text","text":"hello"}]}`),
+		json.RawMessage(`{"type":"agentMessage","id":"assistant","clientId":"00000000-0000-4000-8000-000000000002","text":"world"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := turn["items"].([]any)
+	user := items[0].(map[string]any)
+	if user["clientMessageId"] != "00000000-0000-4000-8000-000000000001" {
+		t.Fatalf("user identity missing: %#v", user)
+	}
+	if _, leaked := items[1].(map[string]any)["clientMessageId"]; leaked {
+		t.Fatalf("assistant inherited private identity: %#v", items[1])
+	}
+}
+
 func TestNormalizeStoredThreadProjectsBundledPinnedSectionState(t *testing.T) {
 	thread, err := NormalizeStored(appserver.Thread{ID: "pinned-section", Name: "Pinned", CWD: "/fixture", Section: &appserver.ThreadSection{ID: appserver.PinnedSectionID, Name: "Pinned"}, Status: json.RawMessage(`{"type":"idle"}`)})
 	if err != nil {

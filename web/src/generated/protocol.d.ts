@@ -28,6 +28,8 @@ export type Request = {
     | "auth.pair.cancel"
     | "device.list"
     | "thread.create"
+    | "thread.archive.update"
+    | "thread.archive.undo"
     | "thread.list"
     | "thread.read"
     | "thread.history"
@@ -58,6 +60,28 @@ export type Response = {
   };
   error?: Error;
 };
+export type Item = {
+  itemId: Id;
+  role: "user" | "assistant" | "system";
+  clientMessageId?: RequestId;
+  text: string;
+  /**
+   * @maxItems 24
+   */
+  images?: {
+    index: number;
+    kind: "native" | "markdown";
+    alt: string;
+    source: string;
+  }[];
+  activity?: {
+    kind: "mcpToolCall" | "commandExecution" | "fileChange" | "sleep" | "imageView";
+    label: string;
+    status: "inProgress" | "completed" | "failed" | "interrupted" | "unknown";
+    details: string;
+    truncated: boolean;
+  };
+};
 
 export interface WebHello {
   type: "hello";
@@ -85,6 +109,8 @@ export interface Capabilities {
   interaction?: boolean;
   queue?: boolean;
   threadCreate?: boolean;
+  threadArchive?: boolean;
+  threadArchiveUndo?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";
@@ -161,27 +187,6 @@ export interface Turn {
   items: Item[];
   itemsComplete?: boolean;
   nextItemCursor?: string;
-}
-export interface Item {
-  itemId: Id;
-  role: "user" | "assistant" | "system";
-  text: string;
-  /**
-   * @maxItems 24
-   */
-  images?: {
-    index: number;
-    kind: "native" | "markdown";
-    alt: string;
-    source: string;
-  }[];
-  activity?: {
-    kind: "mcpToolCall" | "commandExecution" | "fileChange" | "sleep" | "imageView";
-    label: string;
-    status: "inProgress" | "completed" | "failed" | "interrupted" | "unknown";
-    details: string;
-    truncated: boolean;
-  };
 }
 export interface Interaction {
   interactionId: Id;

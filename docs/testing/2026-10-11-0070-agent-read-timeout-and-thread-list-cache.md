@@ -18,6 +18,9 @@
 GO111MODULE=on go test ./...
 PASS
 
+GO111MODULE=on go vet ./...
+PASS
+
 GO111MODULE=on go test -race ./internal/codex/appserver
 PASS
 GO111MODULE=on go test -race ./internal/desktopagent
@@ -38,7 +41,7 @@ PASS
 
 ```text
 npm test
-23 files, 176 tests passed
+23 files, 186 tests passed
 
 npm run build
 TypeScript + Vite production build passed
@@ -56,7 +59,7 @@ TypeScript + Vite production build passed
 
 ```text
 npx playwright test
-20 passed
+25 passed
 ```
 
 新增 Chromium mobile fixture 在 390×844、touch、dark mode 下执行 A → B → A：切回 A 后项目和会话在同一帧恢复，250ms 后 `thread.list` 总请求数仍为 2。

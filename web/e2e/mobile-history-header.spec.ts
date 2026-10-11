@@ -31,8 +31,16 @@ async function openHistoryFixture(page: Page, thread: Thread = fixtureThread, fa
       viewport.height = height;
       viewport.dispatchEvent(new Event("resize"));
     };
+    (window as unknown as { __resizeArielSafariViewport: (height: number) => void }).__resizeArielSafariViewport = height => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      viewport.height = height;
+      viewport.dispatchEvent(new Event("resize"));
+      window.dispatchEvent(new Event("resize"));
+    };
   });
+  let relaySocket: { send(message: string): void } | undefined;
   await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
+    relaySocket = socket;
     const message = JSON.parse(String(raw));
     if (message.type === "hello") {
       socket.send(JSON.stringify({ type: "hello.ok", v: 1, connectionId: "history", relayEpoch: "history-epoch", sessionToken }));
@@ -52,6 +60,7 @@ async function openHistoryFixture(page: Page, thread: Thread = fixtureThread, fa
   await page.getByText(thread.title).click();
   await expect(page.getByRole("heading", { name: thread.title })).toBeVisible();
   await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
+  return { sendEvent: (event: unknown) => relaySocket?.send(JSON.stringify(event)) };
 }
 
 test("the running composer stays visible when the mobile keyboard shrinks the viewport", async ({ page }) => {
@@ -83,6 +92,51 @@ test("the running composer stays visible when the mobile keyboard shrinks the vi
   expect(geometry.composerBottom).toBeLessThanOrEqual(500);
 });
 
+test("typing through Safari-style viewport resize and streaming never collapses the focused composer", async ({ page }) => {
+  const running: Thread = {
+    ...fixtureThread,
+    runtime: "inProgress",
+    turns: fixtureThread.turns.map((turn, index) => index === fixtureThread.turns.length - 1 ? { ...turn, status: "inProgress" } : turn),
+  };
+  const { sendEvent } = await openHistoryFixture(page, running, true);
+  const input = page.getByRole("textbox", { name: "发送消息" });
+  const composerWrap = page.locator(".composer-wrap");
+  await input.focus();
+  await page.evaluate(() => {
+    (window as unknown as { __resizeArielSafariViewport: (height: number) => void }).__resizeArielSafariViewport(500);
+  });
+
+  let draft = "";
+  for (const [index, character] of ["处", "理", "中"].entries()) {
+    draft += character;
+    await input.pressSequentially(character);
+    await page.evaluate(() => {
+      const transcript = document.querySelector(".transcript") as HTMLElement;
+      transcript.scrollTop = Math.max(0, transcript.scrollHeight - transcript.clientHeight - 100);
+      transcript.dispatchEvent(new Event("scroll"));
+    });
+    const updated: Thread = {
+      ...running,
+      turns: running.turns.map((turn, turnIndex) => turnIndex === running.turns.length - 1
+        ? { ...turn, items: turn.items.map((item, itemIndex) => itemIndex === turn.items.length - 1 ? { ...item, text: `${item.text}-${index}` } : item) }
+        : turn),
+    };
+    sendEvent({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: running.threadId, subscriptionId: "sub", streamId: "stream", baseSeq: index + 1, seq: index + 2, thread: updated });
+    await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
+    await expect(input).toBeVisible();
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(draft);
+  }
+
+  await page.evaluate(() => {
+    const transcript = document.querySelector(".transcript") as HTMLElement;
+    transcript.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+    transcript.scrollTop = Math.max(0, transcript.scrollHeight - transcript.clientHeight - 100);
+    transcript.dispatchEvent(new Event("scroll"));
+  });
+  await expect(composerWrap).toHaveAttribute("data-history-collapsed", "true");
+});
+
 test("scrolling into history fully collapses the chrome and gives its height to the transcript", async ({ page }) => {
   await openHistoryFixture(page);
   const head = page.locator(".conversation-head");
@@ -97,6 +151,7 @@ test("scrolling into history fully collapses the chrome and gives its height to 
   expect(initial.headHeight).toBe(66);
 
   await transcript.evaluate(element => {
+    element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
     element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 100);
     element.dispatchEvent(new Event("scroll"));
   });

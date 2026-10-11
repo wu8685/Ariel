@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
-import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, preserveDraftAfterSend, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
+import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
 import { newRequestID } from "./ids";
 import { WebSession } from "./session";
@@ -19,7 +19,7 @@ import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 10;
 const mobileViewportMaxWidth = 800;
@@ -28,6 +28,7 @@ const composerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding
 const latestFollowDistance = 80;
 const historyHeaderExpandDistance = 32;
 const latestChromeRestoreDuration = 260;
+const transcriptGestureGraceMs = 500;
 const agentOfflineGraceMs = 8_000;
 const agentOfflineNotice = "Desktop Agent 暂时离线，恢复后会重新同步当前会话。";
 const queueMenuWidth = 108;
@@ -36,6 +37,10 @@ type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: numb
 type PhonePairing = { credential: string; phase: "confirm" | "connecting" | "error" };
 type PairingInvite = { status: "loading" | "waiting" | "consumed" | "expired" | "error"; credential: string; expiresAt: number; qr: string; message: string };
 type QueueDragState = { pointerId: number; queueId: string; startY: number; order: string[]; cleanup: () => void };
+type PendingSubmission = { deviceId: string; agentEpoch: string; threadId: string; clientMessageId: string; revision: number; queueId: string };
+type ThreadMenuState = { threadId: string; left: number; top: number };
+type ThreadLongPress = { threadId: string; pointerId: number; startX: number; startY: number; timer: number };
+type ArchiveUndoToast = { threadId: string; title: string; operationId: string };
 type WebAuthMode = "pin" | "passkey";
 type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
 
@@ -78,7 +83,7 @@ function contentMarker(thread: Thread): ContentMarker {
 function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
   return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
 }
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", TIMEOUT: "读取超时，请重试。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。" };
 
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
@@ -253,6 +258,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const itemOverridesRef = useRef<Record<string, Turn>>({});
   const [draft, setDraft] = useState("");
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
+  const composerRevision = useRef(0);
+  const composerSnapshot = useRef({ draft, screenshots });
+  const pendingSubmission = useRef<PendingSubmission | null>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
@@ -260,6 +268,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [editingQueueId, setEditingQueueId] = useState("");
   const [queueMenuId, setQueueMenuId] = useState("");
   const [queueMenuPosition, setQueueMenuPosition] = useState({ left: 0, top: 0, above: false });
+  const [threadMenu, setThreadMenu] = useState<ThreadMenuState | null>(null);
+  const [threadArchiveWorking, setThreadArchiveWorking] = useState("");
+  const [archiveUndoToast, setArchiveUndoToast] = useState<ArchiveUndoToast | null>(null);
   const [draggingQueueId, setDraggingQueueId] = useState("");
   const [dragQueueOrder, setDragQueueOrder] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
@@ -291,7 +302,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const lastTranscriptScrollTop = useRef(0);
   const historyReturnIntent = useRef(false);
   const transcriptTouchY = useRef<number | null>(null);
-  const keyboardViewportActive = useRef(false);
+  const transcriptGestureDeadline = useRef(0);
   const latestChromeRestoreDeadline = useRef(0);
   const latestChromeRestoreTimer = useRef<number | null>(null);
   const pendingReadingAnchor = useRef<ReadingAnchor | null>(null);
@@ -301,6 +312,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pairingGeneration = useRef(0);
   const queueDrag = useRef<QueueDragState | null>(null);
+  const threadLongPress = useRef<ThreadLongPress | null>(null);
+  const suppressThreadClick = useRef({ threadId: "", until: 0 });
+  const threadMenuFirstItem = useRef<HTMLButtonElement>(null);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
   const allThreadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
@@ -311,6 +325,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const queuedMessages = view?.thread.queuedMessages || [];
   const queueEnabled = device?.capabilities.queue === true;
   const threadCreateEnabled = device?.capabilities.threadCreate === true;
+  const threadArchiveEnabled = device?.capabilities.threadArchive === true;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
   const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
@@ -326,6 +341,40 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const known = new Set(override.items.map(item => item.itemId));
     return { ...turn, items: [...override.items, ...turn.items.filter(item => !known.has(item.itemId))], itemsComplete: override.itemsComplete, nextItemCursor: override.nextItemCursor };
   });
+
+  useEffect(() => {
+    if (composerSnapshot.current.draft === draft && composerSnapshot.current.screenshots === screenshots) return;
+    composerSnapshot.current = { draft, screenshots };
+    composerRevision.current++;
+  }, [draft, screenshots]);
+
+  function agentEpochFor(id: string): string {
+    return devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || "";
+  }
+
+  function sameSubmissionTarget(submission: PendingSubmission): boolean {
+    return selection.current.deviceId === submission.deviceId
+      && selection.current.threadId === submission.threadId
+      && agentEpochFor(submission.deviceId) === submission.agentEpoch;
+  }
+
+  function clearSubmittedComposer(submission: PendingSubmission): boolean {
+    if (!sameSubmissionTarget(submission) || composerRevision.current !== submission.revision) return false;
+    setDraft("");
+    setScreenshots([]);
+    if (submission.queueId) setEditingQueueId("");
+    return true;
+  }
+
+  function reconcileSubmission(thread: Thread, eventDeviceId: string, eventThreadId: string) {
+    const submission = pendingSubmission.current;
+    if (!submission?.clientMessageId || submission.deviceId !== eventDeviceId || submission.threadId !== eventThreadId || !sameSubmissionTarget(submission)) return;
+    const observed = thread.turns.some(turn => turn.items.some(item => item.role === "user" && item.clientMessageId === submission.clientMessageId))
+      || (thread.queuedMessages || []).some(item => item.clientMessageId === submission.clientMessageId);
+    if (!observed) return;
+    pendingSubmission.current = null;
+    if (clearSubmittedComposer(submission)) setNotice("消息已确认发送。");
+  }
 
   function resetHistory() {
     const empty = emptyHistoryState();
@@ -477,7 +526,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container) return;
-    if (keyboardViewportActive.current && document.activeElement === composerInputRef.current && followLatestRef.current && transcriptTouchY.current === null) {
+    const composerEditingWithoutTranscriptGesture = window.innerWidth <= mobileViewportMaxWidth
+      && document.activeElement === composerInputRef.current
+      && followLatestRef.current
+      && transcriptTouchY.current === null
+      && performance.now() >= transcriptGestureDeadline.current;
+    if (composerEditingWithoutTranscriptGesture) {
       scrollToLatest(container);
       lastTranscriptScrollTop.current = container.scrollTop;
       setShowReturnToLatest(false);
@@ -525,7 +579,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   function onTranscriptWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    if (event.deltaY !== 0) applyHistoryReturnGesture(event.deltaY > 0);
+    if (event.deltaY !== 0) {
+      transcriptGestureDeadline.current = performance.now() + transcriptGestureGraceMs;
+      applyHistoryReturnGesture(event.deltaY > 0);
+    }
   }
 
   function onTranscriptTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
@@ -538,10 +595,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (currentY === undefined) return;
     transcriptTouchY.current = currentY;
     if (previousY === null || currentY === previousY) return;
+    transcriptGestureDeadline.current = performance.now() + transcriptGestureGraceMs;
     applyHistoryReturnGesture(currentY < previousY);
   }
 
   function onTranscriptTouchEnd() {
+    transcriptGestureDeadline.current = performance.now() + transcriptGestureGraceMs;
     transcriptTouchY.current = null;
   }
 
@@ -704,7 +763,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (generation !== threadListGeneration.current || selection.current.deviceId !== id || searchInputRef.current.trim() !== query || identity?.agentEpoch !== currentIdentity?.agentEpoch) return;
     setListLoading(false);
     if (response.outcome !== "accepted") {
-      setListError(query && response.error?.code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : errorText(response));
+      const code = response.error?.code;
+      setListError(query && code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : code === "TIMEOUT" || code === "OUTCOME_UNKNOWN" ? "加载会话超时，请重试。" : errorText(response));
       return;
     }
     const page = (response.data?.threads as Thread[] | undefined) || [];
@@ -768,7 +828,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setThreads(current => [created, ...current.filter(thread => thread.threadId !== created.threadId)]);
     setNewThreadOpen(false);
     setShowList(false);
-    await selectThread(created.threadId, targetDevice);
+    await selectThread(created.threadId, targetDevice, true, true);
     composerInputRef.current?.focus();
   }
 
@@ -800,10 +860,11 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return true;
   }
 
-  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true) {
+  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true, retryCreatedSubscribe = false) {
     if (!targetDevice) return;
     if (cachePrevious) cacheCurrentHistory();
-    if (selection.current.deviceId === targetDevice && selection.current.threadId === id) rememberReadingPosition();
+    const sameThread = selection.current.deviceId === targetDevice && selection.current.threadId === id;
+    if (sameThread) rememberReadingPosition();
     else { resumeReadingAnchor.current = null; lastTranscriptScrollTop.current = 0; restoreLatestChrome(); }
     pendingReadingAnchor.current = null;
     blockedSelection.current = "";
@@ -813,14 +874,29 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
     selection.current = { deviceId: targetDevice, threadId: id, view: null };
-    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setScreenshots([]); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    setThreadId(id); setView(null); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    if (!sameThread) {
+      pendingSubmission.current = null;
+      setScreenshots([]);
+      setEditingQueueId("");
+    }
     if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
-    const response = await client.request("thread.subscribe", targetDevice, { threadId: id });
+    let response = await client.request("thread.subscribe", targetDevice, { threadId: id });
     if (epoch !== pendingSelect.current) {
       const staleID = response.data?.subscriptionId;
       if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
       return;
+    }
+    if (retryCreatedSubscribe && response.outcome !== "accepted" && (response.error?.code === "RESYNC_REQUIRED" || response.error?.code === "TIMEOUT")) {
+      await new Promise(resolve => window.setTimeout(resolve, 500));
+      if (epoch !== pendingSelect.current || selection.current.deviceId !== targetDevice || selection.current.threadId !== id || status !== "ready") return;
+      response = await client.request("thread.subscribe", targetDevice, { threadId: id });
+      if (epoch !== pendingSelect.current) {
+        const staleID = response.data?.subscriptionId;
+        if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
+        return;
+      }
     }
     if (response.outcome !== "accepted") {
       if (response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED") {
@@ -956,12 +1032,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         if (current.view?.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
-        selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId);
+        selection.current.view = next; setView(next); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId); reconcileSubmission(event.thread, event.deviceId, event.threadId);
       } else if (event.event === "thread.update") {
         const next = applyThreadEvent(current.view, event);
         if (!next) { void resync(); return; }
         selection.current.view = next; setView(next);
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
+        reconcileSubmission(event.thread, event.deviceId, event.threadId);
       }
     };
     if (webAuthMode === "pin" && !phonePairing) {
@@ -1077,6 +1154,29 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   useEffect(() => { setPermissionInfoOpen(false); }, [deviceId, threadId]);
 
   useEffect(() => {
+    setThreadMenu(null);
+    setArchiveUndoToast(null);
+  }, [deviceId, device?.agentEpoch]);
+
+  useEffect(() => {
+    if (!threadMenu) return;
+    threadMenuFirstItem.current?.focus();
+    const close = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".thread-context-menu")) setThreadMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setThreadMenu(null); };
+    document.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); };
+  }, [threadMenu]);
+
+  useEffect(() => {
+    if (!archiveUndoToast) return;
+    const timer = window.setTimeout(() => setArchiveUndoToast(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [archiveUndoToast]);
+
+  useEffect(() => {
     if (editingQueueId && !queuedMessages.some(item => item.queueId === editingQueueId)) {
       setEditingQueueId("");
       setDraft("");
@@ -1139,11 +1239,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const sync = () => {
       const visibleBottom = viewport.offsetTop + viewport.height;
       const keyboardVisible = window.innerWidth <= 800 && document.activeElement === input && visibleBottom < window.innerHeight - 80;
-      keyboardViewportActive.current = keyboardVisible;
       setVisualViewportHeight(keyboardVisible ? Math.round(visibleBottom) : null);
     };
     const onBlur = () => {
-      keyboardViewportActive.current = false;
       setVisualViewportHeight(null);
     };
     viewport.addEventListener("resize", sync);
@@ -1261,9 +1359,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     }
   }
 
-  function applyQueueResponse(response: Response, targetDevice: string, targetThread: string, targetEpoch: number): boolean {
+  function applyQueueResponse(response: Response, targetDevice: string, targetThread: string): boolean {
     const items = responseQueue(response);
-    if (!items || pendingSelect.current !== targetEpoch || selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread || !selection.current.view) return false;
+    if (!items) return false;
+    if (selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread || !selection.current.view) return true;
     const next = { ...selection.current.view, thread: { ...selection.current.view.thread, queuedMessages: items } };
     selection.current.view = next;
     setView(next);
@@ -1276,27 +1375,27 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const images = screenshots;
     const targetDevice = deviceId;
     const targetThread = view.threadId;
-    const targetEpoch = pendingSelect.current;
     const queueID = editingQueueId;
+    const clientMessageId = queueID ? "" : newRequestID();
+    const submission: PendingSubmission = { deviceId: targetDevice, agentEpoch: agentEpochFor(targetDevice), threadId: targetThread, clientMessageId, revision: composerRevision.current, queueId: queueID };
+    pendingSubmission.current = submission;
     setWorking(true); setNotice("");
     const content = { text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) };
     const response = queueID
       ? await client.request("queue.update", targetDevice, { threadId: targetThread, queueId: queueID, ...content })
       : view.thread.runtime === "inProgress" && queueEnabled
-        ? await client.request("queue.add", targetDevice, { threadId: targetThread, clientMessageId: newRequestID(), ...content })
-        : await client.request("turn.start", targetDevice, { threadId: targetThread, clientMessageId: newRequestID(), ...content });
+        ? await client.request("queue.add", targetDevice, { threadId: targetThread, clientMessageId, ...content })
+        : await client.request("turn.start", targetDevice, { threadId: targetThread, clientMessageId, ...content });
     setWorking(false);
-    const stillSelected = pendingSelect.current === targetEpoch && selection.current.deviceId === targetDevice && selection.current.threadId === targetThread;
     const queueMutation = !!queueID || (view.thread.runtime === "inProgress" && queueEnabled);
-    const accepted = response.outcome === "accepted" && (!queueMutation || applyQueueResponse(response, targetDevice, targetThread, targetEpoch));
-    if (stillSelected) {
-      setDraft(current => current === text ? preserveDraftAfterSend(current, accepted ? "accepted" : response.outcome === "accepted" ? "unknown" : response.outcome) : current);
-      if (accepted) {
-        setScreenshots(current => current === images ? [] : current);
-        if (queueID) setEditingQueueId("");
-      }
-      if (!accepted) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response));
+    const accepted = response.outcome === "accepted" && (!queueMutation || applyQueueResponse(response, targetDevice, targetThread));
+    if (accepted) {
+      if (pendingSubmission.current === submission) pendingSubmission.current = null;
+      clearSubmittedComposer(submission);
+      return;
     }
+    if (response.outcome !== "unknown" && pendingSubmission.current === submission) pendingSubmission.current = null;
+    if (sameSubmissionTarget(submission)) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response));
   }
 
   function editQueuedMessage(item: QueuedMessage) {
@@ -1336,7 +1435,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         : errorText(response));
       return;
     }
-    if (!applyQueueResponse(response, targetDevice, targetThread, targetEpoch)) { setNotice("队列回执格式无法确认，请等待状态同步后再操作。"); return; }
+    if (!applyQueueResponse(response, targetDevice, targetThread)) { setNotice("队列回执格式无法确认，请等待状态同步后再操作。"); return; }
     if (params.queueId === editingQueueId) cancelQueueEdit();
   }
 
@@ -1465,6 +1564,95 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (response.outcome !== "accepted") setNotice(errorText(response));
   }
 
+  function openThreadMenu(thread: Thread, left: number, top: number) {
+    if (!threadArchiveEnabled) return;
+    setThreadMenu({ threadId: thread.threadId, left: Math.max(8, Math.min(left, window.innerWidth - 180)), top: Math.max(8, Math.min(top, window.innerHeight - 96)) });
+  }
+
+  function cancelThreadLongPress() {
+    const pending = threadLongPress.current;
+    if (pending) window.clearTimeout(pending.timer);
+    threadLongPress.current = null;
+  }
+
+  function beginThreadLongPress(thread: Thread, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!threadArchiveEnabled || (event.button !== undefined && event.button !== 0)) return;
+    cancelThreadLongPress();
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const timer = window.setTimeout(() => {
+      if (threadLongPress.current?.pointerId !== pointerId) return;
+      suppressThreadClick.current = { threadId: thread.threadId, until: Date.now() + 800 };
+      openThreadMenu(thread, startX, startY);
+      threadLongPress.current = null;
+    }, 500);
+    threadLongPress.current = { threadId: thread.threadId, pointerId, startX, startY, timer };
+  }
+
+  function moveThreadLongPress(event: ReactPointerEvent<HTMLButtonElement>) {
+    const pending = threadLongPress.current;
+    if (!pending || pending.pointerId !== event.pointerId) return;
+    if (Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY) > 10) cancelThreadLongPress();
+  }
+
+  async function archiveThread(thread: Thread) {
+    if (!threadArchiveEnabled || threadArchiveWorking) return;
+    setThreadMenu(null);
+    setThreadArchiveWorking(thread.threadId);
+    const targetDevice = deviceId;
+    const targetAgentEpoch = agentEpochFor(targetDevice);
+    const response = await client.request("thread.archive.update", targetDevice, { threadId: thread.threadId, archived: true });
+    setThreadArchiveWorking("");
+    if (targetDevice !== selection.current.deviceId || targetAgentEpoch !== agentEpochFor(targetDevice)) return;
+    const operationId = response.data?.operationId;
+    if (response.outcome !== "accepted" || typeof operationId !== "string" || !operationId) {
+      setNotice(response.outcome === "accepted" ? "归档回执无法确认，会话列表已重新加载。" : errorText(response));
+      void loadThreads(targetDevice, "", searchInputRef.current.trim());
+      return;
+    }
+    setThreads(current => current.filter(candidate => candidate.threadId !== thread.threadId));
+    if (selection.current.threadId === thread.threadId) {
+      const subscriptionId = expectedSubscription.current;
+      pendingSelect.current++;
+      expectedSubscription.current = "";
+      selection.current = { deviceId: targetDevice, threadId: "", view: null };
+      setThreadId("");
+      setView(null);
+      resetHistory();
+      if (subscriptionId) void client.request("thread.unsubscribe", targetDevice, { subscriptionId });
+    }
+    setArchiveUndoToast({ threadId: thread.threadId, title: thread.title || "未命名会话", operationId });
+  }
+
+  async function undoArchive() {
+    const toast = archiveUndoToast;
+    if (!toast || !device?.capabilities.threadArchiveUndo || threadArchiveWorking) return;
+    setThreadArchiveWorking(toast.threadId);
+    const response = await client.request("thread.archive.undo", deviceId, { threadId: toast.threadId, operationId: toast.operationId });
+    setThreadArchiveWorking("");
+    if (response.outcome !== "accepted") {
+      setNotice(errorText(response));
+      return;
+    }
+    setArchiveUndoToast(null);
+    await loadThreads(deviceId, "", searchInputRef.current.trim());
+  }
+
+  function renderThreadRow(thread: Thread) {
+    const archiveAllowed = selection.current.threadId === thread.threadId && view?.threadId === thread.threadId && view.thread.runtime === "idle";
+    return <button key={thread.threadId} type="button" data-thread-id={thread.threadId} className={`thread-row ${threadId === thread.threadId ? "selected" : ""}`}
+      onClick={() => { const suppressed = suppressThreadClick.current.threadId === thread.threadId && Date.now() <= suppressThreadClick.current.until; suppressThreadClick.current = { threadId: "", until: 0 }; if (!suppressed) void selectThread(thread.threadId); }}
+      onContextMenu={event => { event.preventDefault(); openThreadMenu(thread, event.clientX, event.clientY); }}
+      onKeyDown={event => { if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openThreadMenu(thread, rect.left + 16, rect.top + 16); } }}
+      onPointerDown={event => beginThreadLongPress(thread, event)} onPointerMove={moveThreadLongPress} onPointerUp={cancelThreadLongPress} onPointerCancel={cancelThreadLongPress}
+      data-archive-allowed={archiveAllowed ? "true" : "false"}>
+      <span className="thread-title">{thread.title || "未命名会话"}</span>
+      {searchInput.trim() && thread.searchSnippet && <span className="thread-snippet">{thread.searchSnippet}</span>}
+      <span className="thread-date">{new Date(thread.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+    </button>;
+  }
+
   const accessHero = <div><div className="connect-hero"><ArielLogo size="clamp(128px, 12vw, 160px)" variant="color" decorative priority className="connect-logo" /><div className="connect-hero-copy"><span className="eyebrow">PRIVATE ACCESS</span><h1>Agent 联络中继器</h1></div></div><p>{webAuthMode === "passkey" ? "使用此设备上的 Passkey 安全登录。会话凭据仅保存在受保护的浏览器 Cookie 中。" : "输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。"}</p></div>;
   const accessPanel = webAuthMode === "passkey" ? <section className="connect-panel" aria-label="Passkey 登录">{accessHero}
     {!passkeyAuth.loaded ? <div className="auth-loading" role="status">正在检查登录状态…</div> : <form onSubmit={event => { event.preventDefault(); void authenticateWithPasskey(); }}>
@@ -1505,12 +1693,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <div className="sidebar-device-row"><span className={`status-dot ${device?.agentOnline ? "online" : ""}`} aria-hidden="true" /><select id="device" aria-label="设备" aria-describedby="sidebar-device-status" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select><span id="sidebar-device-status" className="sr-only">{device ? `${device.deviceName}，${device.agentOnline ? "Agent 在线" : "Agent 离线"}，${device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}` : "未选择设备"}</span></div>
         <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></button>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
-        <div className="thread-list">{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(t => <button key={t.threadId} data-thread-id={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div></section>}{threadGroups.map((group, index) => {
+        <div className="thread-list" onScroll={cancelThreadLongPress}>{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(renderThreadRow)}</div></section>}{threadGroups.map((group, index) => {
           const expanded = expandedProjectKeys.has(group.key);
           const projectThreadsID = `project-threads-${index}`;
           return <section className={`project-group ${expanded ? "expanded" : "collapsed"}`} aria-label={`项目 ${group.name}`} key={group.key}>
             <header className="project-heading"><button className="project-toggle" type="button" aria-expanded={expanded} aria-controls={projectThreadsID} aria-label={`${expanded ? "收起" : "展开"}项目 ${group.name}，${group.path}`} onClick={() => toggleProjectGroup(group.key)}><span className={`project-chevron ${expanded ? "expanded" : ""}`} aria-hidden="true">›</span><span className="project-copy"><span className="project-name">{group.name}</span><span className="project-path" title={group.path}>{group.path}</span></span><span className="project-count" aria-hidden="true">{group.threads.length}</span></button></header>
-            <div id={projectThreadsID} className="project-threads" hidden={!expanded}>{expanded && group.threads.map(t => <button key={t.threadId} data-thread-id={t.threadId} className={`thread-row ${threadId === t.threadId ? "selected" : ""}`} onClick={() => void selectThread(t.threadId)}><span className="thread-title">{t.title || "未命名会话"}</span>{searchInput.trim() && t.searchSnippet && <span className="thread-snippet">{t.searchSnippet}</span>}<span className="thread-date">{new Date(t.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></button>)}</div>
+            <div id={projectThreadsID} className="project-threads" hidden={!expanded}>{expanded && group.threads.map(renderThreadRow)}</div>
           </section>;
         })}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
@@ -1571,6 +1759,16 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
             </div></div></div></div></div>
       </main>
     </div>
+    {threadMenu && (() => {
+      const target = threads.find(candidate => candidate.threadId === threadMenu.threadId);
+      if (!target) return null;
+      const archiveAllowed = selection.current.threadId === target.threadId && view?.threadId === target.threadId && view.thread.runtime === "idle";
+      return createPortal(<div className="thread-context-menu" role="menu" aria-label={`会话操作：${target.title || "未命名会话"}`} style={{ left: threadMenu.left, top: threadMenu.top }}>
+        <button ref={threadMenuFirstItem} type="button" role="menuitem" onClick={() => void archiveThread(target)} disabled={!archiveAllowed || threadArchiveWorking === target.threadId}>归档</button>
+        {!archiveAllowed && <small>会话处理完成后可归档</small>}
+      </div>, document.body);
+    })()}
+    {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
   </div>;
 }
