@@ -70,6 +70,16 @@ npx playwright test
 
 人工检查截图确认：设备选择器已回到 Mac A；项目 `device-a` 与“设备 A 的缓存会话”可见；未出现空列表、错误提示或布局跳变。
 
+## 公网部署与在线验收
+
+- 合并提交：`e1d0af6882691087bd698cc4dda846166ac82d22`
+- 容器镜像：`wu8685/ariel@sha256:8a29b8f97a97124a0a437addcea3d3caffcd46e4afede266b1fe41efeaaab7a9`
+- ECS：`ariel-relay` 健康检查为 `healthy`，`https://www.kan.chat/healthz` 返回 `ok`；
+- 本机：`./scripts/ariel.sh status` 返回“Agent 已与 Relay 握手，Codex 就绪”；
+- 公网 Web：设备状态显示“昊天的 Mac，Agent 在线，Codex 就绪”，会话列表恢复出 49 个会话。已有 Passkey 浏览器会话过期时，缓存列表仍保持可见。
+
+部署前因 Relay 尚未识别新版 Agent 的归档能力字段，Agent 会收到正常关闭帧并重连；Relay 与 Agent 升级到同一提交后该现象停止，连续观察期间未再断开。
+
 ## 边界
 
 - 自动测试用可控的 hung endpoint 证明自愈逻辑；公网链路无法在不影响当前使用的前提下强制制造同样卡死。部署后应以实际手机切换设备继续观察日志。
