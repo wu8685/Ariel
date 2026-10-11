@@ -271,8 +271,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .thread-row:hover { background: var(--color-panel); }
 .thread-row.selected { background: var(--color-raised); border-color: var(--color-accent); box-shadow: inset 3px 0 0 var(--color-accent); }
-.thread-context-menu { position: fixed; z-index: 80; width: 172px; padding: 6px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-raised); box-shadow: 0 14px 36px rgba(0,0,0,.42); }
-.thread-context-menu button { width: 100%; min-height: 38px; border: 0; border-radius: 5px; padding: 0 10px; text-align: left; color: var(--color-text); background: transparent; }
+.thread-context-menu { position: fixed; z-index: 80; width: 172px; padding: 6px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-raised); box-shadow: 0 14px 36px rgba(0,0,0,.42); font-size: 12px; line-height: 1.4; }
+.thread-context-menu button { width: 100%; min-height: 38px; border: 0; border-radius: 5px; padding: 0 10px; text-align: left; color: var(--color-text); background: transparent; font-size: inherit; line-height: inherit; }
 .thread-context-menu button:hover:not(:disabled), .thread-context-menu button:focus-visible { background: var(--color-panel); }
 .thread-context-menu button:disabled { opacity: .48; }
 .thread-context-menu small { display: block; padding: 4px 10px 7px; color: var(--color-muted); line-height: 1.35; }

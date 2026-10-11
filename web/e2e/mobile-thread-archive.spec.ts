@@ -39,8 +39,12 @@ test("a stationary phone long press archives a verified idle thread and offers u
   const row = page.locator(`.thread-row[data-thread-id="${thread.threadId}"]`);
   await row.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", button: 0, clientX: 120, clientY: 260 });
   await page.waitForTimeout(550);
-  await expect(page.getByRole("menuitem", { name: "归档" })).toBeVisible();
-  await page.getByRole("menuitem", { name: "归档" }).click();
+  const archiveItem = page.getByRole("menuitem", { name: "归档" });
+  await expect(archiveItem).toBeVisible();
+  await expect(archiveItem).toHaveCSS("font-size", "12px");
+  await expect(archiveItem).toHaveCSS("line-height", "16.8px");
+  expect((await archiveItem.boundingBox())?.height).toBeGreaterThanOrEqual(38);
+  await archiveItem.click();
 
   await expect.poll(() => archiveCount).toBe(1);
   await expect(page.getByRole("button", { name: "撤销归档" })).toBeVisible();

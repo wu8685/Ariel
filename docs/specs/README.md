@@ -87,6 +87,7 @@
 | 0068 | [侧栏会话长按菜单与原生置顶／归档](0068-sidebar-thread-context-actions.md) | Partially implemented（归档／撤销已验；置顶被 0.160.0 schema 阻塞） | 长按／右键会话后安全归档并提供短时撤销；public pin capability 可用后再启用置顶 |
 | 0069 | [已确认发送后可靠清空输入框](0069-confirmed-send-clears-composer.md) | Implemented（Go／Web／真实 Chromium 已验） | 修复同会话 resync 吞掉 accepted 清理，并用 exact clientMessageId 对账 unknown 后的真实送达 |
 | 0070 | [Agent 只读请求自愈与设备会话列表缓存](0070-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
+| 0071 | [会话操作菜单字体统一](0071-uniform-thread-context-menu-type.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 将“归档”菜单项统一到现有紧凑菜单的 `12px / 1.4` 字体体系，并保持 touch 点击区域 |
 
 ## 设计基线
 

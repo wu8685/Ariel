@@ -167,6 +167,16 @@ describe("fixed Night appearance", () => {
     expect(menuButton).toMatch(/font-size:\s*inherit/);
   });
 
+  it("uses the compact menu type scale for thread context actions", () => {
+    const menu = style.match(/\.thread-context-menu\s*\{([^}]*)\}/s)?.[1] || "";
+    const menuButton = style.match(/\.thread-context-menu button\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(menu).toMatch(/font-size:\s*12px/);
+    expect(menu).toMatch(/line-height:\s*1\.4/);
+    expect(menuButton).toMatch(/min-height:\s*38px/);
+    expect(menuButton).toMatch(/font-size:\s*inherit/);
+    expect(menuButton).toMatch(/line-height:\s*inherit/);
+  });
+
   it("keeps mobile approval and question fields from magnifying the page on focus", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(mobile).toMatch(/\.question input,\s*\.question select\s*\{[^}]*font-size:\s*16px;[^}]*min-width:\s*0/s);
