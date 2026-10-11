@@ -29,6 +29,11 @@ type agent struct {
 	writeMu  sync.Mutex
 }
 
+// Service.List may issue two sequential thread/list calls (recent + pinned).
+// Three seconds per attempt leaves enough room for one endpoint rebuild while
+// staying well inside Relay's bounded read budget.
+const threadListAttemptTimeout = 3 * time.Second
+
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.Binary == "" || cfg.Socket == "" {
 		return errors.New("Codex binary and Desktop IPC socket are required")
@@ -45,7 +50,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 	}
-	readOnlyRPC, err := appserver.NewRestartingRPC(ctx, func(parent context.Context) (appserver.ReadOnlyEndpoint, error) {
+	readOnlyRPC, err := appserver.NewRestartingRPCWithThreadListTimeout(ctx, threadListAttemptTimeout, func(parent context.Context) (appserver.ReadOnlyEndpoint, error) {
 		return appserver.Start(parent, cfg.Binary, cwd)
 	})
 	if err != nil {

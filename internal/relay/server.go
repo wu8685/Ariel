@@ -686,6 +686,10 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		timeout = s.cfg.MutationTimeout
 	}
 	entry.timer = time.AfterFunc(timeout, func() {
+		if isLongRead(method) {
+			s.finishRoute(relayID, agent, responseError(webID, "rejected", "TIMEOUT", "agent read response timeout"))
+			return
+		}
 		s.finishRoute(relayID, agent, responseError(webID, "unknown", "OUTCOME_UNKNOWN", "agent response timeout"))
 	})
 	s.mu.Unlock()
