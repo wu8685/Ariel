@@ -502,7 +502,7 @@ func (s *Service) boundLiveThread(ctx context.Context, thread map[string]any) er
 }
 
 func (s *Service) History(ctx context.Context, id, cursor string, limit int) (map[string]any, error) {
-	if id == "" || limit < 1 || limit > recentTurnLimit {
+	if id == "" || limit < 1 || limit > historyTurnMaxLimit {
 		return nil, errors.New("INVALID_ARGUMENT")
 	}
 	paged, ok := s.history.(PagedHistory)

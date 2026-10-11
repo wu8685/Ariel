@@ -29,7 +29,7 @@
 | 0010 | [刷新页面复用 Web session](0010-browser-relay-session.md) | Approved（用户已确认） | 浏览器与 Relay 内存 session 免刷新重输连接码 |
 | 0011 | [手机会话紧凑布局与 Night 视觉](0011-compact-mobile-conversation-header.md) | Approved（Web／浏览器已验；物理手机待验） | 缩小顶部区域，参考 Codex 手机版的视觉层级优化对话与输入区 |
 | 0012 | [电脑浏览器紧凑会话布局](0012-compact-desktop-conversation.md) | Implemented（侧栏顶部／会话 item 紧凑化、跨端圆角与截图已验） | 沿用手机紧凑布局与 icon 操作体系，缩小桌面顶部、侧栏与输入区，侧栏按需展开 |
-| 0013 | [大会话最近十回合与 64 MiB 有界同步](0013-paged-history-and-large-owner.md) | Approved（已实现并验证；物理手机旧页待验） | 默认最近 10 turn、旧历史按需分页，本机原会话上限 64 MiB |
+| 0013 | [大会话最近十回合与 64 MiB 有界同步](0013-paged-history-and-large-owner.md) | Superseded in part by 0072（分页与容量继续有效） | 默认最近窗口已改为 4 turn；旧历史仍按需分页，本机原会话上限 64 MiB |
 | 0014 | [手机输入框回车换行与八行自适应](0014-mobile-composer-newline-and-eight-lines.md) | Approved（Web／物理手机已验） | 手机 Enter 仅换行，按钮发送；输入框一至八行增长并在超出后内部滚动 |
 | 0015 | [工具活动默认折叠，按需查看每段调用](0015-compact-tool-activity-in-conversation.md) | Approved（用户已确认） | 一组工具调用默认单行摘要，点击查看各调用；运行状态轻量呈现 |
 | 0016 | [向上滚动渐进加载会话历史](0016-scroll-triggered-history-loading.md) | Draft（暂缓；保持 0013 当前按钮加载） | 若未来启用：上滑自动逐页补充更早 turn／item，并保持阅读位置 |
@@ -88,6 +88,7 @@
 | 0069 | [已确认发送后可靠清空输入框](0069-confirmed-send-clears-composer.md) | Implemented（Go／Web／真实 Chromium 已验） | 修复同会话 resync 吞掉 accepted 清理，并用 exact clientMessageId 对账 unknown 后的真实送达 |
 | 0070 | [Agent 只读请求自愈与设备会话列表缓存](0070-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
 | 0071 | [会话操作菜单字体统一](0071-uniform-thread-context-menu-type.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 将“归档”菜单项统一到现有紧凑菜单的 `12px / 1.4` 字体体系，并保持 touch 点击区域 |
+| 0072 | [新会话首屏最近四回合](0072-four-turn-initial-history-window.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | 首次只同步最新 4 个 turn，手动旧页仍保持最多 10 个以减少翻页往返 |
 
 ## 设计基线
 

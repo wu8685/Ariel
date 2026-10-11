@@ -21,7 +21,8 @@ import "./interaction.css";
 
 type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
-const recentTurnLimit = 10;
+const recentTurnLimit = 4;
+const historyTurnPageLimit = 10;
 const mobileViewportMaxWidth = 800;
 const composerMinHeight = 44;
 const composerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
@@ -1287,7 +1288,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     lastPaint.current = { key, seq: view.seq, marker };
   }, [view?.seq, view?.threadId, history, itemOverrides]);
 
-  async function loadOlder(additionalTurns = 1) {
+  async function loadOlder(additionalTurns = 1, requestLimit = historyTurnPageLimit) {
     if (!view || !deviceId || historyLoadingRef.current || historyRef.current.exhausted) return;
     const epoch = pendingSelect.current;
     const targetThread = view.threadId;
@@ -1297,7 +1298,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     try {
       for (let pageNumber = 0; pageNumber < 20; pageNumber++) {
         const current = historyRef.current;
-        const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: 10, ...(current.cursor ? { cursor: current.cursor } : {}) });
+        const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: requestLimit, ...(current.cursor ? { cursor: current.cursor } : {}) });
         if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
         if (response.outcome !== "accepted") {
           if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) continue;
@@ -1329,7 +1330,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   useEffect(() => {
     if (!view || view.thread.recentComplete !== false || history.exhausted || historyLoadingRef.current) return;
     const missing = recentTurnLimit - view.thread.turns.length - history.older.length;
-    if (missing > 0) void loadOlder(missing);
+    if (missing > 0) void loadOlder(missing, Math.min(missing, recentTurnLimit));
   }, [view?.seq, history.older.length, history.exhausted]);
 
   async function loadOlderItems(turn: Turn) {

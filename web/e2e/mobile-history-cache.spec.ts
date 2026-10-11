@@ -23,6 +23,7 @@ const second: Thread = {
 
 test("reuses downloaded history after a mobile user switches away and back", async ({ page }) => {
   let historyRequests = 0;
+  const historyLimits: number[] = [];
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
   await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
     const message = JSON.parse(String(raw));
@@ -37,6 +38,7 @@ test("reuses downloaded history after a mobile user switches away and back", asy
     if (message.method === "thread.subscribe") data = { subscriptionId: `sub-${message.params.threadId}` };
     if (message.method === "thread.history") {
       historyRequests++;
+      historyLimits.push(message.params.limit);
       data = {
         turns: [first.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "只下载一次的旧历史" }] }],
         nextCursor: "",
@@ -56,6 +58,7 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   await page.getByRole("button", { name: "加载更早消息" }).click();
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
   expect(historyRequests).toBe(1);
+  expect(historyLimits).toEqual([10]);
 
   await page.getByRole("button", { name: /打开会话列表/ }).click();
   await page.getByText(second.title).click();
@@ -78,4 +81,5 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   await page.getByRole("button", { name: "加载更早消息" }).click();
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
   expect(historyRequests).toBe(2);
+  expect(historyLimits).toEqual([10, 10]);
 });

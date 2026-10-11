@@ -119,10 +119,10 @@ func (*wideMetadataHistory) Read(_ context.Context, id string) (appserver.Thread
 }
 
 func (pagedHistory) Turns(_ context.Context, id, cursor string, limit int, view string) (appserver.TurnPage, error) {
-	if id != "thread" || cursor != "" || limit != 10 || view != appserver.TurnItemsFull {
+	if id != "thread" || cursor != "" || (limit != 4 && limit != 10) || view != appserver.TurnItemsFull {
 		return appserver.TurnPage{}, fmt.Errorf("unexpected recent page request")
 	}
-	turns := make([]appserver.Turn, 10)
+	turns := make([]appserver.Turn, limit)
 	for i := range turns {
 		turns[i] = appserver.Turn{ID: fmt.Sprintf("turn-%02d", 12-i), Status: "completed", Items: []json.RawMessage{}}
 	}
@@ -134,7 +134,7 @@ func (pagedHistory) Items(context.Context, string, string, string, int) (appserv
 	return appserver.ItemPage{}, fmt.Errorf("unexpected item request")
 }
 
-func TestServiceReadReturnsLatestTenFromPagedHistory(t *testing.T) {
+func TestServiceReadReturnsLatestFourFromPagedHistory(t *testing.T) {
 	s := NewService(pagedHistory{}, nil)
 	defer s.Close()
 	thread, err := s.Read(context.Background(), "thread")
@@ -142,13 +142,13 @@ func TestServiceReadReturnsLatestTenFromPagedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	turns := thread["turns"].([]any)
-	if len(turns) != 10 || turns[0].(map[string]any)["turnId"] != "turn-03" || turns[9].(map[string]any)["turnId"] != "turn-12" || thread["historyComplete"] != false {
+	if len(turns) != 4 || turns[0].(map[string]any)["turnId"] != "turn-09" || turns[3].(map[string]any)["turnId"] != "turn-12" || thread["historyComplete"] != false {
 		t.Fatalf("recent stored history: %+v", thread)
 	}
 }
 
-func TestServiceReadSegmentsLatestTenWhenWebPageWouldOverflow(t *testing.T) {
-	large := strings.Repeat("x", 800<<10)
+func TestServiceReadSegmentsLatestFourWhenWebPageWouldOverflow(t *testing.T) {
+	large := strings.Repeat("x", 2<<20)
 	h := &historyStub{turns: func(limit int, cursor, view string) (appserver.TurnPage, error) {
 		if cursor != "" || view != appserver.TurnItemsFull {
 			return appserver.TurnPage{}, fmt.Errorf("unexpected cursor or view")
@@ -167,13 +167,13 @@ func TestServiceReadSegmentsLatestTenWhenWebPageWouldOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	turns := thread["turns"].([]any)
-	if len(turns) != 5 || thread["recentComplete"] != false || thread["historyComplete"] != false || turns[len(turns)-1].(map[string]any)["turnId"] != "turn-10" {
+	if len(turns) != 2 || thread["recentComplete"] != false || thread["historyComplete"] != false || turns[len(turns)-1].(map[string]any)["turnId"] != "turn-10" {
 		t.Fatalf("recent window was not segmented without losing newest turn: count=%d recent=%v history=%v", len(turns), thread["recentComplete"], thread["historyComplete"])
 	}
 }
 
 func TestServiceReadLeavesEnvelopeRoomForLargeMetadata(t *testing.T) {
-	large := strings.Repeat("x", 700<<10)
+	large := strings.Repeat("x", 2<<20)
 	h := &wideMetadataHistory{}
 	h.turns = func(limit int, cursor, view string) (appserver.TurnPage, error) {
 		turns := make([]appserver.Turn, limit)
@@ -197,8 +197,8 @@ func TestServiceReadLeavesEnvelopeRoomForLargeMetadata(t *testing.T) {
 	}
 }
 
-func TestServiceSubscribeSegmentsLatestTenWithoutDisconnecting(t *testing.T) {
-	item, _ := json.Marshal(map[string]any{"id": "one", "type": "agentMessage", "text": strings.Repeat("x", 800<<10)})
+func TestServiceSubscribeKeepsLatestFourWithoutDisconnecting(t *testing.T) {
+	item, _ := json.Marshal(map[string]any{"id": "one", "type": "agentMessage", "text": "small"})
 	turns := make([]map[string]any, 10)
 	for i := range turns {
 		turns[i] = map[string]any{"turnId": fmt.Sprintf("turn-%02d", i+1), "status": "completed", "items": []json.RawMessage{item}}
@@ -213,7 +213,7 @@ func TestServiceSubscribeSegmentsLatestTenWithoutDisconnecting(t *testing.T) {
 	}
 	activate()
 	got := thread["turns"].([]any)
-	if len(got) >= 10 || len(got) == 0 || thread["recentComplete"] != false || got[len(got)-1].(map[string]any)["turnId"] != "turn-10" {
+	if len(got) != 4 || got[0].(map[string]any)["turnId"] != "turn-07" || thread["recentComplete"] != true || thread["historyComplete"] != false || got[len(got)-1].(map[string]any)["turnId"] != "turn-10" {
 		t.Fatalf("live recent segment is not newest complete turns: count=%d recent=%v", len(got), thread["recentComplete"])
 	}
 }

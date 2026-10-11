@@ -15,7 +15,10 @@ import (
 
 var ErrNativeShape = errors.New("Desktop history or live state has unsupported structure")
 
-const recentTurnLimit = 10
+const (
+	recentTurnLimit     = 4
+	historyTurnMaxLimit = 10
+)
 
 func NormalizeStored(source appserver.Thread) (map[string]any, error) {
 	if source.ID == "" || source.CWD == "" {
@@ -247,7 +250,7 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			Text                string `json:"text"`
 			ClientID            string `json:"clientId"`
 			ClientUserMessageID string `json:"clientUserMessageId"`
-			Content []struct {
+			Content             []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 				URL  string `json:"url"`

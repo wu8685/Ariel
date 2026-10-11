@@ -562,16 +562,18 @@ describe("Ariel app interactions", () => {
     const { socket, requests } = await openFixture(recent);
     await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
     const sent = requests("thread.history")[0];
+    expect(sent.params).toMatchObject({ threadId: "fixture", limit: 3 });
     await act(async () => socket.message({ type: "response", v: 1, requestId: sent.requestId, outcome: "accepted", data: { turns: [recent.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "补齐内容" }] }], nextCursor: "" } }));
     expect(await screen.findByText("补齐内容")).toBeTruthy();
     expect(screen.getByText("最新内容")).toBeTruthy();
   });
 
-  it("loads older turns on demand after walking past the ten-turn live overlap", async () => {
+  it("loads older turns on demand after walking past the recent live overlap", async () => {
     const recent: Thread = { ...fixtureThread, historyComplete: false, recentComplete: true, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "最新内容" }] }] };
     const { socket, requests } = await openFixture(recent);
     fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
     await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    expect(requests("thread.history")[0].params).toMatchObject({ threadId: "fixture", limit: 10 });
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [recent.turns[0]], nextCursor: "after-latest" } }));
     await waitFor(() => expect(requests("thread.history")).toHaveLength(2));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[1].requestId, outcome: "accepted", data: { turns: [{ turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "更早内容" }] }], nextCursor: "" } }));
