@@ -173,7 +173,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 				a.handle(requestCtx, req.RequestID, req.Method, req.Params)
 			}()
 		default:
-			a.reply(requestCtx, req.RequestID, nil, errors.New("OVERLOADED"))
+			a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
 		}
 	}
 }
@@ -233,7 +233,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		CWD             string              `json:"cwd"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
-		a.reply(ctx, id, nil, errors.New("INVALID_ARGUMENT"))
+		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
 		return
 	}
 	var data map[string]any
@@ -287,7 +287,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		})
 		if err == nil {
 			data = map[string]any{"subscriptionId": subID, "streamId": streamID}
-			a.reply(ctx, id, data, nil)
+			a.reply(ctx, id, method, data, nil)
 			_ = a.send(ctx, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": a.deviceID, "threadId": p.ThreadID, "subscriptionId": subID, "streamId": streamID, "seq": 1, "thread": thread})
 			activate()
 			return
@@ -331,16 +331,19 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	default:
 		err = errors.New("INVALID_ARGUMENT")
 	}
-	a.reply(ctx, id, data, err)
+	a.reply(ctx, id, method, data, err)
 }
 
-func (a *agent) reply(ctx context.Context, id string, data map[string]any, err error) {
+func (a *agent) reply(ctx context.Context, id, method string, data map[string]any, err error) {
 	msg := map[string]any{"type": "response", "v": 1, "requestId": id}
 	if err == nil {
 		msg["outcome"] = "accepted"
 		msg["data"] = data
 	} else {
-		outcome, code := "rejected", requestErrorCode(err)
+		outcome, code := "rejected", requestErrorCode(method, err)
+		if code == "OUTCOME_UNKNOWN" {
+			outcome = "unknown"
+		}
 		if errors.Is(err, appserver.ErrOutcomeUnknown) {
 			outcome = "unknown"
 			code = "OUTCOME_UNKNOWN"
@@ -362,8 +365,13 @@ func (a *agent) reply(ctx context.Context, id string, data map[string]any, err e
 	_ = a.send(ctx, msg)
 }
 
-func requestErrorCode(err error) string {
+func requestErrorCode(method string, err error) string {
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		if isReadRequest(method) {
+			return "TIMEOUT"
+		}
+		return "OUTCOME_UNKNOWN"
 	case errors.Is(err, desktopipc.ErrFrameTooLarge), errors.Is(err, appserver.ErrResponseTooLarge):
 		return "HISTORY_TOO_LARGE"
 	case errors.Is(err, desktopipc.ErrOverloaded):
@@ -372,9 +380,18 @@ func requestErrorCode(err error) string {
 		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
-	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED":
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT":
 		return code
 	default:
 		return "RESYNC_REQUIRED"
+	}
+}
+
+func isReadRequest(method string) bool {
+	switch method {
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe":
+		return true
+	default:
+		return false
 	}
 }

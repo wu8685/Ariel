@@ -8,9 +8,9 @@ export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(valu
 type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
-export function timeoutFor(method: Method, params: Record<string, unknown> = {}): number {
-  if (method === "thread.list" && typeof params.searchTerm === "string" && params.searchTerm) return 40000;
-  if (method === "thread.subscribe" || method === "thread.history" || method === "thread.history.items" || method === "thread.image") return 35000;
+export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {
+  if (["thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image"].includes(method)) return 40000;
+  if (method === "thread.subscribe") return 35000;
   if (method === "thread.create" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
   return 12000;
 }

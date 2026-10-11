@@ -1435,6 +1435,28 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("Thread B")).toBeTruthy();
   });
 
+  it("keeps device-switch read failures scoped and describes them as retryable loads", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac-a", deviceName: "Mac A", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } },
+      { deviceId: "mac-b", deviceName: "Mac B", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } },
+    ] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-b" } });
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "late A" } }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "B timed out" } }));
+    expect((await screen.findByRole("alert")).textContent).toBe("加载会话超时，请重试。");
+    expect(screen.queryByText(/不要直接重发/)).toBeNull();
+  });
+
   it("does not revive an offline device with an older device list response", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

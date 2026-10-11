@@ -27,6 +27,7 @@ type Config struct {
 	HelloTimeout        time.Duration
 	MaxFrameBytes       int64
 	RequestTimeout      time.Duration
+	ReadTimeout         time.Duration
 	SubscriptionTimeout time.Duration
 	MutationTimeout     time.Duration
 	HeartbeatInterval   time.Duration
@@ -139,6 +140,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 10 * time.Second
+	}
+	if cfg.ReadTimeout <= 0 {
+		cfg.ReadTimeout = 35 * time.Second
 	}
 	if cfg.SubscriptionTimeout <= 0 {
 		cfg.SubscriptionTimeout = 30 * time.Second
@@ -672,11 +676,11 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	s.routes[relayID] = entry
 	s.byWeb[web][webID] = relayID
 	timeout := s.cfg.RequestTimeout
+	if isLongRead(method) {
+		timeout = s.cfg.ReadTimeout
+	}
 	if method == "thread.subscribe" {
 		timeout = s.cfg.SubscriptionTimeout
-	}
-	if method == "thread.list" && reference.SearchTerm != "" {
-		timeout = max(s.cfg.RequestTimeout, s.cfg.SubscriptionTimeout) + 5*time.Second
 	}
 	if method == "thread.create" || method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
 		timeout = s.cfg.MutationTimeout
@@ -690,6 +694,15 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		s.finishRoute(relayID, agent, responseError(webID, "unknown", "OUTCOME_UNKNOWN", "agent send outcome unknown"))
 	}
 	return true
+}
+
+func isLongRead(method string) bool {
+	switch method {
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []byte, relayID string) {
