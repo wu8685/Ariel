@@ -80,7 +80,7 @@
 | 0061 | [ECS 单机一键部署 Relay + Web](0061-ecs-single-node-one-command.md) | Implemented（契约／双模式真实 Docker／HTTPS 反代／全量回归已验） | 用一个脚本在单台 Linux ECS 上安全生成凭据并拉起 PIN 或 Caddy + Passkey 拓扑 |
 | 0062 | [Web 端有界会话历史缓存](0062-bounded-web-history-cache.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 在同一页面与 Agent epoch 内复用已下载旧页，减少会话往返时的重复下载 |
 | 0063 | [Agent 重连状态 fencing 与会话恢复](0063-agent-reconnect-state-fencing.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 防止旧 epoch offline／stream 事件污染新连接，并保证短暂断线后最终恢复当前会话 |
-| 0064 | [Agent 只读请求自愈与设备会话列表缓存](0064-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
+| 0070 | [Agent 只读请求自愈与设备会话列表缓存](0070-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
 
 ## 设计基线
 

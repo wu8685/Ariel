@@ -1,4 +1,4 @@
-# 0064：Agent 只读请求自愈与设备会话列表缓存
+# 0070：Agent 只读请求自愈与设备会话列表缓存
 
 - 状态：Implemented（2026-10-11；Go／Web／race／production build／真实 Chromium 截图回归通过）。
 - 来源：切换到在线设备时会话列表偶发归零，并显示“执行结果不确定”；重启本机 Agent 后可暂时恢复。
@@ -56,4 +56,4 @@
 - Web 新增 4 MiB／16 条目的内存 LRU 会话列表缓存，以 `deviceId + agentEpoch + normalized query` 隔离；60 秒内切回设备直接复用，过期条目先显示再后台刷新，最长保留 5 分钟。
 - 手动刷新显式绕过缓存；分页成功后缓存合并后的列表与 cursor。设备消失、epoch 改变或 WebSocket 断开时清除对应缓存。
 - 本机 Agent 已重启以临时解除旧 endpoint 卡死；正式二进制与公网 Web／Relay 的部署结果记录在测试文档。
-- 验收证据见 [`docs/testing/2026-10-11-0064-agent-read-timeout-and-thread-list-cache.md`](../testing/2026-10-11-0064-agent-read-timeout-and-thread-list-cache.md)。
+- 验收证据见 [`docs/testing/2026-10-11-0070-agent-read-timeout-and-thread-list-cache.md`](../testing/2026-10-11-0070-agent-read-timeout-and-thread-list-cache.md)。

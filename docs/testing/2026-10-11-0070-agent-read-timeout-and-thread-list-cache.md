@@ -1,7 +1,7 @@
-# 0064 Agent 只读请求自愈与设备会话列表缓存验收
+# 0070 Agent 只读请求自愈与设备会话列表缓存验收
 
 - 日期：2026-10-11
-- 规格：[`0064-agent-read-timeout-and-thread-list-cache.md`](../specs/0064-agent-read-timeout-and-thread-list-cache.md)
+- 规格：[`0070-agent-read-timeout-and-thread-list-cache.md`](../specs/0070-agent-read-timeout-and-thread-list-cache.md)
 - 跟踪：[GitHub Issue #1](https://github.com/wu8685/Ariel/issues/1)
 
 ## 原因复现与临时恢复
