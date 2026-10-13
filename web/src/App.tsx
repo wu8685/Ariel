@@ -8,6 +8,7 @@ import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
 import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } from "./history-cache";
 import { BrowserThreadListCache, type ThreadListCacheIdentity } from "./thread-list-cache";
+import { BrowserThreadUnreadStore } from "./thread-unread";
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
@@ -240,6 +241,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceId, setDeviceId] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [unreadThreadIDs, setUnreadThreadIDs] = useState<Set<string>>(() => new Set());
   const [cursor, setCursor] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
@@ -298,6 +300,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const devicesRef = useRef<Device[]>([]);
   const historyCache = useRef(new BrowserHistoryCache());
   const threadListCache = useRef(new BrowserThreadListCache());
+  const unreadStore = useMemo(() => new BrowserThreadUnreadStore(window.localStorage), []);
+  const backgroundThreadListRefresh = useRef(false);
+  const threadListRequestsInFlight = useRef(0);
   const restoredHistoryCache = useRef<HistoryCacheIdentity | null>(null);
   const expectedSubscription = useRef("");
   const blockedSelection = useRef("");
@@ -639,6 +644,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   function returnToLatest() {
     restoreLatestChrome();
+    window.setTimeout(markCurrentThreadRead, 0);
   }
 
   function disconnect() {
@@ -776,7 +782,34 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return id && agentEpoch ? { deviceId: id, agentEpoch, query } : null;
   }
 
-  async function loadThreads(id: string, next = "", query = searchTerm, force = false) {
+  function observeUnread(id: string, observed: Thread[]) {
+    const unread = unreadStore.observe(id, observed);
+    const observedIDs = new Set(observed.map(thread => thread.threadId));
+    setUnreadThreadIDs(current => {
+      const updated = new Set(current);
+      for (const threadID of observedIDs) updated.delete(threadID);
+      for (const threadID of unread) updated.add(threadID);
+      return updated;
+    });
+  }
+
+  function markThreadRead(id: string, thread: Thread) {
+    if (!unreadStore.markRead(id, thread.threadId, thread.updatedAt)) return;
+    setUnreadThreadIDs(current => {
+      if (!current.has(thread.threadId)) return current;
+      const updated = new Set(current);
+      updated.delete(thread.threadId);
+      return updated;
+    });
+  }
+
+  function markCurrentThreadRead() {
+    const current = selection.current;
+    if (document.visibilityState !== "visible" || !followLatestRef.current || !current.view?.subscriptionId || current.view.deviceId !== current.deviceId || current.view.threadId !== current.threadId) return;
+    markThreadRead(current.deviceId, current.view.thread);
+  }
+
+  async function loadThreads(id: string, next = "", query = searchTerm, force = false, background = false) {
     const generation = ++threadListGeneration.current;
     if (!id) { setThreads([]); setListLoading(false); return; }
     const identity = threadListIdentity(id, query);
@@ -784,23 +817,30 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const cached = threadListCache.current.get(identity);
       if (cached) {
         setThreads(cached.value.threads);
+        observeUnread(id, cached.value.threads);
         setCursor(cached.value.cursor);
         setListError("");
         if (cached.fresh) { setListLoading(false); return; }
       }
     }
-    setListLoading(true);
-    setListError("");
-    const response = await client.request("thread.list", id, { limit: 50, ...(next ? { cursor: next } : {}), ...(query ? { searchTerm: query } : {}) });
+    if (!background) {
+      setListLoading(true);
+      setListError("");
+    }
+    threadListRequestsInFlight.current++;
+    const response = await client.request("thread.list", id, { limit: 50, ...(next ? { cursor: next } : {}), ...(query ? { searchTerm: query } : {}) })
+      .finally(() => { threadListRequestsInFlight.current--; });
     const currentIdentity = threadListIdentity(id, query);
     if (generation !== threadListGeneration.current || selection.current.deviceId !== id || searchInputRef.current.trim() !== query || identity?.agentEpoch !== currentIdentity?.agentEpoch) return;
-    setListLoading(false);
+    if (!background) setListLoading(false);
     if (response.outcome !== "accepted") {
+      if (background) return;
       const code = response.error?.code;
       setListError(query && code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : code === "TIMEOUT" || code === "OUTCOME_UNKNOWN" ? "加载会话超时，请重试。" : errorText(response));
       return;
     }
     const page = (response.data?.threads as Thread[] | undefined) || [];
+    observeUnread(id, page);
     const nextCursor = String(response.data?.nextCursor || "");
     setThreads(current => {
       const merged = next ? mergeThreadPages(current, page) : page;
@@ -808,6 +848,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       return merged;
     });
     setCursor(nextCursor);
+  }
+
+  async function refreshUnreadThreads(allowClosedList = false) {
+    if (backgroundThreadListRefresh.current || threadListRequestsInFlight.current > 0 || status !== "ready" || !deviceId || !device?.agentOnline || !device.codexReady || searchInputRef.current.trim() || document.visibilityState !== "visible" || (!allowClosedList && !showList)) return;
+    backgroundThreadListRefresh.current = true;
+    try { await loadThreads(deviceId, "", "", true, true); }
+    finally { backgroundThreadListRefresh.current = false; }
   }
 
   function openNewThreadDialog() {
@@ -1068,10 +1115,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         if (current.view?.subscriptionId && current.view.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
+        observeUnread(event.deviceId, [event.thread]);
         selection.current.view = next; setView(next); setSyncingView(false); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId); reconcileSubmission(event.thread, event.deviceId, event.threadId);
       } else if (event.event === "thread.update") {
         const next = applyThreadEvent(current.view, event);
         if (!next) { void resync(); return; }
+        observeUnread(event.deviceId, [next.thread]);
         selection.current.view = next; setView(next);
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
         reconcileSubmission(next.thread, event.deviceId, event.threadId);
@@ -1125,7 +1174,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     selection.current = { deviceId, threadId: "", view: null };
     const cached = threadListIdentity(deviceId, searchTerm);
     const cachedList = cached ? threadListCache.current.get(cached) : null;
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setLocalThreadDraft(null); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedList?.value.threads || []); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    const cachedThreads = cachedList?.value.threads || [];
+    setUnreadThreadIDs(cachedThreads.length && deviceId ? unreadStore.observe(deviceId, cachedThreads) : new Set());
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setLocalThreadDraft(null); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedThreads); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -1147,14 +1198,29 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     let hiddenAt = 0;
     const onVisibility = () => {
       if (document.visibilityState === "hidden") hiddenAt = Date.now();
-      else if (hiddenAt && Date.now() - hiddenAt >= 5000) {
-        hiddenAt = 0;
-        client.wake();
+      else {
+        markCurrentThreadRead();
+        if (hiddenAt && Date.now() - hiddenAt >= 5000) {
+          hiddenAt = 0;
+          client.wake();
+          void refreshUnreadThreads();
+        }
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [client]);
+
+  useEffect(() => {
+    if (status !== "ready" || !deviceId || !device?.agentOnline || !device.codexReady || searchTerm || !showList || document.visibilityState !== "visible") return;
+    const timer = window.setInterval(() => void refreshUnreadThreads(), 15_000);
+    return () => window.clearInterval(timer);
+  }, [status, deviceId, device?.agentOnline, device?.codexReady, searchTerm, showList]);
+
+  useEffect(() => {
+    if (!view?.subscriptionId || syncingView || readOnlyHistory) return;
+    markCurrentThreadRead();
+  }, [view?.threadId, view?.thread.updatedAt, view?.seq, syncingView, readOnlyHistory]);
 
   useEffect(() => {
     if (!showList) return;
@@ -1755,6 +1821,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (targetDevice !== selection.current.deviceId || targetAgentEpoch !== agentEpochFor(targetDevice)) return;
     const candidate = response.data?.thread as Thread | undefined;
     if (response.outcome === "accepted" && candidate?.threadId === dialog.threadId && candidate.title === name) {
+      markThreadRead(targetDevice, candidate);
       applyVerifiedThreadMetadata(candidate);
       setRenameThreadDialog(null);
       return;
@@ -1780,6 +1847,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (targetDevice !== selection.current.deviceId || targetAgentEpoch !== agentEpochFor(targetDevice)) return;
     const candidate = response.data?.thread as Thread | undefined;
     if (response.outcome === "accepted" && candidate?.threadId === thread.threadId && candidate.isPinned === pinned) {
+      markThreadRead(targetDevice, candidate);
       applyVerifiedThreadMetadata(candidate);
       if (!pinned) {
         const group = groupThreadsByProject([candidate])[0];
@@ -1814,7 +1882,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       onKeyDown={event => { if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openThreadMenu(thread, rect.left + 16, rect.top + 16); } }}
       onPointerDown={event => beginThreadLongPress(thread, event)} onPointerMove={moveThreadLongPress} onPointerUp={cancelThreadLongPress} onPointerCancel={cancelThreadLongPress}
       data-archive-allowed={archiveAllowed ? "true" : "false"}>
-      <span className="thread-title">{thread.title || "未命名会话"}</span>
+      <span className="thread-title-line"><span className="thread-title">{thread.title || "未命名会话"}</span>{unreadThreadIDs.has(thread.threadId) && <span className="thread-unread" role="status" aria-label="有新结果" />}</span>
       {searchInput.trim() && thread.searchSnippet && <span className="thread-snippet">{thread.searchSnippet}</span>}
       <span className="thread-date">{new Date(thread.updatedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
     </button>;
@@ -1884,7 +1952,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       </aside>
       <main className="conversation">
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
-          <button className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
+          <button className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}

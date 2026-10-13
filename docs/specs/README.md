@@ -92,6 +92,8 @@
 | 0073 | [会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | item 级增量更新；切换与 resync 保留已确认正文，只在后台同步最新状态 |
 | 0074 | [新建空会话在创建端关闭前完成 Desktop 接管](0074-created-thread-owner-adoption.md) | Compatibility blocked（真机否定，未发布） | 空 thread 即使保持创建端存活也无法由 Desktop 接管；保留证据，禁止用占位消息或猜测关联绕过 |
 | 0075 | [侧栏会话重命名与原生置顶操作](0075-sidebar-thread-rename-and-pin.md) | Implemented（Go／race／真实 Codex fixture／Web／真实移动 Chromium 已验） | 通过 `thread/name/set` 和 `thread/section/move` 修改 Codex 原生标题与 Pinned section，菜单提供重命名／置顶／取消置顶 |
+| 0076 | [新会话首条消息的 App Server bootstrap](0076-local-draft-first-turn-bootstrap.md) | Implemented（Go／race／真实 Codex fixture／Web／真实移动 Chromium 已验） | 发送首条消息时由单一 App Server 进程创建并执行 thread，避免空会话跨进程 owner 接管超时 |
+| 0077 | [Web 本地会话未读标记](0077-web-local-thread-unread.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 以浏览器本地已读水位和单次批量刷新在侧栏展示 unread 蓝点，不依赖 Codex 私有 read-state |
 
 ## 设计基线
 

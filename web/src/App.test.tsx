@@ -30,6 +30,7 @@ beforeEach(() => {
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
   BrowserSocket.sockets = [];
   sessionStorage.clear();
+  localStorage.clear();
   window.history.replaceState({}, "", "/");
 });
 
@@ -113,6 +114,48 @@ describe("Ariel app interactions", () => {
     }
   });
 
+  it("shows a local unread marker after a batch refresh and clears it only after the selected snapshot renders", async () => {
+    const background: Thread = { ...fixtureThread, threadId: "background", title: "Background", cwd: fixtureThread.cwd };
+    const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread, background]);
+    const backgroundRow = document.querySelector<HTMLElement>('.thread-row[data-thread-id="background"]')!;
+    expect(backgroundRow.querySelector('[aria-label="有新结果"]')).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    const changed = { ...background, updatedAt: "2026-10-04T00:00:01Z" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [fixtureThread, changed] } }));
+    expect(document.querySelector('.thread-row[data-thread-id="background"] [aria-label="有新结果"]')).toBeTruthy();
+
+    fireEvent.click(document.querySelector<HTMLElement>('.thread-row[data-thread-id="background"]')!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect(document.querySelector('.thread-row[data-thread-id="background"] [aria-label="有新结果"]')).toBeTruthy();
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-background" } }));
+    expect(document.querySelector('.thread-row[data-thread-id="background"] [aria-label="有新结果"]')).toBeTruthy();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "background", subscriptionId: "sub-background", streamId: "stream-background", seq: 1, thread: changed }));
+    expect(document.querySelector('.thread-row[data-thread-id="background"] [aria-label="有新结果"]')).toBeTruthy();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(document.querySelector('.thread-row[data-thread-id="background"] [aria-label="有新结果"]')).toBeNull());
+  });
+
+  it("uses one non-overlapping batch request for periodic unread refresh", async () => {
+    let refresh: (() => void) | undefined;
+    vi.spyOn(window, "setInterval").mockImplementation(((handler: TimerHandler, timeout?: number) => {
+      if (timeout === 15_000 && typeof handler === "function") refresh = handler as unknown as () => void;
+      return 91;
+    }) as typeof window.setInterval);
+    const { socket, requests } = await openFixture();
+    expect(refresh).toBeTruthy();
+    act(() => refresh!());
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    act(() => refresh!());
+    expect(requests("thread.list")).toHaveLength(2);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    act(() => refresh!());
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(3));
+  });
+
   it("opens the thread menu by secondary click and archives only a verified idle selection", async () => {
     const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread], true);
     const row = document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!;
@@ -144,10 +187,15 @@ describe("Ariel app interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
     await waitFor(() => expect(requests("thread.name.update")).toHaveLength(1));
     expect(requests("thread.name.update")[0].params).toEqual({ threadId: "fixture", name: "新名称" });
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.name.update")[0].requestId, outcome: "accepted", data: { thread: { ...withMessage, title: "新名称" } } }));
+    const renamed = { ...withMessage, title: "新名称", updatedAt: "2026-10-04T00:00:01Z" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.name.update")[0].requestId, outcome: "accepted", data: { thread: renamed } }));
     expect(await screen.findByRole("heading", { name: "新名称" })).toBeTruthy();
     expect(screen.getByText("保留的正文")).toBeTruthy();
     expect((screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement).value).toBe("未发送草稿");
+    fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [renamed] } }));
+    expect(document.querySelector('[aria-label="有新结果"]')).toBeNull();
   });
 
   it("pins and unpins through one verified metadata mutation", async () => {
