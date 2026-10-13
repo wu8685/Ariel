@@ -57,7 +57,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadBootstrap: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
@@ -292,7 +292,7 @@ describe("Ariel app interactions", () => {
     expect([...projects.options].some(option => option.value === "/work/pinned-only")).toBe(true);
   });
 
-  it("creates an empty thread in the chosen project and hands it to the normal subscription flow", async () => {
+  it("creates only a local draft, then bootstraps exactly once on the first send", async () => {
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
     expect(screen.getByRole("dialog", { name: "新建会话" })).toBeTruthy();
@@ -302,74 +302,37 @@ describe("Ariel app interactions", () => {
     expect((cwd as HTMLInputElement).value).toBe("/tmp/fixture");
     fireEvent.change(cwd, { target: { value: "/work/new-project" } });
     fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
-    expect(requests("thread.create")[0].params).toEqual({ cwd: "/work/new-project" });
-    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000099", title: "", cwd: "/work/new-project", updatedAt: "2026-10-07T00:00:00Z" };
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "accepted", data: { thread: created } }));
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
-    expect(requests("thread.subscribe")[1].params.threadId).toBe(created.threadId);
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-created" } }));
-    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: created.threadId, subscriptionId: "sub-created", streamId: "stream-created", seq: 1, thread: created }));
-    expect(await screen.findByRole("heading", { name: "未命名会话" })).toBeTruthy();
+    expect(requests("thread.create")).toHaveLength(0);
+    expect(requests("thread.bootstrap")).toHaveLength(0);
     expect(screen.queryByRole("dialog", { name: "新建会话" })).toBeNull();
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    expect(input.disabled).toBe(false);
+    expect(input.placeholder).toContain("第一条消息");
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(requests("thread.bootstrap")).toHaveLength(1));
+    expect(requests("thread.bootstrap")[0].params.cwd).toBe("/work/new-project");
+    expect(requests("thread.bootstrap")[0].params.text).toBe("hello");
+    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000099", title: "", cwd: "/work/new-project", updatedAt: "2026-10-13T00:00:00Z", runtime: "inProgress" };
+    const request = requests("thread.bootstrap")[0];
+    await act(async () => socket.message({ type: "response", v: 1, requestId: request.requestId, outcome: "accepted", data: { thread: created, threadId: created.threadId, turnId: "turn-first", clientMessageId: request.params.clientMessageId } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect((screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("retries only the first subscription when a newly created thread is not immediately visible", async () => {
+  it("keeps the local draft after an uncertain bootstrap and never retries automatically", async () => {
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
     fireEvent.change(screen.getByRole("textbox", { name: "项目目录" }), { target: { value: "/work/new-project" } });
     fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
-    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000098", title: "", cwd: "/work/new-project", updatedAt: "2026-10-11T00:00:00Z" };
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "accepted", data: { thread: created } }));
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
-
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "rejected", error: { code: "RESYNC_REQUIRED", message: "not indexed yet" } }));
-    expect(screen.queryByText("事件顺序发生变化，正在重新同步。")).toBeNull();
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
-
-    expect(requests("thread.create")).toHaveLength(1);
-    expect(requests("thread.subscribe")).toHaveLength(3);
-    expect(requests("thread.subscribe")[2].params.threadId).toBe(created.threadId);
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-created-retry" } }));
-    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: created.threadId, subscriptionId: "sub-created-retry", streamId: "stream-created-retry", seq: 1, thread: created }));
-    const input = await screen.findByRole("textbox", { name: "发送消息" });
-    expect(input.hasAttribute("disabled")).toBe(false);
-    expect(screen.queryByText("事件顺序发生变化，正在重新同步。")).toBeNull();
-  });
-
-  it("cancels a newly created thread subscription retry after the user switches threads", async () => {
-    const { socket, requests } = await openFixture(fixtureThread, false, true);
-    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "项目目录" }), { target: { value: "/work/new-project" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
-    const created: Thread = { ...fixtureThread, threadId: "00000000-0000-4000-8000-000000000097", title: "", cwd: "/work/new-project", updatedAt: "2026-10-11T00:00:00Z" };
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "accepted", data: { thread: created } }));
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "rejected", error: { code: "RESYNC_REQUIRED", message: "not indexed yet" } }));
-
-    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
-    fireEvent.click(screen.getByText(fixtureThread.title).closest("button")!);
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
-
-    expect(requests("thread.create")).toHaveLength(1);
-    expect(requests("thread.subscribe")).toHaveLength(3);
-    expect(requests("thread.subscribe")[2].params.threadId).toBe(fixtureThread.threadId);
-  });
-
-  it("keeps the chosen directory visible when thread creation is rejected", async () => {
-    const { socket, requests } = await openFixture(fixtureThread, false, true);
-    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
-    const cwd = screen.getByRole("textbox", { name: "项目目录" });
-    fireEvent.change(cwd, { target: { value: "/missing/project" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    await waitFor(() => expect(requests("thread.create")).toHaveLength(1));
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.create")[0].requestId, outcome: "rejected", error: { code: "INVALID_ARGUMENT", message: "invalid" } }));
-    expect(await screen.findByText("目录必须是这台电脑上已存在的绝对文件夹路径。")).toBeTruthy();
-    expect((cwd as HTMLInputElement).value).toBe("/missing/project");
-    expect(screen.getByRole("dialog", { name: "新建会话" })).toBeTruthy();
+    const input = screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "keep me" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(requests("thread.bootstrap")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.bootstrap")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "unknown" } }));
+    expect((screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement).value).toBe("keep me");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    expect(requests("thread.bootstrap")).toHaveLength(1);
   });
 
   it("hides thread creation when the Desktop Agent does not advertise it", async () => {

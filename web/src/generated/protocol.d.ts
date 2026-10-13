@@ -28,6 +28,7 @@ export type Request = {
     | "auth.pair.cancel"
     | "device.list"
     | "thread.create"
+    | "thread.bootstrap"
     | "thread.archive.update"
     | "thread.archive.undo"
     | "thread.name.update"
@@ -127,6 +128,7 @@ export interface Capabilities {
   interaction?: boolean;
   queue?: boolean;
   threadCreate?: boolean;
+  threadBootstrap?: boolean;
   threadArchive?: boolean;
   threadArchiveUndo?: boolean;
   threadRename?: boolean;

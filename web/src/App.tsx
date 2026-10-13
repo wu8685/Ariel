@@ -19,7 +19,7 @@ import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 4;
 const historyTurnPageLimit = 10;
@@ -43,6 +43,7 @@ type ThreadMenuState = { threadId: string; left: number; top: number };
 type ThreadLongPress = { threadId: string; pointerId: number; startX: number; startY: number; timer: number };
 type ArchiveUndoToast = { threadId: string; title: string; operationId: string };
 type RenameThreadDialog = { threadId: string; name: string };
+type LocalThreadDraft = { deviceId: string; agentEpoch: string; cwd: string };
 type WebAuthMode = "pin" | "passkey";
 type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
 
@@ -250,6 +251,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [newThreadCwd, setNewThreadCwd] = useState("");
   const [newThreadError, setNewThreadError] = useState("");
   const [creatingThread, setCreatingThread] = useState(false);
+  const [localThreadDraft, setLocalThreadDraft] = useState<LocalThreadDraft | null>(null);
   const searchInputRef = useRef("");
   const searchInputChanged = useRef(false);
   const [threadId, setThreadId] = useState("");
@@ -336,13 +338,14 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const activeTurn = view?.thread.turns.findLast(t => t.status === "inProgress");
   const queuedMessages = view?.thread.queuedMessages || [];
   const queueEnabled = device?.capabilities.queue === true;
-  const threadCreateEnabled = device?.capabilities.threadCreate === true;
+  const threadCreateEnabled = device?.capabilities.threadBootstrap === true;
   const threadArchiveEnabled = device?.capabilities.threadArchive === true;
   const threadRenameEnabled = device?.capabilities.threadRename === true;
   const threadPinEnabled = device?.capabilities.threadPin === true;
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
+  const composerReady = localThreadDraft ? agentReady : ownerReady;
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
   const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
   const renderedQueuedMessages = dragQueueOrder.length === queuedMessages.length
@@ -809,6 +812,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   function openNewThreadDialog() {
     if (!threadCreateEnabled || !deviceId) return;
+	if (localThreadDraft && (draft.trim() || screenshots.length) && !window.confirm("当前新会话草稿尚未发送。要放弃它并重新选择项目吗？")) return;
     setNewThreadCwd(view?.thread.cwd || selectedThread?.cwd || allThreadGroups[0]?.path || "");
     setNewThreadError("");
     setNewThreadOpen(true);
@@ -830,36 +834,27 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setNewThreadError("");
   }
 
-  async function createThread() {
+  function createThread() {
     const cwd = newThreadCwd.trim();
     if (!threadCreateEnabled || !deviceId || !cwd || creatingThread) return;
-    const generation = ++threadCreateGeneration.current;
-    const targetDevice = deviceId;
-    setCreatingThread(true);
-    setNewThreadError("");
-    const response = await client.request("thread.create", targetDevice, { cwd });
-    if (generation !== threadCreateGeneration.current || targetDevice !== selection.current.deviceId) return;
-    setCreatingThread(false);
-    if (response.outcome !== "accepted") {
-      setNewThreadError(response.error?.code === "INVALID_ARGUMENT" ? "目录必须是这台电脑上已存在的绝对文件夹路径。" : errorText(response));
-      return;
-    }
-    const candidate = response.data?.thread as Partial<Thread> | undefined;
-    if (!candidate || typeof candidate.threadId !== "string" || !candidate.threadId || typeof candidate.cwd !== "string" || !candidate.cwd || typeof candidate.title !== "string" || typeof candidate.updatedAt !== "string" || !Array.isArray(candidate.turns) || !Array.isArray(candidate.pendingInteractions)) {
-      setNewThreadError("创建结果无法确认。请先在 Codex Desktop 中核对，不要直接重试。");
-      return;
-    }
-    const created = candidate as Thread;
-    searchInputRef.current = "";
-    searchInputChanged.current = false;
-    setSearchInput("");
-    setSearchTerm("");
-    setCursor("");
-    setThreads(current => [created, ...current.filter(thread => thread.threadId !== created.threadId)]);
+    const oldSubscription = expectedSubscription.current;
+    const oldDevice = selection.current.deviceId;
+    if (oldSubscription && oldDevice) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    expectedSubscription.current = "";
+    pendingSelect.current++;
+    selection.current = { deviceId, threadId: "", view: null };
+    setThreadId("");
+    setView(null);
+    setSyncingView(false);
+    setReadOnlyHistory(false);
+    resetHistory();
+    setLocalThreadDraft({ deviceId, agentEpoch: agentEpochFor(deviceId), cwd });
+    setDraft("");
+    setScreenshots([]);
+    setNotice("");
     setNewThreadOpen(false);
     setShowList(false);
-    await selectThread(created.threadId, targetDevice, true, true);
-    composerInputRef.current?.focus();
+    window.setTimeout(() => composerInputRef.current?.focus(), 0);
   }
 
   function updateSearch(value: string) {
@@ -891,7 +886,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     return true;
   }
 
-  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true, retryCreatedSubscribe = false) {
+  async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true, retryCreatedSubscribe = false, initialThread?: Thread) {
     if (!targetDevice) return;
     if (cachePrevious) cacheCurrentHistory();
     const sameThread = selection.current.deviceId === targetDevice && selection.current.threadId === id;
@@ -904,7 +899,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const oldDevice = selection.current.deviceId;
     const oldSubscription = expectedSubscription.current;
     expectedSubscription.current = "";
-    const cachedView = restoreCachedConversation(targetDevice, id);
+    const cachedView = restoreCachedConversation(targetDevice, id) || (initialThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: initialThread } : null);
     selection.current = { deviceId: targetDevice, threadId: id, view: cachedView };
     setThreadId(id); setView(cachedView); setSyncingView(true); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!cachedView) resetHistory();
@@ -987,7 +982,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setLocalThreadDraft(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
       historyCache.current.clear();
@@ -1130,7 +1125,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     selection.current = { deviceId, threadId: "", view: null };
     const cached = threadListIdentity(deviceId, searchTerm);
     const cachedList = cached ? threadListCache.current.get(cached) : null;
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedList?.value.threads || []); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setLocalThreadDraft(null); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedList?.value.threads || []); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
 
   useEffect(() => {
@@ -1430,6 +1425,36 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   async function send() {
+	if (localThreadDraft) {
+		if (!deviceId || working || readOnlyHistory || !composerReady || (!draft.trim() && screenshots.length === 0)) return;
+		const local = localThreadDraft;
+		const revision = composerRevision.current;
+		const text = draft;
+		const images = screenshots;
+		const clientMessageId = newRequestID();
+		setWorking(true);
+		setNotice("");
+		const response = await client.request("thread.bootstrap", local.deviceId, { cwd: local.cwd, clientMessageId, text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) });
+		setWorking(false);
+		if (selection.current.deviceId !== local.deviceId || agentEpochFor(local.deviceId) !== local.agentEpoch) return;
+		const candidate = response.data?.thread as Partial<Thread> | undefined;
+		const receiptThreadID = response.data?.threadId;
+		const receiptTurnID = response.data?.turnId;
+		const accepted = response.outcome === "accepted" && candidate && typeof candidate.threadId === "string" && candidate.threadId === receiptThreadID
+			&& typeof candidate.cwd === "string" && candidate.cwd === local.cwd && typeof candidate.title === "string" && typeof candidate.updatedAt === "string"
+			&& Array.isArray(candidate.turns) && Array.isArray(candidate.pendingInteractions) && typeof receiptTurnID === "string" && receiptTurnID
+			&& response.data?.clientMessageId === clientMessageId;
+		if (!accepted) {
+			setNotice(response.outcome === "accepted" ? "创建结果无法确认。草稿已保留，请先刷新会话列表核对，不要直接重发。" : errorText(response));
+			return;
+		}
+		const created = candidate as Thread;
+		if (composerRevision.current === revision) { setDraft(""); setScreenshots([]); }
+		setLocalThreadDraft(null);
+		setThreads(current => [created, ...current.filter(thread => thread.threadId !== created.threadId)]);
+		await selectThread(created.threadId, local.deviceId, false, false, created);
+		return;
+	}
     if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)) return;
     const text = draft;
     const images = screenshots;
@@ -1815,7 +1840,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <button className="thread-create-close icon-button icon-control" type="button" aria-label="关闭新建会话" data-tooltip="关闭" onClick={closeNewThreadDialog} disabled={creatingThread}><CloseIcon /></button>
         <span className="eyebrow">NEW CODEX SESSION</span>
         <h2 id="thread-create-title">新建会话</h2>
-        <p>选择一个已有项目，或输入这台电脑上的绝对目录。这里只创建空会话，不会自动发送消息。</p>
+        <p>选择一个已有项目，或输入这台电脑上的绝对目录。会先建立本地草稿，发送第一条消息后才创建 Codex 会话。</p>
         <label htmlFor="known-project">已有项目</label>
         <select id="known-project" aria-label="选择已有项目" value={allThreadGroups.some(group => group.path === newThreadCwd) ? newThreadCwd : ""} onChange={event => { if (event.target.value) setNewThreadCwd(event.target.value); }} disabled={creatingThread}>
           <option value="">手动输入其他目录</option>
@@ -1860,7 +1885,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       <main className="conversation">
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
           <button className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => setShowList(true)}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
-          <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
+          <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
@@ -1868,7 +1893,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
         {syncingView && view && !readOnlyHistory && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
-          {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
+          {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
           {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
@@ -1903,13 +1928,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
             })}</ol>
           </section>}
           {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></button></div>)}</div>}
-          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={!view || readOnlyHistory} rows={1} />
+          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={localThreadDraft ? "发送第一条消息，创建 Codex 会话…" : view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={(!view && !localThreadDraft) || readOnlyHistory} rows={1} />
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
-              <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={!view || readOnlyHistory || working} />
-              <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={!view || readOnlyHistory || working}><PlusIcon /></button>
+              <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={(!view && !localThreadDraft) || readOnlyHistory || working} />
+              <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
               {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
-              <button className="primary send-button icon-control" aria-label={sendAction} data-tooltip={sendAction} onClick={() => void send()} disabled={readOnlyHistory || !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)}><SendIcon /></button>
+              <button className="primary send-button icon-control" aria-label={sendAction} data-tooltip={sendAction} onClick={() => void send()} disabled={readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled))}><SendIcon /></button>
             </div></div></div></div></div>
       </main>
     </div>

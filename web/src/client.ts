@@ -5,7 +5,7 @@ import { isPairingCredential } from "./pairing";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
-type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
+type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 function retryableRead(method: Method): boolean {
@@ -15,7 +15,7 @@ function retryableRead(method: Method): boolean {
 export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {
   if (retryableRead(method)) return 40000;
   if (method === "thread.subscribe") return 35000;
-  if (method === "thread.create" || method.startsWith("thread.archive.") || method === "thread.name.update" || method === "thread.pin.update" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
+  if (method === "thread.create" || method === "thread.bootstrap" || method.startsWith("thread.archive.") || method === "thread.name.update" || method === "thread.pin.update" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
   return 12000;
 }
 

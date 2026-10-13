@@ -67,7 +67,7 @@ func Run(ctx context.Context, cfg Config) error {
 		queues = append(queues, queueReader)
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
-	service.SetThreadCreator(appserver.NewThreadCreator(cfg.Binary))
+	service.SetThreadBootstrapper(AppServerBootstrapper{Binary: cfg.Binary})
 	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
 	service.SetThreadMetadataWriter(appserver.ThreadMetadataWriter{RPC: readOnlyRPC})
 	defer service.Close()
@@ -111,7 +111,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled(), "threadRename": service.ThreadRenameEnabled(), "threadPin": service.ThreadPinEnabled()}}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadBootstrap": service.ThreadBootstrapEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled(), "threadRename": service.ThreadRenameEnabled(), "threadPin": service.ThreadPinEnabled()}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -252,9 +252,16 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	var err error
 	switch method {
 	case "thread.create":
+		err = appserver.ErrMethodUnavailable
+	case "thread.bootstrap":
 		var thread map[string]any
-		thread, err = a.service.CreateThread(ctx, p.CWD)
-		data = map[string]any{"thread": thread}
+		var turnID string
+		thread, turnID, err = a.service.BootstrapThread(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images)
+		threadID := ""
+		if thread != nil {
+			threadID, _ = thread["threadId"].(string)
+		}
+		data = map[string]any{"thread": thread, "threadId": threadID, "turnId": turnID, "clientMessageId": p.ClientMessageID}
 	case "thread.archive.update":
 		if !p.Archived {
 			err = errors.New("INVALID_ARGUMENT")

@@ -682,7 +682,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	if method == "thread.subscribe" {
 		timeout = s.cfg.SubscriptionTimeout
 	}
-	if method == "thread.create" || method == "thread.archive.update" || method == "thread.archive.undo" || method == "thread.name.update" || method == "thread.pin.update" || method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
+	if method == "thread.create" || method == "thread.bootstrap" || method == "thread.archive.update" || method == "thread.archive.undo" || method == "thread.name.update" || method == "thread.pin.update" || method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
 		timeout = s.cfg.MutationTimeout
 	}
 	entry.timer = time.AfterFunc(timeout, func() {

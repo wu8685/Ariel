@@ -86,6 +86,7 @@ describe("Ariel WebSocket client", () => {
     expect(timeoutFor("queue.add")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("queue.reorder")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("thread.create")).toBe(timeoutFor("turn.start"));
+    expect(timeoutFor("thread.bootstrap")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("thread.name.update")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("thread.pin.update")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("thread.list", { searchTerm: "Ariel" })).toBe(40000);

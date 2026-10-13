@@ -47,6 +47,15 @@ type ThreadCreator interface {
 	Create(context.Context, string) (appserver.Thread, error)
 }
 
+type BootstrapResult struct {
+	ThreadID, TurnID, Title, CWD string
+	Live                         Live
+}
+
+type ThreadBootstrapper interface {
+	Bootstrap(context.Context, string, string, string, []string) (BootstrapResult, error)
+}
+
 type ThreadArchiver interface {
 	Archive(context.Context, string) error
 	Unarchive(context.Context, string) error
@@ -109,6 +118,8 @@ type threadController struct {
 	startMu        sync.Mutex
 	id, title, cwd string
 	bootstrap      bool
+	bootstrapHold  bool
+	migrating      bool
 	live           Live
 	subs           map[string]*subscription
 	leases         int
@@ -118,6 +129,7 @@ type Service struct {
 	history          History
 	queue            FollowUpQueue
 	creator          ThreadCreator
+	bootstrapper     ThreadBootstrapper
 	archiver         ThreadArchiver
 	metadata         ThreadMetadataWriter
 	attach           LiveFactory
@@ -134,6 +146,7 @@ type Service struct {
 	knownThreadOrder []string
 	threadMutations  [64]sync.Mutex
 	metadataSlots    chan struct{}
+	bootstrapSlots   chan struct{}
 	closed           bool
 	placeholderGrace time.Duration
 	archiveUndo      []archiveUndoRecord
@@ -155,13 +168,17 @@ func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Se
 	if len(queue) > 0 {
 		followUps = queue[0]
 	}
-	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, knownThreads: map[string]struct{}{}, metadataSlots: make(chan struct{}, 2), placeholderGrace: 8 * time.Second}
+	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, knownThreads: map[string]struct{}{}, metadataSlots: make(chan struct{}, 2), bootstrapSlots: make(chan struct{}, 2), placeholderGrace: 8 * time.Second}
 }
 
 func (s *Service) QueueEnabled() bool { return s.queue != nil }
 
-func (s *Service) SetThreadCreator(creator ThreadCreator)              { s.creator = creator }
-func (s *Service) ThreadCreationEnabled() bool                         { return s.creator != nil }
+func (s *Service) SetThreadCreator(creator ThreadCreator) { s.creator = creator }
+func (s *Service) ThreadCreationEnabled() bool            { return s.creator != nil }
+func (s *Service) SetThreadBootstrapper(bootstrapper ThreadBootstrapper) {
+	s.bootstrapper = bootstrapper
+}
+func (s *Service) ThreadBootstrapEnabled() bool                        { return s.bootstrapper != nil }
 func (s *Service) SetThreadArchiver(archiver ThreadArchiver)           { s.archiver = archiver }
 func (s *Service) ThreadArchiveEnabled() bool                          { return s.archiver != nil }
 func (s *Service) SetThreadMetadataWriter(writer ThreadMetadataWriter) { s.metadata = writer }
@@ -413,6 +430,158 @@ func (s *Service) CreateThread(ctx context.Context, cwd string) (map[string]any,
 	return thread, nil
 }
 
+type normalizedLive interface {
+	CurrentThread() (map[string]any, error)
+}
+
+type terminalBootstrapLive interface {
+	Live
+	normalizedLive
+	Terminal() <-chan struct{}
+	Verify(context.Context) error
+}
+
+func (s *Service) BootstrapThread(ctx context.Context, cwd, messageID, text string, images []string) (map[string]any, string, error) {
+	if s.bootstrapper == nil {
+		return nil, "", appserver.ErrMethodUnavailable
+	}
+	if messageID == "" || (text == "" && len(images) == 0) || validateUploadImages(images) != nil {
+		return nil, "", appserver.ErrInvalidArgument
+	}
+	canonical, err := canonicalProjectDirectory(cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	select {
+	case s.bootstrapSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	default:
+		return nil, "", errors.New("OVERLOADED")
+	}
+	keepSlot := false
+	defer func() {
+		if !keepSlot {
+			<-s.bootstrapSlots
+		}
+	}()
+	result, err := s.bootstrapper.Bootstrap(ctx, canonical, messageID, text, images)
+	if err != nil {
+		return nil, "", err
+	}
+	live, ok := result.Live.(terminalBootstrapLive)
+	if !ok || !threadIDPattern.MatchString(result.ThreadID) || result.TurnID == "" || result.CWD != canonical {
+		if result.Live != nil {
+			_ = result.Live.Close()
+		}
+		return nil, "", appserver.ErrOutcomeUnknown
+	}
+	thread, err := live.CurrentThread()
+	if err != nil || thread["threadId"] != result.ThreadID || thread["cwd"] != canonical {
+		_ = live.Close()
+		return nil, "", appserver.ErrOutcomeUnknown
+	}
+	c, err := s.controller(result.ThreadID)
+	if err != nil {
+		_ = live.Close()
+		return nil, "", err
+	}
+	c.mu.Lock()
+	if c.live != nil {
+		c.mu.Unlock()
+		s.releaseController(c)
+		_ = live.Close()
+		return nil, "", appserver.ErrOutcomeUnknown
+	}
+	c.title, c.cwd, c.bootstrap = result.Title, canonical, true
+	c.bootstrapHold = true
+	c.live = live
+	c.mu.Unlock()
+	s.rememberThread(result.ThreadID)
+	go s.pump(c, live)
+	go s.migrateBootstrap(c, live)
+	keepSlot = true
+	s.releaseController(c)
+	return thread, result.TurnID, nil
+}
+
+func (s *Service) migrateBootstrap(c *threadController, live terminalBootstrapLive) {
+	defer func() { <-s.bootstrapSlots }()
+	select {
+	case <-live.Terminal():
+	case <-live.Done():
+		s.invalidateLive(c, live, "RESYNC_REQUIRED")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if live.Verify(ctx) != nil {
+		s.invalidateLive(c, live, "NATIVE_STATE_UNCERTAIN")
+		return
+	}
+	c.mu.Lock()
+	if c.live != live {
+		c.mu.Unlock()
+		return
+	}
+	c.migrating = true
+	c.live = nil
+	c.mu.Unlock()
+	_ = live.Close()
+	var source appserver.Thread
+	var err error
+	for ctx.Err() == nil {
+		source, err = s.history.Read(ctx, c.id)
+		if err == nil && source.ID == c.id && source.CWD == c.cwd {
+			break
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+	if err != nil || source.ID != c.id || source.CWD != c.cwd {
+		s.failMigration(c, "NATIVE_STATE_UNCERTAIN")
+		return
+	}
+	desktop, err := s.attach(ctx, c.id, c.cwd)
+	if err != nil {
+		s.failMigration(c, "RESYNC_REQUIRED")
+		return
+	}
+	c.mu.Lock()
+	if c.live != nil {
+		c.mu.Unlock()
+		_ = desktop.Close()
+		return
+	}
+	c.live = desktop
+	c.bootstrap = false
+	c.bootstrapHold = false
+	c.migrating = false
+	c.mu.Unlock()
+	go s.pump(c, desktop)
+}
+
+func (s *Service) failMigration(c *threadController, code string) {
+	c.mu.Lock()
+	c.bootstrapHold = false
+	c.migrating = false
+	out := make([]*subscription, 0, len(c.subs))
+	for id, sub := range c.subs {
+		if sub.active {
+			out = append(out, sub)
+		}
+		delete(c.subs, id)
+	}
+	c.mu.Unlock()
+	for _, sub := range out {
+		sub.emit(map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": code})
+	}
+}
+
 func (s *Service) controller(id string) (*threadController, error) {
 	s.mu.Lock()
 	if s.closed {
@@ -460,7 +629,7 @@ func (s *Service) releaseController(c *threadController) {
 	c.leases--
 	c.mu.Lock()
 	var retired Live
-	if c.leases == 0 && len(c.subs) == 0 {
+	if c.leases == 0 && len(c.subs) == 0 && !c.bootstrapHold && !c.migrating {
 		retired = c.live
 		c.live = nil
 	}
@@ -821,6 +990,9 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 	if c.live != nil {
 		return nil
 	}
+	if c.migrating {
+		return errors.New("RESYNC_REQUIRED")
+	}
 	title, cwd := c.title, c.cwd
 	if !c.bootstrap {
 		source, err := s.history.Read(ctx, c.id)
@@ -843,14 +1015,23 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 	return nil
 }
 
+func currentLiveThread(c *threadController, live Live) (map[string]any, json.RawMessage, error) {
+	if normalized, ok := live.(normalizedLive); ok {
+		thread, err := normalized.CurrentThread()
+		return thread, nil, err
+	}
+	raw, err := live.Current()
+	if err != nil {
+		return nil, raw, err
+	}
+	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
+	return thread, raw, err
+}
+
 // Mutation requests may be sent without an active Web subscription. They
 // still need the same fail-closed native-state gate as thread.subscribe.
 func (s *Service) validateLive(c *threadController) error {
-	raw, err := c.live.Current()
-	if err != nil {
-		return err
-	}
-	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
+	thread, _, err := currentLiveThread(c, c.live)
 	if err != nil {
 		return desktopipc.ErrNativeStateUncertain
 	}
@@ -868,21 +1049,20 @@ func (s *Service) pump(c *threadController, live Live) {
 	for {
 		select {
 		case <-live.Updates():
-			raw, err := live.Current()
+			thread, raw, err := currentLiveThread(c, live)
 			if err != nil {
-				s.invalidateLive(c, live, "RESYNC_REQUIRED")
-				return
-			}
-			thread, e := NormalizeLive(c.id, c.title, c.cwd, raw)
-			if e != nil {
-				if desktopipc.TransientCanonicalPlaceholder(raw, c.cwd) {
+				if len(raw) > 0 && desktopipc.TransientCanonicalPlaceholder(raw, c.cwd) {
 					if placeholderTimer == nil {
 						placeholderTimer = time.NewTimer(s.placeholderGrace)
 						placeholderDeadline = placeholderTimer.C
 					}
 					continue
 				}
-				s.invalidateLive(c, live, "NATIVE_STATE_UNCERTAIN")
+				code := "RESYNC_REQUIRED"
+				if len(raw) > 0 {
+					code = "NATIVE_STATE_UNCERTAIN"
+				}
+				s.invalidateLive(c, live, code)
 				return
 			}
 			if placeholderTimer != nil {
@@ -890,7 +1070,7 @@ func (s *Service) pump(c *threadController, live Live) {
 				placeholderTimer = nil
 				placeholderDeadline = nil
 			}
-			if e = s.attachQueue(context.Background(), thread); e != nil {
+			if err = s.attachQueue(context.Background(), thread); err != nil {
 				s.invalidateLive(c, live, "RESYNC_REQUIRED")
 				return
 			}
@@ -998,12 +1178,7 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
-	raw, err := c.live.Current()
-	if err != nil {
-		c.mu.Unlock()
-		return "", "", nil, nil, err
-	}
-	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
+	thread, _, err := currentLiveThread(c, c.live)
 	if err != nil {
 		c.mu.Unlock()
 		return "", "", nil, nil, desktopipc.ErrNativeStateUncertain
@@ -1027,8 +1202,8 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 		c.mu.Lock()
 		if c.subs[sub.id] == sub {
 			live := c.live
-			latestRaw, currentErr := live.Current()
-			latest, normalizeErr := NormalizeLive(c.id, c.title, c.cwd, latestRaw)
+			latest, _, currentErr := currentLiveThread(c, live)
+			normalizeErr := currentErr
 			if normalizeErr == nil {
 				normalizeErr = s.attachQueue(context.Background(), latest)
 			}
@@ -1097,7 +1272,7 @@ func (s *Service) retireIdle(c *threadController) {
 	s.mu.Lock()
 	c.mu.Lock()
 	var retired Live
-	if c.leases == 0 && len(c.subs) == 0 {
+	if c.leases == 0 && len(c.subs) == 0 && !c.bootstrapHold && !c.migrating {
 		retired = c.live
 		c.live = nil
 	}

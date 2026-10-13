@@ -2,7 +2,6 @@ package desktopagent
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
-	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/relay"
 )
 
@@ -24,9 +22,6 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	s := NewService(pagedHistory{}, func(context.Context, string, string) (Live, error) {
 		return live, nil
 	})
-	createDir := t.TempDir()
-	creator := &fakeThreadCreator{thread: appserver.Thread{ID: "00000000-0000-4000-8000-000000000099", Status: json.RawMessage(`{"type":"notLoaded"}`)}}
-	s.SetThreadCreator(creator)
 	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -71,15 +66,14 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 		t.Fatalf("history: %v", data)
 	}
 	requestID = "00000000-0000-4000-8000-000000000005"
-	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.create", "params": map[string]any{"cwd": createDir}}); err != nil {
+	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.create", "params": map[string]any{"cwd": t.TempDir()}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := wsjson.Read(wctx, w, &got); err != nil {
 		t.Fatal(err)
 	}
-	created := got["data"].(map[string]any)["thread"].(map[string]any)
-	if got["outcome"] != "accepted" || created["threadId"] != creator.thread.ID || creator.cwd == "" {
-		t.Fatalf("create thread route: response=%v creator=%+v", got, creator)
+	if got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "PROTOCOL_UNSUPPORTED" {
+		t.Fatalf("deprecated create thread route: response=%v", got)
 	}
 	requestID = "00000000-0000-4000-8000-000000000004"
 	if err := wsjson.Write(wctx, w, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.history", "params": map[string]any{"threadId": "thread", "limit": 10}}); err != nil {

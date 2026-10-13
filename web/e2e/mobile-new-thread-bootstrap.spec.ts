@@ -5,15 +5,15 @@ const createdThread = {
   threadId: "00000000-0000-4000-8000-000000000096",
   title: "",
   cwd: "/tmp/new-project",
-  updatedAt: "2026-10-11T00:00:00Z",
-  runtime: "idle",
-  turns: [],
+  updatedAt: "2026-10-13T00:00:00Z",
+  runtime: "inProgress",
+  turns: [{ turnId: "turn-first", status: "inProgress", items: [{ itemId: "user-first", role: "user", text: "hello", clientMessageId: "" }] }],
   pendingInteractions: [],
 };
 
-test("a newly created thread retries one cold subscription without duplicating creation", async ({ page }) => {
-  await page.clock.install();
+test("mobile local draft bootstraps once and keeps the composer stable", async ({ page }) => {
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
+  let bootstrapCount = 0;
   let createCount = 0;
   let subscribeCount = 0;
   await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
@@ -25,21 +25,21 @@ test("a newly created thread retries one cold subscription without duplicating c
     if (message.type !== "request") return;
     if (message.method === "device.list") {
       socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { devices: [
-        { deviceId: "mac", deviceName: "创建测试 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, threadCreate: true } },
+        { deviceId: "mac", deviceName: "创建测试 Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true, threadBootstrap: true } },
       ] } }));
     } else if (message.method === "thread.list") {
       socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { threads: [], nextCursor: "" } }));
     } else if (message.method === "thread.create") {
       createCount++;
-      socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { thread: createdThread } }));
+    } else if (message.method === "thread.bootstrap") {
+      bootstrapCount++;
+      createdThread.turns[0].items[0].text = message.params.text;
+      createdThread.turns[0].items[0].clientMessageId = message.params.clientMessageId;
+      socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { thread: createdThread, threadId: createdThread.threadId, turnId: "turn-first", clientMessageId: message.params.clientMessageId } }));
     } else if (message.method === "thread.subscribe") {
       subscribeCount++;
-      if (subscribeCount === 1) {
-        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "rejected", error: { code: "RESYNC_REQUIRED", message: "not indexed yet" } }));
-      } else {
-        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { subscriptionId: "created-sub" } }));
-        socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: createdThread.threadId, subscriptionId: "created-sub", streamId: "created-stream", seq: 1, thread: createdThread }));
-      }
+      socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { subscriptionId: "created-sub" } }));
+      socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: createdThread.threadId, subscriptionId: "created-sub", streamId: "created-stream", seq: 1, thread: createdThread }));
     }
   }));
 
@@ -47,13 +47,23 @@ test("a newly created thread retries one cold subscription without duplicating c
   await page.getByRole("button", { name: "新建会话" }).click();
   await page.getByRole("textbox", { name: "项目目录" }).fill(createdThread.cwd);
   await page.getByRole("button", { name: "创建会话" }).click();
-  await expect.poll(() => subscribeCount).toBe(1);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(createCount).toBe(0);
+  expect(bootstrapCount).toBe(0);
 
-  await page.clock.fastForward(500);
-  await expect.poll(() => subscribeCount).toBe(2);
-  expect(createCount).toBe(1);
+  const composer = page.getByRole("textbox", { name: "发送消息" });
+  await expect(composer).toBeEnabled();
+  const before = await composer.boundingBox();
+  await composer.fill("hello");
+  const after = await composer.boundingBox();
+  expect(after?.width).toBe(before?.width);
+  expect(after?.height).toBeGreaterThanOrEqual(before?.height || 0);
+
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect.poll(() => bootstrapCount).toBe(1);
+  await expect.poll(() => subscribeCount).toBe(1);
+  expect(createCount).toBe(0);
   await expect(page.getByRole("heading", { name: "未命名会话" })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "发送消息" })).toBeEnabled();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(composer).toBeEnabled();
+  await expect(composer).toHaveValue("");
+  await expect(page.getByText("正在同步会话…")).toHaveCount(0);
 });

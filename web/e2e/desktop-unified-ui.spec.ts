@@ -26,7 +26,7 @@ async function openFixture(page: Page) {
     }
     if (message.type !== "request") return;
     let data: Record<string, unknown> = {};
-    if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "桌面视觉测试", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, queue: true, threadCreate: true } }] };
+    if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "桌面视觉测试", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, queue: true, threadBootstrap: true } }] };
     if (message.method === "thread.list") data = { threads: [fixtureThread], nextCursor: "" };
     if (message.method === "thread.subscribe") data = { subscriptionId: "desktop-sub" };
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
