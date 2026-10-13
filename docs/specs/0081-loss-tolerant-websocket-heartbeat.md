@@ -1,6 +1,6 @@
 # 0081：弱网下 WebSocket heartbeat 容错
 
-- 状态：Approved（2026-10-13，用户已确认；实施中）。
+- 状态：Implemented（2026-10-13；TDD、Go 全包、race、Web 全量、构建、本机 Agent 与公网 Docker Relay 验收通过；用户侧会话菜单复验待完成）。
 - 来源：0080 已把会话菜单的 Desktop Agent 总预算调整为 30 秒，但用户复验仍在约 10 秒看到超时。现场测量显示本机到公网 Relay 存在 60% ICMP 丢包、约 367 ms RTT，631 KB HTTPS 资源下载约 30 秒；同期 Desktop Agent 日志持续出现 heartbeat pong deadline、TLS handshake timeout 和 WebSocket 重连。服务器 CPU、内存与容器健康状态正常。
 - 范围：提高 Relay、Desktop Agent 的 WebSocket heartbeat 与单帧发送在弱网下的容错；部署本机 Agent 和公网 Docker Relay／Web。不会改变业务请求幂等语义，也不会无限延长会话菜单等待。
 
@@ -54,3 +54,12 @@
 - 不引入消息持久化、离线队列或自动 mutation replay。
 - 不把网络持续不可达伪装成业务成功。
 - 不修改会话缓存、unread、图片发送或新建会话语义。
+
+## 实施结果
+
+- 新增共享 `internal/wsheartbeat` 状态机；Relay 与 Desktop Agent 均采用 30 秒 interval、15 秒单次 timeout、连续两次失败才断线，并在成功后清零计数。
+- 两端 WebSocket 单帧发送 deadline 从 5 秒调整为 15 秒；业务请求的 30／35／40 秒预算与 mutation 不重放语义保持不变。
+- Dockerfile 已显式复制新 package，避免容器构建遗漏内部依赖。
+- 本机 Desktop Agent 已替换并通过 launchd 重启；公网 Relay 已以 `ariel-relay:c226db2` 启动，原 `ariel-relay:5b2fff9` 保留为已停止的回滚容器。
+- 公网容器 health 为 `healthy`；部署后连续观察约 107 秒，Agent 保持同一条 `ESTABLISHED` 连接，日志没有新增 heartbeat 断线。
+- 验收证据见 [`docs/testing/2026-10-13-0081-loss-tolerant-websocket-heartbeat.md`](../testing/2026-10-13-0081-loss-tolerant-websocket-heartbeat.md)。
