@@ -1,6 +1,6 @@
 # 0076：本地新会话草稿与首条 turn bootstrap
 
-- 状态：Approved（2026-10-13；用户已确认，先执行 compatibility gate，再进入 TDD）。
+- 状态：Implemented（2026-10-13；compatibility gate、TDD、真实 bundled Codex fixture、Go race、Web 全量测试、真实 Chromium 手机 viewport 与公网／本机部署均已通过；物理 iPhone/Safari 待用户复验）。
 - 来源：公网 Web 点击“新建会话”后，空 thread 无法由 Codex Desktop 接管，页面长期停留在“正在同步会话”并最终超时。
 - 关联：[0033 在指定项目中新建 Codex 会话](0033-create-thread-in-project.md)、[0065 新建会话的 bootstrap 订阅](0065-new-thread-bootstrap-subscription.md)、[0074 新建空会话的 Desktop 接管试验](0074-created-thread-owner-adoption.md)。
 - 官方依据：[OpenAI Codex app-server 文档](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)要求客户端保存 `thread/start` 返回的 thread ID，在同一执行链路调用 `turn/start`、消费 streaming events，并在后续进程通过 `thread/resume` 恢复。
