@@ -13,6 +13,12 @@ import (
 	"github.com/wu8685/Ariel/internal/relay"
 )
 
+func TestProductionThreadListAttemptTimeout(t *testing.T) {
+	if threadListAttemptTimeout != 5*time.Second {
+		t.Fatalf("thread/list attempt timeout = %s, want 5s", threadListAttemptTimeout)
+	}
+}
+
 func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(r.Handler())

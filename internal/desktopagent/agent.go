@@ -29,10 +29,11 @@ type agent struct {
 	writeMu  sync.Mutex
 }
 
-// Service.List may issue two sequential thread/list calls (recent + pinned).
-// Three seconds per attempt leaves enough room for one endpoint rebuild while
-// staying well inside Relay's bounded read budget.
-const threadListAttemptTimeout = 3 * time.Second
+// Service.List may issue three sequential thread/list calls (recent, the
+// modern pinned filter, and the Codex 0.160.0 pinned-section fallback). Five
+// seconds per attempt leaves enough room for one endpoint rebuild per call
+// while keeping the worst-case path inside Relay's bounded read budget.
+const threadListAttemptTimeout = 5 * time.Second
 
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.Binary == "" || cfg.Socket == "" {
