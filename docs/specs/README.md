@@ -90,6 +90,7 @@
 | 0071 | [会话操作菜单字体统一](0071-uniform-thread-context-menu-type.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 将“归档”菜单项统一到现有紧凑菜单的 `12px / 1.4` 字体体系，并保持 touch 点击区域 |
 | 0072 | [新会话首屏最近四回合](0072-four-turn-initial-history-window.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | 首次只同步最新 4 个 turn，手动旧页仍保持最多 10 个以减少翻页往返 |
 | 0073 | [会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | item 级增量更新；切换与 resync 保留已确认正文，只在后台同步最新状态 |
+| 0074 | [新建空会话在创建端关闭前完成 Desktop 接管](0074-created-thread-owner-adoption.md) | Compatibility blocked（真机否定，未发布） | 空 thread 即使保持创建端存活也无法由 Desktop 接管；保留证据，禁止用占位消息或猜测关联绕过 |
 
 ## 设计基线
 
