@@ -20,11 +20,14 @@ Ariel 使用 public App Server 调用，并在写入后分别读取 active 与 a
 
 隔离探针在临时目录创建一条无 turn 会话，以 `thread/inject_items` 使其形成可归档的持久化 fixture，完成 archive → 双索引验证 → unarchive → 双索引验证，最后仅由测试清理逻辑删除 fixture；全程没有启动模型 turn。
 
-### 不可启用：public App Server 置顶写入
+### 2026-10-13 更新：可启用 public App Server 置顶写入与重命名
 
-当前 bundled `0.160.0` 的 `ThreadMetadataUpdateParams` 只有 `threadId` 与 `gitInfo`，没有 `isPinned`。因此不能按 `thread/metadata/update {isPinned}` 实现置顶；发送 schema 外字段会把未验证行为冒充成稳定能力。
+原探针只检查了 `thread/metadata/update {isPinned}`，该判断对这一个方法仍成立；但进一步检查同一 bundled `0.160.0` 的公开生成 schema 后，确认它还提供：
 
-只读 `thread/list` 仍可读取现有 pinned section，所以既有置顶展示不受影响。
+- `thread/name/set {threadId, name}`；
+- `thread/section/move {threadId, sectionId, beforeThreadId?}`，其中 `sectionId:null` 表示移出 section。
+
+隔离持久化 fixture 已通过生产使用的 `RestartingRPC` 路径完成 rename → read、pin → read/ListPinned、unpin → read/ListPinned，且 mutation 前后 turn 数量不变，最后删除 fixture。因此 Ariel 改用 `thread/section/move` 写入既有保留 `Pinned` section，不再把缺少 `thread/metadata/update.isPinned` 误判为整个 public pin 能力不可用。
 
 ### 暂不可启用：跨会话 active／unread 批量状态与 mark-read
 
@@ -39,7 +42,7 @@ Codex App 内部工具目录确实包含批量 thread 状态和 read-state 能�
 ## 产品降级
 
 - `threadArchive`／`threadArchiveUndo` 可上报并启用；归档只对当前已订阅且 live snapshot 明确为 idle 的会话开放。
-- `threadPin`、`threadStatus`、`threadReadState` 不上报；Web 不显示虚假的置顶操作、spinner 或未读蓝点。
+- `threadPin` 与 `threadRename` 在上述隔离 fixture 验证通过后上报；`threadStatus`、`threadReadState` 仍不上报，Web 不显示虚假的跨会话 spinner 或未读蓝点。
 - 当前会话本身仍由既有 live owner snapshot 展示运行状态；会话列表、历史、发送和队列不受影响。
 
 ## 后续解锁条件

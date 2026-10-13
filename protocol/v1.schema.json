@@ -31,7 +31,9 @@
         "queue": { "type": "boolean" },
         "threadCreate": { "type": "boolean" },
         "threadArchive": { "type": "boolean" },
-        "threadArchiveUndo": { "type": "boolean" }
+        "threadArchiveUndo": { "type": "boolean" },
+        "threadRename": { "type": "boolean" },
+        "threadPin": { "type": "boolean" }
       }
     },
     "webHello": {
@@ -68,7 +70,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.archive.update", "thread.archive.undo", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -78,6 +80,8 @@
         { "if": { "properties": { "method": { "const": "thread.create" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/createThreadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.archive.update" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/archiveThreadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.archive.undo" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/archiveUndoParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.name.update" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/renameThreadParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.pin.update" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/pinThreadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/listParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.history" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyParams" } } } },
@@ -115,6 +119,17 @@
     "archiveUndoParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "operationId"],
       "properties": { "threadId": { "$ref": "#/$defs/id" }, "operationId": { "$ref": "#/$defs/id" } }
+    },
+    "renameThreadParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "name"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*\\S[^\\x00-\\x1F\\x7F-\\x9F]*$" }
+      }
+    },
+    "pinThreadParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "pinned"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "pinned": { "type": "boolean" } }
     },
     "threadParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],

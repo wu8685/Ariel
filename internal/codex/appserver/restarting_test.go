@@ -113,6 +113,32 @@ func TestRestartingRPCNeverRetriesQueueMutationWithUnknownOutcome(t *testing.T) 
 	}
 }
 
+func TestRestartingRPCAllowsMetadataMutationsButNeverRetriesThem(t *testing.T) {
+	for _, method := range []string{"thread/name/set", "thread/section/move"} {
+		t.Run(method, func(t *testing.T) {
+			first := &fakeReadOnlyEndpoint{done: make(chan struct{}), fail: true}
+			second := &fakeReadOnlyEndpoint{done: make(chan struct{})}
+			var started atomic.Int32
+			rpc, err := NewRestartingRPC(context.Background(), func(context.Context) (ReadOnlyEndpoint, error) {
+				if started.Add(1) == 1 {
+					return first, nil
+				}
+				return second, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rpc.Close()
+			if err := rpc.Call(context.Background(), method, map[string]any{}, nil); !errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("metadata mutation outcome: %v", err)
+			}
+			if first.calls != 1 || second.calls != 0 {
+				t.Fatalf("metadata mutation was replayed: %d/%d", first.calls, second.calls)
+			}
+		})
+	}
+}
+
 func TestRestartingRPCAllowsNativeSearchAsReadOnly(t *testing.T) {
 	endpoint := &fakeReadOnlyEndpoint{done: make(chan struct{})}
 	rpc, err := NewRestartingRPC(context.Background(), func(context.Context) (ReadOnlyEndpoint, error) { return endpoint, nil })

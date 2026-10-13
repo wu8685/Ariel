@@ -52,9 +52,15 @@ type ThreadArchiver interface {
 	Unarchive(context.Context, string) error
 }
 
+type ThreadMetadataWriter interface {
+	Rename(context.Context, string, string) (appserver.Thread, error)
+	Pin(context.Context, string, bool) (appserver.Thread, error)
+}
+
 var ErrHistoryTooLarge = errors.New("HISTORY_TOO_LARGE")
 var ErrArchiveStateUnknown = errors.New("NATIVE_STATE_UNCERTAIN")
 var ErrArchiveUndoInvalid = errors.New("INVALID_ARGUMENT")
+var ErrThreadMetadataTargetUnknown = errors.New("INVALID_ARGUMENT")
 
 const maxThreadPayloadBytes = 7 << 20
 const maxHistoryPageBytes = 6 << 20
@@ -62,6 +68,7 @@ const maxThreadControllers = 64
 const maxSubscriptionsPerThread = 16
 const maxRecentMessageIDs = 4096
 const maxPinnedThreads = 100
+const maxKnownThreadIDs = 1024
 
 func checkThreadSize(thread map[string]any) error {
 	return checkPayloadSize(thread, maxThreadPayloadBytes)
@@ -112,6 +119,7 @@ type Service struct {
 	queue            FollowUpQueue
 	creator          ThreadCreator
 	archiver         ThreadArchiver
+	metadata         ThreadMetadataWriter
 	attach           LiveFactory
 	mu               sync.Mutex
 	archiveMu        sync.Mutex
@@ -122,6 +130,10 @@ type Service struct {
 	clock            uint64
 	seen             map[string]struct{}
 	seenOrder        []string
+	knownThreads     map[string]struct{}
+	knownThreadOrder []string
+	threadMutations  [64]sync.Mutex
+	metadataSlots    chan struct{}
 	closed           bool
 	placeholderGrace time.Duration
 	archiveUndo      []archiveUndoRecord
@@ -143,20 +155,146 @@ func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Se
 	if len(queue) > 0 {
 		followUps = queue[0]
 	}
-	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, placeholderGrace: 8 * time.Second}
+	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, knownThreads: map[string]struct{}{}, metadataSlots: make(chan struct{}, 2), placeholderGrace: 8 * time.Second}
 }
 
 func (s *Service) QueueEnabled() bool { return s.queue != nil }
 
-func (s *Service) SetThreadCreator(creator ThreadCreator)    { s.creator = creator }
-func (s *Service) ThreadCreationEnabled() bool               { return s.creator != nil }
-func (s *Service) SetThreadArchiver(archiver ThreadArchiver) { s.archiver = archiver }
-func (s *Service) ThreadArchiveEnabled() bool                { return s.archiver != nil }
+func (s *Service) SetThreadCreator(creator ThreadCreator)              { s.creator = creator }
+func (s *Service) ThreadCreationEnabled() bool                         { return s.creator != nil }
+func (s *Service) SetThreadArchiver(archiver ThreadArchiver)           { s.archiver = archiver }
+func (s *Service) ThreadArchiveEnabled() bool                          { return s.archiver != nil }
+func (s *Service) SetThreadMetadataWriter(writer ThreadMetadataWriter) { s.metadata = writer }
+func (s *Service) ThreadRenameEnabled() bool                           { return s.metadata != nil }
+func (s *Service) ThreadPinEnabled() bool                              { return s.metadata != nil }
+
+func (s *Service) lockThreadMutation(threadID string) func() {
+	var bucket uint32
+	for index := 0; index < len(threadID); index++ {
+		bucket = bucket*33 + uint32(threadID[index])
+	}
+	lock := &s.threadMutations[int(bucket)%len(s.threadMutations)]
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (s *Service) enterMetadataMutation(ctx context.Context, threadID string) (func(), error) {
+	unlock := s.lockThreadMutation(threadID)
+	select {
+	case s.metadataSlots <- struct{}{}:
+		return func() { <-s.metadataSlots; unlock() }, nil
+	case <-ctx.Done():
+		unlock()
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Service) rememberThread(threadID string) {
+	if !threadIDPattern.MatchString(threadID) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.knownThreads[threadID]; exists {
+		return
+	}
+	s.knownThreads[threadID] = struct{}{}
+	s.knownThreadOrder = append(s.knownThreadOrder, threadID)
+	if len(s.knownThreadOrder) > maxKnownThreadIDs {
+		oldest := s.knownThreadOrder[0]
+		s.knownThreadOrder = s.knownThreadOrder[1:]
+		delete(s.knownThreads, oldest)
+	}
+}
+
+func (s *Service) knownThread(threadID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, exists := s.knownThreads[threadID]
+	return exists
+}
+
+func (s *Service) RenameThread(ctx context.Context, threadID, name string) (map[string]any, error) {
+	name = strings.TrimSpace(name)
+	if s.metadata == nil || !threadIDPattern.MatchString(threadID) || !validThreadName(name) {
+		return nil, appserver.ErrInvalidArgument
+	}
+	leave, err := s.enterMetadataMutation(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
+	if !s.knownThread(threadID) {
+		return nil, ErrThreadMetadataTargetUnknown
+	}
+	stored, err := s.metadata.Rename(ctx, threadID, name)
+	if err != nil {
+		return nil, err
+	}
+	thread, err := normalizeMetadataThread(threadID, stored)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	controller := s.threads[threadID]
+	s.mu.Unlock()
+	if controller != nil {
+		controller.mu.Lock()
+		controller.title = stored.Name
+		controller.mu.Unlock()
+	}
+	return thread, nil
+}
+
+func (s *Service) PinThread(ctx context.Context, threadID string, pinned bool) (map[string]any, error) {
+	if s.metadata == nil || !threadIDPattern.MatchString(threadID) {
+		return nil, appserver.ErrInvalidArgument
+	}
+	leave, err := s.enterMetadataMutation(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
+	if !s.knownThread(threadID) {
+		return nil, ErrThreadMetadataTargetUnknown
+	}
+	stored, err := s.metadata.Pin(ctx, threadID, pinned)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeMetadataThread(threadID, stored)
+}
+
+func validThreadName(name string) bool {
+	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > 200 || len(name) > 800 {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeMetadataThread(threadID string, stored appserver.Thread) (map[string]any, error) {
+	if stored.ID != threadID {
+		return nil, appserver.ErrOutcomeUnknown
+	}
+	stored.Turns = nil
+	thread, err := NormalizeStored(stored)
+	if err != nil {
+		return nil, appserver.ErrOutcomeUnknown
+	}
+	return thread, checkThreadSize(thread)
+}
 
 func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, error) {
 	if s.archiver == nil || !threadIDPattern.MatchString(threadID) {
 		return "", appserver.ErrMethodUnavailable
 	}
+	unlock := s.lockThreadMutation(threadID)
+	defer unlock()
 	s.archiveMu.Lock()
 	defer s.archiveMu.Unlock()
 	s.mu.Lock()
@@ -203,6 +341,8 @@ func (s *Service) UndoArchive(ctx context.Context, threadID, operationID string)
 	if s.archiver == nil || !threadIDPattern.MatchString(threadID) || operationID == "" {
 		return ErrArchiveUndoInvalid
 	}
+	unlock := s.lockThreadMutation(threadID)
+	defer unlock()
 	s.archiveMu.Lock()
 	defer s.archiveMu.Unlock()
 	now := time.Now()
@@ -250,6 +390,7 @@ func (s *Service) CreateThread(ctx context.Context, cwd string) (map[string]any,
 	if !threadIDPattern.MatchString(created.ID) || created.CWD != canonical {
 		return nil, appserver.ErrOutcomeUnknown
 	}
+	s.rememberThread(created.ID)
 	created.Turns = nil
 	thread, err := NormalizeStored(created)
 	if err != nil {
@@ -374,6 +515,7 @@ func (s *Service) List(ctx context.Context, limit int, cursor string) ([]map[str
 			return nil, "", e
 		}
 		threads = append(threads, thread)
+		s.rememberThread(source.ID)
 	}
 	next := ""
 	if page.NextCursor != nil {
@@ -407,6 +549,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int, cursor st
 			return nil, "", err
 		}
 		threads = append(threads, thread)
+		s.rememberThread(result.Thread.ID)
 	}
 	next := ""
 	if page.NextCursor != nil {
@@ -423,6 +566,7 @@ func (s *Service) Read(ctx context.Context, id string) (map[string]any, error) {
 	if source.ID != id {
 		return nil, ErrNativeShape
 	}
+	s.rememberThread(source.ID)
 	thread, err := NormalizeStored(source)
 	if err != nil {
 		return nil, err

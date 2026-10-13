@@ -401,12 +401,21 @@ func TestRelayStillClassifiesMutationTimeoutAsUnknown(t *testing.T) {
 	web := dialTest(t, s.URL, testOrigin)
 	sendJSON(t, web, webHello())
 	readJSON(t, web)
-	id := "00000000-0000-4000-8000-000000000072"
-	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "turn.start", "params": map[string]any{"threadId": "mock-thread-a", "clientMessageId": "00000000-0000-4000-8000-000000000073", "text": "do not replay"}})
-	readJSON(t, agent)
-	got := readJSON(t, web)
-	if got["outcome"] != "unknown" || got["error"].(map[string]any)["code"] != "OUTCOME_UNKNOWN" {
-		t.Fatalf("mutation timeout lost unknown semantics: %+v", got)
+	tests := []struct {
+		id, method string
+		params     map[string]any
+	}{
+		{"00000000-0000-4000-8000-000000000072", "turn.start", map[string]any{"threadId": "mock-thread-a", "clientMessageId": "00000000-0000-4000-8000-000000000073", "text": "do not replay"}},
+		{"00000000-0000-4000-8000-000000000074", "thread.name.update", map[string]any{"threadId": "mock-thread-a", "name": "Renamed"}},
+		{"00000000-0000-4000-8000-000000000075", "thread.pin.update", map[string]any{"threadId": "mock-thread-a", "pinned": true}},
+	}
+	for _, test := range tests {
+		sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": test.id, "deviceId": "mock-mac", "method": test.method, "params": test.params})
+		readJSON(t, agent)
+		got := readJSON(t, web)
+		if got["outcome"] != "unknown" || got["error"].(map[string]any)["code"] != "OUTCOME_UNKNOWN" {
+			t.Fatalf("%s timeout lost unknown semantics: %+v", test.method, got)
+		}
 	}
 }
 

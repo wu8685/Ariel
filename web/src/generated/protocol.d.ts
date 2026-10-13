@@ -30,6 +30,8 @@ export type Request = {
     | "thread.create"
     | "thread.archive.update"
     | "thread.archive.undo"
+    | "thread.name.update"
+    | "thread.pin.update"
     | "thread.list"
     | "thread.read"
     | "thread.history"
@@ -127,6 +129,8 @@ export interface Capabilities {
   threadCreate?: boolean;
   threadArchive?: boolean;
   threadArchiveUndo?: boolean;
+  threadRename?: boolean;
+  threadPin?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";

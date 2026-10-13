@@ -48,7 +48,7 @@ async function expandProject(cwd: string) {
   fireEvent.click(await screen.findByRole("button", { name: `展开项目 ${projectName(cwd)}，${path}` }));
 }
 
-async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false) {
+async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false, threadMetadata = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -57,7 +57,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadCreate: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
@@ -125,6 +125,39 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.archive.update")[0].requestId, outcome: "accepted", data: { operationId: "archive-one" } }));
     expect(screen.queryByText("Fixture")).toBeNull();
     expect(screen.getByRole("button", { name: "撤销归档" })).toBeTruthy();
+  });
+
+  it("renames a thread from the context menu without replacing the transcript or draft", async () => {
+    const withMessage: Thread = { ...fixtureThread, turns: [{ turnId: "turn", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "保留的正文" }] }] };
+    const { socket, requests } = await openFixture(withMessage, false, false, [withMessage], false, true);
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "未发送草稿" } });
+    fireEvent.contextMenu(document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!, { clientX: 120, clientY: 180 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+    const input = screen.getByRole("textbox", { name: "会话名称" });
+    expect((input as HTMLInputElement).value).toBe("Fixture");
+    fireEvent.change(input, { target: { value: "  新名称  " } });
+    fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
+    await waitFor(() => expect(requests("thread.name.update")).toHaveLength(1));
+    expect(requests("thread.name.update")[0].params).toEqual({ threadId: "fixture", name: "新名称" });
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.name.update")[0].requestId, outcome: "accepted", data: { thread: { ...withMessage, title: "新名称" } } }));
+    expect(await screen.findByRole("heading", { name: "新名称" })).toBeTruthy();
+    expect(screen.getByText("保留的正文")).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement).value).toBe("未发送草稿");
+  });
+
+  it("pins and unpins through one verified metadata mutation", async () => {
+    const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread], false, true);
+    const openMenu = () => fireEvent.contextMenu(document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!, { clientX: 120, clientY: 180 });
+    openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "置顶" }));
+    expect(requests("thread.pin.update")).toHaveLength(1);
+    expect(requests("thread.pin.update")[0].params).toEqual({ threadId: "fixture", pinned: true });
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.pin.update")[0].requestId, outcome: "accepted", data: { thread: { ...fixtureThread, isPinned: true } } }));
+    expect(await screen.findByRole("region", { name: "置顶会话" })).toBeTruthy();
+    openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "取消置顶" }));
+    expect(requests("thread.pin.update")).toHaveLength(2);
+    expect(requests("thread.pin.update")[1].params).toEqual({ threadId: "fixture", pinned: false });
   });
 
   it("requires a 500ms stationary long press and suppresses its following click", async () => {

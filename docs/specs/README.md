@@ -84,13 +84,14 @@
 | 0065 | [新建会话的 bootstrap 订阅](0065-new-thread-bootstrap-subscription.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 复用已确认创建回执跨过持久化索引可见性窗口，并对首次只读订阅做一次 bounded retry |
 | 0066 | [运行中输入焦点与会话 chrome 稳定性](0066-running-composer-focus-stability.md) | Implemented（Web 单测／真实 Chromium／全量回归已验） | 输入框聚焦时只接受明确的 transcript 手势进入历史阅读，避免打字／streaming 布局变化收起输入区 |
 | 0067 | [侧栏会话运行与未读状态](0067-sidebar-thread-status.md) | Blocked（Desktop 私有 pipe 不支持独立第二 client） | 通过一次批量 Codex App Tool 快照展示运行 spinner／未读蓝点，并以有界缓存和自适应轮询避免逐会话查询 |
-| 0068 | [侧栏会话长按菜单与原生置顶／归档](0068-sidebar-thread-context-actions.md) | Partially implemented（归档／撤销已验；置顶被 0.160.0 schema 阻塞） | 长按／右键会话后安全归档并提供短时撤销；public pin capability 可用后再启用置顶 |
+| 0068 | [侧栏会话长按菜单与原生置顶／归档](0068-sidebar-thread-context-actions.md) | Superseded in part by 0075（归档／撤销继续有效） | 长按／右键会话后安全归档并提供短时撤销；置顶写能力由 0075 采用原生 section mutation 实现 |
 | 0069 | [已确认发送后可靠清空输入框](0069-confirmed-send-clears-composer.md) | Implemented（Go／Web／真实 Chromium 已验） | 修复同会话 resync 吞掉 accepted 清理，并用 exact clientMessageId 对账 unknown 后的真实送达 |
 | 0070 | [Agent 只读请求自愈与设备会话列表缓存](0070-agent-read-timeout-and-thread-list-cache.md) | Implemented（Go／Web／race／真实 Chromium 已验） | 对存活但卡死的 App Server 读连接限时重建并安全重试；切换设备时复用同 epoch 的会话列表 |
 | 0071 | [会话操作菜单字体统一](0071-uniform-thread-context-menu-type.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 将“归档”菜单项统一到现有紧凑菜单的 `12px / 1.4` 字体体系，并保持 touch 点击区域 |
 | 0072 | [新会话首屏最近四回合](0072-four-turn-initial-history-window.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | 首次只同步最新 4 个 turn，手动旧页仍保持最多 10 个以减少翻页往返 |
 | 0073 | [会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md) | Implemented（Go／Web／race／真实移动 Chromium／build 已验） | item 级增量更新；切换与 resync 保留已确认正文，只在后台同步最新状态 |
 | 0074 | [新建空会话在创建端关闭前完成 Desktop 接管](0074-created-thread-owner-adoption.md) | Compatibility blocked（真机否定，未发布） | 空 thread 即使保持创建端存活也无法由 Desktop 接管；保留证据，禁止用占位消息或猜测关联绕过 |
+| 0075 | [侧栏会话重命名与原生置顶操作](0075-sidebar-thread-rename-and-pin.md) | Implemented（Go／race／真实 Codex fixture／Web／真实移动 Chromium 已验） | 通过 `thread/name/set` 和 `thread/section/move` 修改 Codex 原生标题与 Pinned section，菜单提供重命名／置顶／取消置顶 |
 
 ## 设计基线
 

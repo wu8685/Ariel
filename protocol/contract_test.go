@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestV1EnvelopeSchemaAcceptsKnownMessages(t *testing.T) {
 	valid := []string{
@@ -13,6 +16,8 @@ func TestV1EnvelopeSchemaAcceptsKnownMessages(t *testing.T) {
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.subscribe","params":{"threadId":"thread-a","updateMode":"item-delta-v1"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.archive.update","params":{"threadId":"thread-a","archived":true}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.archive.undo","params":{"threadId":"thread-a","operationId":"archive-operation"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.name.update","params":{"threadId":"thread-a","name":"新名称"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.pin.update","params":{"threadId":"thread-a","pinned":true}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000002","deviceId":"device-a","method":"thread.history","params":{"threadId":"thread-a","limit":10,"cursor":"opaque-turn"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000003","deviceId":"device-a","method":"thread.history.items","params":{"threadId":"thread-a","turnId":"turn-a","limit":100,"cursor":"opaque-item"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000003","deviceId":"device-a","method":"thread.image","params":{"threadId":"thread-a","turnId":"turn-a","itemId":"image-a","imageIndex":0}}`,
@@ -57,6 +62,10 @@ func TestV1EnvelopeSchemaRejectsWrongVersionShapeAndUnexpectedFields(t *testing.
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.archive.update","params":{"threadId":"thread-a","archived":false}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.archive.update","params":{"threadId":"thread-a","archived":true,"delete":true}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.archive.undo","params":{"threadId":"thread-a","operationId":""}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.name.update","params":{"threadId":"thread-a","name":"   "}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.name.update","params":{"threadId":"thread-a","name":"bad\nname"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.pin.update","params":{"threadId":"thread-a","pinned":"yes"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.pin.update","params":{"threadId":"thread-a","pinned":true,"sectionId":"private"}}`,
 		`{"type":"response","v":1,"requestId":"00000000-0000-4000-8000-000000000001","outcome":"rejected"}`,
 		`{"type":"event","v":1,"event":"auth.pair.consumed","credential":"p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 		`{"type":"event","v":1,"event":"thread.update","deviceId":"device-a","threadId":"mock-a","subscriptionId":"sub-a","streamId":"stream-a","seq":2,"items":[]}`,
@@ -67,6 +76,7 @@ func TestV1EnvelopeSchemaRejectsWrongVersionShapeAndUnexpectedFields(t *testing.
 		`{"type":"event","v":1,"event":"thread.snapshot","deviceId":"device-a","threadId":"thread-a","subscriptionId":"sub-a","streamId":"stream-a","seq":1,"thread":{"threadId":"thread-a","title":"Fixture","cwd":"/fixture","updatedAt":"2026-10-04T00:00:00Z","runtime":"idle","turns":[{"turnId":"turn-a","status":"completed","items":[{"itemId":"assistant-a","role":"assistant","text":"hello","clientMessageId":"00000000-0000-4000-8000-000000000001"}]}],"pendingInteractions":[]}}`,
 		`not-json`,
 	}
+	invalid = append(invalid, `{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000005","deviceId":"device-a","method":"thread.name.update","params":{"threadId":"thread-a","name":"`+strings.Repeat("界", 201)+`"}}`)
 	for _, raw := range invalid {
 		if err := Validate([]byte(raw)); err == nil {
 			t.Errorf("invalid message accepted: %s", raw)

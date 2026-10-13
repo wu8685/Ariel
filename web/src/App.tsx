@@ -19,7 +19,7 @@ import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 4;
 const historyTurnPageLimit = 10;
@@ -42,6 +42,7 @@ type PendingSubmission = { deviceId: string; agentEpoch: string; threadId: strin
 type ThreadMenuState = { threadId: string; left: number; top: number };
 type ThreadLongPress = { threadId: string; pointerId: number; startX: number; startY: number; timer: number };
 type ArchiveUndoToast = { threadId: string; title: string; operationId: string };
+type RenameThreadDialog = { threadId: string; name: string };
 type WebAuthMode = "pin" | "passkey";
 type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
 
@@ -50,6 +51,11 @@ function webAuthModeFromDocument(): WebAuthMode {
 }
 
 function readingKey(deviceId: string, threadId: string): string { return `${deviceId}\u0000${threadId}`; }
+
+function validThreadName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed.length > 0 && Array.from(trimmed).length <= 200 && new TextEncoder().encode(trimmed).length <= 800 && !/[\u0000-\u001f\u007f-\u009f]/u.test(trimmed);
+}
 
 function captureReadingAnchor(container: HTMLElement | null, key: string): ReadingAnchor | null {
   if (!container) return null;
@@ -272,6 +278,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const [queueMenuPosition, setQueueMenuPosition] = useState({ left: 0, top: 0, above: false });
   const [threadMenu, setThreadMenu] = useState<ThreadMenuState | null>(null);
   const [threadArchiveWorking, setThreadArchiveWorking] = useState("");
+  const [threadMetadataWorking, setThreadMetadataWorking] = useState("");
+  const [renameThreadDialog, setRenameThreadDialog] = useState<RenameThreadDialog | null>(null);
+  const [renameThreadError, setRenameThreadError] = useState("");
   const [archiveUndoToast, setArchiveUndoToast] = useState<ArchiveUndoToast | null>(null);
   const [draggingQueueId, setDraggingQueueId] = useState("");
   const [dragQueueOrder, setDragQueueOrder] = useState<string[]>([]);
@@ -317,6 +326,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const threadLongPress = useRef<ThreadLongPress | null>(null);
   const suppressThreadClick = useRef({ threadId: "", until: 0 });
   const threadMenuFirstItem = useRef<HTMLButtonElement>(null);
+  const renameThreadInput = useRef<HTMLInputElement>(null);
   const device = devices.find(d => d.deviceId === deviceId);
   const selectedThread = threads.find(t => t.threadId === threadId);
   const allThreadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
@@ -328,6 +338,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const queueEnabled = device?.capabilities.queue === true;
   const threadCreateEnabled = device?.capabilities.threadCreate === true;
   const threadArchiveEnabled = device?.capabilities.threadArchive === true;
+  const threadRenameEnabled = device?.capabilities.threadRename === true;
+  const threadPinEnabled = device?.capabilities.threadPin === true;
+  const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
@@ -1183,8 +1196,19 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   useEffect(() => {
     setThreadMenu(null);
+    setRenameThreadDialog(null);
+    setRenameThreadError("");
     setArchiveUndoToast(null);
   }, [deviceId, device?.agentEpoch]);
+
+  useEffect(() => {
+    if (!renameThreadDialog) return;
+    renameThreadInput.current?.focus();
+    renameThreadInput.current?.select();
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && !threadMetadataWorking) setRenameThreadDialog(null); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [renameThreadDialog, threadMetadataWorking]);
 
   useEffect(() => {
     if (!threadMenu) return;
@@ -1594,8 +1618,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   function openThreadMenu(thread: Thread, left: number, top: number) {
-    if (!threadArchiveEnabled) return;
-    setThreadMenu({ threadId: thread.threadId, left: Math.max(8, Math.min(left, window.innerWidth - 180)), top: Math.max(8, Math.min(top, window.innerHeight - 96)) });
+    if (!threadContextActionsEnabled) return;
+    setThreadMenu({ threadId: thread.threadId, left: Math.max(8, Math.min(left, window.innerWidth - 180)), top: Math.max(8, Math.min(top, window.innerHeight - 168)) });
   }
 
   function cancelThreadLongPress() {
@@ -1605,7 +1629,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   function beginThreadLongPress(thread: Thread, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!threadArchiveEnabled || (event.button !== undefined && event.button !== 0)) return;
+    if (!threadContextActionsEnabled || (event.button !== undefined && event.button !== 0)) return;
     cancelThreadLongPress();
     const pointerId = event.pointerId;
     const startX = event.clientX;
@@ -1626,7 +1650,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }
 
   async function archiveThread(thread: Thread) {
-    if (!threadArchiveEnabled || threadArchiveWorking) return;
+    if (!threadArchiveEnabled || threadArchiveWorking || threadMetadataWorking === thread.threadId) return;
     setThreadMenu(null);
     setThreadArchiveWorking(thread.threadId);
     const targetDevice = deviceId;
@@ -1653,6 +1677,87 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       if (subscriptionId) void client.request("thread.unsubscribe", targetDevice, { subscriptionId });
     }
     setArchiveUndoToast({ threadId: thread.threadId, title: thread.title || "未命名会话", operationId });
+  }
+
+  function openRenameThreadDialog(thread: Thread) {
+    setThreadMenu(null);
+    setRenameThreadError("");
+    setRenameThreadDialog({ threadId: thread.threadId, name: thread.title || "" });
+  }
+
+  function applyVerifiedThreadMetadata(thread: Thread) {
+    setThreads(current => {
+      const next = current.map(candidate => candidate.threadId === thread.threadId
+        ? { ...candidate, title: thread.title, isPinned: thread.isPinned }
+        : candidate);
+      const identity = threadListIdentity(deviceId, searchInputRef.current.trim());
+      if (identity) threadListCache.current.set(identity, { threads: next, cursor });
+      return next;
+    });
+    const historyIdentity = historyCacheIdentity(deviceId, thread.threadId);
+    const cached = historyIdentity ? historyCache.current.get(historyIdentity) : null;
+    if (historyIdentity && cached?.thread) {
+      historyCache.current.set(historyIdentity, { ...cached, thread: { ...cached.thread, title: thread.title, isPinned: thread.isPinned } });
+    }
+    setView(current => {
+      if (!current || current.threadId !== thread.threadId) return current;
+      const next = { ...current, thread: { ...current.thread, title: thread.title, isPinned: thread.isPinned } };
+      selection.current.view = next;
+      return next;
+    });
+  }
+
+  async function renameThread() {
+    const dialog = renameThreadDialog;
+    const name = dialog?.name.trim() || "";
+    if (!dialog || !threadRenameEnabled || threadMetadataWorking || threadArchiveWorking === dialog.threadId || !validThreadName(name)) {
+      if (dialog) setRenameThreadError("名称需为 1–200 个字符，且不能包含控制字符。");
+      return;
+    }
+    setThreadMetadataWorking(dialog.threadId);
+    setRenameThreadError("");
+    const targetDevice = deviceId;
+    const targetAgentEpoch = agentEpochFor(targetDevice);
+    const response = await client.request("thread.name.update", targetDevice, { threadId: dialog.threadId, name });
+    setThreadMetadataWorking("");
+    if (targetDevice !== selection.current.deviceId || targetAgentEpoch !== agentEpochFor(targetDevice)) return;
+    const candidate = response.data?.thread as Thread | undefined;
+    if (response.outcome === "accepted" && candidate?.threadId === dialog.threadId && candidate.title === name) {
+      applyVerifiedThreadMetadata(candidate);
+      setRenameThreadDialog(null);
+      return;
+    }
+    if (response.outcome === "unknown") {
+      setRenameThreadDialog(null);
+      setNotice("修改结果不确定，请检查会话列表。");
+      void loadThreads(targetDevice, "", searchInputRef.current.trim(), true);
+      return;
+    }
+    setRenameThreadError(response.outcome === "accepted" ? "修改回执无法确认，请重试。" : errorText(response));
+  }
+
+  async function pinThread(thread: Thread) {
+    if (!threadPinEnabled || threadMetadataWorking || threadArchiveWorking === thread.threadId) return;
+    setThreadMenu(null);
+    setThreadMetadataWorking(thread.threadId);
+    const pinned = thread.isPinned !== true;
+    const targetDevice = deviceId;
+    const targetAgentEpoch = agentEpochFor(targetDevice);
+    const response = await client.request("thread.pin.update", targetDevice, { threadId: thread.threadId, pinned });
+    setThreadMetadataWorking("");
+    if (targetDevice !== selection.current.deviceId || targetAgentEpoch !== agentEpochFor(targetDevice)) return;
+    const candidate = response.data?.thread as Thread | undefined;
+    if (response.outcome === "accepted" && candidate?.threadId === thread.threadId && candidate.isPinned === pinned) {
+      applyVerifiedThreadMetadata(candidate);
+      if (!pinned) {
+        const group = groupThreadsByProject([candidate])[0];
+        if (group) setExpandedProjectKeys(current => new Set(current).add(group.key));
+      }
+      void loadThreads(targetDevice, "", searchInputRef.current.trim(), true);
+      return;
+    }
+    setNotice(response.outcome === "accepted" ? "置顶回执无法确认，会话列表已重新加载。" : response.outcome === "unknown" ? "置顶结果不确定，请检查会话列表。" : errorText(response));
+    if (response.outcome === "unknown" || response.outcome === "accepted") void loadThreads(targetDevice, "", searchInputRef.current.trim(), true);
   }
 
   async function undoArchive() {
@@ -1713,6 +1818,17 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <input id="thread-create-cwd" aria-label="项目目录" value={newThreadCwd} maxLength={4096} onChange={event => setNewThreadCwd(event.target.value)} placeholder="/Users/me/workspace/project" disabled={creatingThread} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
         {newThreadError && <p className="thread-create-error" role="alert">{newThreadError}</p>}
         <div className="thread-create-actions"><button className="secondary" type="button" onClick={closeNewThreadDialog} disabled={creatingThread}>取消</button><button className="primary" type="button" aria-label="创建会话" onClick={() => void createThread()} disabled={creatingThread || !newThreadCwd.trim()}>{creatingThread ? "正在创建…" : "创建"}</button></div>
+      </section>
+    </div>}
+    {renameThreadDialog && <div className="thread-create-backdrop thread-rename-backdrop" role="presentation">
+      <section className="thread-create-dialog thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-rename-title">
+        <button className="thread-create-close icon-button icon-control" type="button" aria-label="关闭重命名" data-tooltip="关闭" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}><CloseIcon /></button>
+        <span className="eyebrow">CODEX SESSION</span>
+        <h2 id="thread-rename-title">修改会话名称</h2>
+        <label htmlFor="thread-rename-name">会话名称</label>
+        <input ref={renameThreadInput} id="thread-rename-name" aria-label="会话名称" value={renameThreadDialog.name} onChange={event => setRenameThreadDialog(current => current ? { ...current, name: event.target.value } : current)} onKeyDown={event => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void renameThread(); } }} disabled={!!threadMetadataWorking} />
+        {renameThreadError && <p className="thread-create-error" role="alert">{renameThreadError}</p>}
+        <div className="thread-create-actions"><button className="secondary" type="button" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}>取消</button><button className="primary" type="button" aria-label="保存名称" onClick={() => void renameThread()} disabled={!!threadMetadataWorking || !validThreadName(renameThreadDialog.name)}>{threadMetadataWorking ? "正在保存…" : "保存"}</button></div>
       </section>
     </div>}
     {status !== "ready" && accessPanel}
@@ -1794,9 +1910,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const target = threads.find(candidate => candidate.threadId === threadMenu.threadId);
       if (!target) return null;
       const archiveAllowed = ownerReady && selection.current.threadId === target.threadId && view?.threadId === target.threadId && view.thread.runtime === "idle";
+      const targetWorking = threadMetadataWorking === target.threadId || threadArchiveWorking === target.threadId;
       return createPortal(<div className="thread-context-menu" role="menu" aria-label={`会话操作：${target.title || "未命名会话"}`} style={{ left: threadMenu.left, top: threadMenu.top }}>
-        <button ref={threadMenuFirstItem} type="button" role="menuitem" onClick={() => void archiveThread(target)} disabled={!archiveAllowed || threadArchiveWorking === target.threadId}>归档</button>
-        {!archiveAllowed && <small>会话处理完成后可归档</small>}
+        {threadRenameEnabled && <button ref={threadMenuFirstItem} type="button" role="menuitem" onClick={() => openRenameThreadDialog(target)} disabled={targetWorking}>重命名</button>}
+        {threadPinEnabled && <button ref={!threadRenameEnabled ? threadMenuFirstItem : undefined} type="button" role="menuitem" onClick={() => void pinThread(target)} disabled={targetWorking}>{target.isPinned ? "取消置顶" : "置顶"}</button>}
+        {threadArchiveEnabled && <button ref={!threadRenameEnabled && !threadPinEnabled ? threadMenuFirstItem : undefined} type="button" role="menuitem" onClick={() => void archiveThread(target)} disabled={!archiveAllowed || targetWorking}>归档</button>}
+        {threadArchiveEnabled && !archiveAllowed && <small>会话处理完成后可归档</small>}
       </div>, document.body);
     })()}
     {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}

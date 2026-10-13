@@ -69,6 +69,7 @@ func Run(ctx context.Context, cfg Config) error {
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
 	service.SetThreadCreator(appserver.NewThreadCreator(cfg.Binary))
 	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
+	service.SetThreadMetadataWriter(appserver.ThreadMetadataWriter{RPC: readOnlyRPC})
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -110,7 +111,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled()}}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadCreate": service.ThreadCreationEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled(), "threadRename": service.ThreadRenameEnabled(), "threadPin": service.ThreadPinEnabled()}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -238,6 +239,8 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		Answers         map[string][]string `json:"answers"`
 		CWD             string              `json:"cwd"`
 		Archived        bool                `json:"archived"`
+		Name            string              `json:"name"`
+		Pinned          *bool               `json:"pinned"`
 		OperationID     string              `json:"operationId"`
 		UpdateMode      string              `json:"updateMode"`
 	}
@@ -263,6 +266,18 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "thread.archive.undo":
 		err = a.service.UndoArchive(ctx, p.ThreadID, p.OperationID)
 		data = map[string]any{}
+	case "thread.name.update":
+		var thread map[string]any
+		thread, err = a.service.RenameThread(ctx, p.ThreadID, p.Name)
+		data = map[string]any{"thread": thread}
+	case "thread.pin.update":
+		if p.Pinned == nil {
+			err = errors.New("INVALID_ARGUMENT")
+			break
+		}
+		var thread map[string]any
+		thread, err = a.service.PinThread(ctx, p.ThreadID, *p.Pinned)
+		data = map[string]any{"thread": thread}
 	case "thread.list":
 		if p.Limit == 0 {
 			p.Limit = 50
