@@ -61,7 +61,10 @@ test("phone long press renames and pins without replacing the open conversation"
   const rename = page.getByRole("menuitem", { name: "重命名" });
   await expect(rename).toHaveCSS("font-size", "12px");
   await rename.click();
-  await page.getByRole("textbox", { name: "会话名称" }).fill("手机改名");
+  const renameInput = page.getByRole("textbox", { name: "会话名称" });
+  await expect(renameInput).toBeFocused();
+  await renameInput.pressSequentially("手机改名");
+  await expect(renameInput).toHaveValue("手机改名");
   await page.getByRole("button", { name: "保存名称" }).click();
   await expect.poll(() => renameCount).toBe(1);
   await expect(page.getByRole("heading", { name: "手机改名" })).toBeVisible();

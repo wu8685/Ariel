@@ -135,6 +135,11 @@ describe("Ariel app interactions", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
     const input = screen.getByRole("textbox", { name: "会话名称" });
     expect((input as HTMLInputElement).value).toBe("Fixture");
+    expect((input as HTMLInputElement).selectionStart).toBe(0);
+    expect((input as HTMLInputElement).selectionEnd).toBe("Fixture".length);
+    fireEvent.change(input, { target: { value: "新" } });
+    expect((input as HTMLInputElement).selectionStart).toBe(1);
+    expect((input as HTMLInputElement).selectionEnd).toBe(1);
     fireEvent.change(input, { target: { value: "  新名称  " } });
     fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
     await waitFor(() => expect(requests("thread.name.update")).toHaveLength(1));

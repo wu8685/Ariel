@@ -24,7 +24,8 @@
    - `归档`。
    不支持的能力不显示；归档仍沿用既有 idle 门禁。
 3. 点击 `重命名` 打开 modal dialog：
-   - 输入框预填当前标题；空标题会全选，便于直接输入；
+   - 输入框预填当前标题；弹窗首次打开时全选一次，便于直接输入；
+   - 后续每次输入、校验或 working state 更新都必须保留浏览器当前 caret／selection，不得再次自动全选；
    - 自动聚焦输入框，桌面 Enter 保存、Escape 取消；手机使用显式“取消／保存”按钮；
    - 标题 trim 后必须为 1～200 个 Unicode code points，不允许控制字符；不支持用空字符串恢复自动标题；
    - 保存期间禁用重复提交，原会话内容和草稿保持可见。
@@ -87,6 +88,7 @@
 7. 隔离真机探针创建一条持久化 fixture，依次执行 rename → read、pin → read/ListPinned、unpin → read/ListPinned，确认不新增 turn/item，最后删除 fixture；不得修改真实业务会话。
 8. 真实 Chromium 覆盖 390×844 touch 长按菜单、rename dialog、pin 后位置变化，以及桌面右键／键盘路径；截图与行为断言并用。物理 iPhone/Safari 在公网部署后由用户复验。
 9. 完成 Go 全量、`go vet`、相关 race、Web 全量、production build 和全部 Playwright 后，才把 spec 标为 Implemented。
+10. 回归测试逐字符输入新标题：首次字符可以替换打开弹窗时的一次性全选，之后字符必须追加在当前 caret，不能因受控 state 更新而重新全选或覆盖前文。
 
 ## 发布与回退
 

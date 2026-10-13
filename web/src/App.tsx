@@ -1201,14 +1201,21 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     setArchiveUndoToast(null);
   }, [deviceId, device?.agentEpoch]);
 
+  const renameThreadDialogID = renameThreadDialog?.threadId || "";
+  const renameThreadDialogOpen = renameThreadDialog !== null;
+
   useEffect(() => {
-    if (!renameThreadDialog) return;
+    if (!renameThreadDialogID) return;
     renameThreadInput.current?.focus();
     renameThreadInput.current?.select();
+  }, [renameThreadDialogID]);
+
+  useEffect(() => {
+    if (!renameThreadDialogOpen) return;
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && !threadMetadataWorking) setRenameThreadDialog(null); };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
-  }, [renameThreadDialog, threadMetadataWorking]);
+  }, [renameThreadDialogOpen, threadMetadataWorking]);
 
   useEffect(() => {
     if (!threadMenu) return;
