@@ -504,7 +504,7 @@ func mockThread() map[string]any {
 }
 
 // Opt-in because it deliberately fills a loopback TCP receive buffer and waits
-// for the production 5-second WebSocket write deadline. It exercises actual
+// for the production 15-second WebSocket write deadline. It exercises actual
 // socket backpressure, not a mocked writer.
 func TestRelaySlowWebSocketDoesNotRetainSubscription(t *testing.T) {
 	if os.Getenv("ARIEL_TEST_SLOW_SOCKET") != "1" {
@@ -540,7 +540,7 @@ func TestRelaySlowWebSocketDoesNotRetainSubscription(t *testing.T) {
 	large := mockThread()
 	large["turns"] = []any{map[string]any{"turnId": "large-turn", "status": "inProgress", "items": []any{map[string]any{"itemId": "large-item", "role": "assistant", "text": strings.Repeat("x", (8<<20)-4096)}}}}
 	sendJSON(t, agent, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": "mock-mac", "threadId": "mock-thread-a", "subscriptionId": "slow-sub", "streamId": "stream-slow-sub", "seq": 1, "thread": large})
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for {
 		r.mu.Lock()
 		remainingWebs := len(r.webs)

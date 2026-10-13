@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
+	"github.com/wu8685/Ariel/internal/wsheartbeat"
 	"github.com/wu8685/Ariel/protocol"
 )
 
@@ -149,10 +150,10 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	heartbeatFailure := make(chan error, 1)
 	interval, timeout := cfg.HeartbeatInterval, cfg.HeartbeatTimeout
 	if interval <= 0 {
-		interval = 20 * time.Second
+		interval = wsheartbeat.DefaultInterval
 	}
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = wsheartbeat.DefaultTimeout
 	}
 	go func() {
 		if err := heartbeatRelay(heartCtx, conn, interval, timeout); err != nil {
@@ -197,21 +198,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 }
 
 func heartbeatRelay(ctx context.Context, conn *websocket.Conn, interval, timeout time.Duration) error {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			pingCtx, cancel := context.WithTimeout(ctx, timeout)
-			err := conn.Ping(pingCtx)
-			cancel()
-			if err != nil {
-				return err
-			}
-		}
-	}
+	return wsheartbeat.Run(ctx, interval, timeout, wsheartbeat.DefaultMaxConsecutiveFailures, conn.Ping)
 }
 
 func (a *agent) send(ctx context.Context, value any) error {
@@ -224,7 +211,7 @@ func (a *agent) send(ctx context.Context, value any) error {
 	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	writeCtx, cancel := context.WithTimeout(ctx, wsheartbeat.DefaultWriteTimeout)
 	defer cancel()
 	return a.conn.Write(writeCtx, websocket.MessageText, body)
 }

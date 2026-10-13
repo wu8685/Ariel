@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/wu8685/Ariel/internal/wsheartbeat"
 	"github.com/wu8685/Ariel/protocol"
 )
 
@@ -151,10 +152,10 @@ func New(cfg Config) (*Server, error) {
 		cfg.MutationTimeout = 45 * time.Second
 	}
 	if cfg.HeartbeatInterval <= 0 {
-		cfg.HeartbeatInterval = 20 * time.Second
+		cfg.HeartbeatInterval = wsheartbeat.DefaultInterval
 	}
 	if cfg.HeartbeatTimeout <= 0 {
-		cfg.HeartbeatTimeout = 5 * time.Second
+		cfg.HeartbeatTimeout = wsheartbeat.DefaultTimeout
 	}
 	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
 }
@@ -377,21 +378,8 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) heartbeat(ctx context.Context, p *peer) {
-	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			pingCtx, cancel := context.WithTimeout(ctx, s.cfg.HeartbeatTimeout)
-			err := p.conn.Ping(pingCtx)
-			cancel()
-			if err != nil {
-				p.conn.CloseNow()
-				return
-			}
-		}
+	if err := wsheartbeat.Run(ctx, s.cfg.HeartbeatInterval, s.cfg.HeartbeatTimeout, wsheartbeat.DefaultMaxConsecutiveFailures, p.conn.Ping); err != nil {
+		p.conn.CloseNow()
 	}
 }
 
@@ -402,7 +390,7 @@ func (p *peer) send(ctx context.Context, msg any) error {
 	}
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	writeCtx, cancel := context.WithTimeout(ctx, wsheartbeat.DefaultWriteTimeout)
 	defer cancel()
 	if err := p.conn.Write(writeCtx, websocket.MessageText, body); err != nil {
 		// A slow consumer must lose its subscription and resync, not retain an

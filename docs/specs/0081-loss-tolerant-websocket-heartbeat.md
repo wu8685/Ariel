@@ -1,6 +1,6 @@
 # 0081：弱网下 WebSocket heartbeat 容错
 
-- 状态：Draft（等待用户确认）。
+- 状态：Approved（2026-10-13，用户已确认；实施中）。
 - 来源：0080 已把会话菜单的 Desktop Agent 总预算调整为 30 秒，但用户复验仍在约 10 秒看到超时。现场测量显示本机到公网 Relay 存在 60% ICMP 丢包、约 367 ms RTT，631 KB HTTPS 资源下载约 30 秒；同期 Desktop Agent 日志持续出现 heartbeat pong deadline、TLS handshake timeout 和 WebSocket 重连。服务器 CPU、内存与容器健康状态正常。
 - 范围：提高 Relay、Desktop Agent 的 WebSocket heartbeat 与单帧发送在弱网下的容错；部署本机 Agent 和公网 Docker Relay／Web。不会改变业务请求幂等语义，也不会无限延长会话菜单等待。
 
