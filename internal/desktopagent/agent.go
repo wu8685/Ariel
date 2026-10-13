@@ -30,10 +30,20 @@ type agent struct {
 }
 
 // Service.List may issue three sequential thread/list calls (recent, the
-// modern pinned filter, and the Codex 0.160.0 pinned-section fallback). Five
-// seconds per attempt leaves enough room for one endpoint rebuild per call
-// while keeping the worst-case path inside Relay's bounded read budget.
-const threadListAttemptTimeout = 5 * time.Second
+// modern pinned filter, and the Codex 0.160.0 pinned-section fallback). Every
+// call shares one request budget; each individual attempt may use at most half
+// of it so a hung recent-list endpoint can still be rebuilt once.
+const (
+	threadListAttemptTimeout = 15 * time.Second
+	threadListRequestTimeout = 30 * time.Second
+)
+
+func threadListRequestContext(ctx context.Context, searchTerm string) (context.Context, context.CancelFunc) {
+	if searchTerm != "" {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, threadListRequestTimeout)
+}
 
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.Binary == "" || cfg.Socket == "" {
@@ -290,12 +300,14 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		if p.Limit == 0 {
 			p.Limit = 50
 		}
+		listCtx, cancelList := threadListRequestContext(ctx, p.SearchTerm)
+		defer cancelList()
 		var list []map[string]any
 		var cursor string
 		if p.SearchTerm != "" {
-			list, cursor, err = a.service.Search(ctx, p.SearchTerm, p.Limit, p.Cursor)
+			list, cursor, err = a.service.Search(listCtx, p.SearchTerm, p.Limit, p.Cursor)
 		} else {
-			list, cursor, err = a.service.List(ctx, p.Limit, p.Cursor)
+			list, cursor, err = a.service.List(listCtx, p.Limit, p.Cursor)
 		}
 		data = map[string]any{"threads": list, "nextCursor": cursor}
 	case "thread.read":

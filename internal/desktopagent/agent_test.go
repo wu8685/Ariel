@@ -13,9 +13,34 @@ import (
 	"github.com/wu8685/Ariel/internal/relay"
 )
 
-func TestProductionThreadListAttemptTimeout(t *testing.T) {
-	if threadListAttemptTimeout != 5*time.Second {
-		t.Fatalf("thread/list attempt timeout = %s, want 5s", threadListAttemptTimeout)
+func TestProductionThreadListTimeoutBudgets(t *testing.T) {
+	if threadListAttemptTimeout != 15*time.Second {
+		t.Fatalf("thread/list attempt timeout = %s, want 15s", threadListAttemptTimeout)
+	}
+	if threadListRequestTimeout != 30*time.Second {
+		t.Fatalf("thread/list request timeout = %s, want 30s", threadListRequestTimeout)
+	}
+	if 2*threadListAttemptTimeout != threadListRequestTimeout {
+		t.Fatalf("two attempts = %s, request budget = %s", 2*threadListAttemptTimeout, threadListRequestTimeout)
+	}
+}
+
+func TestThreadListRequestContextBudgetsOnlyMenuRefresh(t *testing.T) {
+	parent := context.Background()
+	listCtx, cancel := threadListRequestContext(parent, "")
+	defer cancel()
+	deadline, ok := listCtx.Deadline()
+	remaining := time.Until(deadline)
+	if !ok || remaining < 29*time.Second || remaining > 30*time.Second {
+		t.Fatalf("menu refresh deadline remaining = %s, present=%v", remaining, ok)
+	}
+	searchCtx, stopSearch := threadListRequestContext(parent, "needle")
+	defer stopSearch()
+	if searchCtx != parent {
+		t.Fatal("thread search unexpectedly received the menu refresh budget")
+	}
+	if _, ok := searchCtx.Deadline(); ok {
+		t.Fatal("thread search unexpectedly received a deadline")
 	}
 }
 

@@ -96,6 +96,7 @@
 | 0077 | [Web 本地会话未读标记](0077-web-local-thread-unread.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 以浏览器本地已读水位和单次批量刷新在侧栏展示 unread 蓝点，不依赖 Codex 私有 read-state |
 | 0078 | [会话菜单刷新超时预算调整](0078-sidebar-refresh-timeout-budget.md) | Implemented（Go 全包／race／构建／本机公网 Agent 重启已验） | 将 Desktop Agent 的 `thread/list` 单次等待从 3 秒调到 5 秒，同时保持跨层总预算有界 |
 | 0079 | [Web 发送图片前本地归一化](0079-web-image-normalization-before-send.md) | Draft（等待用户确认） | 在浏览器内缩放和压缩高分辨率图片，消除“附件可预览、发送时才失败”的校验差异 |
+| 0080 | [会话菜单刷新总预算与单次读取预算](0080-thread-list-overall-timeout-budget.md) | Implemented（Go 全包／race／构建／本机公网 Agent 重启已验） | 为菜单刷新设置共享的 30 秒总预算，并将单次 App Server attempt 从 5 秒调到 15 秒 |
 
 ## 设计基线
 
