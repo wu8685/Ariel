@@ -95,6 +95,7 @@
 | 0076 | [新会话首条消息的 App Server bootstrap](0076-local-draft-first-turn-bootstrap.md) | Implemented（Go／race／真实 Codex fixture／Web／真实移动 Chromium 已验） | 发送首条消息时由单一 App Server 进程创建并执行 thread，避免空会话跨进程 owner 接管超时 |
 | 0077 | [Web 本地会话未读标记](0077-web-local-thread-unread.md) | Implemented（Web 全量／真实移动 Chromium／build 已验） | 以浏览器本地已读水位和单次批量刷新在侧栏展示 unread 蓝点，不依赖 Codex 私有 read-state |
 | 0078 | [会话菜单刷新超时预算调整](0078-sidebar-refresh-timeout-budget.md) | Implemented（Go 全包／race／构建／本机公网 Agent 重启已验） | 将 Desktop Agent 的 `thread/list` 单次等待从 3 秒调到 5 秒，同时保持跨层总预算有界 |
+| 0079 | [Web 发送图片前本地归一化](0079-web-image-normalization-before-send.md) | Draft（等待用户确认） | 在浏览器内缩放和压缩高分辨率图片，消除“附件可预览、发送时才失败”的校验差异 |
 
 ## 设计基线
 
