@@ -97,6 +97,7 @@
 | 0078 | [会话菜单刷新超时预算调整](0078-sidebar-refresh-timeout-budget.md) | Implemented（Go 全包／race／构建／本机公网 Agent 重启已验） | 将 Desktop Agent 的 `thread/list` 单次等待从 3 秒调到 5 秒，同时保持跨层总预算有界 |
 | 0079 | [Web 发送图片前本地归一化](0079-web-image-normalization-before-send.md) | Draft（等待用户确认） | 在浏览器内缩放和压缩高分辨率图片，消除“附件可预览、发送时才失败”的校验差异 |
 | 0080 | [会话菜单刷新总预算与单次读取预算](0080-thread-list-overall-timeout-budget.md) | Implemented（Go 全包／race／构建／本机公网 Agent 重启已验） | 为菜单刷新设置共享的 30 秒总预算，并将单次 App Server attempt 从 5 秒调到 15 秒 |
+| 0081 | [弱网下 WebSocket heartbeat 容错](0081-loss-tolerant-websocket-heartbeat.md) | Draft（等待用户确认） | 避免单次 5 秒 Pong 超时在高丢包链路上提前拆除连接，并扩大有界帧发送窗口 |
 
 ## 设计基线
 
