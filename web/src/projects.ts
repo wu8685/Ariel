@@ -37,6 +37,15 @@ export function groupThreadsByProject<T extends { cwd: string }>(threads: readon
   return groups;
 }
 
+export function unreadProjectKeys<T extends { threadId: string; cwd: string }>(threads: readonly T[], unreadThreadIDs: ReadonlySet<string>): Set<string> {
+  const keys = new Set<string>();
+  for (const thread of threads) {
+    if (!unreadThreadIDs.has(thread.threadId)) continue;
+    keys.add(normalizeProjectPath(thread.cwd) || "\u0000unknown-project");
+  }
+  return keys;
+}
+
 export function partitionThreadsByPin<T extends { isPinned?: boolean }>(threads: readonly T[]): { pinned: T[]; regular: T[] } {
   const pinned: T[] = [];
   const regular: T[] = [];

@@ -44,7 +44,20 @@ test("a batch update shows one local unread dot and rendered selection clears it
   await page.goto("/");
   await page.getByRole("button", { name: /展开项目 Ariel/ }).click();
   await expect(page.getByLabel("有新结果")).toHaveCount(0);
+  await page.getByRole("button", { name: /收起项目 Ariel/ }).click();
   await page.getByRole("button", { name: "刷新会话" }).click();
+  const projectDot = page.getByLabel("项目有新结果");
+  await expect(projectDot).toBeVisible();
+  expect((await projectDot.boundingBox())?.width).toBe(7);
+  expect((await projectDot.boundingBox())?.height).toBe(7);
+  const projectCount = page.locator(".project-group .project-count");
+  const projectDotBox = await projectDot.boundingBox();
+  const projectCountBox = await projectCount.boundingBox();
+  expect(projectDotBox && projectCountBox && projectDotBox.x + projectDotBox.width < projectCountBox.x).toBeTruthy();
+  await expect(page).toHaveScreenshot("mobile-project-unread-dot.png", { animations: "disabled", caret: "hide" });
+
+  await page.getByRole("button", { name: /展开项目 Ariel/ }).click();
+  await expect(projectDot).toBeVisible();
   const unreadRow = page.locator('[data-thread-id="unread-thread"]');
   const dot = unreadRow.getByLabel("有新结果");
   await expect(dot).toBeVisible();
@@ -56,5 +69,6 @@ test("a batch update shows one local unread dot and rendered selection clears it
   await expect(page.getByText("后台任务已经完成。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /打开会话列表/ }).click();
   await expect(page.locator('[data-thread-id="unread-thread"]').getByLabel("有新结果")).toHaveCount(0);
+  await expect(page.getByLabel("项目有新结果")).toHaveCount(0);
   expect(listCalls).toBeGreaterThanOrEqual(3);
 });

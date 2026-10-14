@@ -13,7 +13,7 @@ import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
-import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin } from "./projects";
+import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin, unreadProjectKeys } from "./projects";
 import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
@@ -339,6 +339,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const allThreadGroups = useMemo(() => groupThreadsByProject(threads), [threads]);
   const { pinned: pinnedThreads, regular: regularThreads } = useMemo(() => partitionThreadsByPin(threads), [threads]);
   const threadGroups = useMemo(() => groupThreadsByProject(regularThreads), [regularThreads]);
+  const unreadProjectIDs = useMemo(() => unreadProjectKeys(threads, unreadThreadIDs), [threads, unreadThreadIDs]);
   const mock = device?.adapterVersion?.startsWith("mock-") ?? false;
   const activeTurn = view?.thread.turns.findLast(t => t.status === "inProgress");
   const queuedMessages = view?.thread.queuedMessages || [];
@@ -1941,9 +1942,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
         <div className="thread-list" onScroll={cancelThreadLongPress}>{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(renderThreadRow)}</div></section>}{threadGroups.map((group, index) => {
           const expanded = expandedProjectKeys.has(group.key);
+          const unread = unreadProjectIDs.has(group.key);
           const projectThreadsID = `project-threads-${index}`;
           return <section className={`project-group ${expanded ? "expanded" : "collapsed"}`} aria-label={`项目 ${group.name}`} key={group.key}>
-            <header className="project-heading"><button className="project-toggle" type="button" aria-expanded={expanded} aria-controls={projectThreadsID} aria-label={`${expanded ? "收起" : "展开"}项目 ${group.name}，${group.path}`} onClick={() => toggleProjectGroup(group.key)}><span className={`project-chevron ${expanded ? "expanded" : ""}`} aria-hidden="true">›</span><span className="project-copy"><span className="project-name">{group.name}</span><span className="project-path" title={group.path}>{group.path}</span></span><span className="project-count" aria-hidden="true">{group.threads.length}</span></button></header>
+            <header className="project-heading"><button className="project-toggle" type="button" aria-expanded={expanded} aria-controls={projectThreadsID} aria-label={`${expanded ? "收起" : "展开"}项目 ${group.name}，${group.path}`} onClick={() => toggleProjectGroup(group.key)}><span className={`project-chevron ${expanded ? "expanded" : ""}`} aria-hidden="true">›</span><span className="project-copy"><span className="project-name-line"><span className="project-name">{group.name}</span>{unread && <span className="thread-unread project-unread" role="status" aria-label="项目有新结果" />}</span><span className="project-path" title={group.path}>{group.path}</span></span><span className="project-count" aria-hidden="true">{group.threads.length}</span></button></header>
             <div id={projectThreadsID} className="project-threads" hidden={!expanded}>{expanded && group.threads.map(renderThreadRow)}</div>
           </section>;
         })}{listLoading && <p className="list-state" role="status">{searchInput.trim() ? "正在搜索会话…" : "正在加载会话…"}</p>}{listError && <p className="list-state list-error" role="alert">{listError}</p>}{!listLoading && !listError && searchInput.trim() && threads.length === 0 && status === "ready" && <p className="list-state">没有找到匹配会话</p>}</div>

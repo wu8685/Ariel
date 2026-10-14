@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupThreadsByProject, mergeThreadPages, normalizeProjectPath, partitionThreadsByPin, projectName } from "./projects";
+import { groupThreadsByProject, mergeThreadPages, normalizeProjectPath, partitionThreadsByPin, projectName, unreadProjectKeys } from "./projects";
 
 type Session = { threadId: string; cwd: string };
 
@@ -42,6 +42,17 @@ describe("project session grouping", () => {
       { threadId: "pin-two", cwd: "/two", isPinned: true },
     ];
     expect(partitionThreadsByPin(sessions)).toEqual({ pinned: [sessions[0], sessions[2]], regular: [sessions[1]] });
+  });
+
+  it("aggregates unread sessions by normalized project path including pinned sessions", () => {
+    const sessions = [
+      { threadId: "alpha-regular", cwd: "/work/alpha/" },
+      { threadId: "alpha-pinned", cwd: "/work/alpha", isPinned: true },
+      { threadId: "beta", cwd: "/work/beta" },
+      { threadId: "unknown", cwd: "" },
+    ];
+    expect(unreadProjectKeys(sessions, new Set())).toEqual(new Set());
+    expect(unreadProjectKeys(sessions, new Set(["alpha-pinned", "beta", "unknown"]))).toEqual(new Set(["/work/alpha", "/work/beta", "\u0000unknown-project"]));
   });
 
   it("merges paged sessions by thread identity while refreshing known entries", () => {

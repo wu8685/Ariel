@@ -139,6 +139,38 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(document.querySelector('.thread-row[data-thread-id="background"] [aria-label="有新结果"]')).toBeNull());
   });
 
+  it("keeps a project unread marker until every unread session in that project is viewed", async () => {
+    const alphaOne: Thread = { ...fixtureThread, threadId: "alpha-one", title: "Alpha one", cwd: "/work/alpha" };
+    const alphaTwo: Thread = { ...fixtureThread, threadId: "alpha-two", title: "Alpha two", cwd: "/work/alpha/" };
+    const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread, alphaOne, alphaTwo]);
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    const changedOne = { ...alphaOne, updatedAt: "2026-10-04T00:00:01Z" };
+    const changedTwo = { ...alphaTwo, updatedAt: "2026-10-04T00:00:02Z" };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [fixtureThread, changedOne, changedTwo] } }));
+
+    const alphaGroup = await screen.findByRole("region", { name: "项目 alpha" });
+    expect(alphaGroup.querySelector('[aria-label="项目有新结果"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "展开项目 alpha，/work/alpha" }));
+    expect(alphaGroup.querySelector('[aria-label="项目有新结果"]')).toBeTruthy();
+    expect(requests("thread.list")).toHaveLength(2);
+
+    fireEvent.click(screen.getByText("Alpha one").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-alpha-one" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "alpha-one", subscriptionId: "sub-alpha-one", streamId: "stream-alpha-one", seq: 1, thread: changedOne }));
+    await waitFor(() => expect(document.querySelector('.thread-row[data-thread-id="alpha-one"] [aria-label="有新结果"]')).toBeNull());
+    expect(alphaGroup.querySelector('[aria-label="项目有新结果"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Alpha two").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-alpha-two" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "alpha-two", subscriptionId: "sub-alpha-two", streamId: "stream-alpha-two", seq: 1, thread: changedTwo }));
+    await waitFor(() => expect(alphaGroup.querySelector('[aria-label="项目有新结果"]')).toBeNull());
+    expect(requests("thread.list")).toHaveLength(2);
+  });
+
   it("uses one non-overlapping batch request for periodic unread refresh", async () => {
     let refresh: (() => void) | undefined;
     vi.spyOn(window, "setInterval").mockImplementation(((handler: TimerHandler, timeout?: number) => {
