@@ -1,6 +1,6 @@
 # 0084：Passkey 滑动会话与本地持久恢复
 
-- 状态：Approved（2026-10-15，用户已确认；实施中）。
+- 状态：Implemented（2026-10-15；Go、Web、race、真实移动 Chromium 与公网 Docker 已验；物理 iPhone／Safari 待用户复验）。
 - 来源：用户发现 iPhone 从其他应用返回 Safari 后，有时需要重新输入 Passkey；认证后当前默认会话又进入整页同步。用户希望省去重复认证和破坏性同步。
 - 关联：[0061 ECS 单机一键部署](0061-ecs-single-node-one-command.md)、[0073 会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md)、[0083 前后台与会话切换的非破坏性恢复](0083-nondestructive-foreground-resume.md)。
 - 范围：Passkey Cookie 续期、真实 WebSocket 重连时保留 stale view、Safari 页面进程被回收后的本机持久显示缓存；不改变 Codex SSOT，不在 Relay 保存会话正文。
