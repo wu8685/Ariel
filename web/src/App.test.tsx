@@ -493,6 +493,8 @@ describe("Ariel app interactions", () => {
     const second = { queueId: "queue-two", clientMessageId: "message-two", text: "第二条", images: [] as [], editable: true };
     const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active-turn", status: "inProgress", items: [] }], queuedMessages: [first] };
     const { socket, requests } = await openFixture(running, true);
+    expect(screen.getByRole("button", { name: "加入队列" })).toBeTruthy();
+    expect(document.querySelector(".send-loading-spinner")).toBeNull();
 
     const input = screen.getByRole("textbox", { name: "发送消息" });
     fireEvent.change(input, { target: { value: "第二条" } });
@@ -605,6 +607,7 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "do not send" } });
     expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector(".send-loading-spinner")).toBeNull();
     expect(requests("turn.start")).toHaveLength(0);
   });
 
@@ -733,13 +736,22 @@ describe("Ariel app interactions", () => {
     const { socket } = await openFixture(thread);
     const composer = screen.getByLabelText("发送消息") as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: "未发送草稿" } });
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(document.querySelector(".send-loading-spinner")).toBeNull();
     vi.spyOn(Math, "random").mockReturnValue(0);
 
     act(() => socket.close(1006));
     expect(screen.getByText("断线期间继续显示")).toBeTruthy();
     expect(composer.value).toBe("未发送草稿");
     expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
-    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    const reconnectingSend = screen.getByRole("button", { name: "正在同步会话，暂不可发送" }) as HTMLButtonElement;
+    expect(reconnectingSend.disabled).toBe(true);
+    expect(reconnectingSend.querySelector(".send-loading-spinner")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
+    const sendsBeforeBlockedActions = socket.sent.filter(value => JSON.parse(value).method === "thread.send").length;
+    fireEvent.click(reconnectingSend);
+    fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
+    expect(socket.sent.filter(value => JSON.parse(value).method === "thread.send")).toHaveLength(sendsBeforeBlockedActions);
 
     await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 900)); });
     const reconnected = BrowserSocket.sockets[1];
@@ -753,6 +765,11 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
     expect(await screen.findByText("断线期间继续显示")).toBeTruthy();
     expect(composer.value).toBe("未发送草稿");
+    expect((screen.getByRole("button", { name: "正在同步会话，暂不可发送" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => reconnected.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub-reconnected" } }));
+    act(() => reconnected.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub-reconnected", streamId: "stream-reconnected", seq: 1, thread }));
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(document.querySelector(".send-loading-spinner")).toBeNull();
   });
 
   it("restores a locally persisted conversation before the fresh owner snapshot after reload", async () => {
@@ -779,7 +796,13 @@ describe("Ariel app interactions", () => {
     expect(requests("thread.subscribe")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "cached" } });
     expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
     expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
-    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    const restoringSend = screen.getByRole("button", { name: "正在同步会话，暂不可发送" }) as HTMLButtonElement;
+    expect(restoringSend.disabled).toBe(true);
+    expect(restoringSend.querySelector(".send-loading-spinner")).toBeTruthy();
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub-cached" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "cached", subscriptionId: "sub-cached", streamId: "stream-cached", seq: 1, thread: cached }));
+    expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
+    expect(document.querySelector(".send-loading-spinner")).toBeNull();
   });
 
   it("multiplexes the current and previous conversation so A to B to A needs no resubscribe", async () => {
@@ -1723,7 +1746,7 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
     expect(screen.getByText(/正在同步最新状态/)).toBeTruthy();
     expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "正在同步会话，暂不可发送" }) as HTMLButtonElement).disabled).toBe(true);
     expect(requests("thread.subscribe")[1]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture" } });
     expect(requests("thread.unsubscribe")).toContainEqual(expect.objectContaining({ deviceId: "mac", params: { subscriptionId: "sub-1" } }));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-2" } }));

@@ -179,6 +179,10 @@ function SendIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5"/><path d="m6.5 10.5 5.5-5.5 5.5 5.5"/></svg>;
 }
 
+function SendLoadingIcon() {
+  return <svg className="send-loading-spinner" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/></svg>;
+}
+
 function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: PhonePairing; origin: string; onConfirm: () => void; onCancel: () => void }) {
   const error = pairing.phase === "error";
   return <section className="connect-panel pairing-confirm" aria-label="确认扫码登录">
@@ -357,8 +361,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
   const composerReady = localThreadDraft ? agentReady : ownerReady;
+  const ownerRecoveryLoading = Boolean(view && !readOnlyHistory && !ownerReady && (syncingView || recoveringDeviceId === deviceId));
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
   const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
+  const displayedSendAction = ownerRecoveryLoading ? "正在同步会话，暂不可发送" : sendAction;
   const renderedQueuedMessages = dragQueueOrder.length === queuedMessages.length
     ? dragQueueOrder.map(id => queuedMessages.find(item => item.queueId === id)).filter((item): item is QueuedMessage => !!item)
     : queuedMessages;
@@ -2160,7 +2166,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
               <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
               {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
-              <button className="primary send-button icon-control" aria-label={sendAction} data-tooltip={sendAction} onClick={() => void send()} disabled={readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled))}><SendIcon /></button>
+              <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
             </div></div></div></div></div>
       </main>
     </div>
