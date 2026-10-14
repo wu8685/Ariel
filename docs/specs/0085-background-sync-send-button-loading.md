@@ -1,6 +1,6 @@
 # 0085：后台同步期间的发送按钮加载态
 
-- 状态：Approved（2026-10-15，用户已确认；实施中）。
+- 状态：Implemented（2026-10-15；Web 全量、真实移动 Chromium、截图基线、build 与公网 Docker 已验；物理 iPhone／Safari 待用户复验）。
 - 来源：0084 已能在 WebSocket 重连或页面 reload 后立即展示本地缓存正文，但用户仍希望明确知道 fresh owner 正在后台恢复。
 - 关联：[0073 会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md)、[0083 前后台与会话切换的非破坏性恢复](0083-nondestructive-foreground-resume.md)、[0084 Passkey 滑动会话与本地持久恢复](0084-passkey-sliding-session-and-durable-resume.md)。
 
