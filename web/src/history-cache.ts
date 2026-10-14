@@ -22,7 +22,7 @@ const defaultMaxBytes = 32 << 20;
 const defaultMaxEntries = 8;
 const defaultTTL = 5 * 60_000;
 
-function cacheKey(identity: HistoryCacheIdentity): string {
+export function historyCacheKey(identity: HistoryCacheIdentity): string {
   return `${identity.deviceId}\u0000${identity.agentEpoch}\u0000${identity.threadId}`;
 }
 
@@ -35,7 +35,7 @@ function validItems(turn: Turn): boolean {
   return true;
 }
 
-function sanitize(value: HistoryCacheValue): HistoryCacheValue | null {
+export function sanitizeHistoryCacheValue(value: HistoryCacheValue): HistoryCacheValue | null {
   const turnIDs = new Set<string>();
   for (const turn of value.history.older) {
     if (!turn.turnId || turn.status !== "completed" || turnIDs.has(turn.turnId) || !validItems(turn)) return null;
@@ -76,11 +76,11 @@ export class BrowserHistoryCache {
   }
 
   set(identity: HistoryCacheIdentity, value: HistoryCacheValue): boolean {
-    const key = cacheKey(identity);
+    const key = historyCacheKey(identity);
     this.remove(key);
     this.pruneExpired();
     if (!identity.deviceId || !identity.agentEpoch || !identity.threadId) return false;
-    const safe = sanitize(value);
+    const safe = sanitizeHistoryCacheValue(value);
     if (!safe || (safe.history.older.length === 0 && !safe.thread) || (safe.thread && safe.thread.threadId !== identity.threadId)) return false;
     const bytes = new TextEncoder().encode(JSON.stringify({ identity, value: safe })).length;
     if (bytes > this.maxBytes) return false;
@@ -93,7 +93,7 @@ export class BrowserHistoryCache {
 
   get(identity: HistoryCacheIdentity): HistoryCacheValue | null {
     this.pruneExpired();
-    const key = cacheKey(identity);
+    const key = historyCacheKey(identity);
     const entry = this.entries.get(key);
     if (!entry) return null;
     entry.accessedAt = this.now();
@@ -103,7 +103,7 @@ export class BrowserHistoryCache {
   }
 
   delete(identity: HistoryCacheIdentity): void {
-    this.remove(cacheKey(identity));
+    this.remove(historyCacheKey(identity));
   }
 
   clearDevice(deviceId: string): void {

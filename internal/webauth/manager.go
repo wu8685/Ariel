@@ -112,8 +112,13 @@ func (m *Manager) Authenticated(r *http.Request) bool {
 }
 
 func (m *Manager) status(w http.ResponseWriter, r *http.Request) {
+	authenticated := m.Authenticated(r)
+	if authenticated && !m.setSessionCookie(w) {
+		writeError(w, http.StatusInternalServerError, "could not refresh session")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mode": "passkey", "authenticated": m.Authenticated(r), "enrollmentRequired": len(m.store.snapshot().Credentials) == 0,
+		"mode": "passkey", "authenticated": authenticated, "enrollmentRequired": len(m.store.snapshot().Credentials) == 0,
 	})
 }
 

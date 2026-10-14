@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { App } from "./App";
 import type { Thread } from "./generated/protocol";
 import { normalizeProjectPath, projectName } from "./projects";
+import { DurableHistoryCache, MemoryDurableHistoryBackend } from "./durable-history-cache";
+import { emptyHistoryState } from "./history";
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];
@@ -724,6 +726,60 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("不要重新同步的正文")).toBeTruthy();
     expect(composer.value).toBe("后台切换期间保留的草稿");
     expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
+  });
+
+  it("keeps confirmed content and draft visible across a real socket reconnect", async () => {
+    const thread: Thread = { ...fixtureThread, turns: [{ turnId: "visible-turn", status: "completed", items: [{ itemId: "visible-item", role: "assistant", text: "断线期间继续显示" }] }] };
+    const { socket } = await openFixture(thread);
+    const composer = screen.getByLabelText("发送消息") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "未发送草稿" } });
+    vi.spyOn(Math, "random").mockReturnValue(0);
+
+    act(() => socket.close(1006));
+    expect(screen.getByText("断线期间继续显示")).toBeTruthy();
+    expect(composer.value).toBe("未发送草稿");
+    expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 900)); });
+    const reconnected = BrowserSocket.sockets[1];
+    reconnected.onopen?.(new Event("open"));
+    act(() => reconnected.message({ type: "hello.ok", v: 1, connectionId: "c2", relayEpoch: "e", sessionToken: relaySession }));
+    const requests = (method: string) => reconnected.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    act(() => reconnected.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } },
+    ] } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    expect(await screen.findByText("断线期间继续显示")).toBeTruthy();
+    expect(composer.value).toBe("未发送草稿");
+  });
+
+  it("restores a locally persisted conversation before the fresh owner snapshot after reload", async () => {
+    const backend = new MemoryDurableHistoryBackend();
+    const durable = new DurableHistoryCache({ backend, now: () => 1_000 });
+    const identity = { deviceId: "mac", agentEpoch: "agent-epoch", threadId: "cached" };
+    const cached: Thread = { ...fixtureThread, threadId: "cached", title: "本机恢复会话", turns: [{ turnId: "cached-turn", status: "completed", items: [{ itemId: "cached-item", role: "assistant", text: "reload 后立即显示" }] }] };
+    await durable.set(identity, { history: emptyHistoryState(), itemOverrides: {}, thread: cached });
+    await durable.rememberSelection(identity);
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+
+    render(<App durableHistoryCache={durable} />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } },
+    ] } }));
+
+    expect(await screen.findByText("reload 后立即显示")).toBeTruthy();
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    expect(requests("thread.subscribe")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "cached" } });
+    expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("multiplexes the current and previous conversation so A to B to A needs no resubscribe", async () => {

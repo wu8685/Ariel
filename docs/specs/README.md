@@ -100,6 +100,7 @@
 | 0081 | [弱网下 WebSocket heartbeat 容错](0081-loss-tolerant-websocket-heartbeat.md) | Implemented（Go／race／Web／构建／本机 Agent／公网 Docker 已验） | 避免单次 5 秒 Pong 超时在高丢包链路上提前拆除连接，并扩大有界帧发送窗口 |
 | 0082 | [项目级本地 unread 标记](0082-project-level-local-unread.md) | Implemented（Web 197／真实移动 Chromium 29／build／公网 Docker 已验） | 项目内任一会话 unread 时在折叠项目标题展示同款蓝点，不增加逐会话请求 |
 | 0083 | [前后台与会话切换的非破坏性恢复](0083-nondestructive-foreground-resume.md) | Implemented（Web 202／真实移动 Chromium 29／build／公网 Docker 已验） | 单 WebSocket 多路复用；健康前台恢复不重建，当前与上一会话保持有界 live subscription |
+| 0084 | [Passkey 滑动会话与本地持久恢复](0084-passkey-sliding-session-and-durable-resume.md) | Approved（实施中） | 24 小时不活跃滑动认证；真断线与 Safari reload 保留本机 stale view，后台静默恢复 owner |
 
 ## 设计基线
 

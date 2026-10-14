@@ -64,6 +64,47 @@ func TestStatusAndRegistrationOptionsSecurityBoundary(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedStatusRenewsOnlyALiveSession(t *testing.T) {
+	m := testManager(t)
+	now := time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	m.codec.now = m.now
+
+	issued := httptest.NewRecorder()
+	if !m.setSessionCookie(issued) {
+		t.Fatal("could not issue session cookie")
+	}
+	original := issued.Result().Cookies()[0]
+
+	now = now.Add(23 * time.Hour)
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req.AddCookie(original)
+	refreshed := httptest.NewRecorder()
+	m.Handler().ServeHTTP(refreshed, req)
+	if refreshed.Code != http.StatusOK || !strings.Contains(refreshed.Body.String(), `"authenticated":true`) {
+		t.Fatalf("status: %d %s", refreshed.Code, refreshed.Body.String())
+	}
+	cookies := refreshed.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || cookies[0].Value == original.Value {
+		t.Fatalf("live session was not rotated: %#v", cookies)
+	}
+
+	now = now.Add(23 * time.Hour)
+	second := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	second.AddCookie(cookies[0])
+	if !m.Authenticated(second) {
+		t.Fatal("renewed session did not survive a second active day")
+	}
+
+	expired := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	expired.AddCookie(original)
+	rejected := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rejected, expired)
+	if strings.Contains(rejected.Body.String(), `"authenticated":true`) || rejected.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("expired session renewed: %s %#v", rejected.Body.String(), rejected.Header())
+	}
+}
+
 func TestManagerRejectsInvalidConfiguration(t *testing.T) {
 	base := Config{PublicOrigin: "https://ariel.example.com", RPID: "ariel.example.com", CredentialsFile: filepath.Join(t.TempDir(), "auth.json"), SessionKey: []byte(strings.Repeat("a", 32)), SetupToken: strings.Repeat("s", 32)}
 	for name, mutate := range map[string]func(*Config){

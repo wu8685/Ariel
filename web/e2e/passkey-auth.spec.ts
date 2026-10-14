@@ -146,5 +146,13 @@ test("enrolls a primary and backup Passkey, then signs in again", async ({ brows
   await expect(page).toHaveScreenshot("passkey-login.png", { animations: "disabled" });
   await page.getByRole("button", { name: "使用 Passkey 登录" }).click();
   await expect(page.locator(".masthead .connection.ready")).toContainText("Relay 已连接");
+  const beforeRefresh = (await context.cookies(publicOrigin)).find(cookie => cookie.name === "__Host-ariel_session");
+  expect(beforeRefresh).toBeTruthy();
+  const status = await page.request.get(`${publicOrigin}/api/auth/status`);
+  expect(status.ok()).toBe(true);
+  expect(await status.json()).toMatchObject({ mode: "passkey", authenticated: true });
+  const afterRefresh = (await context.cookies(publicOrigin)).find(cookie => cookie.name === "__Host-ariel_session");
+  expect(afterRefresh?.value).not.toBe(beforeRefresh?.value);
+  expect(afterRefresh).toMatchObject({ secure: true, httpOnly: true, sameSite: "Strict" });
   await context.close();
 });

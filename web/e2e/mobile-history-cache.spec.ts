@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type WebSocketRoute } from "@playwright/test";
 import type { Thread } from "../src/generated/protocol";
 
 const sessionToken = `s_${"a".repeat(64)}`;
@@ -25,7 +25,7 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   let historyRequests = 0;
   let connections = 0;
   let subscriptions = 0;
-  let relaySocket: { send(data: string): void } | null = null;
+  let relaySocket: WebSocketRoute | null = null;
   const historyLimits: number[] = [];
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
   await page.routeWebSocket("**/ws", socket => {
@@ -56,7 +56,9 @@ test("reuses downloaded history after a mobile user switches away and back", asy
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
     if (message.method === "thread.subscribe") {
       const thread = message.params.threadId === first.threadId ? first : second;
-      socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: `sub-${thread.threadId}`, streamId: `stream-${thread.threadId}`, seq: 1, thread }));
+      const sendSnapshot = () => socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: `sub-${thread.threadId}`, streamId: `stream-${thread.threadId}`, seq: 1, thread }));
+      if (connections > 1 && thread.threadId === first.threadId) setTimeout(sendSnapshot, 300);
+      else sendSnapshot();
     }
     });
   });
@@ -90,6 +92,17 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   expect(historyRequests).toBe(1);
   expect(historyLimits).toEqual([10]);
 
+  await composer.fill("真实断线也保留");
+  relaySocket!.close({ code: 1012, reason: "fixture reconnect" });
+  await expect(page.getByText("A 的最新内容")).toBeVisible();
+  await expect(composer).toHaveValue("真实断线也保留");
+  await expect(page.getByRole("heading", { name: "正在同步会话…" })).toHaveCount(0);
+  await expect.poll(() => connections).toBe(2);
+  await expect(page.getByText("A 的最新内容")).toBeVisible();
+  await expect(composer).toHaveValue("真实断线也保留");
+  await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
+  await composer.fill("");
+
   await page.getByRole("button", { name: /打开会话列表/ }).click();
   await page.getByText(second.title).click();
   await expect(page.getByText("B 正在运行")).toBeVisible();
@@ -106,15 +119,17 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   await expect(page.getByText("A 的后台增量")).toBeVisible();
   await expect(page.locator(".runtime")).toHaveText("待命");
   await expect(page.getByText(/正在同步最新状态/)).toHaveCount(0);
-  expect(subscriptions).toBe(2);
+  expect(subscriptions).toBe(3);
   expect(historyRequests).toBe(1);
 
   await page.reload();
-  await page.getByRole("button", { name: "展开项目 history-cache，/tmp/history-cache" }).click();
-  await page.getByText(first.title).click();
-  await expect(page.getByText("A 的最新内容")).toBeVisible();
-  await page.getByRole("button", { name: "加载更早消息" }).click();
+  await expect(page.getByText("A 的后台增量")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "正在同步会话…" })).toHaveCount(0);
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
-  expect(historyRequests).toBe(2);
-  expect(historyLimits).toEqual([10, 10]);
+  expect(historyRequests).toBe(1);
+  await expect.poll(() => subscriptions).toBe(4);
+  await expect(page.getByText("A 的最新内容")).toBeVisible();
+  await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
+  expect(historyRequests).toBe(1);
+  expect(historyLimits).toEqual([10]);
 });

@@ -7,6 +7,7 @@ import { newRequestID } from "./ids";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
 import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } from "./history-cache";
+import { DurableHistoryCache } from "./durable-history-cache";
 import { BrowserThreadListCache, type ThreadListCacheIdentity } from "./thread-list-cache";
 import { BrowserThreadUnreadStore } from "./thread-unread";
 import { activityStatusText, groupTurnItems } from "./activity";
@@ -219,9 +220,10 @@ function PairingDialog({ invite, seconds, onClose, onRegenerate }: { invite: Pai
   </div>;
 }
 
-export function App({ initialPairingCredential }: { initialPairingCredential?: string } = {}) {
+export function App({ initialPairingCredential, durableHistoryCache }: { initialPairingCredential?: string; durableHistoryCache?: DurableHistoryCache } = {}) {
   const client = useMemo(() => new ArielSocket(wsURL), []);
   const webSession = useMemo(() => new WebSession(() => window.sessionStorage), []);
+  const durableCache = useMemo(() => durableHistoryCache ?? new DurableHistoryCache(), [durableHistoryCache]);
   const [webAuthMode] = useState<WebAuthMode>(webAuthModeFromDocument);
   const [passkeyAuth, setPasskeyAuth] = useState<PasskeyAuthState>({ loaded: false, enrollmentRequired: false, error: "" });
   const [passkeyBusy, setPasskeyBusy] = useState(false);
@@ -316,6 +318,8 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const observedAgentEpochs = useRef(new Map<string, string>());
   const recoveryGeneration = useRef(0);
   const recoveryRunning = useRef(false);
+  const connectionResume = useRef(false);
+  const durableRestoreAttempt = useRef("");
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const lastTranscriptScrollTop = useRef(0);
@@ -514,14 +518,28 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (!current.view?.subscriptionId || current.view.deviceId !== current.deviceId || current.view.threadId !== current.threadId) return;
     const identity = historyCacheIdentity(current.deviceId, current.threadId);
     if (!identity) return;
-    historyCache.current.set(identity, { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: current.view.thread });
+    const value = { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: current.view.thread };
+    historyCache.current.set(identity, value);
+    void durableCache.set(identity, value);
+    void durableCache.rememberSelection(identity);
   }
 
   function cacheWarmThread(next: ThreadView) {
     const identity = historyCacheIdentity(next.deviceId, next.threadId);
     const cached = identity ? historyCache.current.get(identity) : null;
     if (!identity || !cached) return;
-    historyCache.current.set(identity, { ...cached, thread: next.thread });
+    const value = { ...cached, thread: next.thread };
+    historyCache.current.set(identity, value);
+    void durableCache.set(identity, value);
+  }
+
+  function persistView(next: ThreadView) {
+    const identity = historyCacheIdentity(next.deviceId, next.threadId);
+    if (!identity) return;
+    const value = { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: next.thread };
+    historyCache.current.set(identity, value);
+    void durableCache.set(identity, value);
+    void durableCache.rememberSelection(identity);
   }
 
   function restoreCachedConversation(targetDevice: string, targetThread: string): ThreadView | null {
@@ -552,6 +570,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const restored = restoredHistoryCache.current;
     if (restored?.deviceId !== targetDevice || restored.threadId !== targetThread) return false;
     historyCache.current.delete(restored);
+    void durableCache.delete(restored);
     const empty = emptyHistoryState();
     historyRef.current = empty;
     setHistory(empty);
@@ -699,6 +718,12 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   function disconnect() {
     closePairingInvite();
+    connectionResume.current = false;
+    durableRestoreAttempt.current = "";
+    selection.current = { deviceId: "", threadId: "", view: null };
+    expectedSubscription.current = "";
+    setView(null); setThreadId(""); setDraft(""); setScreenshots([]); resetHistory();
+    void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
     if (webAuthMode === "passkey") {
       setPasskeyAuth(current => ({ ...current, loaded: true, error: "" }));
@@ -816,6 +841,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       if (previous?.agentEpoch && previous.agentEpoch !== candidate.agentEpoch) {
         clearWarmSubscriptions(candidate.deviceId);
         historyCache.current.clearDevice(candidate.deviceId);
+        void durableCache.clearDevice(candidate.deviceId);
         threadListCache.current.clearDevice(candidate.deviceId);
         discardRestoredHistory(candidate.deviceId, selection.current.threadId);
         if (offlineDevice.current !== candidate.deviceId) invalidateOwnerView(candidate.deviceId, "Desktop Agent 已重连，正在重新同步当前会话。");
@@ -1014,7 +1040,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       setScreenshots([]);
       setEditingQueueId("");
     }
-    if (warm) return;
+    if (warm) { persistView(warm); return; }
     if (oldSubscription && !old?.subscriptionId) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     let response = await client.request("thread.subscribe", targetDevice, { threadId: id, updateMode: "item-delta-v1" });
     if (epoch !== pendingSelect.current) {
@@ -1058,7 +1084,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         const current = selection.current;
         const online = devicesRef.current.filter(candidate => candidate.agentOnline);
         const target = recoveryTarget(current.deviceId, current.threadId, online, blockedSelection.current);
-        if (target && !current.view) await selectThread(target.threadId, target.deviceId);
+        if (target && (!current.view || !current.view.subscriptionId)) await selectThread(target.threadId, target.deviceId);
         if (generation === recoveryGeneration.current) return;
       }
     } finally {
@@ -1086,6 +1112,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     client.onStatus = next => {
       setStatus(next);
       if (next === "invalid") {
+        durableRestoreAttempt.current = "";
         if (webAuthMode === "passkey") {
           setPasskeyAuth(current => ({ ...current, loaded: true, error: "登录会话已失效，请重新使用 Passkey。" }));
         } else {
@@ -1096,20 +1123,29 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         }
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
+        connectionResume.current = false;
+        rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); warmSubscriptions.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setLocalThreadDraft(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current);
+        return;
       }
-      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); warmSubscriptions.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setLocalThreadDraft(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") {
+        rememberReadingPosition(); cacheCurrentHistory(); clearAgentOfflineTimer(); offlineDevice.current = ""; setRecoveringDeviceId(""); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; warmSubscriptions.current.clear();
+        if (selection.current.view) {
+          connectionResume.current = true;
+          const stale = { ...selection.current.view, subscriptionId: "", streamId: "", seq: 0 };
+          selection.current.view = stale;
+          setView(stale);
+          setSyncingView(true);
+        }
+        setPairingInvite(current => current?.status === "waiting" ? null : current);
+      }
     };
     client.onReady = (_epoch, sessionToken) => {
       warmSubscriptions.current.clear();
-      historyCache.current.clear();
-      threadListCache.current.clear();
-      observedAgentEpochs.current.clear();
       if (webAuthMode === "pin" && sessionToken) webSession.accepted(sessionToken);
       if (pairingAttempt.current) setPhonePairing(null);
       pairingAttempt.current = false;
       savedSessionAttempt.current = webAuthMode === "pin" && Boolean(sessionToken);
       setSessionExpired(false);
-      expectedSubscription.current = ""; selection.current.view = null; setView(null); setSyncingView(false); setReadOnlyHistory(false); resetHistory();
       void refreshDevices().then(() => void resumeSelected());
     };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
@@ -1194,7 +1230,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);
+        connectionResume.current = false;
         selection.current.view = next; setView(next); setSyncingView(false); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId); reconcileSubmission(event.thread, event.deviceId, event.threadId);
+        persistView(next);
       } else if (event.event === "thread.update") {
         const next = applyThreadEvent(currentEvent ? current.view : warm, event);
         if (!next) {
@@ -1205,7 +1243,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         observeUnread(event.deviceId, [next.thread]);
         retainWarmSubscription(next);
         if (!currentEvent) cacheWarmThread(next);
-        else { selection.current.view = next; setView(next); }
+        else { selection.current.view = next; setView(next); persistView(next); }
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
         if (currentEvent) reconcileSubmission(next.thread, event.deviceId, event.threadId);
       }
@@ -1266,6 +1304,23 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   }, [deviceId]);
 
   useEffect(() => {
+    const epoch = device?.agentEpoch || "";
+    const attempt = status === "ready" && deviceId && epoch ? `${deviceId}\u0000${epoch}` : "";
+    if (!attempt || durableRestoreAttempt.current === attempt || selection.current.threadId) return;
+    durableRestoreAttempt.current = attempt;
+    let active = true;
+    void durableCache.lastSelection().then(async identity => {
+      if (!active || !identity || identity.deviceId !== deviceId || identity.agentEpoch !== epoch || selection.current.threadId) return;
+      const cached = await durableCache.get(identity);
+      if (!active || !cached?.thread || cached.thread.threadId !== identity.threadId || selection.current.threadId) return;
+      if (!historyCache.current.set(identity, cached)) return;
+      connectionResume.current = true;
+      await selectThread(identity.threadId, identity.deviceId, false);
+    });
+    return () => { active = false; };
+  }, [status, deviceId, device?.agentEpoch, durableCache]);
+
+  useEffect(() => {
     if (!searchInputChanged.current) return;
     const timer = window.setTimeout(() => {
       setSearchTerm(searchInput.trim());
@@ -1288,14 +1343,28 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         markCurrentThreadRead();
         if (hiddenAt && Date.now() - hiddenAt >= 5000) {
           hiddenAt = 0;
-          client.wake();
-          void refreshUnreadThreads();
+          void (async () => {
+            if (webAuthMode === "passkey") {
+              try {
+                const auth = await loadAuthStatus();
+                if (auth.mode === "passkey") setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: "" });
+              } catch { /* WebSocket state remains authoritative. */ }
+            }
+            client.wake();
+            void refreshUnreadThreads();
+          })();
         }
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [client]);
+  }, [client, webAuthMode]);
+
+  useEffect(() => {
+    if (webAuthMode !== "passkey" || status !== "ready") return;
+    const timer = window.setInterval(() => { void loadAuthStatus().catch(() => undefined); }, 12 * 60 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [webAuthMode, status]);
 
   useEffect(() => {
     if (status !== "ready" || !deviceId || !device?.agentOnline || !device.codexReady || searchTerm || !showList || document.visibilityState !== "visible") return;
@@ -1524,6 +1593,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
         historyRef.current = next;
         setHistory(next);
+        if (selection.current.view) persistView(selection.current.view);
         if (next.older.length >= targetCount || next.exhausted) return;
       }
       setNotice("历史变化过快，请稍后重新加载更早消息。");
@@ -1560,6 +1630,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
       const next = { ...itemOverridesRef.current, [turn.turnId]: prependOlderItems(itemOverridesRef.current[turn.turnId] || turn, items, nextItemCursor, itemsComplete) };
       replaceItemOverrides(next);
+      if (selection.current.view) persistView(selection.current.view);
     } finally {
       itemLoadingRef.current = "";
       setItemLoading("");
@@ -2017,7 +2088,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         <div className="thread-create-actions"><button className="secondary" type="button" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}>取消</button><button className="primary" type="button" aria-label="保存名称" onClick={() => void renameThread()} disabled={!!threadMetadataWorking || !validThreadName(renameThreadDialog.name)}>{threadMetadataWorking ? "正在保存…" : "保存"}</button></div>
       </section>
     </div>}
-    {status !== "ready" && accessPanel}
+    {(status === "invalid" || (status !== "ready" && !view && !localThreadDraft)) && accessPanel}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
@@ -2046,7 +2117,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
-        {syncingView && view && !readOnlyHistory && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
+        {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
