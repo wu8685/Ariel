@@ -1,6 +1,6 @@
 # 0082：项目级本地 unread 标记
 
-- 状态：Approved（2026-10-14，用户已确认；实施中）。
+- 状态：Implemented（2026-10-14；Web 全量测试、真实移动 Chromium、production build 与公网 Docker 已验证）。
 - 来源：Web 已按 0077 在会话行展示本地 unread 蓝点；用户希望项目折叠时也能看出项目内存在未读会话。
 - 关联：[0077 Web 本地会话未读标记](0077-web-local-thread-unread.md)。
 - 范围：Web 侧项目标题的 unread 聚合与展示；不增加 Relay／Desktop Agent／Codex API，不新增请求或持久化字段。
@@ -45,3 +45,11 @@
 ## 回滚
 
 - 删除项目 unread 派生集合和项目标题蓝点即可；0077 的会话水位、本地存储与网络行为不受影响。
+
+## 实施结果
+
+- Web 从已有 `threads` 与 `unreadThreadIDs` 纯派生项目 unread 集合，没有增加 Relay／Desktop Agent 请求或新的持久化状态。
+- 项目收起或展开不会清除 unread；查看项目内最后一个 unread 会话后，项目蓝点立即消失。
+- 置顶会话、规范化项目路径、未知项目与搜索结果均按本规格的当前列表语义聚合。
+- Web 全量 197 个测试、真实移动 Chromium 29 个场景和 production build 全部通过；公网 `ariel-relay:220cb24` 已进入 `healthy`。
+- 物理 iPhone／Safari 的最终触摸与视觉复验保留给用户。

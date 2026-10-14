@@ -98,7 +98,7 @@
 | 0079 | [Web 发送图片前本地归一化](0079-web-image-normalization-before-send.md) | Draft（等待用户确认） | 在浏览器内缩放和压缩高分辨率图片，消除“附件可预览、发送时才失败”的校验差异 |
 | 0080 | [会话菜单刷新总预算与单次读取预算](0080-thread-list-overall-timeout-budget.md) | Implemented（Go 全包／race／构建／本机公网 Agent 重启已验） | 为菜单刷新设置共享的 30 秒总预算，并将单次 App Server attempt 从 5 秒调到 15 秒 |
 | 0081 | [弱网下 WebSocket heartbeat 容错](0081-loss-tolerant-websocket-heartbeat.md) | Implemented（Go／race／Web／构建／本机 Agent／公网 Docker 已验） | 避免单次 5 秒 Pong 超时在高丢包链路上提前拆除连接，并扩大有界帧发送窗口 |
-| 0082 | [项目级本地 unread 标记](0082-project-level-local-unread.md) | Approved（实施中） | 项目内任一会话 unread 时在折叠项目标题展示同款蓝点，不增加逐会话请求 |
+| 0082 | [项目级本地 unread 标记](0082-project-level-local-unread.md) | Implemented（Web 197／真实移动 Chromium 29／build／公网 Docker 已验） | 项目内任一会话 unread 时在折叠项目标题展示同款蓝点，不增加逐会话请求 |
 
 ## 设计基线
 
