@@ -1,6 +1,6 @@
 # 0083：前后台与会话切换的非破坏性恢复
 
-- 状态：Approved（2026-10-15，用户已确认；实施中）。
+- 状态：Implemented（2026-10-15；Web 202／真实移动 Chromium 29／production build／公网 Docker 已验）。
 - 来源：用户发现切换到其他应用再返回浏览器，或在当前页面切到另一会话再切回，都会看到当前会话重新同步；希望存量内容保持不动，只补充离开期间的增量。
 - 关联：[0006 M4 恢复与容量](0006-m4-recovery-capacity.md)、[0073 会话增量同步与无白屏缓存恢复](0073-incremental-thread-sync-and-stale-view-cache.md)、[0077 Web 本地会话未读标记](0077-web-local-thread-unread.md)。
 - 范围：WebSocket 前台唤醒判定、当前／上一会话的有界 warm subscription 与 Web 恢复交互；不改变 Relay／Desktop Agent 协议，不把正文写入 Relay 或浏览器持久化存储。
