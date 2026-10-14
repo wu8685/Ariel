@@ -55,6 +55,7 @@ export class ArielSocket {
 
   wake() {
     if (!this.token) return;
+    if (this.ready && this.ws?.readyState === WebSocket.OPEN) return;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.helloTimer) clearTimeout(this.helloTimer);
     this.retryTimer = null;

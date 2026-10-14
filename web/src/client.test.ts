@@ -26,6 +26,7 @@ describe("Ariel WebSocket client", () => {
     const sessionToken = `s_${"a".repeat(64)}`;
     sockets[0].message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken });
     expect(ready).toEqual([sessionToken]);
+    sockets[0].close(1006);
     client.wake();
     sockets[1].onopen?.();
     expect(JSON.parse(sockets[1].sent[0]).token).toBe(sessionToken);
@@ -132,7 +133,7 @@ describe("Ariel WebSocket client", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("reconnects on foreground wake and marks in-flight mutation unknown", async () => {
+  it("keeps a healthy multiplexed connection and in-flight mutation on foreground wake", async () => {
     const sockets: FakeSocket[] = [];
     const client = new ArielSocket("ws://localhost/ws", () => {
       const socket = new FakeSocket(); sockets.push(socket);
@@ -142,11 +143,31 @@ describe("Ariel WebSocket client", () => {
     sockets[0].message({ type: "hello.ok", v: 1, connectionId: "c1", relayEpoch: "e1" });
     const pending = client.request("turn.start", "device", { threadId: "t", clientMessageId: crypto.randomUUID(), text: "hi" });
     client.wake();
-    expect((await pending).outcome).toBe("unknown");
-    expect(sockets).toHaveLength(2);
-    expect(sockets[0].readyState).toBe(3);
-    sockets[1].onopen?.();
-    expect(JSON.parse(sockets[1].sent[0]).token).toBe("secret");
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].readyState).toBe(1);
+    const outbound = JSON.parse(sockets[0].sent.at(-1)!);
+    sockets[0].message({ type: "response", v: 1, requestId: outbound.requestId, outcome: "accepted", data: { turnId: "turn" } });
+    expect((await pending).outcome).toBe("accepted");
     client.disconnect();
+  });
+
+  it("reconnects immediately on foreground wake when the socket is unavailable", () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    try {
+      const client = new ArielSocket("ws://localhost/ws", () => {
+        const socket = new FakeSocket(); sockets.push(socket);
+        return socket as unknown as WebSocket;
+      });
+      client.connect("secret"); sockets[0].onopen?.();
+      sockets[0].message({ type: "hello.ok", v: 1, connectionId: "c1", relayEpoch: "e1" });
+      sockets[0].close(1006);
+      expect(sockets).toHaveLength(1);
+      client.wake();
+      expect(sockets).toHaveLength(2);
+      sockets[1].onopen?.();
+      expect(JSON.parse(sockets[1].sent[0]).token).toBe("secret");
+      client.disconnect();
+    } finally { vi.useRealTimers(); }
   });
 });

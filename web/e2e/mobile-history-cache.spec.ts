@@ -23,9 +23,15 @@ const second: Thread = {
 
 test("reuses downloaded history after a mobile user switches away and back", async ({ page }) => {
   let historyRequests = 0;
+  let connections = 0;
+  let subscriptions = 0;
+  let relaySocket: { send(data: string): void } | null = null;
   const historyLimits: number[] = [];
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
-  await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
+  await page.routeWebSocket("**/ws", socket => {
+    connections++;
+    relaySocket = socket;
+    socket.onMessage(raw => {
     const message = JSON.parse(String(raw));
     if (message.type === "hello") {
       socket.send(JSON.stringify({ type: "hello.ok", v: 1, connectionId: "cache", relayEpoch: "relay-cache", sessionToken }));
@@ -35,7 +41,10 @@ test("reuses downloaded history after a mobile user switches away and back", asy
     let data: Record<string, unknown> = {};
     if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "缓存测试 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-cache", capabilities: { autoLoad: true, history: true } }] };
     if (message.method === "thread.list") data = { threads: [first, second], nextCursor: "" };
-    if (message.method === "thread.subscribe") data = { subscriptionId: `sub-${message.params.threadId}` };
+    if (message.method === "thread.subscribe") {
+      subscriptions++;
+      data = { subscriptionId: `sub-${message.params.threadId}` };
+    }
     if (message.method === "thread.history") {
       historyRequests++;
       historyLimits.push(message.params.limit);
@@ -47,14 +56,35 @@ test("reuses downloaded history after a mobile user switches away and back", asy
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
     if (message.method === "thread.subscribe") {
       const thread = message.params.threadId === first.threadId ? first : second;
-      socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: `sub-${thread.threadId}`, streamId: `stream-${thread.threadId}-${Date.now()}`, seq: 1, thread }));
+      socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: `sub-${thread.threadId}`, streamId: `stream-${thread.threadId}`, seq: 1, thread }));
     }
-  }));
+    });
+  });
 
   await page.goto("/");
   await page.getByRole("button", { name: "展开项目 history-cache，/tmp/history-cache" }).click();
   await page.getByText(first.title).click();
   await expect(page.getByText("A 的最新内容")).toBeVisible();
+  const composer = page.getByLabel("发送消息");
+  await composer.fill("应用切换后仍保留");
+  const connectionsBeforeForeground = connections;
+  const subscriptionsBeforeForeground = subscriptions;
+  await page.evaluate(() => {
+    let state = "hidden";
+    let now = 1_000;
+    const originalNow = Date.now;
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    Date.now = () => now;
+    document.dispatchEvent(new Event("visibilitychange"));
+    state = "visible";
+    now = 7_000;
+    document.dispatchEvent(new Event("visibilitychange"));
+    Date.now = originalNow;
+  });
+  await expect(composer).toHaveValue("应用切换后仍保留");
+  expect(connections).toBe(connectionsBeforeForeground);
+  expect(subscriptions).toBe(subscriptionsBeforeForeground);
+  await composer.fill("");
   await page.getByRole("button", { name: "加载更早消息" }).click();
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
   expect(historyRequests).toBe(1);
@@ -64,14 +94,19 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   await page.getByText(second.title).click();
   await expect(page.getByText("B 正在运行")).toBeVisible();
   await expect(page.locator(".runtime")).toHaveText("运行中");
+  const firstUpdated: Thread = { ...first, updatedAt: "2026-10-10T00:00:01Z", turns: [{ ...first.turns[0], items: [{ ...first.turns[0].items[0], text: "A 的后台增量" }] }] };
+  relaySocket!.send(JSON.stringify({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: first.threadId, subscriptionId: `sub-${first.threadId}`, streamId: `stream-${first.threadId}`, baseSeq: 1, seq: 2, thread: firstUpdated }));
+  await expect(page.getByText("B 正在运行")).toBeVisible();
 
   const restoreLatest = page.getByRole("button", { name: "恢复输入区并回到最新" });
   if (await restoreLatest.isVisible()) await restoreLatest.click();
   await page.getByRole("button", { name: /打开会话列表/ }).click();
   await page.getByText(first.title).click();
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
-  await expect(page.getByText("A 的最新内容")).toBeVisible();
+  await expect(page.getByText("A 的后台增量")).toBeVisible();
   await expect(page.locator(".runtime")).toHaveText("待命");
+  await expect(page.getByText(/正在同步最新状态/)).toHaveCount(0);
+  expect(subscriptions).toBe(2);
   expect(historyRequests).toBe(1);
 
   await page.reload();

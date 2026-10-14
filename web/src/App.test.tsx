@@ -7,6 +7,7 @@ import { normalizeProjectPath, projectName } from "./projects";
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];
+  static readonly OPEN = 1;
   readyState = 1;
   sent: string[] = [];
   onopen: ((event: Event) => void) | null = null;
@@ -692,20 +693,104 @@ describe("Ariel app interactions", () => {
     expect(await screen.findByText("第二会话运行中")).toBeTruthy();
 
     fireEvent.click(screen.getByText("First").closest("button")!);
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
+    expect(requests("thread.subscribe")).toHaveLength(2);
     expect(screen.getByText("第一会话最新")).toBeTruthy();
     expect(screen.getByText("已经下载的旧历史")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
-    expect(screen.getByText(/正在同步最新状态/)).toBeTruthy();
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
     expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-first-again" } }));
-    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-first-again", streamId: "stream-first-again", seq: 1, thread: first }));
 
     expect(await screen.findByText("已经下载的旧历史")).toBeTruthy();
     expect(screen.getByText("第一会话最新")).toBeTruthy();
     expect(screen.getByText("待命")).toBeTruthy();
     expect(requests("thread.history")).toHaveLength(1);
+  });
+
+  it("keeps a healthy socket and selected conversation stable after returning from background", async () => {
+    const thread: Thread = { ...fixtureThread, turns: [{ turnId: "visible-turn", status: "completed", items: [{ itemId: "visible-item", role: "assistant", text: "不要重新同步的正文" }] }] };
+    const { requests } = await openFixture(thread);
+    const composer = screen.getByLabelText("发送消息") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "后台切换期间保留的草稿" } });
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValueOnce(1_000);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    now.mockReturnValue(7_000);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(BrowserSocket.sockets).toHaveLength(1);
+    expect(requests("thread.subscribe")).toHaveLength(1);
+    expect(screen.getByText("不要重新同步的正文")).toBeTruthy();
+    expect(composer.value).toBe("后台切换期间保留的草稿");
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
+  });
+
+  it("multiplexes the current and previous conversation so A to B to A needs no resubscribe", async () => {
+    const alpha: Thread = { ...fixtureThread, threadId: "alpha", title: "Alpha", turns: [{ turnId: "alpha-turn", status: "completed", items: [{ itemId: "alpha-item", role: "assistant", text: "Alpha 已确认内容" }] }] };
+    const beta: Thread = { ...fixtureThread, threadId: "beta", title: "Beta", turns: [{ turnId: "beta-turn", status: "completed", items: [{ itemId: "beta-item", role: "assistant", text: "Beta 已确认内容" }] }] };
+    const { socket, requests } = await openFixture(alpha, false, false, [alpha, beta]);
+
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    fireEvent.click(screen.getByText("Beta").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-beta" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "beta", subscriptionId: "sub-beta", streamId: "stream-beta", seq: 1, thread: beta }));
+    expect(await screen.findByText("Beta 已确认内容")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    fireEvent.click(screen.getByText("Alpha").closest("button")!);
+
+    await waitFor(() => expect(screen.getByText("Alpha 已确认内容")).toBeTruthy());
+    expect(requests("thread.subscribe")).toHaveLength(2);
+    expect(requests("thread.unsubscribe")).toHaveLength(0);
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
+  });
+
+  it("merges a background delta into the warm conversation without disturbing the current DOM", async () => {
+    const alpha: Thread = { ...fixtureThread, threadId: "alpha", title: "Alpha", turns: [{ turnId: "alpha-turn", status: "inProgress", items: [{ itemId: "alpha-item", role: "assistant", text: "Alpha 起点" }] }] };
+    const beta: Thread = { ...fixtureThread, threadId: "beta", title: "Beta", turns: [{ turnId: "beta-turn", status: "completed", items: [{ itemId: "beta-item", role: "assistant", text: "Beta 保持不动" }] }] };
+    const { socket, requests } = await openFixture(alpha, false, false, [alpha, beta]);
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    fireEvent.click(screen.getByText("Beta").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-beta" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "beta", subscriptionId: "sub-beta", streamId: "stream-beta", seq: 1, thread: beta }));
+    const betaNode = await screen.findByText("Beta 保持不动");
+
+    const alphaUpdated: Thread = { ...alpha, turns: [{ ...alpha.turns[0], items: [{ ...alpha.turns[0].items[0], text: "Alpha 后台增量" }] }] };
+    act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "alpha", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: alphaUpdated }));
+    expect(screen.getByText("Beta 保持不动")).toBe(betaNode);
+    expect(screen.queryByText("Alpha 后台增量")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    fireEvent.click(screen.getByText("Alpha").closest("button")!);
+    expect(await screen.findByText("Alpha 后台增量")).toBeTruthy();
+    expect(requests("thread.subscribe")).toHaveLength(2);
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
+  });
+
+  it("evicts the oldest warm subscription when selecting a third conversation", async () => {
+    const alpha: Thread = { ...fixtureThread, threadId: "alpha", title: "Alpha" };
+    const beta: Thread = { ...fixtureThread, threadId: "beta", title: "Beta" };
+    const gamma: Thread = { ...fixtureThread, threadId: "gamma", title: "Gamma" };
+    const { socket, requests } = await openFixture(alpha, false, false, [alpha, beta, gamma]);
+    const open = async (thread: Thread, subscriptionId: string, streamId: string, expected: number) => {
+      fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+      fireEvent.click(screen.getByText(thread.title).closest("button")!);
+      await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(expected));
+      await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[expected - 1].requestId, outcome: "accepted", data: { subscriptionId } }));
+      act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId, streamId, seq: 1, thread }));
+    };
+    await open(beta, "sub-beta", "stream-beta", 2);
+    await open(gamma, "sub-gamma", "stream-gamma", 3);
+    expect(requests("thread.unsubscribe")).toContainEqual(expect.objectContaining({ params: { subscriptionId: "sub" } }));
+
+    fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
+    fireEvent.click(screen.getByText("Alpha").closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(4));
+    expect(screen.getByText(/正在同步最新状态/)).toBeTruthy();
+    expect(requests("thread.unsubscribe")).toContainEqual(expect.objectContaining({ params: { subscriptionId: "sub-beta" } }));
   });
 
   it("drops a restored cursor once and rebuilds pagination when the Agent rejects it", async () => {
@@ -721,9 +806,7 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-second" } }));
     act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "second", subscriptionId: "sub-second", streamId: "stream-second", seq: 1, thread: second }));
     fireEvent.click(screen.getByText("First").closest("button")!);
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(3));
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[2].requestId, outcome: "accepted", data: { subscriptionId: "sub-first-again" } }));
-    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-first-again", streamId: "stream-first-again", seq: 1, thread: first }));
+    expect(requests("thread.subscribe")).toHaveLength(2);
     expect(await screen.findByText("缓存旧历史")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
@@ -970,10 +1053,11 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(400);
   });
 
-  it("keeps formal monochrome product marks without adding a full-page loading mark during cached resync", async () => {
+  it("keeps formal monochrome product marks without resubscribing the selected conversation", async () => {
     const { requests } = await openFixture();
     fireEvent.click(document.querySelector(`.thread-row[data-thread-id="${fixtureThread.threadId}"]`)!);
-    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect(requests("thread.subscribe")).toHaveLength(1);
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
     const marks = [...document.querySelectorAll(".ariel-logo--micro")];
     expect(marks).toHaveLength(2);
     for (const mark of marks) {

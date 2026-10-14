@@ -300,6 +300,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   const devicesRef = useRef<Device[]>([]);
   const historyCache = useRef(new BrowserHistoryCache());
   const threadListCache = useRef(new BrowserThreadListCache());
+  const warmSubscriptions = useRef(new Map<string, ThreadView>());
   const unreadStore = useMemo(() => new BrowserThreadUnreadStore(window.localStorage), []);
   const backgroundThreadListRefresh = useRef(false);
   const threadListRequestsInFlight = useRef(0);
@@ -375,6 +376,47 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
 
   function agentEpochFor(id: string): string {
     return devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || "";
+  }
+
+  function warmSubscriptionKey(targetDevice: string, targetThread: string): string {
+    const epoch = agentEpochFor(targetDevice);
+    return targetDevice && epoch && targetThread ? `${targetDevice}\u0000${epoch}\u0000${targetThread}` : "";
+  }
+
+  function warmSubscription(targetDevice: string, targetThread: string): ThreadView | null {
+    const key = warmSubscriptionKey(targetDevice, targetThread);
+    return key ? warmSubscriptions.current.get(key) || null : null;
+  }
+
+  function retainWarmSubscription(next: ThreadView) {
+    if (!next.subscriptionId || !next.streamId) return;
+    const key = warmSubscriptionKey(next.deviceId, next.threadId);
+    if (!key) return;
+    warmSubscriptions.current.delete(key);
+    warmSubscriptions.current.set(key, next);
+  }
+
+  function dropWarmSubscription(targetDevice: string, targetThread: string, unsubscribe = false) {
+    const key = warmSubscriptionKey(targetDevice, targetThread);
+    const existing = key ? warmSubscriptions.current.get(key) : null;
+    if (key) warmSubscriptions.current.delete(key);
+    if (unsubscribe && existing?.subscriptionId) void client.request("thread.unsubscribe", existing.deviceId, { subscriptionId: existing.subscriptionId });
+  }
+
+  function clearWarmSubscriptions(targetDevice = "", unsubscribe = false) {
+    for (const [key, existing] of warmSubscriptions.current) {
+      if (targetDevice && existing.deviceId !== targetDevice) continue;
+      warmSubscriptions.current.delete(key);
+      if (unsubscribe && existing.subscriptionId) void client.request("thread.unsubscribe", existing.deviceId, { subscriptionId: existing.subscriptionId });
+    }
+  }
+
+  function pruneWarmSubscriptions(keep: ReadonlySet<string>) {
+    for (const [key, existing] of warmSubscriptions.current) {
+      if (keep.has(key)) continue;
+      warmSubscriptions.current.delete(key);
+      void client.request("thread.unsubscribe", existing.deviceId, { subscriptionId: existing.subscriptionId });
+    }
   }
 
   function sameSubmissionTarget(submission: PendingSubmission): boolean {
@@ -473,6 +515,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const identity = historyCacheIdentity(current.deviceId, current.threadId);
     if (!identity) return;
     historyCache.current.set(identity, { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: current.view.thread });
+  }
+
+  function cacheWarmThread(next: ThreadView) {
+    const identity = historyCacheIdentity(next.deviceId, next.threadId);
+    const cached = identity ? historyCache.current.get(identity) : null;
+    if (!identity || !cached) return;
+    historyCache.current.set(identity, { ...cached, thread: next.thread });
   }
 
   function restoreCachedConversation(targetDevice: string, targetThread: string): ThreadView | null {
@@ -765,6 +814,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
       const previous = devicesRef.current.find(device => device.deviceId === candidate.deviceId);
       if (candidate.agentEpoch) observedAgentEpochs.current.set(candidate.deviceId, candidate.agentEpoch);
       if (previous?.agentEpoch && previous.agentEpoch !== candidate.agentEpoch) {
+        clearWarmSubscriptions(candidate.deviceId);
         historyCache.current.clearDevice(candidate.deviceId);
         threadListCache.current.clearDevice(candidate.deviceId);
         discardRestoredHistory(candidate.deviceId, selection.current.threadId);
@@ -888,6 +938,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const oldSubscription = expectedSubscription.current;
     const oldDevice = selection.current.deviceId;
     if (oldSubscription && oldDevice) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    dropWarmSubscription(oldDevice, selection.current.threadId);
     expectedSubscription.current = "";
     pendingSelect.current++;
     selection.current = { deviceId, threadId: "", view: null };
@@ -946,18 +997,25 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     const old = selection.current.view;
     const oldDevice = selection.current.deviceId;
     const oldSubscription = expectedSubscription.current;
+    if (old?.subscriptionId) retainWarmSubscription(old);
+    const targetKey = warmSubscriptionKey(targetDevice, id);
+    const oldKey = old?.subscriptionId ? warmSubscriptionKey(old.deviceId, old.threadId) : "";
+    pruneWarmSubscriptions(new Set([targetKey, oldKey].filter(Boolean)));
+    const warm = warmSubscription(targetDevice, id);
     expectedSubscription.current = "";
-    const cachedView = restoreCachedConversation(targetDevice, id) || (initialThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: initialThread } : null);
+    const restoredView = restoreCachedConversation(targetDevice, id);
+    const cachedView = warm || restoredView || (initialThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: initialThread } : null);
     selection.current = { deviceId: targetDevice, threadId: id, view: cachedView };
-    setThreadId(id); setView(cachedView); setSyncingView(true); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
-    if (!cachedView) resetHistory();
+    expectedSubscription.current = warm?.subscriptionId || "";
+    setThreadId(id); setView(cachedView); setSyncingView(!warm); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
+    if (!restoredView) resetHistory();
     if (!sameThread) {
       pendingSubmission.current = null;
       setScreenshots([]);
       setEditingQueueId("");
     }
-    if (oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
-    else if (old) void client.request("thread.unsubscribe", old.deviceId, { subscriptionId: old.subscriptionId });
+    if (warm) return;
+    if (oldSubscription && !old?.subscriptionId) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     let response = await client.request("thread.subscribe", targetDevice, { threadId: id, updateMode: "item-delta-v1" });
     if (epoch !== pendingSelect.current) {
       const staleID = response.data?.subscriptionId;
@@ -1011,8 +1069,17 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
   async function resync() {
     const current = selection.current;
     if (!current.threadId) return;
+    cacheCurrentHistory();
+    dropWarmSubscription(current.deviceId, current.threadId, true);
+    expectedSubscription.current = "";
+    if (current.view) {
+      const stale = { ...current.view, subscriptionId: "", streamId: "", seq: 0 };
+      selection.current.view = stale;
+      setView(stale);
+    }
+    setSyncingView(true);
     setNotice("");
-    await selectThread(current.threadId, current.deviceId, true);
+    await selectThread(current.threadId, current.deviceId, false);
   }
 
   useEffect(() => {
@@ -1030,9 +1097,10 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
       }
-      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setLocalThreadDraft(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
+      if (next !== "ready") { rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); warmSubscriptions.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setLocalThreadDraft(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current); }
     };
     client.onReady = (_epoch, sessionToken) => {
+      warmSubscriptions.current.clear();
       historyCache.current.clear();
       threadListCache.current.clear();
       observedAgentEpochs.current.clear();
@@ -1060,6 +1128,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         }
         updateDevicePresence(event);
         if (!event.agentOnline) {
+          clearWarmSubscriptions(event.deviceId);
           historyCache.current.clearDevice(event.deviceId);
           if (event.deviceId === selection.current.deviceId) {
             rememberReadingPosition();
@@ -1083,8 +1152,13 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         return;
       }
       const current = selection.current;
-      if (!belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current)) return;
+      const currentEvent = belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current);
+      const warm = warmSubscription(event.deviceId, event.threadId);
+      const warmEvent = Boolean(warm && belongsToSubscription(event, warm.deviceId, warm.threadId, warm.subscriptionId));
+      if (!currentEvent && !warmEvent) return;
       if (event.event === "thread.error") {
+        dropWarmSubscription(event.deviceId, event.threadId);
+        if (!currentEvent) return;
         if (!current.view || !current.view.subscriptionId || (current.view.subscriptionId === event.subscriptionId && current.view.streamId === event.streamId)) {
           if (event.code === "HISTORY_TOO_LARGE") {
             const identity = historyCacheIdentity(current.deviceId, current.threadId);
@@ -1098,7 +1172,7 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
           if (event.code === "RESYNC_REQUIRED") {
             expectedSubscription.current = "";
             setSyncingView(true);
-            void selectThread(current.threadId, current.deviceId, true);
+            void resync();
             return;
           }
           const identity = historyCacheIdentity(current.deviceId, current.threadId);
@@ -1113,18 +1187,27 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
         return;
       }
       if (event.event === "thread.snapshot") {
+        if (!currentEvent) return;
         if (current.view?.subscriptionId && current.view.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
+        if (!next) return;
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
         observeUnread(event.deviceId, [event.thread]);
+        retainWarmSubscription(next);
         selection.current.view = next; setView(next); setSyncingView(false); setReadOnlyHistory(false); setNotice(""); finishAgentRecovery(event.deviceId); reconcileSubmission(event.thread, event.deviceId, event.threadId);
       } else if (event.event === "thread.update") {
-        const next = applyThreadEvent(current.view, event);
-        if (!next) { void resync(); return; }
+        const next = applyThreadEvent(currentEvent ? current.view : warm, event);
+        if (!next) {
+          dropWarmSubscription(event.deviceId, event.threadId, true);
+          if (currentEvent) void resync();
+          return;
+        }
         observeUnread(event.deviceId, [next.thread]);
-        selection.current.view = next; setView(next);
+        retainWarmSubscription(next);
+        if (!currentEvent) cacheWarmThread(next);
+        else { selection.current.view = next; setView(next); }
         setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
-        reconcileSubmission(next.thread, event.deviceId, event.threadId);
+        if (currentEvent) reconcileSubmission(next.thread, event.deviceId, event.threadId);
       }
     };
     if (webAuthMode === "pin" && !phonePairing) {
@@ -1170,7 +1253,9 @@ export function App({ initialPairingCredential }: { initialPairingCredential?: s
     if (offlineDevice.current && offlineDevice.current !== deviceId) finishAgentRecovery(offlineDevice.current);
     if (oldDevice && oldDevice !== deviceId) { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); }
     const oldSubscription = expectedSubscription.current;
-    if (oldDevice && oldSubscription) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    const oldWarm = oldDevice ? warmSubscription(oldDevice, selection.current.threadId) : null;
+    if (oldDevice) clearWarmSubscriptions(oldDevice, true);
+    if (oldDevice && oldSubscription && !oldWarm) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
     const cached = threadListIdentity(deviceId, searchTerm);
