@@ -86,6 +86,14 @@ func (f *Follower) Updates() <-chan struct{} { return f.updates }
 func (f *Follower) Done() <-chan struct{}    { return f.c.Done() }
 func (f *Follower) Owner() string            { return f.o.owner }
 
+// StateBytes reports the size of the latest owner state frame. It powers
+// pipeline observability (spec 0086) without exposing content.
+func (f *Follower) StateBytes() int {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.o.summary.StateBytes
+}
+
 func (f *Follower) Current() (json.RawMessage, error) {
 	f.stateMu.Lock()
 	defer f.stateMu.Unlock()

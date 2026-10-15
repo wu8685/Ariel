@@ -318,6 +318,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "thread.subscribe":
 		loadCtx, cancel := context.WithTimeout(ctx, 28*time.Second)
 		defer cancel()
+		subscribeStart := time.Now()
 		var subID, streamID string
 		var thread map[string]any
 		var activate func()
@@ -330,10 +331,21 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		if err == nil {
 			data = map[string]any{"subscriptionId": subID, "streamId": streamID}
 			a.reply(ctx, id, method, data, nil)
-			_ = a.send(ctx, map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": a.deviceID, "threadId": p.ThreadID, "subscriptionId": subID, "streamId": streamID, "seq": 1, "thread": thread})
+			snapshot := map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": a.deviceID, "threadId": p.ThreadID, "subscriptionId": subID, "streamId": streamID, "seq": 1, "thread": thread}
+			sendErr := a.send(ctx, snapshot)
+			if body, marshalErr := json.Marshal(snapshot); marshalErr == nil {
+				// Record after the send so the phase reflects delivery, not
+				// just successful marshaling.
+				attrs := []any{"request", id, "snapshotBytes", len(body), "durationMs", time.Since(subscribeStart).Milliseconds(), "ok", sendErr == nil}
+				if sendErr != nil {
+					attrs = append(attrs, "error", requestErrorCode(method, sendErr))
+				}
+				logPhase("first-snapshot-send", p.ThreadID, attrs...)
+			}
 			activate()
 			return
 		}
+		logPhase("subscribe-failed", p.ThreadID, "request", id, "durationMs", time.Since(subscribeStart).Milliseconds(), "error", requestErrorCode(method, err))
 	case "thread.unsubscribe":
 		if !a.service.Unsubscribe(p.SubscriptionID) {
 			err = errors.New("INVALID_ARGUMENT")

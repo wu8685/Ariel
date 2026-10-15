@@ -2,6 +2,7 @@ package desktopagent
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"net"
 	"sync"
@@ -22,6 +23,62 @@ func acquireLargeFollower() (func(), error) {
 	}
 }
 
+// maxFrameHintEntries bounds the per-thread owner frame size hints (spec
+// 0086): a thread whose owner frame once overflowed the ordinary follower
+// skips the doomed small attempt on the next open instead of paying a
+// deterministic small→large retry. The store evicts least-recently-recorded
+// entries first; re-recording an existing hint refreshes its recency.
+const maxFrameHintEntries = 128
+
+var frameHints = struct {
+	sync.Mutex
+	large map[string]bool
+	order []string
+}{large: map[string]bool{}}
+
+func frameHintPrefersLarge(threadID string) bool {
+	frameHints.Lock()
+	defer frameHints.Unlock()
+	return frameHints.large[threadID]
+}
+
+func recordFrameHint(threadID string, large bool) {
+	frameHints.Lock()
+	defer frameHints.Unlock()
+	if !large {
+		delete(frameHints.large, threadID)
+		return
+	}
+	if _, exists := frameHints.large[threadID]; exists {
+		for i, id := range frameHints.order {
+			if id == threadID {
+				frameHints.order = append(frameHints.order[:i], frameHints.order[i+1:]...)
+				break
+			}
+		}
+	}
+	frameHints.order = append(frameHints.order, threadID)
+	frameHints.large[threadID] = true
+	for len(frameHints.order) > maxFrameHintEntries {
+		oldest := frameHints.order[0]
+		frameHints.order = frameHints.order[1:]
+		delete(frameHints.large, oldest)
+	}
+}
+
+func frameHintCount() int {
+	frameHints.Lock()
+	defer frameHints.Unlock()
+	return len(frameHints.large)
+}
+
+func resetFrameHints() {
+	frameHints.Lock()
+	defer frameHints.Unlock()
+	frameHints.large = map[string]bool{}
+	frameHints.order = nil
+}
+
 func productionLargeIPCOptions(threadID string) desktopipc.Options {
 	opts := productionIPCOptions(threadID)
 	opts.MaxFrameBytes = 64 << 20
@@ -33,7 +90,7 @@ func OpenFollower(ctx context.Context, socket, threadID, cwd string) (Live, erro
 	if socket == "" || cwd == "" || !threadIDPattern.MatchString(threadID) {
 		return nil, errors.New("invalid Desktop connection target")
 	}
-	return openFollowerWithFallback(func(large bool) (Live, error) {
+	return openFollowerWithFallback(threadID, func(large bool) (Live, error) {
 		opts := productionIPCOptions(threadID)
 		if large {
 			opts = productionLargeIPCOptions(threadID)
@@ -73,20 +130,32 @@ func (l *leasedLive) Close() error {
 	return err
 }
 
-func openFollowerWithFallback(open func(bool) (Live, error)) (Live, error) {
-	live, err := open(false)
-	if err == nil || !errors.Is(err, desktopipc.ErrFrameTooLarge) {
-		return live, err
+func openFollowerWithFallback(threadID string, open func(bool) (Live, error)) (Live, error) {
+	attempt := rand.Text()
+	if !frameHintPrefersLarge(threadID) {
+		live, err := open(false)
+		if err == nil {
+			recordFrameHint(threadID, false)
+			return live, nil
+		}
+		if !errors.Is(err, desktopipc.ErrFrameTooLarge) {
+			return nil, err
+		}
+		logPhase("small-frame-overflow", threadID, "attempt", attempt)
+	} else {
+		logPhase("large-follower-hint", threadID, "attempt", attempt)
 	}
 	release, err := acquireLargeFollower()
 	if err != nil {
 		return nil, err
 	}
-	live, err = open(true)
+	logPhase("large-follower-retry", threadID, "attempt", attempt)
+	live, err := open(true)
 	if err != nil {
 		release()
 		return nil, err
 	}
+	recordFrameHint(threadID, true)
 	return &leasedLive{Live: live, release: release}, nil
 }
 
@@ -106,6 +175,7 @@ func openFollower(ctx context.Context, socket, threadID, cwd string, opts deskto
 		return nil, err
 	}
 	var follower *desktopipc.Follower
+	discoveryStart := time.Now()
 	_, err = EnsureOwner(ctx, threadID, cwd, OwnerOps{
 		Discover: func(ctx context.Context, id string) (string, error) {
 			query, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -116,16 +186,31 @@ func openFollower(ctx context.Context, socket, threadID, cwd string, opts deskto
 			}
 			return reply.HandledByClientID, nil
 		},
-		Open: OpenThread,
+		Open: func(ctx context.Context, id string) error {
+			openStart := time.Now()
+			err := OpenThread(ctx, id)
+			logPhase("deep-link-open", id, "durationMs", millisSince(openStart), "ok", err == nil)
+			if err == nil {
+				discoveryStart = time.Now()
+			}
+			return err
+		},
 		Verify: func(ctx context.Context, id, owner, expectedCWD string) error {
+			followStart := time.Now()
 			var err error
 			follower, err = desktopipc.Follow(ctx, client, id, owner, expectedCWD)
+			attrs := []any{"durationMs", millisSince(followStart), "ok", err == nil}
+			if err == nil {
+				attrs = append(attrs, "frameBytes", follower.StateBytes())
+			}
+			logPhase("follower-initialize", id, attrs...)
 			return err
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
+	logPhase("owner-discovery", threadID, "durationMs", millisSince(discoveryStart))
 	keep = true
 	return follower, nil
 }

@@ -314,6 +314,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const expectedSubscription = useRef("");
   const blockedSelection = useRef("");
   const pendingSelect = useRef(0);
+  // Spec 0086 progressive open: the most recent thread.read fast path, so a
+  // failed or oversized owner sync can reuse it instead of re-requesting.
+  const fastReadCache = useRef<{ deviceId: string; threadId: string; epoch: number; settled: boolean; thread: Thread | null; result: Promise<Thread | null> } | null>(null);
   const deviceListGeneration = useRef(0);
   const threadListGeneration = useRef(0);
   const threadCreateGeneration = useRef(0);
@@ -999,12 +1002,28 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setListLoading(status === "ready" && !!deviceId);
   }
 
-  async function showReadOnlyHistory(id: string, targetDevice: string, epoch: number): Promise<boolean> {
-    const stored = await client.request("thread.read", targetDevice, { threadId: id });
+  async function showReadOnlyHistory(id: string, targetDevice: string, epoch: number, prefetched?: Thread | null): Promise<boolean> {
+    let thread: Thread | null | undefined = prefetched;
+    if (thread === undefined) {
+      const pending = fastReadCache.current;
+      if (pending && pending.deviceId === targetDevice && pending.threadId === id && !pending.settled) {
+        // A progressive fast path for this thread is still in flight; reuse it
+        // instead of issuing a duplicate thread.read.
+        thread = await pending.result;
+      } else {
+        const stored = await client.request("thread.read", targetDevice, { threadId: id });
+        if (epoch !== pendingSelect.current || selection.current.threadId !== id || selection.current.deviceId !== targetDevice) return false;
+        const fetched = stored.data?.thread as Thread | undefined;
+        if (stored.outcome !== "accepted" || fetched?.threadId !== id) {
+          setNotice(stored.outcome === "accepted" ? "历史页身份无法确认。" : errorText(stored));
+          return false;
+        }
+        thread = fetched;
+      }
+    }
     if (epoch !== pendingSelect.current || selection.current.threadId !== id || selection.current.deviceId !== targetDevice) return false;
-    const thread = stored.data?.thread as Thread | undefined;
-    if (stored.outcome !== "accepted" || thread?.threadId !== id) {
-      setNotice(stored.outcome === "accepted" ? "历史页身份无法确认。" : errorText(stored));
+    if (!thread || thread.threadId !== id) {
+      setNotice("历史页身份无法确认。");
       return false;
     }
     const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
@@ -1048,7 +1067,43 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     }
     if (warm) { persistView(warm); return; }
     if (oldSubscription && !old?.subscriptionId) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    // Progressive open (spec 0086): without any cached view, race the read-only
+    // fast path against the owner subscription so history renders within
+    // seconds instead of after a full owner cold load.
+    let progressiveInstalled = false;
+    let subscribeSettled = false;
+    if (!cachedView) {
+      const entry = {
+        deviceId: targetDevice,
+        threadId: id,
+        epoch,
+        settled: false,
+        thread: null as Thread | null,
+        result: Promise.resolve(null as Thread | null),
+      };
+      entry.result = client.request("thread.read", targetDevice, { threadId: id }).then(stored => {
+        const thread = stored.data?.thread as Thread | undefined;
+        entry.thread = stored.outcome === "accepted" && thread?.threadId === id ? thread : null;
+        entry.settled = true;
+        return entry.thread;
+      }).catch(() => { entry.settled = true; return null; });
+      fastReadCache.current = entry;
+      void entry.result.then(thread => {
+        if (!thread || subscribeSettled) return;
+        if (epoch !== pendingSelect.current || selection.current.threadId !== id || selection.current.deviceId !== targetDevice) return;
+        if (expectedSubscription.current || selection.current.view?.subscriptionId) return;
+        const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
+        const pendingView: ThreadView = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: readOnlyThread };
+        progressiveInstalled = true;
+        selection.current.view = pendingView;
+        setView(pendingView);
+        setSyncingView(true);
+      });
+    } else {
+      fastReadCache.current = null;
+    }
     let response = await client.request("thread.subscribe", targetDevice, { threadId: id, updateMode: "item-delta-v1" });
+    subscribeSettled = true;
     if (epoch !== pendingSelect.current) {
       const staleID = response.data?.subscriptionId;
       if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
@@ -1065,11 +1120,41 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       }
     }
     if (response.outcome !== "accepted") {
-      if (response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED") {
+      const entry = fastReadCache.current;
+      const fast = entry && entry.epoch === epoch && entry.deviceId === targetDevice && entry.threadId === id ? entry : null;
+      const oversized = response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED";
+      // Oversized owner frames need the persisted history before degrading, so
+      // wait for an in-flight fast path. That wait is bounded above by the
+      // Relay request timeout backing the fast read, so it cannot hang the
+      // recovery path indefinitely. Other failures must not block recovery
+      // loops on a read that may never resolve.
+      const fastThread = fast ? (fast.settled ? fast.thread : oversized ? await fast.result : null) : null;
+      if (epoch !== pendingSelect.current) return;
+      if (oversized) {
         setReadOnlyHistory(true);
-        if (await showReadOnlyHistory(id, targetDevice, epoch)) return;
+        if (progressiveInstalled) { setSyncingView(false); return; }
+        if (fast && !fastThread) {
+          // The fast path already failed; do not issue a duplicate read.
+          blockedSelection.current = `${targetDevice}\u0000${id}`;
+          setNotice("原 owner 状态无法确认，历史分页也未能加载。可稍后手动重新选择此会话。");
+          return;
+        }
+        if (await showReadOnlyHistory(id, targetDevice, epoch, fast ? fastThread : undefined)) return;
         blockedSelection.current = `${targetDevice}\u0000${id}`;
         setNotice("原 owner 状态无法确认，历史分页也未能加载。可稍后手动重新选择此会话。");
+        return;
+      }
+      if (progressiveInstalled || fastThread) {
+        // Owner sync failed but persisted history is already readable: keep it
+        // as an explicit read-only degradation instead of a blank page.
+        if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
+        if (!progressiveInstalled && fastThread && !(await showReadOnlyHistory(id, targetDevice, epoch, fastThread))) {
+          setNotice(errorText(response));
+          return;
+        }
+        setReadOnlyHistory(true);
+        setSyncingView(false);
+        setNotice(`${errorText(response)} 历史保持只读；重新选择会话可重试连接。`);
         return;
       }
       if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
@@ -1230,7 +1315,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       }
       if (event.event === "thread.snapshot") {
         if (!currentEvent) return;
-        if (current.view?.subscriptionId && current.view.deviceId === event.deviceId && current.view.threadId === event.threadId) rememberReadingPosition();
+        // Preserve the reading position across the snapshot handoff — including
+        // a progressive read-only view (spec 0086) that has no subscription yet.
+        // A resync may already hold an anchor captured while the position was
+        // still valid; never overwrite a pending anchor from the stale view.
+        if (current.view && current.view.deviceId === event.deviceId && current.view.threadId === event.threadId && !resumeReadingAnchor.current) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
         if (!next) return;
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
@@ -1542,8 +1631,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   useLayoutEffect(() => {
     const container = transcriptRef.current;
     if (!container || !view) return;
-    if (syncingView && !view.subscriptionId) return;
     const key = readingKey(view.deviceId, view.threadId);
+    // While a previously painted view resyncs, leave the scroll position alone
+    // until the fresh owner arrives. A progressive first-open view (spec 0086)
+    // has not been painted yet, so it still gets the initial latest-position.
+    if (syncingView && !view.subscriptionId && lastPaint.current.key === key) return;
     const marker = contentMarker(view.thread);
     const pending = pendingReadingAnchor.current;
     if (pending?.key === key) {

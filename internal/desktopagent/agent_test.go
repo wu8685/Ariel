@@ -53,6 +53,10 @@ func TestRealAgentRoutesHistoryAndSnapshotThroughRelay(t *testing.T) {
 	s := NewService(pagedHistory{}, func(context.Context, string, string) (Live, error) {
 		return live, nil
 	})
+	// Spec 0086 keeps the follower warm after the last Web subscription
+	// disappears; use a short grace so this test still observes the eventual
+	// close once the Web side disconnects.
+	s.idleGrace = 50 * time.Millisecond
 	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -537,6 +537,9 @@ func TestServiceBoundsControllersAndRetiresIdleFollower(t *testing.T) {
 		}
 		return live, nil
 	})
+	// Spec 0086 warm grace: unsubscribing no longer closes the follower
+	// immediately; capacity eviction still must.
+	s.idleGrace = time.Hour
 	defer s.Close()
 	var subscriptions []string
 	for i := range 64 {
@@ -555,11 +558,17 @@ func TestServiceBoundsControllersAndRetiresIdleFollower(t *testing.T) {
 	first.mu.Lock()
 	closed := first.closed
 	first.mu.Unlock()
-	if !closed {
-		t.Fatal("idle follower remained open")
+	if closed {
+		t.Fatal("warm-grace follower closed before capacity eviction")
 	}
 	if _, _, _, _, err := s.Subscribe(context.Background(), "thread-after-retire", func(map[string]any) {}); err != nil {
 		t.Fatalf("idle controller was not evicted: %v", err)
+	}
+	first.mu.Lock()
+	closed = first.closed
+	first.mu.Unlock()
+	if !closed {
+		t.Fatal("capacity eviction left the idle follower open")
 	}
 }
 

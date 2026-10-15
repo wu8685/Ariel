@@ -644,6 +644,93 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("已可见内容")).toBeTruthy();
   });
 
+  it("shows persisted history while the owner sync is still in flight", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    const stored: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "历史先可见" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stored } }));
+    expect(await screen.findByText("历史先可见")).toBeTruthy();
+    expect(screen.getByText(/正在同步最新状态.*操作暂时禁用/)).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "尚未可发" } });
+    expect((screen.getByRole("button", { name: "正在同步会话，暂不可发送" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(requests("turn.start")).toHaveLength(0);
+    const fresh: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "历史先可见" }] }, { turnId: "live", status: "completed", items: [{ itemId: "live-item", role: "assistant", text: "实时已接管" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread: fresh }));
+    expect(await screen.findByText("实时已接管")).toBeTruthy();
+    expect(screen.getByText("历史先可见")).toBeTruthy();
+    expect(screen.queryByText(/正在同步最新状态/)).toBeNull();
+    expect(screen.queryByText(/历史只读/)).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "现在可发" } });
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(requests("thread.read")).toHaveLength(1);
+  });
+
+  it("keeps the progressively loaded history read-only when the owner sync fails", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    const stored: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "失败前已读到的历史" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stored } }));
+    expect(await screen.findByText("失败前已读到的历史")).toBeTruthy();
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
+    expect(screen.getByText("失败前已读到的历史")).toBeTruthy();
+    expect(await screen.findByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("重试");
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "do not send" } });
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(requests("turn.start")).toHaveLength(0);
+  });
+
+  it("ignores a late read fast path once the fresh owner snapshot arrived", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    const fresh: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "live", status: "completed", items: [{ itemId: "live-item", role: "assistant", text: "owner 实时内容" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread: fresh }));
+    expect(await screen.findByText("owner 实时内容")).toBeTruthy();
+    const stale: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "stale", status: "completed", items: [{ itemId: "stale-item", role: "assistant", text: "迟到的只读历史" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stale } }));
+    expect(screen.getByText("owner 实时内容")).toBeTruthy();
+    expect(screen.queryByText("迟到的只读历史")).toBeNull();
+    expect(screen.queryByText(/历史只读/)).toBeNull();
+  });
+
   it("automatically fills a segmented recent window without a tap", async () => {
     const recent: Thread = { ...fixtureThread, historyComplete: false, recentComplete: false, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "最新内容" }] }] };
     const { socket, requests } = await openFixture(recent);
