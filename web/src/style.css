@@ -393,6 +393,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .markdown-table-scroll th { background: #ffffff12; font-weight: 700; }
 .markdown-table-scroll tr:last-child td { border-bottom: 0; }
 .markdown-table-scroll :is(th, td):last-child { border-right: 0; }
+.mermaid-diagram { max-width: 100%; margin: .75em 0; overflow-x: auto; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-page); padding: 12px; outline: none; }
+.mermaid-diagram:focus-visible { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+.mermaid-diagram svg { display: block; width: max(100%, var(--mermaid-natural-width)) !important; min-width: 100%; max-width: none !important; height: auto; margin: 0 auto; font-family: Inter, "SF Pro Text", "PingFang SC", sans-serif; }
+.mermaid-loading { display: flex; align-items: center; gap: 8px; min-height: 54px; margin: .75em 0; padding: 12px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-page); color: var(--color-muted); font-size: 12px; }
+.mermaid-loading span { width: 14px; height: 14px; flex: none; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-accent); border-radius: 50%; animation: send-loading-spin .8s linear infinite; }
+.mermaid-fallback { margin: .75em 0; }
+.mermaid-fallback-note { margin-bottom: 6px; color: var(--color-muted); font-size: 11px; }
+.mermaid-fallback pre { margin: 0; }
 .markdown-image-placeholder { display: inline-block; max-width: 100%; padding: .12em .4em; border: 1px solid currentColor; border-radius: 5px; font-size: .9em; overflow-wrap: anywhere; }
 .markdown-unsafe-link { text-decoration: none; }
 .markdown-body .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -480,7 +488,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .send-button svg { width: 18px; height: 18px; }
 .send-loading-spinner { animation: send-loading-spin .8s linear infinite; }
 @keyframes send-loading-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .send-loading-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .send-loading-spinner, .mermaid-loading span { animation: none; } }
 .stop-button { display: grid; place-items: center; min-width: 36px; min-height: 36px; padding: 0; background: var(--color-warning-surface); color: var(--color-warning); border: 1px solid var(--color-warning-border); border-radius: 50%; }
 .stop-button svg { width: 18px; height: 18px; }
 .send-label, .stop-label { display: none; }

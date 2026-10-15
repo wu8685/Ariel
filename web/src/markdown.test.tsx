@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConversationMarkdown } from "./markdown";
+
+vi.mock("mermaid", () => ({ default: {
+  initialize: vi.fn(),
+  render: vi.fn(async (id: string) => ({ svg: `<svg xmlns="http://www.w3.org/2000/svg" id="${id}" viewBox="0 0 120 40"><text>diagram</text></svg>` })),
+} }));
 
 afterEach(cleanup);
 
@@ -84,5 +89,19 @@ describe("conversation Markdown projection", () => {
       const target = reference.getAttribute("href")?.slice(1);
       expect(target && document.getElementById(target)).toBeTruthy();
     }
+  });
+
+  it("renders fenced Mermaid as an accessible inline diagram", async () => {
+    render(<ConversationMarkdown text={"```mermaid\nflowchart LR\nA[开始] --> B[完成]\n```"} />);
+    const diagram = await screen.findByRole("img", { name: "Mermaid 图表" });
+    expect(diagram.querySelector("svg")).toBeTruthy();
+    expect(diagram.textContent).not.toContain("flowchart LR");
+  });
+
+  it("renders a bare Mermaid block while retaining prose after it", async () => {
+    const text = "flowchart TD\n    A[请求] --> B{有身份?}\n    B -- 是 --> C[进入 Controller]\n核心结论：\n后续正文仍然可读。";
+    render(<ConversationMarkdown text={text} />);
+    expect(await screen.findByRole("img", { name: "Mermaid 图表" })).toBeTruthy();
+    expect(document.querySelector(".markdown-body")?.textContent).toContain("核心结论：\n后续正文仍然可读。");
   });
 });

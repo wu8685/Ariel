@@ -1,6 +1,8 @@
-import { Component, useId, type ReactNode } from "react";
+import { Component, isValidElement, useId, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MermaidDiagram } from "./MermaidDiagram";
+import { projectBareMermaidBlocks } from "./mermaid-blocks";
 
 const maxMarkdownCodeUnits = 256 * 1024;
 const markdownPlugins = [remarkGfm];
@@ -32,6 +34,13 @@ const components: Components = {
   table({ children }) {
     return <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="表格，可横向滚动"><table>{children}</table></div>;
   },
+  pre({ children }) {
+    if (isValidElement<{ className?: string; children?: ReactNode }>(children) && /(?:^|\s)language-mermaid(?:\s|$)/u.test(children.props.className || "")) {
+      const source = String(children.props.children || "").replace(/\n$/u, "");
+      return <MermaidDiagram source={source} />;
+    }
+    return <pre>{children}</pre>;
+  },
 };
 
 function PlainFallback({ text, notice }: { text: string; notice: string }) {
@@ -57,6 +66,6 @@ export function ConversationMarkdown({ text, renderImage }: { text: string; rend
   if (text.length > maxMarkdownCodeUnits) return <PlainFallback text={text} notice="内容过长，暂以纯文本显示。" />;
   const imageComponents: Components = renderImage ? { ...components, img({ src, alt }) { return renderImage(src || "", alt || "") || <span className="markdown-image-placeholder" role="img" aria-label={alt ? `图片：${alt}` : "图片"}>{alt ? `图片：${alt}` : "图片"}</span>; } } : components;
   return <MarkdownErrorBoundary text={text}>
-    <div className="markdown-body"><Markdown remarkPlugins={markdownPlugins} remarkRehypeOptions={{ clobberPrefix: `ariel-${messageID}-` }} skipHtml urlTransform={(url, key, node) => node.tagName === "img" && key === "src" ? url : safeHref(url) || ""} components={imageComponents}>{text}</Markdown></div>
+    <div className="markdown-body"><Markdown remarkPlugins={markdownPlugins} remarkRehypeOptions={{ clobberPrefix: `ariel-${messageID}-` }} skipHtml urlTransform={(url, key, node) => node.tagName === "img" && key === "src" ? url : safeHref(url) || ""} components={imageComponents}>{projectBareMermaidBlocks(text)}</Markdown></div>
   </MarkdownErrorBoundary>;
 }
