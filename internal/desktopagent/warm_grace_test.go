@@ -203,6 +203,50 @@ func TestServiceWarmRetireSkipsCloseWhileResubscribed(t *testing.T) {
 	}
 }
 
+// Regression for PR #6 review: reattaching during the warm grace must cancel
+// the pending retire timer, so a later unsubscribe gets a full fresh grace
+// instead of the remainder of the first one. Spec 0086 starts the 90 seconds
+// when the last subscription disappears — measured from the LAST unsubscribe.
+func TestServiceResubscribeRearmsFullWarmGrace(t *testing.T) {
+	live := &fakeLive{updates: make(chan struct{}, 1)}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	s.idleGrace = 200 * time.Millisecond
+	defer s.Close()
+	id, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	if !s.Unsubscribe(id) {
+		t.Fatal("unsubscribe failed")
+	}
+	// Reattach halfway through the first grace.
+	time.Sleep(s.idleGrace / 2)
+	again, _, _, activateAgain, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateAgain()
+	time.Sleep(s.idleGrace / 4)
+	if !s.Unsubscribe(again) {
+		t.Fatal("second unsubscribe failed")
+	}
+	// The timer armed by the first unsubscribe fires around now. The follower
+	// must survive on the fresh grace armed by the second unsubscribe.
+	time.Sleep(s.idleGrace / 2)
+	if liveClosed(live) {
+		t.Fatal("follower retired on the first unsubscribe's timer instead of a full fresh grace after the second unsubscribe")
+	}
+	// And it must still retire once that fresh grace expires.
+	deadline := time.Now().Add(2 * time.Second)
+	for !liveClosed(live) {
+		if time.Now().After(deadline) {
+			t.Fatal("follower never retired after the second unsubscribe's grace expired")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestServiceInitialSnapshotBoundsRecentWindow(t *testing.T) {
 	turns := make([]string, 0, 6)
 	for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6"} {

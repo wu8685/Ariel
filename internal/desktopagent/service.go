@@ -1217,6 +1217,9 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 		return "", "", nil, nil, err
 	}
 	logPhase("owner-attach", id, "durationMs", millisSince(attachStart), "ok", true)
+	// A reattach during the warm grace cancels the pending retire timer, so
+	// the grace restarts from the LAST unsubscribe (spec 0086), not the first.
+	stopWarmRetireLocked(c)
 	normalizeStart := time.Now()
 	thread, _, err := currentLiveThread(c, c.live)
 	if err != nil {

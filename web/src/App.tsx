@@ -1124,7 +1124,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       const fast = entry && entry.epoch === epoch && entry.deviceId === targetDevice && entry.threadId === id ? entry : null;
       const oversized = response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED";
       // Oversized owner frames need the persisted history before degrading, so
-      // wait for an in-flight fast path. Other failures must not block recovery
+      // wait for an in-flight fast path. That wait is bounded above by the
+      // Relay request timeout backing the fast read, so it cannot hang the
+      // recovery path indefinitely. Other failures must not block recovery
       // loops on a read that may never resolve.
       const fastThread = fast ? (fast.settled ? fast.thread : oversized ? await fast.result : null) : null;
       if (epoch !== pendingSelect.current) return;

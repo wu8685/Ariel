@@ -26,7 +26,8 @@ func acquireLargeFollower() (func(), error) {
 // maxFrameHintEntries bounds the per-thread owner frame size hints (spec
 // 0086): a thread whose owner frame once overflowed the ordinary follower
 // skips the doomed small attempt on the next open instead of paying a
-// deterministic small→large retry.
+// deterministic small→large retry. The store evicts least-recently-recorded
+// entries first; re-recording an existing hint refreshes its recency.
 const maxFrameHintEntries = 128
 
 var frameHints = struct {
@@ -48,9 +49,15 @@ func recordFrameHint(threadID string, large bool) {
 		delete(frameHints.large, threadID)
 		return
 	}
-	if _, exists := frameHints.large[threadID]; !exists {
-		frameHints.order = append(frameHints.order, threadID)
+	if _, exists := frameHints.large[threadID]; exists {
+		for i, id := range frameHints.order {
+			if id == threadID {
+				frameHints.order = append(frameHints.order[:i], frameHints.order[i+1:]...)
+				break
+			}
+		}
 	}
+	frameHints.order = append(frameHints.order, threadID)
 	frameHints.large[threadID] = true
 	for len(frameHints.order) > maxFrameHintEntries {
 		oldest := frameHints.order[0]

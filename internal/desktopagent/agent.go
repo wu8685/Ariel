@@ -332,10 +332,16 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 			data = map[string]any{"subscriptionId": subID, "streamId": streamID}
 			a.reply(ctx, id, method, data, nil)
 			snapshot := map[string]any{"type": "event", "v": 1, "event": "thread.snapshot", "deviceId": a.deviceID, "threadId": p.ThreadID, "subscriptionId": subID, "streamId": streamID, "seq": 1, "thread": thread}
+			sendErr := a.send(ctx, snapshot)
 			if body, marshalErr := json.Marshal(snapshot); marshalErr == nil {
-				logPhase("first-snapshot-send", p.ThreadID, "request", id, "snapshotBytes", len(body), "durationMs", time.Since(subscribeStart).Milliseconds())
+				// Record after the send so the phase reflects delivery, not
+				// just successful marshaling.
+				attrs := []any{"request", id, "snapshotBytes", len(body), "durationMs", time.Since(subscribeStart).Milliseconds(), "ok", sendErr == nil}
+				if sendErr != nil {
+					attrs = append(attrs, "error", requestErrorCode(method, sendErr))
+				}
+				logPhase("first-snapshot-send", p.ThreadID, attrs...)
 			}
-			_ = a.send(ctx, snapshot)
 			activate()
 			return
 		}

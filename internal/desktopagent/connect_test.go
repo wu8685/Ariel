@@ -197,3 +197,26 @@ func TestFrameHintStoreIsBounded(t *testing.T) {
 		t.Fatalf("frame hint store unbounded: %d", got)
 	}
 }
+
+// Spec 0086 calls the hint store an LRU: re-recording an existing hint must
+// refresh its recency so a still-active large thread is not evicted by newer
+// one-off entries.
+func TestFrameHintReRecordRefreshesRecency(t *testing.T) {
+	resetFrameHints()
+	key := func(i int) string { return fmt.Sprintf("hint-lru-%d", i) }
+	for i := 0; i < maxFrameHintEntries; i++ {
+		recordFrameHint(key(i), true)
+	}
+	// Touch the oldest entry; the next insert must evict key(1), not key(0).
+	recordFrameHint(key(0), true)
+	recordFrameHint(key(maxFrameHintEntries), true)
+	if !frameHintPrefersLarge(key(0)) {
+		t.Fatal("recently re-recorded hint was evicted")
+	}
+	if frameHintPrefersLarge(key(1)) {
+		t.Fatal("untouched hint survived past a fresh insert")
+	}
+	if got := frameHintCount(); got > maxFrameHintEntries {
+		t.Fatalf("frame hint store unbounded: %d", got)
+	}
+}
