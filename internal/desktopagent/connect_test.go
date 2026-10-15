@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -61,8 +62,9 @@ func TestLargeFollowerHas64MiBBoundAndOneProcessLease(t *testing.T) {
 }
 
 func TestLargeFollowerFallbackRetriesOnlyFrameOverflowAndReleasesLease(t *testing.T) {
+	resetFrameHints()
 	attempts := []bool{}
-	live, err := openFollowerWithFallback(func(large bool) (Live, error) {
+	live, err := openFollowerWithFallback("hint-retry", func(large bool) (Live, error) {
 		attempts = append(attempts, large)
 		if !large {
 			return nil, desktopipc.ErrFrameTooLarge
@@ -84,7 +86,7 @@ func TestLargeFollowerFallbackRetriesOnlyFrameOverflowAndReleasesLease(t *testin
 	}
 	release()
 	attempts = nil
-	_, err = openFollowerWithFallback(func(large bool) (Live, error) {
+	_, err = openFollowerWithFallback("hint-protocol", func(large bool) (Live, error) {
 		attempts = append(attempts, large)
 		return nil, desktopipc.ErrProtocol
 	})
@@ -94,8 +96,9 @@ func TestLargeFollowerFallbackRetriesOnlyFrameOverflowAndReleasesLease(t *testin
 }
 
 func TestLargeFollowerFallbackPreservesOwnerMutationCapabilities(t *testing.T) {
+	resetFrameHints()
 	capable := &mutationCapableLive{fakeLive: &fakeLive{updates: make(chan struct{})}}
-	live, err := openFollowerWithFallback(func(large bool) (Live, error) {
+	live, err := openFollowerWithFallback("hint-capable", func(large bool) (Live, error) {
 		if !large {
 			return nil, desktopipc.ErrFrameTooLarge
 		}
@@ -122,5 +125,75 @@ func TestLargeFollowerFallbackPreservesOwnerMutationCapabilities(t *testing.T) {
 	}
 	if err := steerer.Steer(context.Background(), "turn", "queue", "client", "guide", nil); err != nil || !capable.steered {
 		t.Fatalf("large follower did not forward Steer: %v", err)
+	}
+}
+
+func TestFrameHintSkipsSmallFollowerForKnownLargeThread(t *testing.T) {
+	resetFrameHints()
+	first := []bool{}
+	live, err := openFollowerWithFallback("hint-large-thread", func(large bool) (Live, error) {
+		first = append(first, large)
+		if !large {
+			return nil, desktopipc.ErrFrameTooLarge
+		}
+		return &fakeLive{updates: make(chan struct{})}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0] || !first[1] {
+		t.Fatalf("cold open should try small then large: %v", first)
+	}
+	if err := live.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := []bool{}
+	live2, err := openFollowerWithFallback("hint-large-thread", func(large bool) (Live, error) {
+		second = append(second, large)
+		return &fakeLive{updates: make(chan struct{})}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live2.Close()
+	if len(second) != 1 || !second[0] {
+		t.Fatalf("known-large thread must skip the doomed small follower: %v", second)
+	}
+}
+
+func TestFrameHintNotSetAfterSmallFollowerSuccess(t *testing.T) {
+	resetFrameHints()
+	for i := 0; i < 2; i++ {
+		attempts := []bool{}
+		live, err := openFollowerWithFallback("hint-small-thread", func(large bool) (Live, error) {
+			attempts = append(attempts, large)
+			return &fakeLive{updates: make(chan struct{})}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(attempts) != 1 || attempts[0] {
+			t.Fatalf("small-only thread must keep using the ordinary follower: %v", attempts)
+		}
+		if err := live.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestFrameHintStoreIsBounded(t *testing.T) {
+	resetFrameHints()
+	key := func(i int) string { return fmt.Sprintf("hint-bound-%d", i) }
+	for i := 0; i < maxFrameHintEntries+16; i++ {
+		recordFrameHint(key(i), true)
+	}
+	if frameHintPrefersLarge(key(0)) {
+		t.Fatal("oldest frame hint was not evicted")
+	}
+	if !frameHintPrefersLarge(key(maxFrameHintEntries + 15)) {
+		t.Fatal("newest frame hint missing")
+	}
+	if got := frameHintCount(); got > maxFrameHintEntries {
+		t.Fatalf("frame hint store unbounded: %d", got)
 	}
 }

@@ -79,6 +79,12 @@ const maxRecentMessageIDs = 4096
 const maxPinnedThreads = 100
 const maxKnownThreadIDs = 1024
 
+// defaultIdleGrace keeps an idle live follower warm after the last Web
+// subscription disappears (spec 0086): mobile backgrounding and transient
+// WebSocket reconnects then reattach without a full owner cold load. The
+// capacity LRU, invalidation and Close still retire followers immediately.
+const defaultIdleGrace = 90 * time.Second
+
 func checkThreadSize(thread map[string]any) error {
 	return checkPayloadSize(thread, maxThreadPayloadBytes)
 }
@@ -124,6 +130,7 @@ type threadController struct {
 	subs           map[string]*subscription
 	leases         int
 	lastUsed       uint64
+	retireTimer    *time.Timer
 }
 type Service struct {
 	history          History
@@ -149,6 +156,7 @@ type Service struct {
 	bootstrapSlots   chan struct{}
 	closed           bool
 	placeholderGrace time.Duration
+	idleGrace        time.Duration
 	archiveUndo      []archiveUndoRecord
 }
 
@@ -168,7 +176,7 @@ func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Se
 	if len(queue) > 0 {
 		followUps = queue[0]
 	}
-	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, knownThreads: map[string]struct{}{}, metadataSlots: make(chan struct{}, 2), bootstrapSlots: make(chan struct{}, 2), placeholderGrace: 8 * time.Second}
+	return &Service{history: history, queue: followUps, attach: attach, queueCache: map[string]queueCacheEntry{}, threads: map[string]*threadController{}, seen: map[string]struct{}{}, knownThreads: map[string]struct{}{}, metadataSlots: make(chan struct{}, 2), bootstrapSlots: make(chan struct{}, 2), placeholderGrace: 8 * time.Second, idleGrace: defaultIdleGrace}
 }
 
 func (s *Service) QueueEnabled() bool { return s.queue != nil }
@@ -608,6 +616,7 @@ func (s *Service) controller(id string) (*threadController, error) {
 			victim.mu.Lock()
 			retired = victim.live
 			victim.live = nil
+			stopWarmRetireLocked(victim)
 			victim.mu.Unlock()
 			delete(s.threads, victim.id)
 		}
@@ -628,15 +637,41 @@ func (s *Service) releaseController(c *threadController) {
 	s.mu.Lock()
 	c.leases--
 	c.mu.Lock()
-	var retired Live
 	if c.leases == 0 && len(c.subs) == 0 && !c.bootstrapHold && !c.migrating {
-		retired = c.live
-		c.live = nil
+		s.armWarmRetireLocked(c)
 	}
 	c.mu.Unlock()
 	s.mu.Unlock()
-	if retired != nil {
-		_ = retired.Close()
+}
+
+// armWarmRetireLocked keeps an idle live follower warm for idleGrace instead
+// of closing it immediately (spec 0086). The caller must hold c.mu. Capacity
+// eviction, invalidation and Close still close followers immediately; only
+// the last-subscription-disappeared path goes through the grace.
+func (s *Service) armWarmRetireLocked(c *threadController) {
+	if c.live == nil || c.retireTimer != nil {
+		return
+	}
+	live := c.live
+	c.retireTimer = time.AfterFunc(s.idleGrace, func() { s.retireWarm(c, live) })
+}
+
+func (s *Service) retireWarm(c *threadController, live Live) {
+	c.mu.Lock()
+	c.retireTimer = nil
+	if c.live != live || c.leases != 0 || len(c.subs) != 0 || c.bootstrapHold || c.migrating {
+		c.mu.Unlock()
+		return
+	}
+	c.live = nil
+	c.mu.Unlock()
+	_ = live.Close()
+}
+
+func stopWarmRetireLocked(c *threadController) {
+	if c.retireTimer != nil {
+		c.retireTimer.Stop()
+		c.retireTimer = nil
 	}
 }
 
@@ -1139,6 +1174,7 @@ func (s *Service) invalidateLive(c *threadController, live Live, code string) {
 		return
 	}
 	c.live = nil
+	stopWarmRetireLocked(c)
 	out := make([]delivery, 0, len(c.subs))
 	for id, sub := range c.subs {
 		if sub.active {
@@ -1174,27 +1210,39 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 		c.mu.Unlock()
 		return "", "", nil, nil, errors.New("OVERLOADED")
 	}
+	attachStart := time.Now()
 	if err := s.ensureLive(ctx, c); err != nil {
+		logPhase("owner-attach", id, "durationMs", millisSince(attachStart), "ok", false, "error", requestErrorCode("thread.subscribe", err))
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
+	logPhase("owner-attach", id, "durationMs", millisSince(attachStart), "ok", true)
+	normalizeStart := time.Now()
 	thread, _, err := currentLiveThread(c, c.live)
 	if err != nil {
+		logPhase("normalize", id, "durationMs", millisSince(normalizeStart), "ok", false, "error", requestErrorCode("thread.subscribe", err))
 		c.mu.Unlock()
 		return "", "", nil, nil, desktopipc.ErrNativeStateUncertain
 	}
 	if err := s.boundLiveThread(ctx, thread); err != nil {
+		logPhase("normalize", id, "durationMs", millisSince(normalizeStart), "ok", false, "error", requestErrorCode("thread.subscribe", err))
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
+	logPhase("normalize", id, "durationMs", millisSince(normalizeStart), "ok", true)
+	queueStart := time.Now()
 	if err := s.attachQueue(ctx, thread); err != nil {
 		c.mu.Unlock()
 		return "", "", nil, nil, err
+	}
+	if s.queue != nil {
+		logPhase("queue-attach", id, "durationMs", millisSince(queueStart), "ok", true)
 	}
 	if err := checkThreadSize(thread); err != nil {
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
+	logPhase("first-snapshot", id, "durationMs", millisSince(attachStart), "ok", true)
 	sub := &subscription{id: "desktop-sub-" + rand.Text(), streamID: "desktop-stream-" + rand.Text(), seq: 1, updateMode: updateMode, baseline: thread, emit: emit}
 	c.subs[sub.id] = sub
 	c.mu.Unlock()
@@ -1271,16 +1319,11 @@ func (s *Service) Unsubscribe(id string) bool {
 func (s *Service) retireIdle(c *threadController) {
 	s.mu.Lock()
 	c.mu.Lock()
-	var retired Live
 	if c.leases == 0 && len(c.subs) == 0 && !c.bootstrapHold && !c.migrating {
-		retired = c.live
-		c.live = nil
+		s.armWarmRetireLocked(c)
 	}
 	c.mu.Unlock()
 	s.mu.Unlock()
-	if retired != nil {
-		_ = retired.Close()
-	}
 }
 
 func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (string, error) {
@@ -1709,6 +1752,7 @@ func (s *Service) Close() {
 	s.mu.Unlock()
 	for _, c := range controllers {
 		c.mu.Lock()
+		stopWarmRetireLocked(c)
 		if c.live != nil {
 			_ = c.live.Close()
 		}

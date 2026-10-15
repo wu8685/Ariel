@@ -48,6 +48,9 @@ func TestFollowerReceivesSnapshotAndRejectsBusyStart(t *testing.T) {
 	if err != nil || len(state) == 0 {
 		t.Fatalf("state: %s %v", state, err)
 	}
+	if got, want := f.StateBytes(), len(state); got != want {
+		t.Fatalf("StateBytes = %d, want latest frame size %d", got, want)
+	}
 	if _, err := StartProductionTurn(ctx, &recordingOwner{}, "owner", "thread", "/fixture", state, "id", "hello"); err != ErrTurnBusy {
 		t.Fatalf("busy: %v", err)
 	}
