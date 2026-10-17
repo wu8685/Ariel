@@ -1,6 +1,6 @@
 # 0089：Chilling 文件上下文前端与可选接入
 
-- 状态：Approved（用户于 2026-10-17 确认前后端分离方案）
+- 状态：Implemented（2026-10-17；用户已完成实际使用验收）
 - Ariel 范围：Web UI、feature flag、能力发现、协议与透明转发、既有 Codex owner 发送。
 - 后端归属：本机部署的 Chilling；详见 Chilling `docs/specs/0002-ariel-file-context-backend.md`。
 - 不涉及：Ariel 读取本机文件、解析 Codex 私有文件接口、实现路径安全规则、持久化文件正文或在 Relay 上运行 Chilling。

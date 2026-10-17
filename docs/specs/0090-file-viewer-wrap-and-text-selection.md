@@ -1,6 +1,6 @@
 # 0090 文件查看器导航、双视图与片段引用
 
-- 状态：Approved（用户于 2026-10-17 确认）
+- 状态：Implemented（2026-10-17；用户已完成实际使用验收）
 - 日期：2026-10-17
 - 影响范围：Ariel Web
 - 前置规格：`0089-turn-file-links-and-selection-context.md`
