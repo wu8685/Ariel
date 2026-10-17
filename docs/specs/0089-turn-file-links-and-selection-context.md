@@ -72,6 +72,8 @@ chillingFileContext: boolean
 | `file.context.changes` | 批量读取当前已展示 turn 的修改文件 | `threadId`, `turnIds[]` |
 | `file.context.read` | 按需打开一个已验证的修改文件 | `threadId`, `turnId`, `itemId`, `path`, 可选 revalidate metadata |
 
+`file.context.changes` 是会话打开后的可选增强：单个 change 不在 thread 权威 cwd 内或无法安全归一化时，backend 省略该项；整批摘要失败时 Web 不展示全局错误，也不得把已经打开的会话降级。用户主动点击文件后的 `read`／`prepare` 错误仍明确展示。
+
 现有 `turn.start`、queue 与 steer 输入增加可选 `fileContexts[]`，每项包含 Chilling 所需的引用来源、路径、行号、文件摘要和选中文本。Desktop Agent 先调用 Chilling 的 prepare；成功后只把 Chilling 返回的 canonical context envelope 交给现有 owner 发送。
 
 协议限制：

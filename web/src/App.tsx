@@ -417,7 +417,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		for (const turn of pending) fileChangeRequests.current.add(`${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turn.turnId}`);
 		void client.request("file.context.changes", deviceId, { threadId:view.threadId, turnIds:pending.map(turn=>turn.turnId) }).then(response => {
 			if (selection.current.deviceId !== deviceId || selection.current.threadId !== view.threadId) return;
-			if (response.outcome !== "accepted" || !Array.isArray(response.data?.turns)) { setNotice(errorText(response)); return; }
+			if (response.outcome !== "accepted" || !Array.isArray(response.data?.turns)) {
+				const unavailable = Object.fromEntries(pending.map(turn=>[`${view.threadId}\u0000${turn.turnId}`,[] as FileChange[]]));
+				setFileChanges(current=>({...current,...unavailable}));
+				return;
+			}
 			const next: Record<string,FileChange[]> = {};
 			for (const raw of response.data.turns as unknown[]) {
 				if (!raw || typeof raw !== "object") continue;

@@ -46,3 +46,29 @@ test("mobile opens a changed file and adds an exact quote to the next message", 
 	expect(box?.width).toBeLessThan(900);
 	expect(box?.x).toBeGreaterThan(400);
 });
+
+test("a rejected optional file summary never interrupts opening the conversation", async ({ page }) => {
+  await page.route("**/", async route => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace("__ARIEL_CHILLING_FILE_CONTEXT__", "true");
+    await route.fulfill({ response, body });
+  });
+  await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
+  await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
+    const message=JSON.parse(String(raw));
+    if(message.type==="hello"){socket.send(JSON.stringify({type:"hello.ok",v:1,connectionId:"fc-error",relayEpoch:"fc-epoch",sessionToken}));return;}
+    if(message.type!=="request") return;
+    let data:Record<string,unknown>={};
+    if(message.method==="device.list") data={devices:[{deviceId:"mac",deviceName:"File Mac",agentOnline:true,codexReady:true,agentEpoch:"fc-agent",capabilities:{autoLoad:true,send:true,chillingFileContext:true}}]};
+    if(message.method==="thread.list") data={threads:[thread],nextCursor:""};
+    if(message.method==="thread.subscribe") data={subscriptionId:"sub",streamId:"stream"};
+    if(message.method==="file.context.changes") { socket.send(JSON.stringify({type:"response",v:1,requestId:message.requestId,outcome:"rejected",error:{code:"PATH_NOT_ALLOWED",message:"PATH_NOT_ALLOWED"}})); return; }
+    socket.send(JSON.stringify({type:"response",v:1,requestId:message.requestId,outcome:"accepted",data}));
+    if(message.method==="thread.subscribe") socket.send(JSON.stringify({type:"event",v:1,event:"thread.snapshot",deviceId:"mac",threadId:thread.threadId,subscriptionId:"sub",streamId:"stream",seq:1,thread}));
+  }));
+  await page.goto("/");
+  await page.getByRole("button",{name:"展开项目 file-context，/tmp/file-context"}).click();
+  await page.getByText(thread.title).click();
+  await expect(page.getByText("我更新了文件。")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
