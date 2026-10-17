@@ -10,6 +10,7 @@ import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } fr
 import { DurableHistoryCache } from "./durable-history-cache";
 import { BrowserThreadListCache, type ThreadListCacheIdentity } from "./thread-list-cache";
 import { BrowserThreadUnreadStore } from "./thread-unread";
+import { ComposerDraftStore, composerDraftKey, emptyComposerDraft, type ComposerDraftIdentity, type ComposerDraftSnapshot } from "./composer-drafts";
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
@@ -46,7 +47,7 @@ type ThreadMenuState = { threadId: string; left: number; top: number };
 type ThreadLongPress = { threadId: string; pointerId: number; startX: number; startY: number; timer: number };
 type ArchiveUndoToast = { threadId: string; title: string; operationId: string };
 type RenameThreadDialog = { threadId: string; name: string };
-type LocalThreadDraft = { deviceId: string; agentEpoch: string; cwd: string };
+type LocalThreadDraft = { deviceId: string; agentEpoch: string; cwd: string; draftId: string };
 type WebAuthMode = "pin" | "passkey";
 type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
 
@@ -278,20 +279,21 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [draft, setDraft] = useState("");
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
 	const [fileQuotes, setFileQuotes] = useState<FileQuote[]>([]);
+	const [editingQueueId, setEditingQueueId] = useState("");
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
 	const [openFile, setOpenFile] = useState<FileView | null>(null);
 	const openFileGeneration = useRef(0);
 	const fileChangeRequests = useRef(new Set<string>());
 	const fileContentCache = useRef(new FileContentCache());
 	const fileContentCacheEpoch = useRef("");
-  const composerRevision = useRef(0);
-  const composerSnapshot = useRef({ draft, screenshots, fileQuotes });
-  const pendingSubmission = useRef<PendingSubmission | null>(null);
+  const composerSnapshot = useRef<ComposerDraftSnapshot>(emptyComposerDraft());
+  const composerDrafts = useRef(new ComposerDraftStore());
+  const activeComposerIdentity = useRef<ComposerDraftIdentity | null>(null);
+  const pendingSubmissions = useRef(new Map<string, PendingSubmission>());
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
   const [queueWorking, setQueueWorking] = useState("");
-  const [editingQueueId, setEditingQueueId] = useState("");
   const [queueMenuId, setQueueMenuId] = useState("");
   const [queueMenuPosition, setQueueMenuPosition] = useState({ left: 0, top: 0, above: false });
   const [threadMenu, setThreadMenu] = useState<ThreadMenuState | null>(null);
@@ -391,10 +393,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   });
 
   useEffect(() => {
-    if (composerSnapshot.current.draft === draft && composerSnapshot.current.screenshots === screenshots && composerSnapshot.current.fileQuotes === fileQuotes) return;
-    composerSnapshot.current = { draft, screenshots, fileQuotes };
-    composerRevision.current++;
-  }, [draft, screenshots, fileQuotes]);
+    const previous = composerSnapshot.current;
+    if (previous.draft === draft && previous.screenshots === screenshots && previous.fileQuotes === fileQuotes && previous.editingQueueId === editingQueueId) return;
+    const next = { draft, screenshots, fileQuotes, editingQueueId, revision: previous.revision + 1 };
+    composerSnapshot.current = next;
+    if (activeComposerIdentity.current) composerDrafts.current.set(activeComposerIdentity.current, next);
+  }, [draft, screenshots, fileQuotes, editingQueueId]);
 
 	useEffect(() => {
 		const epoch = deviceId ? `${deviceId}\u0000${device?.agentEpoch || ""}` : "";
@@ -505,6 +509,38 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     }
   }
 
+  function captureComposerSnapshot(): ComposerDraftSnapshot {
+    const previous = composerSnapshot.current;
+    if (previous.draft === draft && previous.screenshots === screenshots && previous.fileQuotes === fileQuotes && previous.editingQueueId === editingQueueId) return previous;
+    const next = { draft, screenshots, fileQuotes, editingQueueId, revision: previous.revision + 1 };
+    composerSnapshot.current = next;
+    return next;
+  }
+
+  function showComposerSnapshot(snapshot: ComposerDraftSnapshot) {
+    composerSnapshot.current = snapshot;
+    setDraft(snapshot.draft);
+    setScreenshots(snapshot.screenshots);
+    setFileQuotes(snapshot.fileQuotes);
+    setEditingQueueId(snapshot.editingQueueId);
+  }
+
+  function activateComposer(identity: ComposerDraftIdentity) {
+    const currentIdentity = activeComposerIdentity.current;
+    if (currentIdentity && composerDraftKey(currentIdentity) === composerDraftKey(identity)) return;
+    if (currentIdentity) composerDrafts.current.set(currentIdentity, captureComposerSnapshot());
+    const next = composerDrafts.current.get(identity) || emptyComposerDraft();
+    activeComposerIdentity.current = identity;
+    showComposerSnapshot(next);
+  }
+
+  function clearAllComposerDrafts() {
+    composerDrafts.current.clear();
+    pendingSubmissions.current.clear();
+    activeComposerIdentity.current = null;
+    showComposerSnapshot(emptyComposerDraft());
+  }
+
   function sameSubmissionTarget(submission: PendingSubmission): boolean {
     return selection.current.deviceId === submission.deviceId
       && selection.current.threadId === submission.threadId
@@ -512,22 +548,29 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }
 
   function clearSubmittedComposer(submission: PendingSubmission): boolean {
-    if (!sameSubmissionTarget(submission) || composerRevision.current !== submission.revision) return false;
-    setDraft("");
-    setScreenshots([]);
-		setFileQuotes([]);
-    if (submission.queueId) setEditingQueueId("");
-    return true;
+    const identity = { deviceId: submission.deviceId, threadId: submission.threadId };
+    const active = activeComposerIdentity.current;
+    if (active && composerDraftKey(active) === composerDraftKey(identity)) {
+      const current = composerSnapshot.current;
+      composerDrafts.current.set(identity, current);
+      if (current.revision !== submission.revision) return false;
+      const cleared = emptyComposerDraft(current.revision + 1);
+      composerDrafts.current.set(identity, cleared);
+      showComposerSnapshot(cleared);
+      return true;
+    }
+    return composerDrafts.current.clearIfRevision(identity, submission.revision);
   }
 
   function reconcileSubmission(thread: Thread, eventDeviceId: string, eventThreadId: string) {
-    const submission = pendingSubmission.current;
-    if (!submission?.clientMessageId || submission.deviceId !== eventDeviceId || submission.threadId !== eventThreadId || !sameSubmissionTarget(submission)) return;
-    const observed = thread.turns.some(turn => turn.items.some(item => item.role === "user" && item.clientMessageId === submission.clientMessageId))
-      || (thread.queuedMessages || []).some(item => item.clientMessageId === submission.clientMessageId);
-    if (!observed) return;
-    pendingSubmission.current = null;
-    if (clearSubmittedComposer(submission)) setNotice("消息已确认发送。");
+    for (const [clientMessageId, submission] of pendingSubmissions.current) {
+      if (submission.deviceId !== eventDeviceId || submission.threadId !== eventThreadId) continue;
+      const observed = thread.turns.some(turn => turn.items.some(item => item.role === "user" && item.clientMessageId === clientMessageId))
+        || (thread.queuedMessages || []).some(item => item.clientMessageId === clientMessageId);
+      if (!observed) continue;
+      pendingSubmissions.current.delete(clientMessageId);
+      if (clearSubmittedComposer(submission) && sameSubmissionTarget(submission)) setNotice("消息已确认发送。");
+    }
   }
 
   function resetHistory() {
@@ -805,7 +848,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
-    openFileGeneration.current++; setView(null); setThreadId(""); setDraft(""); setScreenshots([]); setFileQuotes([]); setOpenFile(null); resetHistory();
+    openFileGeneration.current++; setView(null); setThreadId(""); clearAllComposerDrafts(); setOpenFile(null); resetHistory();
     fileContentCache.current.clear(); fileContentCacheEpoch.current = "";
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
@@ -1057,9 +1100,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setSyncingView(false);
     setReadOnlyHistory(false);
     resetHistory();
-    setLocalThreadDraft({ deviceId, agentEpoch: agentEpochFor(deviceId), cwd });
-    setDraft("");
-    setScreenshots([]);
+    const draftId = `local:${newRequestID()}`;
+    setLocalThreadDraft({ deviceId, agentEpoch: agentEpochFor(deviceId), cwd, draftId });
+    activateComposer({ deviceId, threadId: draftId });
     setNotice("");
     setNewThreadOpen(false);
     setShowList(false);
@@ -1115,6 +1158,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (!targetDevice) return;
     if (cachePrevious) cacheCurrentHistory();
     const sameThread = selection.current.deviceId === targetDevice && selection.current.threadId === id;
+    if (!sameThread) activateComposer({ deviceId: targetDevice, threadId: id });
     if (sameThread) rememberReadingPosition();
     else { resumeReadingAnchor.current = null; lastTranscriptScrollTop.current = 0; restoreLatestChrome(); }
     pendingReadingAnchor.current = null;
@@ -1135,11 +1179,6 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     expectedSubscription.current = warm?.subscriptionId || "";
     setThreadId(id); setView(cachedView); setSyncingView(!warm); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!restoredView) resetHistory();
-    if (!sameThread) {
-      pendingSubmission.current = null;
-      setScreenshots([]);
-      setEditingQueueId("");
-    }
     if (warm) { persistView(warm); return; }
     if (oldSubscription && !old?.subscriptionId) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
     // Progressive open (spec 0086): without any cached view, race the read-only
@@ -1455,6 +1494,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }, [pairingInvite?.status, pairingInvite?.credential, pairingInvite?.expiresAt]);
 
   useLayoutEffect(() => {
+    if (activeComposerIdentity.current) composerDrafts.current.set(activeComposerIdentity.current, captureComposerSnapshot());
+    activeComposerIdentity.current = null;
+    showComposerSnapshot(emptyComposerDraft());
     pendingSelect.current++;
     threadListGeneration.current++;
     const oldDevice = selection.current.deviceId;
@@ -1470,8 +1512,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const cachedList = cached ? threadListCache.current.get(cached) : null;
     const cachedThreads = cachedList?.value.threads || [];
     setUnreadThreadIDs(cachedThreads.length && deviceId ? unreadStore.observe(deviceId, cachedThreads) : new Set());
-    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setLocalThreadDraft(null); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedThreads); setCursor(cachedList?.value.cursor || ""); setListError(""); setEditingQueueId(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
+    threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setLocalThreadDraft(null); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedThreads); setCursor(cachedList?.value.cursor || ""); setListError(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
+
+  useEffect(() => {
+    if (sessionExpired) clearAllComposerDrafts();
+  }, [sessionExpired]);
 
   useEffect(() => {
     const epoch = device?.agentEpoch || "";
@@ -1622,12 +1668,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }, [archiveUndoToast]);
 
   useEffect(() => {
-    if (editingQueueId && !queuedMessages.some(item => item.queueId === editingQueueId)) {
+    if (!syncingView && view && editingQueueId && !queuedMessages.some(item => item.queueId === editingQueueId && item.editable)) {
       setEditingQueueId("");
-      setDraft("");
-      setScreenshots([]);
+      setNotice("原排队消息已变化，请核对后重新发送。");
     }
-  }, [editingQueueId, queuedMessages]);
+  }, [editingQueueId, queuedMessages, syncingView, view]);
 
   useEffect(() => {
     if (!queueMenuId) return;
@@ -1824,7 +1869,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 	if (localThreadDraft) {
 		if (!deviceId || working || readOnlyHistory || !composerReady || (!draft.trim() && screenshots.length === 0)) return;
 		const local = localThreadDraft;
-		const revision = composerRevision.current;
+		const sourceSnapshot = captureComposerSnapshot();
+		const revision = sourceSnapshot.revision;
 		const text = draft;
 		const images = screenshots;
 		const clientMessageId = newRequestID();
@@ -1845,7 +1891,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 			return;
 		}
 		const created = candidate as Thread;
-		if (composerRevision.current === revision) { setDraft(""); setScreenshots([]); }
+		const currentSnapshot = composerSnapshot.current;
+		const temporaryIdentity = { deviceId: local.deviceId, threadId: local.draftId };
+		const createdIdentity = { deviceId: local.deviceId, threadId: created.threadId };
+		composerDrafts.current.set(createdIdentity, currentSnapshot.revision === revision ? emptyComposerDraft(currentSnapshot.revision + 1) : currentSnapshot);
+		composerDrafts.current.delete(temporaryIdentity);
+		activeComposerIdentity.current = null;
 		setLocalThreadDraft(null);
 		setThreads(current => [created, ...current.filter(thread => thread.threadId !== created.threadId)]);
 		await selectThread(created.threadId, local.deviceId, false, false, created);
@@ -1858,8 +1909,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const targetThread = view.threadId;
     const queueID = editingQueueId;
     const clientMessageId = queueID ? "" : newRequestID();
-    const submission: PendingSubmission = { deviceId: targetDevice, agentEpoch: agentEpochFor(targetDevice), threadId: targetThread, clientMessageId, revision: composerRevision.current, queueId: queueID };
-    pendingSubmission.current = submission;
+    const sourceSnapshot = captureComposerSnapshot();
+    composerDrafts.current.set({ deviceId: targetDevice, threadId: targetThread }, sourceSnapshot);
+    const submission: PendingSubmission = { deviceId: targetDevice, agentEpoch: agentEpochFor(targetDevice), threadId: targetThread, clientMessageId, revision: sourceSnapshot.revision, queueId: queueID };
+    if (clientMessageId) pendingSubmissions.current.set(clientMessageId, submission);
     setWorking(true); setNotice("");
     const content = { text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}), ...(!queueID && fileQuotes.length ? { fileContexts:fileQuotes } : {}) };
     const response = queueID
@@ -1871,11 +1924,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const queueMutation = !!queueID || (view.thread.runtime === "inProgress" && queueEnabled);
     const accepted = response.outcome === "accepted" && (!queueMutation || applyQueueResponse(response, targetDevice, targetThread));
     if (accepted) {
-      if (pendingSubmission.current === submission) pendingSubmission.current = null;
+      if (clientMessageId) pendingSubmissions.current.delete(clientMessageId);
       clearSubmittedComposer(submission);
       return;
     }
-    if (response.outcome !== "unknown" && pendingSubmission.current === submission) pendingSubmission.current = null;
+    if (response.outcome !== "unknown" && clientMessageId) pendingSubmissions.current.delete(clientMessageId);
     if (sameSubmissionTarget(submission)) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response));
   }
 
