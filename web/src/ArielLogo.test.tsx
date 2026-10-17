@@ -37,8 +37,8 @@ describe("ArielLogo", () => {
     logo = screen.getByRole("img", { name: "Ariel 彩色标" });
     expect(logo.getAttribute("data-variant")).toBe("color");
     expect(logo.querySelectorAll("img")).toHaveLength(1);
-    expect(logo.querySelector("source")).toBeNull();
-    expect(logo.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.color);
+    expect(logo.querySelector('source[type="image/webp"]')?.getAttribute("srcset")).toBe(arielLogoAssets.colorRuntimeWebP);
+    expect(logo.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.color512);
   });
 
   it("honors explicit string-size variant, tone, priority and custom class", () => {
@@ -51,6 +51,14 @@ describe("ArielLogo", () => {
     expect(image.getAttribute("src")).toBe(arielLogoAssets.white);
     expect(image.getAttribute("fetchpriority")).toBe("high");
     expect(image.getAttribute("loading")).toBe("eager");
+  });
+
+  it("uses a display-sized WebP with a 512px PNG fallback for the color runtime logo", () => {
+    const { container } = render(<ArielLogo size="clamp(128px, 12vw, 160px)" variant="color" priority decorative />);
+    const picture = container.querySelector("picture")!;
+    expect(picture.querySelector('source[type="image/webp"]')?.getAttribute("srcset")).toBe(arielLogoAssets.colorRuntimeWebP);
+    expect(picture.querySelector("img")?.getAttribute("src")).toBe(arielLogoAssets.color512);
+    expect(picture.querySelector("img")?.getAttribute("src")).not.toBe(arielLogoAssets.color);
   });
 
   it("selects the provided white micro asset without CSS recoloring", () => {

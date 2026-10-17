@@ -16,6 +16,7 @@ export interface ArielLogoProps {
 export const arielLogoAssets = {
   color: "/brand/ariel-logo-wind-messenger-color.png",
   color512: "/brand/ariel-logo-wind-messenger-color-512.png",
+  colorRuntimeWebP: "/brand/ariel-logo-wind-messenger-color-512.webp",
   ink: "/brand/ariel-logo-wind-messenger-ink.png",
   white: "/brand/ariel-logo-wind-messenger-white.png",
   microInk: "/brand/ariel-logo-wind-messenger-micro.svg",
@@ -61,7 +62,7 @@ export function ArielLogo({
   const candidates = sources(resolvedVariant);
   const autoTone = tone === "auto" && resolvedVariant !== "color";
   const resolvedTone = resolvedVariant === "color" ? "color" : tone;
-  const src = resolvedVariant === "color" ? candidates.light : tone === "white" ? candidates.dark : candidates.light;
+  const src = resolvedVariant === "color" ? arielLogoAssets.color512 : tone === "white" ? candidates.dark : candidates.light;
   const dimension = cssSize(size);
   const style = { width: dimension, height: dimension } as CSSProperties;
   const accessibility = decorative
@@ -75,6 +76,7 @@ export function ArielLogo({
     data-tone={resolvedTone}
     style={style}
   >
+    {resolvedVariant === "color" && <source type="image/webp" srcSet={arielLogoAssets.colorRuntimeWebP} />}
     {autoTone && <source media="(prefers-color-scheme: dark)" srcSet={candidates.dark} />}
     <img
       src={src}

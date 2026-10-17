@@ -63,6 +63,44 @@ func TestHTMLIsNotCachedAcrossWebBuilds(t *testing.T) {
 	}
 }
 
+func TestStaticAssetsUseBoundedPublicCaching(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>Ariel</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "assets"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "brand"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "assets", "index-abc123.js"), []byte("app"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "brand", "logo.webp"), []byte("logo"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := configFrom("secret", "012345", "http://localhost:8080", dir, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := buildHandler(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct{ path, want string }{
+		{"/assets/index-abc123.js", "public, max-age=31536000, immutable"},
+		{"/brand/logo.webp", "public, max-age=604800"},
+	}
+	for _, test := range tests {
+		r := httptest.NewRecorder()
+		handler.ServeHTTP(r, httptest.NewRequest("GET", test.path, nil))
+		if r.Code != http.StatusOK || r.Header().Get("Cache-Control") != test.want {
+			t.Errorf("%s: status=%d Cache-Control=%q, want %q", test.path, r.Code, r.Header().Get("Cache-Control"), test.want)
+		}
+	}
+}
+
 func TestConfigurationRequiresSixASCIIDigitWebPIN(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0644); err != nil {

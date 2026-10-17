@@ -153,6 +153,11 @@ func buildHandler(cfg config) (http.Handler, error) {
 			_, _ = w.Write([]byte(html))
 			return
 		}
+		if strings.HasPrefix(req.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else if strings.HasPrefix(req.URL.Path, "/brand/") {
+			w.Header().Set("Cache-Control", "public, max-age=604800")
+		}
 		files.ServeHTTP(w, req)
 	}))
 	return mux, nil

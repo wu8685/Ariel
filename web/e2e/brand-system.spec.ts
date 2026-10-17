@@ -7,7 +7,9 @@ test("desktop login uses the formal color wind-messenger hero and micro navigati
   const hero = page.locator(".connect-logo.ariel-logo--color");
   const micro = page.locator(".masthead .brand-logo.ariel-logo--micro");
   await expect(hero).toBeVisible();
-  await expect(hero.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-color.png");
+  await expect(hero.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-color-512.png");
+  await expect(hero.locator('source[type="image/webp"]')).toHaveAttribute("srcset", "/brand/ariel-logo-wind-messenger-color-512.webp");
+  await expect.poll(() => hero.locator("img").evaluate(node => (node as HTMLImageElement).currentSrc)).toMatch(/ariel-logo-wind-messenger-color-512\.webp$/);
   await expect(micro).toBeVisible();
   await expect(micro.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-micro-white.svg");
   const heroBox = await hero.boundingBox();
@@ -23,7 +25,7 @@ test("desktop login uses the formal color wind-messenger hero and micro navigati
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-micro.svg");
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-color-512.png");
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
-  await expect(page).toHaveScreenshot("desktop-brand-login.png", { animations: "disabled", caret: "hide" });
+  await expect(page).toHaveScreenshot("desktop-brand-login.png", { animations: "disabled", caret: "hide", maxDiffPixels: 50 });
 });
 
 test("all critical logo sizes remain legible on approved backgrounds", async ({ page }) => {

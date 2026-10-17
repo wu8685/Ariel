@@ -25,12 +25,13 @@ Ariel 的名称来自莎士比亚《暴风雨》中的空气精灵。他替 Pros
 | --- | --- | --- | --- |
 | Full-color master | `web/public/brand/ariel-logo-wind-messenger-color.png` | `≥ 320 px` | README hero, website hero, launch art, social visual |
 | Full-color compact PNG | `web/public/brand/ariel-logo-wind-messenger-color-512.png` | `≥ 320 px` | avatar source, social and documentation use |
+| Full-color runtime WebP | `web/public/brand/ariel-logo-wind-messenger-color-512.webp` | `128–319 px` | bandwidth-efficient Web login and product brand blocks |
 | Deep-ink monochrome | `web/public/brand/ariel-logo-wind-messenger-ink.png` | `128–319 px` | light backgrounds, print, docs, lockups |
 | Reverse monochrome | `web/public/brand/ariel-logo-wind-messenger-white.png` | `128–319 px` | dark product surfaces and presentations |
 | Deep-ink micro mark | `web/public/brand/ariel-logo-wind-messenger-micro.svg` | `16–127 px` | favicon, navigation, compact status surfaces |
 | Reverse micro mark | `web/public/brand/ariel-logo-wind-messenger-micro-white.svg` | `16–127 px` | dark navigation and compact dark surfaces |
 
-Only the six repository assets listed above are approved for runtime use. Rejected or intermediate exploration files are not copied into this repository.
+Only the repository assets listed above are approved for brand or runtime use. Rejected or intermediate exploration files are not copied into this repository.
 
 ## Core tokens
 
@@ -118,7 +119,8 @@ Use the provided SVGs. Do not redraw the micro mark from the full-color PNG and 
 | README header / website hero | `ariel-logo-wind-messenger-color.png` at `320–420 px` |
 | GitHub organization avatar | `ariel-logo-wind-messenger-color-512.png` on `#162B5C` square canvas |
 | Light About / login brand block | `ariel-logo-wind-messenger-ink.png` |
-| Dark About / login brand block | `ariel-logo-wind-messenger-white.png` |
+| Web login color brand block | `ariel-logo-wind-messenger-color-512.webp`, with `ariel-logo-wind-messenger-color-512.png` fallback |
+| Dark About brand block | `ariel-logo-wind-messenger-white.png` |
 | Light product navigation | `ariel-logo-wind-messenger-micro.svg` |
 | Dark product navigation | `ariel-logo-wind-messenger-micro-white.svg` |
 | Favicon | `ariel-logo-wind-messenger-micro.svg` |

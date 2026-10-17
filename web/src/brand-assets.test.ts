@@ -11,6 +11,7 @@ const brand = resolve(process.cwd(), "public/brand");
 const assets = {
   "ariel-logo-wind-messenger-color.png": "691d4beab26ab10684353ac81f2ab61827c1c72b0c264668a7f82cd591306d30",
   "ariel-logo-wind-messenger-color-512.png": "faa20f8e37fa45905d0a9ec8a923b2edbebcf8a2ae507802470f8ca26c303e6d",
+  "ariel-logo-wind-messenger-color-512.webp": "c4fa4cbd74d7b7a6c4ffc7e54e055569d2be3f1f631c98a795a37bc39fe3097f",
   "ariel-logo-wind-messenger-ink.png": "308a248ea542b8d7bd0a76e4aa2d82ffd5307b0263a7f00cd73b28238460df91",
   "ariel-logo-wind-messenger-white.png": "a85ec3b832dc15879dbff4a67ea444da7ee87e834ffcbcf0cb1a8eabd382c211",
   "ariel-logo-wind-messenger-micro.svg": "c87edfb3e3df51c91c94e50eaf5554ac9d104ba8dbbfe1e01792af776bdbd154",
@@ -84,7 +85,7 @@ function rgbaAlphaStats(png: Buffer) {
 }
 
 describe("formal Ariel wind-messenger brand assets", () => {
-  it("keeps byte-identical repository copies of the six approved runtime assets", () => {
+  it("keeps byte-identical repository copies of the approved brand and runtime assets", () => {
     expect(readdirSync(brand).sort()).toEqual(Object.keys(assets).sort());
     for (const [name, expected] of Object.entries(assets)) {
       const bytes = readFileSync(resolve(brand, name));
@@ -107,6 +108,13 @@ describe("formal Ariel wind-messenger brand assets", () => {
       expect(png[24], name).toBe(8);
       expect(png[25], name).toBe(6);
     }
+  });
+
+  it("keeps the display-sized color WebP below 100 KiB", () => {
+    const image = readFileSync(resolve(brand, "ariel-logo-wind-messenger-color-512.webp"));
+    expect(image.subarray(0, 4).toString()).toBe("RIFF");
+    expect(image.subarray(8, 12).toString()).toBe("WEBP");
+    expect(image.byteLength).toBeLessThan(100 * 1024);
   });
 
   it("keeps both color masters genuinely transparent rather than painting a fixed background", () => {
