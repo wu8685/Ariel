@@ -1,8 +1,8 @@
-# 0089 turn 文件链接与选段引用验收
+# 0089 turn 文件链接、选段引用与部署验收
 
 - 日期：2026-10-17
 - 规格：[`0089-turn-file-links-and-selection-context.md`](../specs/0089-turn-file-links-and-selection-context.md)
-- 结论：Ariel Web／Agent／Relay 与本地 Chilling backend 已按前后端分离方案实现；Go、Web、race、production build、真实移动与桌面 Chromium、真实 Codex 0.160.0 只读兼容性探针均通过。物理 iPhone／Safari 与用户真实会话验收待执行。
+- 结论：Ariel Web／Agent／Relay 与本地 Chilling backend 已按前后端分离方案实现并部署；Go、Web、race、production build、真实移动与桌面 Chromium、真实 Codex 0.160.0 只读兼容性探针均通过。物理 iPhone／Safari 与用户真实会话验收待执行。
 
 ## 实现边界
 
@@ -26,4 +26,10 @@
 
 - 物理 iPhone／Safari 的 native selection、safe-area 与软键盘行为。
 - 启用本机 Chilling 与目标部署 flags 后，在用户真实 `fileChange` turn 上完成一次只读打开、选段和发送验收。
-- 本轮未执行本地 Agent 或公网 Relay 部署。
+
+## 部署记录
+
+- 本机 Chilling 使用 launchd 持久运行，`file-context/v1` capability 返回 `ready: true`，build version 为 `e1f2df7`。
+- 本机 Desktop Agent 已更新到 Ariel `32bb6ad` 并通过 Chilling handshake；其 ready marker 在新版公网 Relay 接受 hello 后生成。
+- 公网 `www.kan.chat` 已运行镜像 `ariel-relay:32bb6ad`，Docker health 与公网 `/healthz` 均为 `ok`，HTML runtime meta 为 `ariel-chilling-file-context=true`。
+- 旧镜像容器 `ariel-relay:ad44f9c` 已停止并保留，供人工回滚；未删除历史容器和持久认证数据。
