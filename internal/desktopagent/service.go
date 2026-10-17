@@ -675,6 +675,38 @@ func stopWarmRetireLocked(c *threadController) {
 	}
 }
 
+// detachIdleWarmLargeFollower selects at most one LRU victim while preserving
+// the single-large-follower process bound. The returned live is closed by the
+// caller after all locks are released, which releases the large follower slot.
+func (s *Service) detachIdleWarmLargeFollower(target *threadController) (Live, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var victim *threadController
+	for _, candidate := range s.threads {
+		if candidate == target {
+			continue
+		}
+		candidate.mu.Lock()
+		eligible := candidate.live != nil && isLargeFollowerLive(candidate.live) && candidate.leases == 0 && len(candidate.subs) == 0 && !candidate.bootstrapHold && !candidate.migrating && candidate.retireTimer != nil
+		candidate.mu.Unlock()
+		if eligible && (victim == nil || candidate.lastUsed < victim.lastUsed) {
+			victim = candidate
+		}
+	}
+	if victim == nil {
+		return nil, ""
+	}
+	victim.mu.Lock()
+	defer victim.mu.Unlock()
+	if victim.live == nil || !isLargeFollowerLive(victim.live) || victim.leases != 0 || len(victim.subs) != 0 || victim.bootstrapHold || victim.migrating || victim.retireTimer == nil {
+		return nil, ""
+	}
+	live := victim.live
+	victim.live = nil
+	stopWarmRetireLocked(victim)
+	return live, victim.id
+}
+
 func (s *Service) List(ctx context.Context, limit int, cursor string) ([]map[string]any, string, error) {
 	page, err := s.history.List(ctx, cursor, limit)
 	if err != nil {
@@ -1211,10 +1243,31 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 		return "", "", nil, nil, errors.New("OVERLOADED")
 	}
 	attachStart := time.Now()
-	if err := s.ensureLive(ctx, c); err != nil {
-		logPhase("owner-attach", id, "durationMs", millisSince(attachStart), "ok", false, "error", requestErrorCode("thread.subscribe", err))
+	attachErr := s.ensureLive(ctx, c)
+	if errors.Is(attachErr, desktopipc.ErrOverloaded) {
+		// Do not hold the target controller lock while acquiring the Service lock:
+		// all controller capacity paths use Service -> controller lock ordering.
 		c.mu.Unlock()
-		return "", "", nil, nil, err
+		victim, victimID := s.detachIdleWarmLargeFollower(c)
+		if victim != nil {
+			closeErr := victim.Close()
+			logPhase("large-follower-preempt", id, "victim", threadDigest(victimID), "closeOk", closeErr == nil)
+			c.mu.Lock()
+			retryStart := time.Now()
+			attachErr = s.ensureLive(ctx, c)
+			retryAttrs := []any{"durationMs", millisSince(retryStart), "ok", attachErr == nil}
+			if attachErr != nil {
+				retryAttrs = append(retryAttrs, "error", requestErrorCode("thread.subscribe", attachErr))
+			}
+			logPhase("large-follower-retry", id, retryAttrs...)
+		} else {
+			c.mu.Lock()
+		}
+	}
+	if attachErr != nil {
+		logPhase("owner-attach", id, "durationMs", millisSince(attachStart), "ok", false, "error", requestErrorCode("thread.subscribe", attachErr))
+		c.mu.Unlock()
+		return "", "", nil, nil, attachErr
 	}
 	logPhase("owner-attach", id, "durationMs", millisSince(attachStart), "ok", true)
 	// A reattach during the warm grace cancels the pending retire timer, so

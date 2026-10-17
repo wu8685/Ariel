@@ -572,6 +572,85 @@ func TestServiceBoundsControllersAndRetiresIdleFollower(t *testing.T) {
 	}
 }
 
+func TestServicePreemptsIdleWarmLargeFollowerForSelectedThread(t *testing.T) {
+	resetFrameHints()
+	var mu sync.Mutex
+	attempts := map[string]int{}
+	lives := map[string]*fakeLive{}
+	s := NewService(anyThreadHistory{}, func(_ context.Context, id, _ string) (Live, error) {
+		mu.Lock()
+		attempts[id]++
+		mu.Unlock()
+		return openFollowerWithFallback(id, func(large bool) (Live, error) {
+			if !large {
+				return nil, desktopipc.ErrFrameTooLarge
+			}
+			live := &fakeLive{updates: make(chan struct{}, 1)}
+			mu.Lock()
+			lives[id] = live
+			mu.Unlock()
+			return live, nil
+		})
+	})
+	s.idleGrace = time.Hour
+	defer s.Close()
+
+	subscription, _, _, _, err := s.Subscribe(context.Background(), "large-a", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Unsubscribe(subscription) {
+		t.Fatal("unsubscribe large warm fixture")
+	}
+	if _, _, _, _, err := s.Subscribe(context.Background(), "large-b", func(map[string]any) {}); err != nil {
+		t.Fatalf("selected large thread did not preempt idle warm follower: %v", err)
+	}
+
+	mu.Lock()
+	a := lives["large-a"]
+	bAttempts := attempts["large-b"]
+	mu.Unlock()
+	if bAttempts != 2 {
+		t.Fatalf("target attach attempts=%d, want one retry after preemption", bAttempts)
+	}
+	a.mu.Lock()
+	closed := a.closed
+	a.mu.Unlock()
+	if !closed {
+		t.Fatal("idle warm large follower was not retired")
+	}
+}
+
+func TestServiceNeverPreemptsActiveLargeFollower(t *testing.T) {
+	resetFrameHints()
+	var first *fakeLive
+	s := NewService(anyThreadHistory{}, func(_ context.Context, id, _ string) (Live, error) {
+		return openFollowerWithFallback(id, func(large bool) (Live, error) {
+			if !large {
+				return nil, desktopipc.ErrFrameTooLarge
+			}
+			live := &fakeLive{updates: make(chan struct{}, 1)}
+			if id == "active-large" {
+				first = live
+			}
+			return live, nil
+		})
+	})
+	defer s.Close()
+	if _, _, _, _, err := s.Subscribe(context.Background(), "active-large", func(map[string]any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := s.Subscribe(context.Background(), "blocked-large", func(map[string]any) {}); !errors.Is(err, desktopipc.ErrOverloaded) {
+		t.Fatalf("active large follower should retain its lease: %v", err)
+	}
+	first.mu.Lock()
+	closed := first.closed
+	first.mu.Unlock()
+	if closed {
+		t.Fatal("active large follower was preempted")
+	}
+}
+
 func TestServiceBoundsSubscriptionsPerThread(t *testing.T) {
 	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) {
 		return &fakeLive{updates: make(chan struct{}, 1)}, nil

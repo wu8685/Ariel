@@ -104,6 +104,15 @@ type leasedLive struct {
 	release func()
 }
 
+// holdsLargeFollowerLease is an internal marker used by the Service capacity
+// controller. It never exposes the underlying Desktop state or lease handle.
+func (*leasedLive) holdsLargeFollowerLease() {}
+
+func isLargeFollowerLive(live Live) bool {
+	_, ok := live.(interface{ holdsLargeFollowerLease() })
+	return ok
+}
+
 func (l *leasedLive) StartWithImages(ctx context.Context, clientMessageID, text string, images []string) (string, error) {
 	capable, ok := l.Live.(interface {
 		StartWithImages(context.Context, string, string, []string) (string, error)

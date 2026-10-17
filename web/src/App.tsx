@@ -50,6 +50,7 @@ type RenameThreadDialog = { threadId: string; name: string };
 type LocalThreadDraft = { deviceId: string; agentEpoch: string; cwd: string; draftId: string };
 type WebAuthMode = "pin" | "passkey";
 type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
+type ReadOnlyReason = "" | "OVERLOADED" | "HISTORY_TOO_LARGE" | "NATIVE_STATE_UNCERTAIN" | "TIMEOUT" | "PROTOCOL_UNSUPPORTED" | string;
 
 function webAuthModeFromDocument(): WebAuthMode {
   return document.querySelector<HTMLMetaElement>('meta[name="ariel-auth-mode"]')?.content === "passkey" ? "passkey" : "pin";
@@ -267,6 +268,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [threadId, setThreadId] = useState("");
   const [view, setView] = useState<ThreadView | null>(null);
   const [readOnlyHistory, setReadOnlyHistory] = useState(false);
+  const [readOnlyReason, setReadOnlyReason] = useState<ReadOnlyReason>("");
   const [syncingView, setSyncingView] = useState(false);
   const [history, setHistory] = useState<HistoryState>(emptyHistoryState);
   const historyRef = useRef<HistoryState>(emptyHistoryState());
@@ -335,6 +337,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const observedAgentEpochs = useRef(new Map<string, string>());
   const recoveryGeneration = useRef(0);
   const recoveryRunning = useRef(false);
+  const readOnlyRetrying = useRef(false);
   const connectionResume = useRef(false);
   const durableRestoreAttempt = useRef("");
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -384,6 +387,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     : queuedMessages;
   const currentPermissions = view && !mock ? permissionSummary(view.thread.permissions) : null;
   const connectionLabel = status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接";
+  const readOnlyMessage = readOnlyReason === "OVERLOADED"
+    ? "历史只读 · 实时连接资源繁忙；当前历史可读，但发送暂时禁用。"
+    : readOnlyReason === "HISTORY_TOO_LARGE"
+      ? "历史只读 · 当前会话状态超过 64 MiB 安全上限；历史可读，但无法建立实时连接。"
+      : "历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。";
+  const canRetryReadOnly = readOnlyReason !== "HISTORY_TOO_LARGE" && readOnlyReason !== "PROTOCOL_UNSUPPORTED";
   const permissionWarning = Boolean(currentPermissions?.warning || currentPermissions?.label.includes("未知"));
   const displayedTurns = [...history.older, ...(view?.thread.turns || [])].map(turn => {
     const override = itemOverrides[turn.turnId];
@@ -391,6 +400,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const known = new Set(override.items.map(item => item.itemId));
     return { ...turn, items: [...override.items, ...turn.items.filter(item => !known.has(item.itemId))], itemsComplete: override.itemsComplete, nextItemCursor: override.nextItemCursor };
   });
+
+  useEffect(() => {
+    if (!readOnlyHistory && readOnlyReason) setReadOnlyReason("");
+  }, [readOnlyHistory, readOnlyReason]);
 
   useEffect(() => {
     const previous = composerSnapshot.current;
@@ -1120,7 +1133,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setListLoading(status === "ready" && !!deviceId);
   }
 
-  async function showReadOnlyHistory(id: string, targetDevice: string, epoch: number, prefetched?: Thread | null): Promise<boolean> {
+  async function showReadOnlyHistory(id: string, targetDevice: string, epoch: number, prefetched?: Thread | null, reason: ReadOnlyReason = "NATIVE_STATE_UNCERTAIN"): Promise<boolean> {
     let thread: Thread | null | undefined = prefetched;
     if (thread === undefined) {
       const pending = fastReadCache.current;
@@ -1149,6 +1162,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     selection.current.view = readOnlyView;
     setView(readOnlyView);
     setSyncingView(false);
+    setReadOnlyReason(reason);
     setReadOnlyHistory(true);
     setNotice("");
     return true;
@@ -1245,6 +1259,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       const fastThread = fast ? (fast.settled ? fast.thread : oversized ? await fast.result : null) : null;
       if (epoch !== pendingSelect.current) return;
       if (oversized) {
+        const reason = response.error?.code || "NATIVE_STATE_UNCERTAIN";
+        setReadOnlyReason(reason);
         setReadOnlyHistory(true);
         if (progressiveInstalled) { setSyncingView(false); return; }
         if (fast && !fastThread) {
@@ -1253,7 +1269,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           setNotice("原 owner 状态无法确认，历史分页也未能加载。可稍后手动重新选择此会话。");
           return;
         }
-        if (await showReadOnlyHistory(id, targetDevice, epoch, fast ? fastThread : undefined)) return;
+        if (await showReadOnlyHistory(id, targetDevice, epoch, fast ? fastThread : undefined, reason)) return;
         blockedSelection.current = `${targetDevice}\u0000${id}`;
         setNotice("原 owner 状态无法确认，历史分页也未能加载。可稍后手动重新选择此会话。");
         return;
@@ -1262,10 +1278,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         // Owner sync failed but persisted history is already readable: keep it
         // as an explicit read-only degradation instead of a blank page.
         if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
-        if (!progressiveInstalled && fastThread && !(await showReadOnlyHistory(id, targetDevice, epoch, fastThread))) {
+        const reason = response.error?.code || "NATIVE_STATE_UNCERTAIN";
+        if (!progressiveInstalled && fastThread && !(await showReadOnlyHistory(id, targetDevice, epoch, fastThread, reason))) {
           setNotice(errorText(response));
           return;
         }
+        setReadOnlyReason(reason);
         setReadOnlyHistory(true);
         setSyncingView(false);
         setNotice(`${errorText(response)} 历史保持只读；重新选择会话可重试连接。`);
@@ -1294,6 +1312,23 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       }
     } finally {
       recoveryRunning.current = false;
+    }
+  }
+
+  async function retryReadOnlyConnection() {
+    const current = selection.current;
+    if (readOnlyRetrying.current || !readOnlyHistory || syncingView || !current.view || !current.deviceId || !current.threadId) return;
+    readOnlyRetrying.current = true;
+    // Persist the visible read-only view before selecting the same thread so
+    // the retry keeps history on screen and does not issue another fast read.
+    persistView(current.view);
+    setReadOnlyReason("");
+    setReadOnlyHistory(false);
+    setSyncingView(true);
+    try {
+      await selectThread(current.threadId, current.deviceId, false);
+    } finally {
+      readOnlyRetrying.current = false;
     }
   }
 
@@ -1405,9 +1440,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             const identity = historyCacheIdentity(current.deviceId, current.threadId);
             if (identity) historyCache.current.delete(identity);
             expectedSubscription.current = "";
+            setReadOnlyReason("HISTORY_TOO_LARGE");
             setReadOnlyHistory(true);
             setSyncingView(false);
-            void showReadOnlyHistory(current.threadId, current.deviceId, pendingSelect.current);
+            void showReadOnlyHistory(current.threadId, current.deviceId, pendingSelect.current, undefined, "HISTORY_TOO_LARGE");
             return;
           }
           if (event.code === "RESYNC_REQUIRED") {
@@ -2342,7 +2378,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
-        {readOnlyHistory && view && <div className="readonly-banner" role="status">历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。</div>}
+        {readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
         {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}

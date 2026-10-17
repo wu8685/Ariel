@@ -604,11 +604,48 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: { ...fixtureThread, runtime: "idle", historyComplete: false, turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "可读历史" }] }] } } }));
     expect(await screen.findByText("可读历史")).toBeTruthy();
-    expect(screen.getByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(screen.getByText(/历史只读.*超过 64 MiB 安全上限/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重新连接" })).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "do not send" } });
     expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
     expect(document.querySelector(".send-loading-spinner")).toBeNull();
     expect(requests("turn.start")).toHaveLength(0);
+  });
+
+  it("explains temporary owner capacity and retries without reloading visible history", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+    const stored: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "容量冲突时仍可阅读" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stored } }));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "OVERLOADED", message: "OVERLOADED" } }));
+
+    expect(await screen.findByText("容量冲突时仍可阅读")).toBeTruthy();
+    expect(screen.getByText(/实时连接资源繁忙.*发送暂时禁用/)).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "重新连接" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
+    expect(requests("thread.read")).toHaveLength(1);
+    expect(screen.getByText("容量冲突时仍可阅读")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "正在同步会话，暂不可发送" }) as HTMLButtonElement).disabled).toBe(true);
+
+    const fresh: Thread = { ...stored, runtime: "idle", turns: [...stored.turns, { turnId: "live", status: "completed", items: [{ itemId: "live-item", role: "assistant", text: "实时连接已恢复" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[1].requestId, outcome: "accepted", data: { subscriptionId: "sub-retry" } }));
+    act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub-retry", streamId: "stream-retry", seq: 1, thread: fresh }));
+    expect(await screen.findByText("实时连接已恢复")).toBeTruthy();
+    expect(screen.queryByText(/实时连接资源繁忙/)).toBeNull();
+    expect(screen.queryByText(/历史只读/)).toBeNull();
   });
 
   it("stops the sync spinner if both owner and stored history cannot be loaded", async () => {
@@ -640,7 +677,8 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
     expect(screen.getByText("已可见内容")).toBeTruthy();
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: recent } }));
-    expect(await screen.findByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(await screen.findByText(/历史只读.*超过 64 MiB 安全上限/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重新连接" })).toBeNull();
     expect(screen.getByText("已可见内容")).toBeTruthy();
   });
 
