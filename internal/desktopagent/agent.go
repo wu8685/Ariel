@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+	chillingclient "github.com/wu8685/Ariel/internal/chilling"
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/wsheartbeat"
@@ -19,15 +21,25 @@ import (
 
 type Config struct {
 	URL, Token, DeviceID, DeviceName, Binary, Socket, CWD string
+	ChillingEndpoint                                      string
+	ChillingEnabled                                       bool
 	HeartbeatInterval, HeartbeatTimeout                   time.Duration
+	FileContext                                           FileContext
 	OnReady                                               func() error
 	OnNotReady                                            func()
 }
+type FileContext interface {
+	Ready() bool
+	Changes(context.Context, chillingclient.ChangesRequest) (chillingclient.ChangesResponse, error)
+	Read(context.Context, chillingclient.ReadRequest) (chillingclient.ReadResponse, error)
+	Prepare(context.Context, chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error)
+}
 type agent struct {
-	conn     *websocket.Conn
-	deviceID string
-	service  *Service
-	writeMu  sync.Mutex
+	conn        *websocket.Conn
+	deviceID    string
+	service     *Service
+	fileContext FileContext
+	writeMu     sync.Mutex
 }
 
 // Service.List may issue three sequential thread/list calls (recent, the
@@ -82,6 +94,14 @@ func Run(ctx context.Context, cfg Config) error {
 	service.SetThreadBootstrapper(AppServerBootstrapper{Binary: cfg.Binary})
 	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
 	service.SetThreadMetadataWriter(appserver.ThreadMetadataWriter{RPC: readOnlyRPC})
+	if cfg.FileContext == nil && cfg.ChillingEnabled {
+		client, clientErr := chillingclient.New(ctx, chillingclient.Config{Enabled: true, Endpoint: cfg.ChillingEndpoint})
+		if clientErr != nil {
+			log.Printf("Chilling file context unavailable: %s", chillingclient.CodeOf(clientErr))
+		} else {
+			cfg.FileContext = client
+		}
+	}
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -115,7 +135,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(8 << 20)
-	a := &agent{conn: conn, deviceID: cfg.DeviceID, service: service}
+	a := &agent{conn: conn, deviceID: cfg.DeviceID, service: service, fileContext: cfg.FileContext}
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
 	defer func() {
@@ -123,7 +143,8 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	queue := make(chan struct{}, 32)
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadBootstrap": service.ThreadBootstrapEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled(), "threadRename": service.ThreadRenameEnabled(), "threadPin": service.ThreadPinEnabled()}}
+	fileContextReady := cfg.FileContext != nil && cfg.FileContext.Ready()
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadBootstrap": service.ThreadBootstrapEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled(), "threadRename": service.ThreadRenameEnabled(), "threadPin": service.ThreadPinEnabled(), "chillingFileContext": fileContextReady}}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -218,29 +239,32 @@ func (a *agent) send(ctx context.Context, value any) error {
 
 func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage) {
 	var p struct {
-		ThreadID        string              `json:"threadId"`
-		TurnID          string              `json:"turnId"`
-		SubscriptionID  string              `json:"subscriptionId"`
-		Cursor          string              `json:"cursor"`
-		SearchTerm      string              `json:"searchTerm"`
-		Limit           int                 `json:"limit"`
-		ClientMessageID string              `json:"clientMessageId"`
-		Text            string              `json:"text"`
-		Images          []string            `json:"images"`
-		ItemID          string              `json:"itemId"`
-		ImageIndex      int                 `json:"imageIndex"`
-		ExpectedTurnID  string              `json:"expectedTurnId"`
-		QueueID         string              `json:"queueId"`
-		QueueIDs        []string            `json:"queueIds"`
-		InteractionID   string              `json:"interactionId"`
-		Decision        string              `json:"decision"`
-		Answers         map[string][]string `json:"answers"`
-		CWD             string              `json:"cwd"`
-		Archived        bool                `json:"archived"`
-		Name            string              `json:"name"`
-		Pinned          *bool               `json:"pinned"`
-		OperationID     string              `json:"operationId"`
-		UpdateMode      string              `json:"updateMode"`
+		ThreadID        string                     `json:"threadId"`
+		TurnID          string                     `json:"turnId"`
+		TurnIDs         []string                   `json:"turnIds"`
+		SubscriptionID  string                     `json:"subscriptionId"`
+		Cursor          string                     `json:"cursor"`
+		SearchTerm      string                     `json:"searchTerm"`
+		Limit           int                        `json:"limit"`
+		ClientMessageID string                     `json:"clientMessageId"`
+		Text            string                     `json:"text"`
+		Images          []string                   `json:"images"`
+		ItemID          string                     `json:"itemId"`
+		Path            string                     `json:"path"`
+		ImageIndex      int                        `json:"imageIndex"`
+		ExpectedTurnID  string                     `json:"expectedTurnId"`
+		QueueID         string                     `json:"queueId"`
+		QueueIDs        []string                   `json:"queueIds"`
+		InteractionID   string                     `json:"interactionId"`
+		Decision        string                     `json:"decision"`
+		Answers         map[string][]string        `json:"answers"`
+		CWD             string                     `json:"cwd"`
+		Archived        bool                       `json:"archived"`
+		Name            string                     `json:"name"`
+		Pinned          *bool                      `json:"pinned"`
+		OperationID     string                     `json:"operationId"`
+		UpdateMode      string                     `json:"updateMode"`
+		FileContexts    []chillingclient.Selection `json:"fileContexts"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -315,6 +339,22 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var uri string
 		uri, err = a.service.Image(ctx, p.ThreadID, p.TurnID, p.ItemID, p.ImageIndex)
 		data = map[string]any{"dataUri": uri}
+	case "file.context.changes":
+		if a.fileContext == nil || !a.fileContext.Ready() {
+			err = errors.New("FEATURE_DISABLED")
+			break
+		}
+		var response chillingclient.ChangesResponse
+		response, err = a.fileContext.Changes(ctx, chillingclient.ChangesRequest{ThreadID: p.ThreadID, TurnIDs: p.TurnIDs})
+		data, err = responseMap(response, err)
+	case "file.context.read":
+		if a.fileContext == nil || !a.fileContext.Ready() {
+			err = errors.New("FEATURE_DISABLED")
+			break
+		}
+		var response chillingclient.ReadResponse
+		response, err = a.fileContext.Read(ctx, chillingclient.ReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, Path: p.Path})
+		data, err = responseMap(response, err)
 	case "thread.subscribe":
 		loadCtx, cancel := context.WithTimeout(ctx, 28*time.Second)
 		defer cancel()
@@ -354,14 +394,22 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		}
 	case "turn.start":
 		var turnID string
-		turnID, err = a.service.StartWithImages(ctx, p.ThreadID, p.ClientMessageID, p.Text, p.Images)
+		var text string
+		text, err = a.prepareMessage(ctx, p.Text, p.FileContexts)
+		if err == nil {
+			turnID, err = a.service.StartWithImages(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
+		}
 		data = map[string]any{"turnId": turnID}
 	case "turn.interrupt":
 		err = a.service.Interrupt(ctx, p.ThreadID, p.ExpectedTurnID)
 		data = map[string]any{}
 	case "queue.add":
 		var queued []map[string]any
-		queued, err = a.service.QueueAdd(ctx, p.ThreadID, p.ClientMessageID, p.Text, p.Images)
+		var text string
+		text, err = a.prepareMessage(ctx, p.Text, p.FileContexts)
+		if err == nil {
+			queued, err = a.service.QueueAdd(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
+		}
 		data = map[string]any{"queuedMessages": queued}
 	case "queue.update":
 		var queued []map[string]any
@@ -386,6 +434,41 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		err = errors.New("INVALID_ARGUMENT")
 	}
 	a.reply(ctx, id, method, data, err)
+}
+
+func responseMap(value any, prior error) (map[string]any, error) {
+	if prior != nil {
+		return nil, prior
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if json.Unmarshal(body, &out) != nil {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	return out, nil
+}
+
+func (a *agent) prepareMessage(ctx context.Context, text string, selections []chillingclient.Selection) (string, error) {
+	if len(selections) == 0 {
+		return text, nil
+	}
+	if a.fileContext == nil || !a.fileContext.Ready() {
+		return "", errors.New("FEATURE_DISABLED")
+	}
+	prepared, err := a.fileContext.Prepare(ctx, chillingclient.PrepareRequest{Selections: selections})
+	if err != nil {
+		return "", err
+	}
+	if prepared.Envelope == "" {
+		return "", errors.New("INVALID_ARGUMENT")
+	}
+	if text == "" {
+		return prepared.Envelope, nil
+	}
+	return text + "\n\n" + prepared.Envelope, nil
 }
 
 func (a *agent) reply(ctx context.Context, id, method string, data map[string]any, err error) {
@@ -420,6 +503,12 @@ func (a *agent) reply(ctx context.Context, id, method string, data map[string]an
 }
 
 func requestErrorCode(method string, err error) string {
+	if code := chillingclient.CodeOf(err); code != "INTERNAL" {
+		switch code {
+		case "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "INVALID_ARGUMENT", "OVERLOADED":
+			return code
+		}
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		if isReadRequest(method) {
@@ -434,7 +523,7 @@ func requestErrorCode(method string, err error) string {
 		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
-	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT":
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED":
 		return code
 	default:
 		return "RESYNC_REQUIRED"
@@ -443,7 +532,7 @@ func requestErrorCode(method string, err error) string {
 
 func isReadRequest(method string) bool {
 	switch method {
-	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe":
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "file.context.changes", "file.context.read":
 		return true
 	default:
 		return false

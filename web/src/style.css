@@ -24,6 +24,38 @@
   background: var(--color-page);
 }
 
+/* Optional Chilling file-context surface. It inherits Ariel's restrained,
+   high-contrast language and stays visually subordinate to the conversation. */
+.turn-files { margin: 10px 0 18px 42px; max-width: min(680px, calc(100% - 54px)); border: 1px solid var(--line, #343434); border-radius: 14px; overflow: hidden; background: #121212; }
+.turn-files-title { display:flex; align-items:center; justify-content:space-between; padding:10px 13px; color:#d8d8d8; font-size:12px; letter-spacing:.03em; border-bottom:1px solid #292929; }
+.turn-files-title small { color:#858585; }
+.turn-file-list { display:flex; flex-direction:column; }
+.turn-file-list button { display:flex; gap:9px; align-items:center; border:0; border-bottom:1px solid #222; background:transparent; color:#bcbcbc; padding:9px 13px; text-align:left; font:500 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; cursor:pointer; }
+.turn-file-list button:last-child { border-bottom:0; }
+.turn-file-list button:hover:not(:disabled), .turn-file-list button:focus-visible { background:#1d1d1d; color:#fff; }
+.turn-file-list button:disabled { cursor:default; opacity:.55; }
+.file-kind { width:17px; height:17px; display:grid; place-items:center; border-radius:5px; font-weight:800; background:#292929; color:#aaa; }
+.file-kind.add { color:#61d99b; background:#143626; }.file-kind.delete { color:#ef8a8a; background:#3b1b1b; }.file-kind.update { color:#e9bc72; background:#3b2d14; }
+.turn-files-more { width:100%; border:0; border-top:1px solid #292929; background:#161616; color:#999; padding:8px; font-size:12px; cursor:pointer; }
+.file-viewer-backdrop { position:fixed; inset:0; z-index:90; display:flex; justify-content:flex-end; background:rgba(0,0,0,.58); backdrop-filter:blur(3px); }
+.file-viewer { width:min(760px,70vw); height:100%; display:grid; grid-template-rows:auto minmax(0,1fr) auto; background:#0b0b0b; border-left:1px solid #3a3a3a; box-shadow:-22px 0 60px rgba(0,0,0,.45); }
+.file-viewer header,.file-viewer footer { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 18px; border-bottom:1px solid #2e2e2e; }
+.file-viewer header div { min-width:0; display:flex; flex-direction:column; gap:3px; }.file-viewer header strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.file-viewer header small,.file-viewer footer span { color:#858585; font-size:12px; }
+.file-viewer header button { width:34px; height:34px; border:1px solid #363636; border-radius:50%; background:#171717; color:#ddd; font-size:22px; cursor:pointer; }
+.file-viewer footer { border-top:1px solid #2e2e2e; border-bottom:0; }.file-viewer footer .primary { border:0; border-radius:18px; padding:9px 16px; background:#f2f2f2; color:#101010; font-weight:700; }.file-viewer footer .primary:disabled { opacity:.35; }
+.file-code { overflow:auto; padding:12px 0 30px; font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace; user-select:text; }
+.file-line { min-width:max-content; display:grid; grid-template-columns:54px 1fr; }.file-line:hover { background:#151515; }.file-line code { padding:0 20px 0 8px; color:#d4d4d4; white-space:pre; }
+.file-line-number { border:0; background:transparent; color:#606060; text-align:right; padding:0 12px 0 4px; font:inherit; cursor:pointer; user-select:none; }.file-line-number:hover,.file-line-number:focus-visible { color:#77b7ff; }
+.file-quote-chips { display:flex; gap:7px; flex-wrap:wrap; padding:0 4px; }.file-quote-chip { display:flex; align-items:center; gap:7px; max-width:100%; padding:6px 8px 6px 10px; border:1px solid #315477; border-radius:10px; background:#10263a; color:#a8cff5; font:600 11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; }.file-quote-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.file-quote-chip button { border:0; background:transparent; color:#8eb5d8; font-size:17px; cursor:pointer; }
+.historical-file-quotes { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }.historical-file-quotes span { max-width:100%; overflow:hidden; padding:4px 7px; border:1px solid #ffffff38; border-radius:7px; color:inherit; font:600 10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
+@media screen and (max-width: 800px) {
+  .turn-files { margin-left:8px; max-width:calc(100% - 16px); }
+  .file-viewer { width:100vw; border-left:0; }
+  .file-viewer-backdrop { background:#0b0b0b; }
+  .file-viewer header { padding-top:max(14px,env(safe-area-inset-top)); }
+  .file-viewer footer { padding-bottom:max(14px,env(safe-area-inset-bottom)); }
+}
+
 * { box-sizing: border-box; }
 body { margin: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

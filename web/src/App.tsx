@@ -18,10 +18,11 @@ import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin, unreadP
 import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
+import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type OpenFile } from "./file-context";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 4;
 const historyTurnPageLimit = 10;
@@ -93,7 +94,7 @@ function contentMarker(thread: Thread): ContentMarker {
 function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
   return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
 }
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。", FEATURE_DISABLED: "文件引用功能尚未启用。", CHILLING_UNAVAILABLE: "本机 Chilling 暂不可用。", CONTRACT_UNSUPPORTED: "Chilling 文件协议版本不兼容。", FILE_NOT_FOUND: "文件已不存在。", PATH_NOT_ALLOWED: "该路径不允许读取。", UNSUPPORTED_FILE_TYPE: "当前只支持 UTF-8 文本文件。", FILE_TOO_LARGE: "文件超过 1 MiB，无法在这里打开。", FILE_CHANGED: "文件已经变化，请重新打开并选择片段。" };
 
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
@@ -276,8 +277,14 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const itemOverridesRef = useRef<Record<string, Turn>>({});
   const [draft, setDraft] = useState("");
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
+	const [fileQuotes, setFileQuotes] = useState<FileQuote[]>([]);
+	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
+	const [openFile, setOpenFile] = useState<OpenFile | null>(null);
+	const fileChangeRequests = useRef(new Set<string>());
+	const fileContentCache = useRef(new FileContentCache());
+	const fileContentCacheEpoch = useRef("");
   const composerRevision = useRef(0);
-  const composerSnapshot = useRef({ draft, screenshots });
+  const composerSnapshot = useRef({ draft, screenshots, fileQuotes });
   const pendingSubmission = useRef<PendingSubmission | null>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
@@ -360,6 +367,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const threadArchiveEnabled = device?.capabilities.threadArchive === true;
   const threadRenameEnabled = device?.capabilities.threadRename === true;
   const threadPinEnabled = device?.capabilities.threadPin === true;
+	const fileContextEnabled = webFileContextEnabled() && device?.capabilities.chillingFileContext === true;
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
@@ -382,10 +390,58 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   });
 
   useEffect(() => {
-    if (composerSnapshot.current.draft === draft && composerSnapshot.current.screenshots === screenshots) return;
-    composerSnapshot.current = { draft, screenshots };
+    if (composerSnapshot.current.draft === draft && composerSnapshot.current.screenshots === screenshots && composerSnapshot.current.fileQuotes === fileQuotes) return;
+    composerSnapshot.current = { draft, screenshots, fileQuotes };
     composerRevision.current++;
-  }, [draft, screenshots]);
+  }, [draft, screenshots, fileQuotes]);
+
+	useEffect(() => {
+		const epoch = deviceId ? `${deviceId}\u0000${device?.agentEpoch || ""}` : "";
+		if (fileContentCacheEpoch.current && fileContentCacheEpoch.current !== epoch) {
+			fileContentCache.current.clear();
+			setOpenFile(null);
+		}
+		fileContentCacheEpoch.current = epoch;
+	}, [device?.agentEpoch, deviceId]);
+
+	useEffect(() => {
+		if (!fileContextEnabled || !view || !deviceId) return;
+		const completed = displayedTurns.filter(turn => turn.status === "completed").slice(-recentTurnLimit);
+		const pending = completed.filter(turn => {
+			const key = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turn.turnId}`;
+			return fileChanges[`${view.threadId}\u0000${turn.turnId}`] === undefined && !fileChangeRequests.current.has(key);
+		});
+		if (!pending.length) return;
+		const requestKey = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${pending.map(turn => turn.turnId).join(",")}`;
+		fileChangeRequests.current.add(requestKey);
+		for (const turn of pending) fileChangeRequests.current.add(`${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turn.turnId}`);
+		void client.request("file.context.changes", deviceId, { threadId:view.threadId, turnIds:pending.map(turn=>turn.turnId) }).then(response => {
+			if (selection.current.deviceId !== deviceId || selection.current.threadId !== view.threadId) return;
+			if (response.outcome !== "accepted" || !Array.isArray(response.data?.turns)) { setNotice(errorText(response)); return; }
+			const next: Record<string,FileChange[]> = {};
+			for (const raw of response.data.turns as unknown[]) {
+				if (!raw || typeof raw !== "object") continue;
+				const value = raw as {turnId?:unknown;fileChanges?:unknown}; if (typeof value.turnId !== "string" || !Array.isArray(value.fileChanges)) continue;
+				const changes = value.fileChanges.filter((entry): entry is FileChange => !!entry && typeof entry === "object" && typeof (entry as FileChange).itemId === "string" && typeof (entry as FileChange).path === "string" && ["add","update","delete"].includes((entry as FileChange).kind));
+				next[`${view.threadId}\u0000${value.turnId}`] = changes;
+			}
+			setFileChanges(current=>({...current,...next}));
+		});
+	}, [client, device?.agentEpoch, deviceId, fileChanges, fileContextEnabled, view?.threadId, displayedTurns.map(turn=>`${turn.turnId}:${turn.status}`).join("|")]);
+
+	async function openChangedFile(turn: Turn, change: FileChange) {
+		if (!fileContextEnabled || !view || !deviceId || change.kind === "delete") return;
+		const cacheKey = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turn.turnId}\u0000${change.itemId}\u0000${change.path}`;
+		const cached = fileContentCache.current.get(cacheKey);
+		if (cached) { setOpenFile(cached); return; }
+		const response = await client.request("file.context.read",deviceId,{threadId:view.threadId,turnId:turn.turnId,itemId:change.itemId,path:change.path});
+		if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+		const value=response.data as Partial<OpenFile> | undefined;
+		if (!value || typeof value.content!=="string" || typeof value.sha256!=="string" || typeof value.modifiedAtMs!=="number" || typeof value.lineCount!=="number" || typeof value.language!=="string" || value.version!=="current-workspace") { setNotice("文件响应格式无法识别。"); return; }
+		const file = {...value,threadId:view.threadId,turnId:turn.turnId,itemId:change.itemId,path:change.path} as OpenFile;
+		fileContentCache.current.set(cacheKey,file);
+		setOpenFile(file);
+	}
 
   function agentEpochFor(id: string): string {
     return devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || "";
@@ -442,6 +498,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (!sameSubmissionTarget(submission) || composerRevision.current !== submission.revision) return false;
     setDraft("");
     setScreenshots([]);
+		setFileQuotes([]);
     if (submission.queueId) setEditingQueueId("");
     return true;
   }
@@ -731,7 +788,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
-    setView(null); setThreadId(""); setDraft(""); setScreenshots([]); resetHistory();
+    setView(null); setThreadId(""); setDraft(""); setScreenshots([]); setFileQuotes([]); setOpenFile(null); resetHistory();
+    fileContentCache.current.clear(); fileContentCacheEpoch.current = "";
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
     if (webAuthMode === "passkey") {
@@ -1776,7 +1834,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		await selectThread(created.threadId, local.deviceId, false, false, created);
 		return;
 	}
-    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled)) return;
+    if (!view || !deviceId || readOnlyHistory || !canSend(view.thread, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled)) return;
     const text = draft;
     const images = screenshots;
     const targetDevice = deviceId;
@@ -1786,7 +1844,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const submission: PendingSubmission = { deviceId: targetDevice, agentEpoch: agentEpochFor(targetDevice), threadId: targetThread, clientMessageId, revision: composerRevision.current, queueId: queueID };
     pendingSubmission.current = submission;
     setWorking(true); setNotice("");
-    const content = { text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) };
+    const content = { text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}), ...(!queueID && fileQuotes.length ? { fileContexts:fileQuotes } : {}) };
     const response = queueID
       ? await client.request("queue.update", targetDevice, { threadId: targetThread, queueId: queueID, ...content })
       : view.thread.runtime === "inProgress" && queueEnabled
@@ -2219,9 +2277,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={change=>void openChangedFile(turn,change)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={change=>void openChangedFile(turn,change)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} />)}
         </div>
         {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
@@ -2251,6 +2309,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
               </li>;
             })}</ol>
           </section>}
+          <FileQuoteChips quotes={fileQuotes} onRemove={index=>setFileQuotes(current=>current.filter((_,position)=>position!==index))}/>
           {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></button></div>)}</div>}
           <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={localThreadDraft ? "发送第一条消息，创建 Codex 会话…" : view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={(!view && !localThreadDraft) || readOnlyHistory} rows={1} />
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
@@ -2258,7 +2317,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
               <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
               {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
-              <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
+              <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
             </div></div></div></div></div>
       </main>
     </div>
@@ -2276,10 +2335,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     })()}
     {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
+		{openFile && <FileViewer file={openFile} onClose={()=>setOpenFile(null)} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);setOpenFile(null);window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
   </div>;
 }
 
-function ConversationTurn({ turn, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
+function ConversationTurn({ turn, fileChanges, onOpenFile, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
   const parts = groupTurnItems(turn);
   const lastPart = parts.at(-1);
@@ -2295,9 +2355,10 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, onLoadImage, active
     {parts.map(part => {
       if (part.kind === "message") {
         const item = part.item;
+		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];
-        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><div className="message-text">{item.role === "system" ? item.text : <ConversationMarkdown text={item.text} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
+        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
@@ -2305,6 +2366,7 @@ function ConversationTurn({ turn, loading, onLoadOlderItems, onLoadImage, active
         {activityExpanded && <div className="activity-list">{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <div className="activity-item" key={item.itemId} data-item-id={item.itemId}><div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div><div className="activity-kind">{item.activity!.kind}</div>{item.activity!.details ? <pre className="activity-details">{item.activity!.details}</pre> : <p className="activity-note">当前历史没有更多详情。</p>}{item.activity!.truncated && <p className="activity-note">详情已截断；完整内容请在原 Codex Desktop 查看。</p>}</div>)}</div>}
       </section>;
     })}
+		{turn.status === "completed" && fileChanges && <TurnFileChanges changes={fileChanges} onOpen={onOpenFile}/>}
     {active && <div className="agent-progress" role="status">{processing ? "处理中…" : "思考中…"}</div>}
   </section>;
 }

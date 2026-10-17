@@ -23,7 +23,7 @@ func TestConfigurationRequiresTokenOriginAndBuiltWeb(t *testing.T) {
 
 func TestHandlerServesWebWithoutExposingToken(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<html><meta name="ariel-auth-mode" content="__ARIEL_WEB_AUTH__">Ariel</html>`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<html><meta name="ariel-auth-mode" content="__ARIEL_WEB_AUTH__"><meta name="ariel-chilling-file-context" content="__ARIEL_CHILLING_FILE_CONTEXT__">Ariel</html>`), 0644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := configFrom("secret", "012345", "http://localhost:8080", dir, "127.0.0.1:8080")
@@ -36,7 +36,7 @@ func TestHandlerServesWebWithoutExposingToken(t *testing.T) {
 	}
 	r := httptest.NewRecorder()
 	handler.ServeHTTP(r, httptest.NewRequest("GET", "/", nil))
-	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "Ariel") || !strings.Contains(r.Body.String(), `content="pin"`) || strings.Contains(r.Body.String(), "__ARIEL_WEB_AUTH__") || strings.Contains(r.Body.String(), "secret") {
+	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "Ariel") || !strings.Contains(r.Body.String(), `content="pin"`) || !strings.Contains(r.Body.String(), `name="ariel-chilling-file-context" content="false"`) || strings.Contains(r.Body.String(), "__ARIEL_WEB_AUTH__") || strings.Contains(r.Body.String(), "secret") {
 		t.Fatalf("response: %d %s", r.Code, r.Body.String())
 	}
 }

@@ -5,11 +5,11 @@ import { isPairingCredential } from "./pairing";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
-type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
+type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "file.context.changes" | "file.context.read" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 function retryableRead(method: Method): boolean {
-  return method === "thread.list" || method === "thread.read" || method === "thread.history" || method === "thread.history.items" || method === "thread.image";
+  return method === "thread.list" || method === "thread.read" || method === "thread.history" || method === "thread.history.items" || method === "thread.image" || method === "file.context.changes" || method === "file.context.read";
 }
 
 export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {

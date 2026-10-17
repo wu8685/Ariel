@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"log"
 	"net"
 	"net/http"
@@ -23,10 +24,12 @@ type config struct {
 	token, webPIN, webAuth, publicOrigin, rpID, credentialsFile, setupToken, dist, listen string
 	sessionKey                                                                            []byte
 	origins                                                                               []string
+	enableChillingFileContext                                                             bool
 }
 
 type configInput struct {
 	token, webPIN, webAuth, origins, publicOrigin, rpID, credentialsFile, sessionKey, setupToken, dist, listen string
+	enableChillingFileContext                                                                                  bool
 }
 
 func configFrom(token, webPIN, origins, dist, listen string) (config, error) {
@@ -59,7 +62,7 @@ func configFromInput(input configInput) (config, error) {
 	if input.webAuth == "" {
 		input.webAuth = relay.WebAuthPIN
 	}
-	cfg := config{token: input.token, webPIN: input.webPIN, webAuth: input.webAuth, publicOrigin: input.publicOrigin, rpID: input.rpID, credentialsFile: input.credentialsFile, setupToken: input.setupToken, dist: input.dist, listen: input.listen, origins: list}
+	cfg := config{token: input.token, webPIN: input.webPIN, webAuth: input.webAuth, publicOrigin: input.publicOrigin, rpID: input.rpID, credentialsFile: input.credentialsFile, setupToken: input.setupToken, dist: input.dist, listen: input.listen, origins: list, enableChillingFileContext: input.enableChillingFileContext}
 	switch input.webAuth {
 	case relay.WebAuthPIN:
 		if !relay.ValidWebPIN(input.webPIN) {
@@ -145,7 +148,9 @@ func buildHandler(cfg config) (http.Handler, error) {
 		if req.URL.Path == "/" || req.URL.Path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(strings.ReplaceAll(string(indexHTML), "__ARIEL_WEB_AUTH__", cfg.webAuth)))
+			html := strings.ReplaceAll(string(indexHTML), "__ARIEL_WEB_AUTH__", cfg.webAuth)
+			html = strings.ReplaceAll(html, "__ARIEL_CHILLING_FILE_CONTEXT__", map[bool]string{true: "true", false: "false"}[cfg.enableChillingFileContext])
+			_, _ = w.Write([]byte(html))
 			return
 		}
 		files.ServeHTTP(w, req)
@@ -154,10 +159,12 @@ func buildHandler(cfg config) (http.Handler, error) {
 }
 
 func main() {
+	enableChilling := flag.Bool("enable-chilling-file-context", os.Getenv("ARIEL_ENABLE_CHILLING_FILE_CONTEXT") == "true", "enable Chilling file-context UI")
+	flag.Parse()
 	cfg, err := configFromInput(configInput{
 		token: os.Getenv("ARIEL_TOKEN"), webPIN: os.Getenv("ARIEL_WEB_PIN"), webAuth: os.Getenv("ARIEL_WEB_AUTH"), origins: os.Getenv("ARIEL_ORIGINS"),
 		publicOrigin: os.Getenv("ARIEL_PUBLIC_ORIGIN"), rpID: os.Getenv("ARIEL_WEBAUTHN_RP_ID"), credentialsFile: os.Getenv("ARIEL_WEBAUTHN_CREDENTIALS_FILE"),
-		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"),
+		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: *enableChilling,
 	})
 	if err != nil {
 		log.Fatal(err)

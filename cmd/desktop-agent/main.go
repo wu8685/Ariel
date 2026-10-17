@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log"
 	"math/rand"
 	"net/url"
@@ -16,7 +17,10 @@ import (
 	"github.com/wu8685/Ariel/internal/probe"
 )
 
-type config struct{ url, token, deviceID, deviceName, appPath, socket string }
+type config struct {
+	url, token, deviceID, deviceName, appPath, socket, chillingEndpoint string
+	chillingEnabled                                                     bool
+}
 
 type reconnectBackoff struct{ next time.Duration }
 
@@ -42,13 +46,19 @@ func configFrom(relayURL, token, deviceID, deviceName, appPath, socket string) (
 	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" || parsed.Path != "/ws" || parsed.RawQuery != "" {
 		return config{}, errors.New("ARIEL_RELAY_URL must be ws(s)://host/ws")
 	}
-	return config{relayURL, token, deviceID, deviceName, appPath, socket}, nil
+	return config{url: relayURL, token: token, deviceID: deviceID, deviceName: deviceName, appPath: appPath, socket: socket}, nil
 }
 
 func main() {
+	enableChilling := flag.Bool("enable-chilling-file-context", os.Getenv("ARIEL_ENABLE_CHILLING_FILE_CONTEXT") == "true", "enable the local Chilling file-context gateway")
+	chillingEndpoint := flag.String("chilling-endpoint", os.Getenv("ARIEL_CHILLING_ENDPOINT"), "Chilling unix:// endpoint")
+	flag.Parse()
 	defaults, err := probe.Defaults()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *enableChilling && *chillingEndpoint == "" {
+		log.Fatal("--chilling-endpoint is required when Chilling file context is enabled")
 	}
 	appPath := os.Getenv("ARIEL_APP_PATH")
 	if appPath == "" {
@@ -62,6 +72,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	cfg.chillingEnabled, cfg.chillingEndpoint = *enableChilling, *chillingEndpoint
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	desktopVersion, err := probe.DesktopVersion(ctx, cfg.appPath)
@@ -104,7 +115,7 @@ func main() {
 			backoff.connected()
 			return nil
 		}
-		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, OnReady: onReady, OnNotReady: clearReady})
+		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, ChillingEnabled: cfg.chillingEnabled, ChillingEndpoint: cfg.chillingEndpoint, OnReady: onReady, OnNotReady: clearReady})
 		if ctx.Err() != nil {
 			break
 		}

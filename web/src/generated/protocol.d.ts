@@ -40,6 +40,8 @@ export type Request = {
     | "thread.image"
     | "thread.subscribe"
     | "thread.unsubscribe"
+    | "file.context.changes"
+    | "file.context.read"
     | "turn.start"
     | "turn.interrupt"
     | "queue.add"
@@ -133,6 +135,7 @@ export interface Capabilities {
   threadArchiveUndo?: boolean;
   threadRename?: boolean;
   threadPin?: boolean;
+  chillingFileContext?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";
@@ -158,7 +161,15 @@ export interface Error {
     | "OVERLOADED"
     | "DUPLICATE_AGENT"
     | "NOT_FOUND"
-    | "TIMEOUT";
+    | "TIMEOUT"
+    | "FEATURE_DISABLED"
+    | "CHILLING_UNAVAILABLE"
+    | "CONTRACT_UNSUPPORTED"
+    | "FILE_NOT_FOUND"
+    | "PATH_NOT_ALLOWED"
+    | "UNSUPPORTED_FILE_TYPE"
+    | "FILE_TOO_LARGE"
+    | "FILE_CHANGED";
   message: string;
 }
 export interface DeviceStatus {
