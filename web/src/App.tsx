@@ -18,7 +18,7 @@ import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin, unreadP
 import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
-import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type OpenFile } from "./file-context";
+import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileView, type FileViewMode, type OpenFile } from "./file-context";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
@@ -279,7 +279,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
 	const [fileQuotes, setFileQuotes] = useState<FileQuote[]>([]);
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
-	const [openFile, setOpenFile] = useState<OpenFile | null>(null);
+	const [openFile, setOpenFile] = useState<FileView | null>(null);
+	const openFileGeneration = useRef(0);
 	const fileChangeRequests = useRef(new Set<string>());
 	const fileContentCache = useRef(new FileContentCache());
 	const fileContentCacheEpoch = useRef("");
@@ -399,6 +400,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		const epoch = deviceId ? `${deviceId}\u0000${device?.agentEpoch || ""}` : "";
 		if (fileContentCacheEpoch.current && fileContentCacheEpoch.current !== epoch) {
 			fileContentCache.current.clear();
+			openFileGeneration.current++;
 			setOpenFile(null);
 		}
 		fileContentCacheEpoch.current = epoch;
@@ -433,19 +435,30 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		});
 	}, [client, device?.agentEpoch, deviceId, fileChanges, fileContextEnabled, view?.threadId, displayedTurns.map(turn=>`${turn.turnId}:${turn.status}`).join("|")]);
 
-	async function openChangedFile(turn: Turn, change: FileChange) {
-		if (!fileContextEnabled || !view || !deviceId || change.kind === "delete") return;
-		const cacheKey = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turn.turnId}\u0000${change.itemId}\u0000${change.path}`;
+	async function openChangedFile(turnId: string, change: FileChange, mode:FileViewMode) {
+		if (!fileContextEnabled || !view || !deviceId || (mode === "source" && change.kind === "delete") || (mode === "diff" && !change.diff)) return;
+		const generation=++openFileGeneration.current;
+		const base:FileView={threadId:view.threadId,turnId,change,mode};
+		if(mode==="diff"){
+			setOpenFile(current=>current?.threadId===base.threadId&&current.turnId===base.turnId&&current.change.itemId===change.itemId&&current.change.path===change.path?{...base,file:current.file}:base);
+			return;
+		}
+		const cacheKey = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turnId}\u0000${change.itemId}\u0000${change.path}`;
 		const cached = fileContentCache.current.get(cacheKey);
-		if (cached) { setOpenFile(cached); return; }
-		const response = await client.request("file.context.read",deviceId,{threadId:view.threadId,turnId:turn.turnId,itemId:change.itemId,path:change.path});
-		if (response.outcome !== "accepted") { setNotice(errorText(response)); return; }
+		if (cached) { setOpenFile({...base,file:cached}); return; }
+		setOpenFile(current=>current?.threadId===base.threadId&&current.turnId===base.turnId&&current.change.itemId===change.itemId&&current.change.path===change.path?{...base,file:current.file,loading:true}:{...base,loading:true});
+		const response = await client.request("file.context.read",deviceId,{threadId:view.threadId,turnId,itemId:change.itemId,path:change.path});
+		if(generation!==openFileGeneration.current)return;
+		if (response.outcome !== "accepted") { setOpenFile(null);setNotice(errorText(response)); return; }
 		const value=response.data as Partial<OpenFile> | undefined;
-		if (!value || typeof value.content!=="string" || typeof value.sha256!=="string" || typeof value.modifiedAtMs!=="number" || typeof value.lineCount!=="number" || typeof value.language!=="string" || value.version!=="current-workspace") { setNotice("文件响应格式无法识别。"); return; }
-		const file = {...value,threadId:view.threadId,turnId:turn.turnId,itemId:change.itemId,path:change.path} as OpenFile;
+		if (!value || typeof value.content!=="string" || typeof value.sha256!=="string" || typeof value.modifiedAtMs!=="number" || typeof value.lineCount!=="number" || typeof value.language!=="string" || value.version!=="current-workspace") { setOpenFile(null);setNotice("文件响应格式无法识别。"); return; }
+		const file:OpenFile={threadId:view.threadId,turnId,itemId:change.itemId,path:change.path,content:value.content,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace"};
 		fileContentCache.current.set(cacheKey,file);
-		setOpenFile(file);
+		setOpenFile({...base,file});
 	}
+
+	function closeFile(){openFileGeneration.current++;setOpenFile(null);}
+	function changeFileMode(mode:FileViewMode){if(!openFile)return;void openChangedFile(openFile.turnId,openFile.change,mode);}
 
   function agentEpochFor(id: string): string {
     return devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || "";
@@ -792,7 +805,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
-    setView(null); setThreadId(""); setDraft(""); setScreenshots([]); setFileQuotes([]); setOpenFile(null); resetHistory();
+    openFileGeneration.current++; setView(null); setThreadId(""); setDraft(""); setScreenshots([]); setFileQuotes([]); setOpenFile(null); resetHistory();
     fileContentCache.current.clear(); fileContentCacheEpoch.current = "";
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
@@ -2281,9 +2294,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={change=>void openChangedFile(turn,change)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={change=>void openChangedFile(turn,change)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} />)}
         </div>
         {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
@@ -2339,11 +2352,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     })()}
     {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
-		{openFile && <FileViewer file={openFile} onClose={()=>setOpenFile(null)} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);setOpenFile(null);window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
+		{openFile && <FileViewer view={openFile} onClose={closeFile} onModeChange={changeFileMode} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);closeFile();window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
   </div>;
 }
 
-function ConversationTurn({ turn, fileChanges, onOpenFile, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
+function ConversationTurn({ turn, fileChanges, onOpenFile, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
   const parts = groupTurnItems(turn);
   const lastPart = parts.at(-1);

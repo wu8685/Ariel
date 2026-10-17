@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { FileContentCache, FileViewer, TurnFileChanges, projectCanonicalFileContexts, selectionLines, webFileContextEnabled, type OpenFile } from "./file-context";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FileContentCache, FileViewer, TurnFileChanges, projectCanonicalFileContexts, selectionLines, webFileContextEnabled, type FileView, type OpenFile } from "./file-context";
+
+afterEach(cleanup);
 
 describe("Chilling file context UI", () => {
   it("requires the runtime flag", () => {
@@ -11,23 +13,62 @@ describe("Chilling file context UI", () => {
     expect(webFileContextEnabled()).toBe(true);
   });
 
-  it("renders bounded change cards and opens one on demand", () => {
+  it("offers independent source and diff actions for changed files", () => {
     const open = vi.fn();
-    render(<TurnFileChanges changes={[{ itemId:"i1",path:"a.go",kind:"update"},{itemId:"i2",path:"b.go",kind:"add"}]} onOpen={open}/>);
-    fireEvent.click(screen.getByRole("button", { name: /a.go/ }));
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ path:"a.go" }));
+    render(<TurnFileChanges changes={[
+      { itemId:"i1",path:"a.go",kind:"update",diff:"@@ -1 +1 @@\n-old\n+new" },
+      { itemId:"i2",path:"gone.go",kind:"delete",diff:"@@ -1 +0,0 @@\n-old" },
+    ]} onOpen={open}/>);
+    const updated = screen.getByTestId("file-change:a.go");
+    fireEvent.click(within(updated).getByRole("button", { name:"查看原文：a.go" }));
+    fireEvent.click(within(updated).getByRole("button", { name:"查看 Diff：a.go" }));
+    expect(open).toHaveBeenNthCalledWith(1, expect.objectContaining({ path:"a.go" }), "source");
+    expect(open).toHaveBeenNthCalledWith(2, expect.objectContaining({ path:"a.go" }), "diff");
+    const deleted = screen.getByTestId("file-change:gone.go");
+    expect((within(deleted).getByRole("button", { name:"查看原文：gone.go" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(deleted).getByRole("button", { name:"查看 Diff：gone.go" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("turns a browser range into exact 1-based lines", () => {
     expect(selectionLines("one\ntwo\nthree", 4, 7)).toEqual({ startLine:2, endLine:2, text:"two" });
+    expect(selectionLines("one\r\ntwo", 5, 8)).toEqual({ startLine:2, endLine:2, text:"two" });
   });
 
-  it("adds a validated file quote from the viewer", () => {
+  it("keeps a partial duplicate selection in the viewer until explicit quote", () => {
     const quote = vi.fn();
-    const file: OpenFile = { threadId:"t",turnId:"turn",itemId:"item",path:"a.go",content:"one\ntwo",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:2,language:"go",version:"current-workspace" };
-    render(<FileViewer file={file} onClose={()=>{}} onQuote={quote}/>);
-    fireEvent.click(screen.getByRole("button", { name:"引用第 1 行" }));
-    expect(quote).toHaveBeenCalledWith(expect.objectContaining({ path:"a.go",startLine:1,endLine:1,text:"one" }));
+    const close = vi.fn();
+    const file: OpenFile = { threadId:"t",turnId:"turn",itemId:"item",path:"a.go",content:"repeat one\nrepeat two",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:2,language:"go",version:"current-workspace" };
+    const view: FileView = { threadId:"t",turnId:"turn",change:{itemId:"item",path:"a.go",kind:"update",diff:"@@ -1 +1 @@\n-repeat one\n+repeat two"},mode:"source",file };
+    render(<FileViewer view={view} onClose={close} onModeChange={()=>{}} onQuote={quote}/>);
+    const code = screen.getAllByTestId("file-source-line")[1].querySelector("code")!;
+    const range = document.createRange();
+    range.setStart(code.firstChild!, 0);
+    range.setEnd(code.firstChild!, 6);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.mouseUp(screen.getByTestId("file-source"));
+    expect(screen.getByText("已选择 L2")).toBeTruthy();
+    expect(close).not.toHaveBeenCalled();
+    expect(quote).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name:/引用第/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name:"引用到会话" }));
+    expect(quote).toHaveBeenCalledWith(expect.objectContaining({ path:"a.go",startLine:2,endLine:2,text:"repeat" }));
+  });
+
+  it("renders a read-only truncated diff and returns without quoting", () => {
+    const close = vi.fn();
+    const mode = vi.fn();
+    const view: FileView = {threadId:"t",turnId:"turn",change:{itemId:"item",path:"a.go",kind:"update",diff:"@@ -1 +1 @@\n-old\n+new",diffTruncated:true},mode:"diff"};
+    render(<FileViewer view={view} onClose={close} onModeChange={mode} onQuote={()=>{}}/>);
+    expect(screen.getByText("Diff 已截断")).toBeTruthy();
+    expect(screen.getByText("-old").classList.contains("diff-delete")).toBe(true);
+    expect(screen.getByText("+new").classList.contains("diff-add")).toBe(true);
+    expect(screen.queryByRole("button", {name:"引用到会话"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name:"返回会话"}));
+    expect(close).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", {name:"查看原文"}));
+    expect(mode).toHaveBeenCalledWith("source");
   });
 
   it("projects canonical context as metadata without swallowing malformed text", () => {
