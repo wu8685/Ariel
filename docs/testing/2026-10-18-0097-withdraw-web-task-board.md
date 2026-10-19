@@ -35,3 +35,15 @@ go test ./... -count=1
 完整 Playwright 40 项中 37 项通过。本规格新增 2 项及会话草稿、缓存、文件引用、恢复相关项均通过；其余 3 项是无关的旧品牌／Passkey 截图漂移与登录 Logo 旧文件名断言，未修改其基线。
 
 物理 iPhone／Safari 留给用户复验，不以 Chromium touch viewport 代替。
+
+## 2026-10-19 公网部署
+
+公网当前运行 `ariel-relay:9f64fc1-web-only`。由于部署前的 `ariel-relay:0096-20261018` 包含尚未合入 Git 的后台 task／Obsidian 能力，本次没有用 `main@9f64fc1` 的旧 Relay binary 覆盖它，而是构建派生镜像：保留 0096 Relay binary，只将 `main@9f64fc1` 构建出的 `/app/web/dist` 复制进去。
+
+- 新旧 `/app/ariel-relay` SHA-256 均为 `1d9a83d94fc584fcef17e11c79323ce2f9a8a0cd0ae3ab413e6dfb0753583a9e`。
+- 容器状态 `running/healthy`，公网 `https://www.kan.chat/healthz` 返回 `ok`。
+- 公网主资产为 `/assets/index-C1aBs2jN.js` 和 `/assets/index-CASQioDl.css`。
+- HTML 无 `ariel-enable-tasks` meta；JS 无「进入任务看板」和 `CHILLING · TASKS` 标记。
+- `ARIEL_ENABLE_TASKS=true` 与 `ARIEL_ENABLE_CHILLING_FILE_CONTEXT=true` 保持不变，说明只撤回 Web 看板入口，没有关闭后台 task gateway 或文件上下文。
+- 本机 Desktop Agent 在切换后 8 秒内更新 ready marker，并恢复到 `www.kan.chat:443` 的 `ESTABLISHED` 连接。
+- 旧容器以停止状态保留为 `ariel-relay-rollback-0096-before-web-withdrawal`，可用于回滚。

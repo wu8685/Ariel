@@ -1,6 +1,6 @@
 # 0097：撤回 Web 任务看板入口
 
-- 状态：Implemented（2026-10-18；Web 237 项、Go 全仓、production build、桌面／手机真实 Chromium 专项已验；物理 iPhone／Safari 待用户复验）
+- 状态：Implemented（2026-10-19 已部署公网；Web 237 项、Go 全仓、production build、桌面／手机真实 Chromium 专项已验；物理 iPhone／Safari 待用户复验）
 - 影响范围：Ariel Web、Relay 的 Web HTML 配置注入与对应浏览器测试
 - 不影响范围：Ariel Relay／Desktop Agent 的 task protocol 与后台路由、chilling 的任务领域／MySQL／scheduler，以及既有会话和文件上下文能力
 - 取代关系：本规格获批后，取代 0091 中“Web 看板、导航与 task client”相关要求；0091 的后台 task gateway、跨主机路由和 chilling SSOT 边界继续有效
