@@ -254,22 +254,49 @@ func normalizeBootstrapInteraction(id string, frame appserver.IncomingFrame) map
 	if kind == "user_input" {
 		var value struct {
 			Questions []struct {
-				ID, Question string
-				Options      []struct {
-					Label string `json:"label"`
+				ID, Header, Question string
+				IsSecret             bool `json:"isSecret"`
+				Options              []struct {
+					Label       string `json:"label"`
+					Description string `json:"description"`
 				} `json:"options"`
 			} `json:"questions"`
 		}
-		if json.Unmarshal(frame.Params, &value) == nil {
+		if json.Unmarshal(frame.Params, &value) == nil && len(value.Questions) > 0 && len(value.Questions) <= 3 {
 			questions := make([]any, 0, len(value.Questions))
 			for _, question := range value.Questions {
+				if question.IsSecret || strings.TrimSpace(question.ID) == "" || strings.TrimSpace(question.Question) == "" {
+					card["kind"] = "unsupported"
+					card["prompt"] = "此问题需要在电脑端处理。"
+					card["availableDecisions"] = []any{}
+					delete(card, "questions")
+					return card
+				}
 				options := make([]any, 0, len(question.Options))
 				for _, option := range question.Options {
-					options = append(options, option.Label)
+					if strings.TrimSpace(option.Label) == "" {
+						card["kind"] = "unsupported"
+						card["prompt"] = "此问题需要在电脑端处理。"
+						card["availableDecisions"] = []any{}
+						return card
+					}
+					normalized := map[string]any{"label": option.Label}
+					if option.Description != "" {
+						normalized["description"] = option.Description
+					}
+					options = append(options, normalized)
 				}
-				questions = append(questions, map[string]any{"id": question.ID, "question": question.Question, "options": options})
+				normalized := map[string]any{"id": question.ID, "question": question.Question, "options": options}
+				if question.Header != "" {
+					normalized["header"] = question.Header
+				}
+				questions = append(questions, normalized)
 			}
 			card["questions"] = questions
+		} else {
+			card["kind"] = "unsupported"
+			card["prompt"] = "此问题需要在电脑端处理。"
+			card["availableDecisions"] = []any{}
 		}
 	}
 	return card

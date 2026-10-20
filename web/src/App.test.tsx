@@ -2095,8 +2095,8 @@ describe("Ariel app interactions", () => {
     ] }] };
     const { socket, requests } = await openFixture(thread);
     expect((screen.getByRole("button", { name: "提交回答" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByPlaceholderText("选择建议或自行输入"), { target: { value: "Blue" } });
-    fireEvent.change(screen.getByPlaceholderText("输入回答"), { target: { value: "自由文本" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Blue" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "说明" }), { target: { value: "自由文本" } });
     fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
     expect(requests("interaction.respond")).toHaveLength(1);
     expect(requests("interaction.respond")[0]).toMatchObject({ deviceId: "mac", params: { threadId: "fixture", interactionId: "req-1", decision: "answer", answers: { choice: ["Blue"], note: ["自由文本"] } } });

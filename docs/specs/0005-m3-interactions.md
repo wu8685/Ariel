@@ -3,6 +3,8 @@
 - 状态：实施中。沿用户已确认的 MVP 范围和 0002 审批语义推进；用户已授权连续开发，实施中遇到无法确认的原生行为必须 fail closed。
 - 依据：[0002 审批拒绝语义](0002-approval-denial-semantics.md)、[M0 兼容性报告](../compatibility/2026-10-03-m0.md)、[协议基线](baseline/2026-10-03-codex-remote-protocol.md)。
 
+> 2026-10-20：`requestUserInput` 的原响应链路保持不变；结构化选项、短标题和 Codex 风格 Web 输入卡片的增强范围见 0098，确认后以 0098 为准。
+
 ## 输入、输出和边界
 
 - 输入：Web `interaction.respond` 的 threadId、interactionId、decision、可选 answers；Desktop owner 当前 live snapshot。

@@ -241,7 +241,7 @@ func TestNormalizePendingUserInputResponseDoesNotClaimAnswered(t *testing.T) {
 }
 
 func TestNormalizeCanonicalLiveStatusAndPendingInput(t *testing.T) {
-	state := json.RawMessage(`{"cwd":"/project/a","threadRuntimeStatus":{"type":"inProgress"},"requests":[{"id":7,"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"q","header":"Choice","question":"Choose?","options":[{"label":"A"},{"label":"B"}]}]}}],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"key-1"}]}],"entitiesByKey":{"key-1":{"turnId":"turn-1","status":"inProgress","items":[{"type":"agentMessage","id":"a1","text":"working"}]}}}}}`)
+	state := json.RawMessage(`{"cwd":"/project/a","threadRuntimeStatus":{"type":"inProgress"},"requests":[{"id":7,"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"q","header":"Choice","question":"Choose?","options":[{"label":"A","description":"Recommended option"},{"label":"B"}]}]}}],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"key-1"}]}],"entitiesByKey":{"key-1":{"turnId":"turn-1","status":"inProgress","items":[{"type":"agentMessage","id":"a1","text":"working"}]}}}}}`)
 	thread, err := NormalizeLive("thread-1", "Title", "/project/a", state)
 	if err != nil {
 		t.Fatal(err)
@@ -256,6 +256,14 @@ func TestNormalizeCanonicalLiveStatusAndPendingInput(t *testing.T) {
 	interactions := thread["pendingInteractions"].([]any)
 	if len(interactions) != 1 || interactions[0].(map[string]any)["kind"] != "user_input" || interactions[0].(map[string]any)["interactionId"] == "" {
 		t.Fatalf("interactions: %v", interactions)
+	}
+	question := interactions[0].(map[string]any)["questions"].([]any)[0].(map[string]any)
+	if question["header"] != "Choice" {
+		t.Fatalf("question header lost: %v", question)
+	}
+	options := question["options"].([]any)
+	if len(options) != 2 || options[0].(map[string]any)["label"] != "A" || options[0].(map[string]any)["description"] != "Recommended option" || options[1].(map[string]any)["label"] != "B" {
+		t.Fatalf("structured options lost: %v", options)
 	}
 }
 

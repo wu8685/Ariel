@@ -50,7 +50,8 @@ describe("fixed Night appearance", () => {
     for (const selector of [".connect-panel", ".sidebar", ".conversation", ".composer", ".interaction-card"]) {
       expect(style, selector).toMatch(new RegExp(`${selector.replace(".", "\\.")}\\s*\\{[^}]*background:\\s*var\\(--color-`, "s"));
     }
-    expect(interaction).toMatch(/\.question input\s*\{[^}]*background:\s*var\(--color-/s);
+    expect(interaction).toMatch(/\.question textarea\s*\{[^}]*background:\s*var\(--color-/s);
+    expect(interaction).toMatch(/\.question-option\s*\{[^}]*background:\s*var\(--color-/s);
     expect(style).toMatch(/@media\s*\(max-width:\s*800px\)/);
     expect(style).toMatch(/prefers-reduced-motion/);
   });
@@ -179,7 +180,7 @@ describe("fixed Night appearance", () => {
 
   it("keeps mobile approval and question fields from magnifying the page on focus", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
-    expect(mobile).toMatch(/\.question input,\s*\.question select\s*\{[^}]*font-size:\s*16px;[^}]*min-width:\s*0/s);
+    expect(mobile).toMatch(/\.question textarea\s*\{[^}]*font-size:\s*16px;[^}]*min-width:\s*0/s);
   });
 
   it("visually distinguishes an unavailable mobile send button from the blue active button", () => {

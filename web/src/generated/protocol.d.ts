@@ -226,11 +226,107 @@ export interface Interaction {
   kind: "command_approval" | "file_approval" | "permission_request" | "user_input" | "unsupported";
   prompt: string;
   availableDecisions: ("deny" | "deny_and_stop" | "accept_once" | "answer")[];
-  questions?: {
-    id: Id;
-    question: string;
-    options?: string[];
-  }[];
+  /**
+   * @minItems 1
+   * @maxItems 3
+   */
+  questions?:
+    | [
+        {
+          id: Id;
+          header?: string;
+          question: string;
+          /**
+           * @maxItems 32
+           */
+          options?: (
+            | string
+            | {
+                label: string;
+                description?: string;
+              }
+          )[];
+        }
+      ]
+    | [
+        {
+          id: Id;
+          header?: string;
+          question: string;
+          /**
+           * @maxItems 32
+           */
+          options?: (
+            | string
+            | {
+                label: string;
+                description?: string;
+              }
+          )[];
+        },
+        {
+          id: Id;
+          header?: string;
+          question: string;
+          /**
+           * @maxItems 32
+           */
+          options?: (
+            | string
+            | {
+                label: string;
+                description?: string;
+              }
+          )[];
+        }
+      ]
+    | [
+        {
+          id: Id;
+          header?: string;
+          question: string;
+          /**
+           * @maxItems 32
+           */
+          options?: (
+            | string
+            | {
+                label: string;
+                description?: string;
+              }
+          )[];
+        },
+        {
+          id: Id;
+          header?: string;
+          question: string;
+          /**
+           * @maxItems 32
+           */
+          options?: (
+            | string
+            | {
+                label: string;
+                description?: string;
+              }
+          )[];
+        },
+        {
+          id: Id;
+          header?: string;
+          question: string;
+          /**
+           * @maxItems 32
+           */
+          options?: (
+            | string
+            | {
+                label: string;
+                description?: string;
+              }
+          )[];
+        }
+      ];
 }
 export interface QueuedMessage {
   queueId: Id;

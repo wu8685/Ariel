@@ -34,11 +34,26 @@ describe("interaction cards", () => {
 
   it("requires answers to all questions before submission", () => {
     const onRespond = vi.fn();
-    const question = { ...card("user_input", ["answer"]), questions: [{ id: "choice", question: "选择颜色", options: ["Blue"] }, { id: "note", question: "说明" }] };
+    const question = { ...card("user_input", ["answer"]), questions: [{ id: "choice", question: "选择颜色", options: ["Blue"] }, { id: "note", question: "说明" }] } as Interaction;
     const { rerender } = render(<InteractionCard card={question} values={{}} onChange={vi.fn()} onRespond={onRespond} disabled={false} />);
     expect((screen.getByRole("button", { name: "提交回答" }) as HTMLButtonElement).disabled).toBe(true);
     rerender(<InteractionCard card={question} values={{ choice: "Blue", note: "测试说明" }} onChange={vi.fn()} onRespond={onRespond} disabled={false} />);
     fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
     expect(onRespond).toHaveBeenCalledWith("answer");
+  });
+
+  it("renders touch options with descriptions and reveals an explicit custom answer", () => {
+    const onChange = vi.fn();
+    const question = { ...card("user_input", ["answer"]), questions: [{ id: "choice", header: "方式", question: "请选择处理方式", options: [{ label: "继续", description: "使用当前设置继续" }, { label: "暂停" }] }] } as unknown as Interaction;
+    render(<InteractionCard card={question} values={{}} onChange={onChange} onRespond={vi.fn()} disabled={false} />);
+
+    expect(screen.getByText("方式")).toBeTruthy();
+    expect(screen.getByText("使用当前设置继续")).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /继续/ }));
+    expect(onChange).toHaveBeenCalledWith("choice", "继续");
+
+    fireEvent.click(screen.getByRole("radio", { name: "其他" }));
+    expect(screen.getByRole("textbox", { name: "自定义回答" })).toBeTruthy();
   });
 });

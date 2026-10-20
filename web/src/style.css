@@ -481,8 +481,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .interaction-card h3 { font-family: Georgia, "Songti SC", serif; font-size: 20px; font-weight: 400; margin: 10px 0; }
 .interaction-card p { line-height: 1.7; color: var(--color-muted); font-size: 13px; overflow-wrap: anywhere; }
-.question { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; font-size: 12px; color: var(--color-text); overflow-wrap: anywhere; }
-.question select { background: var(--color-panel); color: var(--color-text); border: 1px solid var(--color-border-strong); padding: 10px; border-radius: 3px; }
+.question { display: flex; min-width: 0; flex-direction: column; gap: 9px; margin: 16px 0; padding: 0; border: 0; font-size: 12px; color: var(--color-text); overflow-wrap: anywhere; }
+.question legend { width: 100%; padding: 0; }
 .interaction-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 .secondary { border: 1px solid var(--color-border-strong); background: var(--color-panel); color: var(--color-text); border-radius: 4px; padding: 10px 14px; }
 .secondary:hover:not(:disabled) { background: var(--color-raised); border-color: var(--color-subtle); }
@@ -631,7 +631,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .stop-button { display: grid; place-items: center; min-width: 36px; min-height: 36px; border-radius: 50%; padding: 0; }
   .stop-glyph { margin-right: 0; font-size: 10px; line-height: 1; }
   .stop-label { display: none; }
-  .question input, .question select { font-size: 16px; min-width: 0; max-width: 100%; }
+  .question textarea { font-size: 16px; min-width: 0; max-width: 100%; }
   .sidebar-foot { font-size: 9px; }
   .permission-strip { display: none; }
 }

@@ -105,6 +105,7 @@
 | 0086 | [大会话渐进打开、follower 大帧 hint 与 live controller 暖保留](0086-progressive-open-frame-hint-and-warm-controller.md) | Implemented（Go 全量／Web 210／真实移动 Chromium 31／build 已验） | thread.read 快路径先渲染只读历史，owner 就绪后无闪空接管；已知大帧跳过注定失败的小 follower；退订后 90 秒暖保留 |
 | 0089 | [Chilling 文件上下文前端与可选接入](0089-turn-file-links-and-selection-context.md) | Implemented（2026-10-17；实际使用验收通过） | Ariel 提供可选 Web UI 与受限 gateway；Codex 文件读取和选区校验由本机 Chilling 负责 |
 | 0093 | [Large follower 空闲抢占与只读会话恢复](0093-large-follower-idle-preemption-and-readonly-recovery.md) | Implemented（Go／race／Web／真实移动 Chromium／build 已验） | 空闲暖缓存可被当前大会话安全接管；活跃会话不抢占，Web 展示明确只读原因并支持重新连接 |
+| 0098 | [会话内用户输入卡片](0098-conversation-user-input-cards.md) | Approved（2026-10-20） | 完善现有 `requestUserInput` 链路，支持结构化选项、自定义回答及当前版本真实回归 |
 
 ## 设计基线
 

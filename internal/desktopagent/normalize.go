@@ -436,10 +436,12 @@ func normalizeInteraction(threadID, cwd string, state, raw json.RawMessage) (map
 			Available []json.RawMessage `json:"availableDecisions"`
 			Questions []struct {
 				ID       string `json:"id"`
+				Header   string `json:"header"`
 				Question string `json:"question"`
 				IsSecret bool   `json:"isSecret"`
 				Options  []struct {
-					Label string `json:"label"`
+					Label       string `json:"label"`
+					Description string `json:"description"`
 				} `json:"options"`
 			} `json:"questions"`
 		} `json:"params"`
@@ -454,7 +456,7 @@ func normalizeInteraction(threadID, cwd string, state, raw json.RawMessage) (map
 	card := map[string]any{"interactionId": interactionID, "kind": "unsupported", "prompt": "此交互类型暂未支持，请在电脑端处理。", "availableDecisions": []string{}}
 	switch req.Method {
 	case "item/tool/requestUserInput":
-		if len(req.Params.Questions) == 0 {
+		if len(req.Params.Questions) == 0 || len(req.Params.Questions) > 3 {
 			return nil, ErrNativeShape
 		}
 		for _, q := range req.Params.Questions {
@@ -468,11 +470,22 @@ func normalizeInteraction(threadID, cwd string, state, raw json.RawMessage) (map
 			if q.ID == "" || q.Question == "" {
 				return nil, ErrNativeShape
 			}
-			options := make([]string, 0, len(q.Options))
+			options := make([]any, 0, len(q.Options))
 			for _, o := range q.Options {
-				options = append(options, o.Label)
+				if strings.TrimSpace(o.Label) == "" {
+					return nil, ErrNativeShape
+				}
+				option := map[string]any{"label": o.Label}
+				if o.Description != "" {
+					option["description"] = o.Description
+				}
+				options = append(options, option)
 			}
-			questions = append(questions, map[string]any{"id": q.ID, "question": q.Question, "options": options})
+			question := map[string]any{"id": q.ID, "question": q.Question, "options": options}
+			if q.Header != "" {
+				question["header"] = q.Header
+			}
+			questions = append(questions, question)
 		}
 		card["kind"] = "user_input"
 		card["prompt"] = "请回答 Codex 的补充问题"
