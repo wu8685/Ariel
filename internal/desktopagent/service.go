@@ -446,6 +446,10 @@ type normalizedLive interface {
 	CurrentThread() (map[string]any, error)
 }
 
+type refreshableLive interface {
+	Refresh(context.Context) (json.RawMessage, error)
+}
+
 type terminalBootstrapLive interface {
 	Live
 	normalizedLive
@@ -1188,6 +1192,38 @@ func currentLiveThread(c *threadController, live Live) (map[string]any, json.Raw
 	}
 	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
 	return thread, raw, err
+}
+
+// RefreshLive performs one bounded owner refresh on an already attached
+// follower. It never creates a controller, reattaches an owner, or replays a
+// mutation. The follower's ordinary Updates channel remains the sole path that
+// publishes the refreshed state to subscribers.
+func (s *Service) RefreshLive(ctx context.Context, id string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("DEVICE_OFFLINE")
+	}
+	c := s.threads[id]
+	if c == nil {
+		s.mu.Unlock()
+		return errors.New("RESYNC_REQUIRED")
+	}
+	s.clock++
+	c.lastUsed = s.clock
+	c.leases++
+	s.mu.Unlock()
+	defer s.releaseController(c)
+
+	c.mu.Lock()
+	live := c.live
+	c.mu.Unlock()
+	refreshable, ok := live.(refreshableLive)
+	if !ok {
+		return errors.New("RESYNC_REQUIRED")
+	}
+	_, err := refreshable.Refresh(ctx)
+	return err
 }
 
 // Mutation requests may be sent without an active Web subscription. They

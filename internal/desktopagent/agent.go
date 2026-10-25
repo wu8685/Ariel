@@ -35,6 +35,7 @@ type Config struct {
 	HeartbeatInterval, HeartbeatTimeout                   time.Duration
 	CacheWarmGrace, CachePublishInterval                  time.Duration
 	CacheLeaseInterval                                    time.Duration
+	CacheRecoveryGuardDelay                               time.Duration
 	CacheEntryMaxBytes                                    int
 	CachePrewarmRecent                                    bool
 	FileContext                                           FileContext
@@ -53,22 +54,23 @@ type FileContext interface {
 	Prepare(context.Context, chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error)
 }
 type agent struct {
-	tasks                *taskRuntime
-	conn                 *websocket.Conn
-	deviceID             string
-	agentEpoch           string
-	service              *Service
-	fileContext          FileContext
-	writeMu              sync.Mutex
-	cacheMu              sync.Mutex
-	cacheSubs            map[string]*cacheSubscription
-	cacheWarmGrace       time.Duration
-	cachePublishInterval time.Duration
-	cacheEntryMaxBytes   int
-	cacheLoad            chan struct{}
-	cacheSendMu          sync.Mutex
-	cachePending         map[string]cacheOutbound
-	cacheWake            chan struct{}
+	tasks                   *taskRuntime
+	conn                    *websocket.Conn
+	deviceID                string
+	agentEpoch              string
+	service                 *Service
+	fileContext             FileContext
+	writeMu                 sync.Mutex
+	cacheMu                 sync.Mutex
+	cacheSubs               map[string]*cacheSubscription
+	cacheWarmGrace          time.Duration
+	cachePublishInterval    time.Duration
+	cacheRecoveryGuardDelay time.Duration
+	cacheEntryMaxBytes      int
+	cacheLoad               chan struct{}
+	cacheSendMu             sync.Mutex
+	cachePending            map[string]cacheOutbound
+	cacheWake               chan struct{}
 }
 
 type cacheOutbound struct {
@@ -87,6 +89,8 @@ type cacheSubscription struct {
 	lastPublished  time.Time
 	structure      string
 	publishTimer   *time.Timer
+	recoveryTimer  *time.Timer
+	recoveryUsed   bool
 	pendingSeq     int64
 	pendingThread  map[string]any
 }
@@ -96,11 +100,12 @@ type cacheSubscription struct {
 // call shares one request budget; each individual attempt may use at most half
 // of it so a hung recent-list endpoint can still be rebuilt once.
 const (
-	threadListAttemptTimeout   = 15 * time.Second
-	threadListRequestTimeout   = 30 * time.Second
-	threadSubscribeLoadTimeout = 45 * time.Second
-	defaultCacheEntryMaxBytes  = 8 << 20
-	cacheSnapshotWriteTimeout  = 5 * time.Second
+	threadListAttemptTimeout       = 15 * time.Second
+	threadListRequestTimeout       = 30 * time.Second
+	threadSubscribeLoadTimeout     = 45 * time.Second
+	defaultCacheEntryMaxBytes      = 8 << 20
+	cacheSnapshotWriteTimeout      = 5 * time.Second
+	defaultCacheRecoveryGuardDelay = 45 * time.Second
 )
 
 var errCacheSnapshotOversized = errors.New("CACHE_OVERSIZED")
@@ -252,7 +257,11 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	if cacheEntryMaxBytes <= 0 || cacheEntryMaxBytes > defaultCacheEntryMaxBytes {
 		cacheEntryMaxBytes = defaultCacheEntryMaxBytes
 	}
-	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1), cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
+	cacheRecoveryGuardDelay := cfg.CacheRecoveryGuardDelay
+	if cacheRecoveryGuardDelay <= 0 {
+		cacheRecoveryGuardDelay = defaultCacheRecoveryGuardDelay
+	}
+	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheRecoveryGuardDelay: cacheRecoveryGuardDelay, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1), cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
 	defer a.releaseCacheSubscriptions()
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
@@ -426,6 +435,9 @@ func (a *agent) releaseCacheSubscriptions() {
 	for _, sub := range a.cacheSubs {
 		if sub.publishTimer != nil {
 			sub.publishTimer.Stop()
+		}
+		if sub.recoveryTimer != nil {
+			sub.recoveryTimer.Stop()
 		}
 		if strings.HasPrefix(sub.subscriptionID, "desktop-sub-") {
 			ids = append(ids, sub.subscriptionID)
@@ -790,6 +802,8 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 			seq, _ := event["seq"].(int)
 			if thread != nil {
 				a.queueCacheSnapshot(threadID, state, int64(seq), thread)
+				runtime, _ := thread["runtime"].(string)
+				a.observeCacheRecoveryState(threadID, state, runtime)
 			}
 			return
 		}
@@ -848,7 +862,80 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	}
 	a.cacheMu.Unlock()
 	activate()
+	a.armCacheRecoveryGuard(threadID, state)
 	return nil
+}
+
+func (a *agent) armCacheRecoveryGuard(threadID string, state *cacheSubscription) {
+	a.cacheMu.Lock()
+	defer a.cacheMu.Unlock()
+	if a.cacheSubs[threadID] != state || state.runtime != "inProgress" || state.recoveryUsed {
+		return
+	}
+	a.resetCacheRecoveryTimerLocked(threadID, state)
+}
+
+func (a *agent) observeCacheRecoveryState(threadID string, state *cacheSubscription, runtime string) {
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] != state {
+		a.cacheMu.Unlock()
+		return
+	}
+	state.runtime = runtime
+	if runtime != "inProgress" {
+		if state.recoveryTimer != nil {
+			state.recoveryTimer.Stop()
+			state.recoveryTimer = nil
+		}
+		a.cacheMu.Unlock()
+		return
+	}
+	if state.recoveryUsed {
+		a.cacheMu.Unlock()
+		return
+	}
+	a.resetCacheRecoveryTimerLocked(threadID, state)
+	a.cacheMu.Unlock()
+}
+
+func (a *agent) resetCacheRecoveryTimerLocked(threadID string, state *cacheSubscription) {
+	if state.recoveryTimer != nil {
+		state.recoveryTimer.Stop()
+	}
+	state.recoveryTimer = time.AfterFunc(a.cacheRecoveryGuardDelay, func() {
+		a.runCacheRecoveryGuard(threadID, state)
+	})
+}
+
+func (a *agent) runCacheRecoveryGuard(threadID string, state *cacheSubscription) {
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] != state || state.recoveryUsed || state.runtime != "inProgress" {
+		a.cacheMu.Unlock()
+		return
+	}
+	state.recoveryUsed = true
+	state.recoveryTimer = nil
+	streamID := state.streamID
+	a.cacheMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), threadSubscribeLoadTimeout)
+	err := a.service.RefreshLive(ctx, threadID)
+	cancel()
+	logPhase("cache-recovery-guard", threadID, "ok", err == nil, "error", requestErrorCode("thread.cache.touch", err))
+	if err == nil {
+		return
+	}
+
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] == state {
+		delete(a.cacheSubs, threadID)
+	}
+	subscriptionID := state.subscriptionID
+	a.cacheMu.Unlock()
+	if strings.HasPrefix(subscriptionID, "desktop-sub-") {
+		a.service.UnsubscribeAndRetire(subscriptionID)
+	}
+	a.sendCacheStatus(context.Background(), threadID, streamID, "error", "RESYNC_REQUIRED")
 }
 
 func cacheStructure(thread map[string]any) string {
@@ -993,6 +1080,9 @@ func (a *agent) evictOneCacheFollower(exclude string) bool {
 	if victim.publishTimer != nil {
 		victim.publishTimer.Stop()
 	}
+	if victim.recoveryTimer != nil {
+		victim.recoveryTimer.Stop()
+	}
 	subscriptionID := victim.subscriptionID
 	a.cacheMu.Unlock()
 	return subscriptionID != "" && a.service.UnsubscribeAndRetire(subscriptionID)
@@ -1121,6 +1211,9 @@ func (a *agent) reply(ctx context.Context, id, method string, data map[string]an
 }
 
 func requestErrorCode(method string, err error) string {
+	if err == nil {
+		return ""
+	}
 	if protocol.IsTaskMethod(method) {
 		switch code := chillingclient.CodeOf(err); code {
 		case "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT":

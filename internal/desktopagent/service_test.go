@@ -306,9 +306,81 @@ type countingLive struct {
 	currentCalls atomic.Int32
 }
 
+type refreshableFakeLive struct {
+	*fakeLive
+	refreshCalls atomic.Int32
+	refreshErr   error
+	onRefresh    func()
+}
+
 func (l *countingLive) Current() (json.RawMessage, error) {
 	l.currentCalls.Add(1)
 	return l.fakeLive.Current()
+}
+
+func (l *refreshableFakeLive) Refresh(context.Context) (json.RawMessage, error) {
+	l.refreshCalls.Add(1)
+	if l.refreshErr != nil {
+		return nil, l.refreshErr
+	}
+	if l.onRefresh != nil {
+		l.onRefresh()
+	}
+	return l.Current()
+}
+
+func TestServiceRefreshLiveUsesExistingFollowerWithoutReattach(t *testing.T) {
+	live := &refreshableFakeLive{fakeLive: &fakeLive{busy: true, updates: make(chan struct{}, 1)}}
+	attaches := atomic.Int32{}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) {
+		attaches.Add(1)
+		return live, nil
+	})
+	defer s.Close()
+	_, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	if err := s.RefreshLive(context.Background(), "thread"); err != nil {
+		t.Fatal(err)
+	}
+	if got := live.refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+	if got := attaches.Load(); got != 1 {
+		t.Fatalf("refresh reattached owner: attaches=%d", got)
+	}
+}
+
+func TestServiceRefreshLivePublishesRefreshedTerminalState(t *testing.T) {
+	live := &refreshableFakeLive{fakeLive: &fakeLive{busy: true, updates: make(chan struct{}, 1)}}
+	live.onRefresh = func() {
+		live.mu.Lock()
+		live.busy = false
+		live.mu.Unlock()
+		live.updates <- struct{}{}
+	}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	events := make(chan map[string]any, 2)
+	_, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(event map[string]any) { events <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	if err := s.RefreshLive(context.Background(), "thread"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		thread, _ := event["thread"].(map[string]any)
+		if thread["runtime"] != "idle" {
+			t.Fatalf("refreshed terminal state was not published: %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refreshed terminal state was not emitted through the follower update path")
+	}
 }
 
 func (l *staticLive) Current() (json.RawMessage, error) { return l.state, nil }

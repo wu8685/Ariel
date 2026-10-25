@@ -49,6 +49,88 @@ func TestCacheSnapshotMailboxKeepsOnlyLatestPerThread(t *testing.T) {
 	}
 }
 
+func TestRestartRecoveryGuardRefreshesSilentInProgressFollowerOnlyOnce(t *testing.T) {
+	live := &refreshableFakeLive{fakeLive: &fakeLive{busy: true, updates: make(chan struct{}, 2)}}
+	service := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+	_, _, _, activate, err := service.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	state := &cacheSubscription{runtime: "inProgress"}
+	a := &agent{
+		service: service, cacheSubs: map[string]*cacheSubscription{"thread": state},
+		cacheRecoveryGuardDelay: 20 * time.Millisecond,
+	}
+	a.armCacheRecoveryGuard("thread", state)
+	deadline := time.After(time.Second)
+	for live.refreshCalls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("silent in-progress follower was not refreshed")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := live.refreshCalls.Load(); got != 1 {
+		t.Fatalf("recovery guard refreshed %d times, want exactly once", got)
+	}
+}
+
+func TestRestartRecoveryGuardCancelsWhenFollowerBecomesTerminal(t *testing.T) {
+	live := &refreshableFakeLive{fakeLive: &fakeLive{busy: true, updates: make(chan struct{}, 2)}}
+	service := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+	_, _, _, activate, err := service.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	state := &cacheSubscription{runtime: "inProgress"}
+	a := &agent{
+		service: service, cacheSubs: map[string]*cacheSubscription{"thread": state},
+		cacheRecoveryGuardDelay: 40 * time.Millisecond,
+	}
+	a.armCacheRecoveryGuard("thread", state)
+	a.observeCacheRecoveryState("thread", state, "idle")
+	time.Sleep(80 * time.Millisecond)
+	if got := live.refreshCalls.Load(); got != 0 {
+		t.Fatalf("terminal follower still triggered %d recovery refreshes", got)
+	}
+}
+
+func TestRestartRecoveryGuardResetsQuietWindowOnFollowerUpdate(t *testing.T) {
+	live := &refreshableFakeLive{fakeLive: &fakeLive{busy: true, updates: make(chan struct{}, 2)}}
+	service := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+	_, _, _, activate, err := service.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	state := &cacheSubscription{runtime: "inProgress"}
+	a := &agent{
+		service: service, cacheSubs: map[string]*cacheSubscription{"thread": state},
+		cacheRecoveryGuardDelay: 60 * time.Millisecond,
+	}
+	a.armCacheRecoveryGuard("thread", state)
+	time.Sleep(40 * time.Millisecond)
+	a.observeCacheRecoveryState("thread", state, "inProgress")
+	time.Sleep(35 * time.Millisecond)
+	if got := live.refreshCalls.Load(); got != 0 {
+		t.Fatalf("ordinary follower update did not reset the quiet window: refreshes=%d", got)
+	}
+	deadline := time.After(time.Second)
+	for live.refreshCalls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("guard did not refresh after the reset quiet window elapsed")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestThreadListRequestContextBudgetsOnlyMenuRefresh(t *testing.T) {
 	parent := context.Background()
 	listCtx, cancel := threadListRequestContext(parent, "")

@@ -1,6 +1,6 @@
 # 0107：Agent Transport 解耦与 Cache 自愈恢复
 
-- 状态：Implemented（用户于 2026-10-25 确认；2026-10-26 完成实现与自动化验收）
+- 状态：Implemented（用户于 2026-10-25 确认主体设计；2026-10-26 明确批准并完成 restart recovery guard 方案 B）
 - 日期：2026-10-25
 - 依据：[0100 Agent 持续跟随与 Relay 双 Turn Hot Cache](0100-agent-fed-relay-two-turn-hot-cache.md)、[0103 轻量历史首屏与 Owner 后台同步](0103-lightweight-history-first-owner-sync.md)、[0104 原生大字段 Lazy 化与当前会话 Tool 实时摘要](0104-lazy-native-payloads-and-selected-tool-sync.md)
 - 取代范围：本规格取代 0100 §6.3、§7.1.4、§7.2 中关于 freshness、重新 watched 必然重绑 owner、Agent 重连后全量恢复 cache follower 的行为；未明确取代的容量、安全和 mutation fencing 规则继续有效。
@@ -89,6 +89,16 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 3. lease 过期、stream gap 或明确 stale 时，Relay 才发起一次 coalesced promotion。
 4. Desktop Agent 若确认 follower 仍有效，应通过 lease／status 恢复 fresh；只有 follower 不存在或 owner 失效时才 cold attach。
 
+### 5.4 Restart recovery guard
+
+1. Agent 新进程连接 Relay 后，Relay 必须按现有 watcher／active cache 集合发送有界 `thread.cache.touch(watching=true)`；Agent 对每个目标重新发现当前 Codex owner、建立 follower，并以新的 cache stream 发布当前双 turn snapshot。
+2. cold attach 的首帧若不是 `inProgress`，不得增加额外刷新；后续仅消费 follower update。
+3. cold attach 的首帧若是 `inProgress`，Agent 必须启动一次性的 recovery guard。正常 follower update 会推迟 guard；会话转入 terminal runtime 时立即取消 guard。
+4. `inProgress` follower 在 guard 静默窗口内始终没有 update 时，Agent 允许且至多执行一次 owner full refresh。该 refresh 只重建当前可观察状态，不重放发送、停止、审批、回答或 queue mutation。
+5. refresh 成功后仍以正常 follower update 路径生成新的完整双 turn snapshot；不得另建 Relay/Web 状态分支。refresh 失败时将 cache 标为 stale／`RESYNC_REQUIRED`，旧正文只读保留，不能继续仅凭 lease 把旧 `inProgress` snapshot 声明为 fresh。
+6. recovery guard 是 cold attach 后的有界单次自愈，不是常驻轮询；同一 cache subscription 生命周期最多触发一次。Web 数量增加不得增加 guard 或 refresh 次数。
+7. guard delay 必须可测试、可配置；production 默认值需覆盖 Agent 重启与 owner stream 重新稳定的竞态窗口，同时不得按会话正文大小动态延长。
+
 ## 6. Promotion 状态机
 
 每个 device／thread promotion 只能处于：
@@ -146,6 +156,9 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 3. 长时间 snapshot write 不阻止 heartbeat control path；snapshot timeout 后 stream 进入 stale且连接可继续或明确重连。
 4. 同一 thread 多次 touch 被 coalesce；warm follower touch 不调用 unsubscribe／owner attach。
 5. promotion queue 满时返回 terminal status，不留下永久 running 状态。
+6. cold attach 首帧为 `inProgress` 且 follower 静默时，guard 只触发一次 owner refresh；refresh 得到 terminal 状态后发布新的 cache snapshot。
+7. guard 前收到 follower update 会重置静默窗口；收到 terminal update 会取消 guard；idle 首帧不启动 guard。
+8. guard refresh 失败时 cache 进入 stale／`RESYNC_REQUIRED`，但 Agent transport、其他 follower 和旧只读正文不受影响。
 
 ### 10.2 Relay
 
@@ -180,6 +193,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 6. Agent epoch 变化后旧双 turn cache立即可读但不可写；fresh cache 到达后安全接管。
 7. 既有 Go test／race／vet、Web unit／build、Playwright 全通过，并补齐上述故障注入回归。
 8. 真实日志中不再出现由 snapshot write lock 导致的 Pong timeout；同设备正常重连不形成持续 `duplicate agent` 循环。
+9. Agent 在 active turn 期间重启、首帧恢复为 `inProgress` 且后续 terminal patch 被故障注入丢弃时，Web 在 guard deadline 后收到 terminal snapshot 或明确 stale 状态，不得无限显示“思考中”。
 
 ## 12. 实现与验收记录
 
@@ -192,3 +206,4 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 5. 同设备认证 transport 支持原子接管；旧 transport 的迟到 cache frame 通过 peer identity fence 丢弃。
 6. Web 跨 `agentEpoch` 保留最近双 turn durable display cache，并在离线／恢复期间剥离 permissions、pending interactions 和 queue，仅以 stale／read-only 方式展示。
 7. 自动化结果：`go test ./...`、`go vet ./...`、关键包 `go test -race`、259 个 Web unit、Web production build、47 个 Playwright 真实浏览器用例全部通过。物理 iPhone／Safari 弱网与后台切换仍按 §10.4 由用户复验。
+8. restart recovery guard 已接入 cache cold attach：`inProgress` 首帧在 45 秒静默窗口后至多触发一次既有 owner follower refresh；普通 update 重置窗口，terminal update 取消窗口，refresh 结果仍从原 follower update 通道发布。新增单次触发、终态取消、窗口重置、禁止 reattach 与终态发布测试；本轮全仓验收为 263 个 Web unit、48 个 Playwright 用例，并再次通过 Go 全量 test／vet 与关键包 race。
