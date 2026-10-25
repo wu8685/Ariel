@@ -92,7 +92,16 @@ export type Item = {
     source: string;
   }[];
   activity?: {
-    kind: "mcpToolCall" | "commandExecution" | "fileChange" | "sleep" | "imageView";
+    kind:
+      | "mcpToolCall"
+      | "commandExecution"
+      | "fileChange"
+      | "sleep"
+      | "imageView"
+      | "collabAgentToolCall"
+      | "subAgentActivity"
+      | "webSearch"
+      | "tool";
     label: string;
     status: "inProgress" | "completed" | "failed" | "interrupted" | "unknown";
     detailState: "omitted" | "available" | "loading" | "unavailable";

@@ -2762,6 +2762,10 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
   const processing = active && lastPart?.kind === "activity";
   const activityParts = parts.filter(part => part.kind === "activity");
   const activityCount = activityParts.reduce((count, part) => count + part.items.length, 0);
+  const activityItems = activityParts.flatMap(part => part.items);
+  const recentActivities = activityItems.slice(-3);
+  const hiddenActivityCount = Math.max(0, activityCount - recentActivities.length);
+  const activitySummary = [...recentActivities.map(item => `${item.activity!.label}（${activityStatusText(item.activity!.status)}）`), ...(hiddenActivityCount ? [`另有 ${hiddenActivityCount} 项`] : [])].join(" · ");
   const firstActivity = activityParts[0];
   const activityLabel = `${activityExpanded ? "收起" : "打开"}工具调用（${activityCount} 项）`;
   const activityToggleText = activityExpanded ? activityLabel : `使用了 ${activityCount} 个工具`;
@@ -2778,7 +2782,7 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
-        {part === firstActivity && <button className={`activity-toggle ${activityExpanded ? "open" : ""}`} type="button" aria-label={activityLabel} title={activityLabel} aria-expanded={activityExpanded} onClick={() => setActivityExpanded(open => !open)}>{activityToggleText}</button>}
+        {part === firstActivity && <><button className={`activity-toggle ${activityExpanded ? "open" : ""}`} type="button" aria-label={activityLabel} title={activityLabel} aria-expanded={activityExpanded} onClick={() => setActivityExpanded(open => !open)}>{activityToggleText}</button>{!activityExpanded && <p className="activity-summary" aria-label="最近工具摘要" title={activitySummary}>{activitySummary}</p>}</>}
         {activityExpanded && <div className="activity-list">{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <ActivityDetail key={item.itemId} item={item} open={openActivityID === item.itemId} onToggle={() => setOpenActivityID(current => current === item.itemId ? "" : item.itemId)} onLoad={onLoadActivity} />)}</div>}
       </section>;
     })}

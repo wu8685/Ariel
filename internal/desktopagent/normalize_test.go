@@ -169,6 +169,10 @@ func TestNormalizeToolActivitiesKeepOnlyLazySummariesAndUnknownTypesVisible(t *t
 		json.RawMessage(`{"id":"f","type":"fileChange","status":"completed","changes":[{"path":"/fixture/note.txt","kind":{"type":"add"},"diff":"+safe"}]}`),
 		json.RawMessage(`{"id":"s","type":"sleep","durationMs":1000}`),
 		json.RawMessage(`{"id":"i","type":"imageView","path":"/fixture/image.png"}`),
+		json.RawMessage(`{"id":"a","type":"collabAgentToolCall","status":"completed","prompt":"must-not-be-forwarded"}`),
+		json.RawMessage(`{"id":"sa","type":"subAgentActivity","status":"inProgress","payload":"must-not-be-forwarded"}`),
+		json.RawMessage(`{"id":"w","type":"webSearch","status":"completed","query":"must-not-be-forwarded"}`),
+		json.RawMessage(`{"id":"t","type":"tool","status":"failed","output":"must-not-be-forwarded"}`),
 		json.RawMessage(`{"id":"u","type":"futureTool"}`),
 	}
 	turn, err := normalizeTurn("turn", "completed", items)
@@ -176,10 +180,10 @@ func TestNormalizeToolActivitiesKeepOnlyLazySummariesAndUnknownTypesVisible(t *t
 		t.Fatal(err)
 	}
 	got := turn["items"].([]any)
-	if len(got) != 6 {
+	if len(got) != 10 {
 		t.Fatalf("lost item identity or order: %v", got)
 	}
-	for index, kind := range []string{"mcpToolCall", "commandExecution", "fileChange", "sleep", "imageView"} {
+	for index, kind := range []string{"mcpToolCall", "commandExecution", "fileChange", "sleep", "imageView", "collabAgentToolCall", "subAgentActivity", "webSearch", "tool"} {
 		item := got[index].(map[string]any)
 		activity, ok := item["activity"].(map[string]any)
 		if !ok || activity["kind"] != kind || activity["label"] == "" || activity["status"] == "" || activity["truncated"] != false {
@@ -195,10 +199,20 @@ func TestNormalizeToolActivitiesKeepOnlyLazySummariesAndUnknownTypesVisible(t *t
 			t.Fatalf("lazy detail availability/revision missing: %v", activity)
 		}
 	}
-	if _, present := got[5].(map[string]any)["activity"]; present {
+	for index, label := range []string{"协作 Agent 调用", "子 Agent 活动", "网页搜索", "工具调用"} {
+		item := got[index+5].(map[string]any)
+		activity := item["activity"].(map[string]any)
+		if activity["label"] != label || activity["detailState"] != "unavailable" {
+			t.Fatalf("unsafe or incomplete fixed summary: %v", item)
+		}
+		if strings.Contains(fmt.Sprint(item), "must-not-be-forwarded") {
+			t.Fatalf("unverified detail leaked into fixed summary: %v", item)
+		}
+	}
+	if _, present := got[9].(map[string]any)["activity"]; present {
 		t.Fatal("unknown type was silently treated as a tool")
 	}
-	if got[5].(map[string]any)["text"] != "[futureTool 项目]" {
+	if got[9].(map[string]any)["text"] != "[futureTool 项目]" {
 		t.Fatal("unknown type lost compatibility notice")
 	}
 }

@@ -41,6 +41,8 @@ test("mobile tool detail stays lazy until the selected item is opened", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "展开项目 tool-lazy，/tmp/tool-lazy" }).click();
   await page.getByText(fixtureThread.title).click();
+  await expect(page.getByLabel("最近工具摘要")).toHaveText("fixture/lookup（已完成）");
+  expect(detailReads).toBe(0);
   await page.getByRole("button", { name: /打开工具调用.*1 项/ }).click();
   expect(detailReads).toBe(0);
   await expect(page.getByText("fixture/lookup")).toBeVisible();

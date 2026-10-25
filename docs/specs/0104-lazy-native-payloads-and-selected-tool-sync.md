@@ -2,6 +2,7 @@
 
 - 状态：Approved（用户于 2026-10-25 确认）
 - 日期：2026-10-25
+- 摘要呈现扩展：Approved（用户于 2026-10-25 确认）
 - 依据：[0023 会话截图](0023-conversation-screenshots.md)、[0100 Agent 持续跟随与 Relay 双 Turn Hot Cache](0100-agent-fed-relay-two-turn-hot-cache.md)、[0103 轻量历史首屏与 Owner 后台同步](0103-lightweight-history-first-owner-sync.md)。
 
 ## 1. 已验证事实
@@ -34,7 +35,7 @@
 
 `Item.activity` 改为只包含：
 
-- `kind`：`mcpToolCall`／`commandExecution`／`fileChange`／`sleep`／`imageView`；
+- `kind`：`mcpToolCall`／`commandExecution`／`fileChange`／`sleep`／`imageView`／`collabAgentToolCall`／`subAgentActivity`／`webSearch`／`tool`；
 - `label`：有界的人类可读名称；
 - `status`：`inProgress`／`completed`／`failed`／`interrupted`／`unknown`；
 - `detailState`：`omitted`／`available`／`loading`／`unavailable`；
@@ -43,7 +44,17 @@
 
 常驻 snapshot／delta 不再携带 `details`。
 
-### 3.2 Lazy detail 请求
+无法从已验证字段中提取安全名称的新 Tool 类型，使用有界固定 label（例如“协作 Agent 调用”），不得为了生成摘要读取或转发 arguments、output、result、内部推理或其他大字段。真正未知的原生类型继续显示兼容性提示，不按名称猜测为 Tool。
+
+### 3.2 折叠态摘要
+
+1. 每个 turn 的 Tool 活动默认折叠，继续显示总数。
+2. 折叠态同时展示按原始顺序取最后 3 项的 `label + status`；超过 3 项时显示“另有 N 项”。不得创建完整 Tool 卡片 DOM。
+3. 展开后才渲染该 turn 的完整 Tool 摘要列表；单项详情仍必须由用户再次点击后 lazy read。
+4. 折叠态不得产生额外 WebSocket 请求、Desktop 读取或 Relay cache 字段；它只能使用常驻 `Item.activity`。
+5. 单项 label 继续受 512 bytes 协议上限约束，Web 还应通过 CSS 限制折叠摘要占用空间，不能让大量 Tool 撑高会话首屏。
+
+### 3.3 Lazy detail 请求
 
 新增请求：
 
@@ -63,7 +74,7 @@
 
 响应只返回该 item 的纯文本详情页、`nextCursor`、`revision` 与 `complete`。单页默认 64 KiB、硬上限 256 KiB；Relay 只转发，不缓存。
 
-### 3.3 当前会话实时语义
+### 3.4 当前会话实时语义
 
 1. 当前会话既有的 multiplexed WebSocket／`thread.cache.watch` 继续承载 thread 与 tool 摘要，不新增 per-tool WebSocket。
 2. 只有用户展开的 tool item 可以建立临时 detail watch；同一 Web client 同时最多 1 个，切换展开项时取消旧 watch。
@@ -106,3 +117,5 @@
 5. Red：streaming sanitizer 处理超过 64 MiB、主要由图片／tool payload 构成的 fixture，输出有界且峰值内存不随被剔除字段线性增长；未知路径 fail closed。
 6. 真实兼容性验收只读目标大会话：记录原始 frame 声明大小、分类字节占比、sanitized 大小、首屏耗时与 owner 可用性；不得保存真实正文。
 7. Web 补真实浏览器回归：展开、分页、进行中状态、切换会话取消与手机 viewport 均通过；物理 iPhone／Safari 仍由用户复验。
+8. Red：`collabAgentToolCall`、`subAgentActivity`、`webSearch` 和通用 `tool` 进入结构化摘要，而真正未知类型仍保持可见兼容性提示。
+9. Red：折叠态只渲染最近 3 条 label／status 和剩余数量，不发 detail read；展开后完整摘要顺序不变。

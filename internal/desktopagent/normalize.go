@@ -487,6 +487,18 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 				parts = append(parts, "路径: ", path)
 			}
 			activity = toolActivity(item.Type, "查看图片", item.Status, parts...)
+		case "collabAgentToolCall":
+			text = "协作 Agent 调用"
+			activity = toolActivity(item.Type, text, item.Status)
+		case "subAgentActivity":
+			text = "子 Agent 活动"
+			activity = toolActivity(item.Type, text, item.Status)
+		case "webSearch":
+			text = "网页搜索"
+			activity = toolActivity(item.Type, text, item.Status)
+		case "tool":
+			text = "工具调用"
+			activity = toolActivity(item.Type, text, item.Status)
 		case "userInputResponse":
 			switch {
 			case item.Completed == nil:

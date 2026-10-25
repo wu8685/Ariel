@@ -1575,9 +1575,7 @@ describe("Ariel app interactions", () => {
     expect(opener.getAttribute("aria-expanded")).toBe("false");
     expect(opener.textContent?.trim()).toBe("使用了 3 个工具");
     expect(opener.querySelector("svg")).toBeNull();
-    expect(screen.queryByText("fixture/lookup")).toBeNull();
-    expect(screen.queryByText("/usr/bin/true")).toBeNull();
-    expect(screen.queryByText("文件变更")).toBeNull();
+    expect(screen.getByLabelText("最近工具摘要").textContent).toBe("fixture/lookup（已完成） · /usr/bin/true（已完成） · 文件变更（已完成）");
     expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
     expect(screen.getByText("answer")).toBeTruthy();
     expect(screen.getByText("[futureTool 项目]")).toBeTruthy();
@@ -1595,6 +1593,15 @@ describe("Ariel app interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: /收起工具调用/ }));
     expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
     expect(screen.getByRole("button", { name: /打开工具调用/ }).textContent?.trim()).toBe("使用了 3 个工具");
+  });
+
+  it("keeps only the latest three tool summaries in collapsed mode without reading details", async () => {
+    const activity = (itemId: string, status: "completed" | "inProgress" = "completed") => ({ itemId, role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: itemId, status, detailState: "available", detailRevision: itemId.repeat(64).slice(0, 64), truncated: false } });
+    const thread = { ...fixtureThread, turns: [{ turnId: "many-tools", status: "inProgress", items: [activity("a"), activity("b"), activity("c"), activity("d"), activity("e", "inProgress")] }] } as unknown as Thread;
+    await openFixture(thread);
+    expect(screen.getByLabelText("最近工具摘要").textContent).toBe("c（已完成） · d（已完成） · e（运行中） · 另有 2 项");
+    expect(screen.queryByText("a（已完成）")).toBeNull();
+    expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
   });
 
   it("keeps one tool opener expanded as live calls append to the same turn", async () => {
