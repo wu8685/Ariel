@@ -17,3 +17,15 @@
 ## 结论
 
 当前兼容方案不能减少 Codex App 已经写入 Unix socket 的字节数，但能避免 Desktop Agent 为 144 MiB frame 分配等量内存，也不会把 tool detail／图片正文送入 Relay cache。历史和已完成 tool 的详情改由 `thread.activity.read` 在用户点击后分页读取；Relay 只转发，不缓存正文。
+
+## 部署后回归：cache admission 必须发生在 Desktop Agent
+
+公网首次部署后，真实多 watcher 场景暴露出一个实现偏差：Relay 虽然把单 entry 限制为 8 MiB，Desktop Agent 却会先尝试发送超限的规范化 snapshot。现场三个 hot thread 因此反复建立 follower；Agent 出现持续高 CPU，并发生 WebSocket heartbeat 写锁超时，手机端最终显示 `TIMEOUT`。
+
+修复后，Desktop Agent 在公网传输前执行同一 8 MiB admission：
+
+- `thread.cache.snapshot` 超限时只发送 `thread.cache.status`，reason 为 `CACHE_OVERSIZED`，不发送 thread 正文；
+- progressive `thread.read` 超限时返回 `HISTORY_TOO_LARGE`，不把大响应写入 Agent／Relay WebSocket；
+- 两种拒绝均保持 Agent 连接存活，Web 进入明确的 terminal fallback，不再无限显示“正在同步会话”。
+
+该回归不改变 0100 的产品语义，而是补齐其“单 entry 最大 8 MiB、超限不得发送半个 payload”的既有边界。

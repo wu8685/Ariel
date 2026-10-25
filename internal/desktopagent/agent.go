@@ -33,6 +33,7 @@ type Config struct {
 	ChillingEnabled                                       bool
 	HeartbeatInterval, HeartbeatTimeout                   time.Duration
 	CacheWarmGrace, CachePublishInterval                  time.Duration
+	CacheEntryMaxBytes                                    int
 	CachePrewarmRecent                                    bool
 	FileContext                                           FileContext
 	OnReady                                               func() error
@@ -58,6 +59,7 @@ type agent struct {
 	cacheSubs            map[string]*cacheSubscription
 	cacheWarmGrace       time.Duration
 	cachePublishInterval time.Duration
+	cacheEntryMaxBytes   int
 	cacheLoad            chan struct{}
 }
 
@@ -83,7 +85,10 @@ const (
 	threadListAttemptTimeout   = 15 * time.Second
 	threadListRequestTimeout   = 30 * time.Second
 	threadSubscribeLoadTimeout = 45 * time.Second
+	defaultCacheEntryMaxBytes  = 8 << 20
 )
+
+var errCacheSnapshotOversized = errors.New("CACHE_OVERSIZED")
 
 func threadListRequestContext(ctx context.Context, searchTerm string) (context.Context, context.CancelFunc) {
 	if searchTerm != "" {
@@ -197,7 +202,11 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	if cachePublishInterval <= 0 {
 		cachePublishInterval = time.Second
 	}
-	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheLoad: make(chan struct{}, 1)}
+	cacheEntryMaxBytes := cfg.CacheEntryMaxBytes
+	if cacheEntryMaxBytes <= 0 || cacheEntryMaxBytes > defaultCacheEntryMaxBytes {
+		cacheEntryMaxBytes = defaultCacheEntryMaxBytes
+	}
+	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1)}
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
@@ -493,6 +502,14 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "thread.read":
 		var thread map[string]any
 		thread, err = a.service.Read(ctx, p.ThreadID)
+		if err == nil {
+			var body []byte
+			body, err = json.Marshal(thread)
+			if err == nil && len(body) > a.cacheEntryMaxBytes {
+				err = errors.New("HISTORY_TOO_LARGE")
+				thread = nil
+			}
+		}
 		data = map[string]any{"thread": thread}
 	case "thread.history":
 		if p.Limit == 0 {
@@ -852,6 +869,16 @@ func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID str
 	if err != nil {
 		return err
 	}
+	if len(body) > a.cacheEntryMaxBytes {
+		statusErr := a.send(ctx, map[string]any{
+			"type": "event", "v": 1, "event": "thread.cache.status", "deviceId": a.deviceID, "threadId": threadID,
+			"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "freshness": "error", "reason": errCacheSnapshotOversized.Error(),
+		})
+		if statusErr != nil {
+			return errors.Join(errCacheSnapshotOversized, statusErr)
+		}
+		return errCacheSnapshotOversized
+	}
 	return a.send(ctx, map[string]any{
 		"type": "event", "v": 1, "event": "thread.cache.snapshot", "deviceId": a.deviceID, "threadId": threadID,
 		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "seq": seq, "capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
@@ -952,7 +979,7 @@ func requestErrorCode(method string, err error) string {
 		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
-	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE":
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "CACHE_OVERSIZED", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE":
 		return code
 	default:
 		return "RESYNC_REQUIRED"

@@ -301,6 +301,99 @@ func TestAgentCacheTouchPublishesTwoTurnSnapshotWithoutWebSubscription(t *testin
 	}
 }
 
+func TestAgentCacheOversizeReportsTerminalStatusWithoutDisconnecting(t *testing.T) {
+	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	service := NewService(pagedHistory{}, func(context.Context, string, string) (Live, error) {
+		return &fakeLive{updates: make(chan struct{}, 1)}, nil
+	})
+	defer service.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunWithService(ctx, Config{
+		URL: url, Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac",
+		CacheEntryMaxBytes: 64,
+	}, service)
+	wctx, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	web, _, err := websocket.Dial(wctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"http://localhost:5173"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer web.CloseNow()
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"}); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := wsjson.Read(wctx, web, &got); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000095", "deviceId": "relay", "method": "device.list", "params": map[string]any{}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["type"] == "event" {
+			if err := wsjson.Read(wctx, web, &got); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got["requestId"] == "00000000-0000-4000-8000-000000000095" && len(got["data"].(map[string]any)["devices"].([]any)) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000094", "deviceId": "real-mac", "method": "thread.read", "params": map[string]any{"threadId": "thread"}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		got = nil
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["requestId"] == "00000000-0000-4000-8000-000000000094" {
+			break
+		}
+	}
+	if got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "HISTORY_TOO_LARGE" {
+		t.Fatalf("oversized progressive read crossed the Agent boundary: %+v", got)
+	}
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000096", "deviceId": "real-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "thread"}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		got = nil
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["event"] == "thread.cache.update" && got["staleReason"] == "CACHE_OVERSIZED" {
+			break
+		}
+	}
+	if got["freshness"] != "missing" || got["thread"] != nil {
+		t.Fatalf("oversized cache leaked a payload: %+v", got)
+	}
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000097", "deviceId": "relay", "method": "device.list", "params": map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		got = nil
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["requestId"] == "00000000-0000-4000-8000-000000000097" {
+			break
+		}
+	}
+	if len(got["data"].(map[string]any)["devices"].([]any)) != 1 {
+		t.Fatalf("oversized cache disconnected the agent: %+v", got)
+	}
+}
+
 func TestAgentCacheRewatchRebindsWarmFollowerAndPublishesCurrentOwnerState(t *testing.T) {
 	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(r.Handler())
