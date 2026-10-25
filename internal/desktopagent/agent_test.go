@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/wu8685/Ariel/internal/relay"
+	"github.com/wu8685/Ariel/internal/wsheartbeat"
 )
 
 func TestProductionThreadListTimeoutBudgets(t *testing.T) {
@@ -29,6 +31,21 @@ func TestProductionThreadListTimeoutBudgets(t *testing.T) {
 func TestProductionSubscriptionLoadBudget(t *testing.T) {
 	if threadSubscribeLoadTimeout != 45*time.Second {
 		t.Fatalf("thread subscribe load timeout = %s, want 45s", threadSubscribeLoadTimeout)
+	}
+}
+
+func TestCacheSnapshotWriteCannotConsumeHeartbeatDeadline(t *testing.T) {
+	if cacheSnapshotWriteTimeout >= wsheartbeat.DefaultTimeout {
+		t.Fatalf("cache snapshot write timeout %s must stay below heartbeat timeout %s", cacheSnapshotWriteTimeout, wsheartbeat.DefaultTimeout)
+	}
+}
+
+func TestCacheSnapshotMailboxKeepsOnlyLatestPerThread(t *testing.T) {
+	a := &agent{cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
+	a.enqueueCacheSnapshot("thread", "stream", 1, map[string]any{"revision": 1})
+	a.enqueueCacheSnapshot("thread", "stream", 2, map[string]any{"revision": 2})
+	if len(a.cachePending) != 1 || a.cachePending["thread"].seq != 2 {
+		t.Fatalf("cache mailbox did not coalesce to latest snapshot: %+v", a.cachePending)
 	}
 }
 
@@ -394,7 +411,7 @@ func TestAgentCacheOversizeReportsTerminalStatusWithoutDisconnecting(t *testing.
 	}
 }
 
-func TestAgentCacheRewatchRebindsWarmFollowerAndPublishesCurrentOwnerState(t *testing.T) {
+func TestAgentCacheRewatchReusesFreshWarmFollower(t *testing.T) {
 	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
@@ -468,21 +485,22 @@ func TestAgentCacheRewatchRebindsWarmFollowerAndPublishesCurrentOwnerState(t *te
 		if err := wsjson.Read(wctx, web, &got); err != nil {
 			t.Fatal(err)
 		}
-		if got["event"] == "thread.cache.update" {
-			thread, _ := got["thread"].(map[string]any)
-			if thread != nil && thread["runtime"] == "inProgress" {
-				break
+		if got["requestId"] == "00000000-0000-4000-8001-999999999999" {
+			data := got["data"].(map[string]any)
+			if data["freshness"] != "fresh" {
+				t.Fatalf("rewatch did not reuse fresh Relay cache: %+v", got)
 			}
+			break
 		}
 	}
-	if opens < 2 {
-		t.Fatalf("warm follower was reused without rebinding: opens=%d", opens)
+	if opens != 1 {
+		t.Fatalf("fresh warm follower was rebound: opens=%d", opens)
 	}
 	first.mu.Lock()
 	closed := first.closed
 	first.mu.Unlock()
-	if !closed {
-		t.Fatal("stale warm follower remained open after rewatch")
+	if closed {
+		t.Fatal("fresh warm follower was closed after rewatch")
 	}
 }
 
@@ -571,6 +589,74 @@ func TestAgentHeartbeatDropsSilentRelay(t *testing.T) {
 	}
 	if !ready || !notReady {
 		t.Fatalf("handshake readiness lifecycle: ready=%v notReady=%v", ready, notReady)
+	}
+}
+
+func TestTransportReconnectKeepsCodexFollowerWarm(t *testing.T) {
+	var connections atomic.Int32
+	var opens atomic.Int32
+	live := &fakeLive{updates: make(chan struct{}, 1)}
+	service := NewService(pagedHistory{}, func(context.Context, string, string) (Live, error) { opens.Add(1); return live, nil })
+	defer service.Close()
+	secondSnapshot := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		connection := connections.Add(1)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var message map[string]any
+		if wsjson.Read(ctx, conn, &message) != nil {
+			return
+		}
+		if err := wsjson.Write(ctx, conn, map[string]any{"type": "hello.ok", "v": 1, "connectionId": fmt.Sprintf("c-%d", connection), "relayEpoch": "relay"}); err != nil {
+			return
+		}
+		requestID := fmt.Sprintf("00000000-0000-4000-8000-%012d", 700+connection)
+		if err := wsjson.Write(ctx, conn, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": "real-mac", "method": "thread.cache.touch", "params": map[string]any{"threadId": "thread", "watching": true}}); err != nil {
+			return
+		}
+		for {
+			message = nil
+			if wsjson.Read(ctx, conn, &message) != nil {
+				return
+			}
+			if message["event"] == "thread.cache.snapshot" {
+				break
+			}
+		}
+		if connection == 1 {
+			_ = conn.Close(websocket.StatusGoingAway, "fixture reconnect")
+			return
+		}
+		select {
+		case <-secondSnapshot:
+		default:
+			close(secondSnapshot)
+		}
+		<-ctx.Done()
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runTransportLoop(ctx, Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http"), Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac", AgentEpoch: "process-epoch", HeartbeatInterval: time.Hour}, service)
+	}()
+	select {
+	case <-secondSnapshot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Agent did not reconnect with a warm follower")
+	}
+	cancel()
+	<-done
+	if connections.Load() < 2 {
+		t.Fatalf("connections=%d, want reconnect", connections.Load())
+	}
+	if opens.Load() != 1 {
+		t.Fatalf("transport reconnect cold-attached Codex owner: opens=%d", opens.Load())
 	}
 }
 

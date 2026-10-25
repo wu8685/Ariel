@@ -112,6 +112,7 @@
 | 0097 | [撤回 Web 任务看板入口](0097-withdraw-web-task-board-entry.md) | Implemented（2026-10-18；Web／Go／桌面与手机 Chromium 专项已验，物理 Safari 待验） | Web 恢复为引入看板前的会话界面；后台 task protocol／路由与 chilling SSOT 保留 |
 | 0098 | [会话内用户输入卡片](0098-conversation-user-input-cards.md) | Approved（2026-10-20） | 完善现有 `requestUserInput` 链路，支持结构化选项、自定义回答及当前版本真实回归 |
 | 0105 | [当前工作区文件浏览器](0105-workspace-file-browser.md) | Implemented（Go／race／vet、Web 258、真实 Chromium 4、build 已验；物理 Safari 待验） | 在显式本机 capability 下按目录 lazy 浏览 thread cwd、打开文本文件并选段引用 |
+| 0107 | [Agent Transport 解耦与 Cache 自愈恢复](0107-resilient-agent-transport-and-cache-recovery.md) | Implemented（Go／race／vet、Web 259、真实 Chromium 47、build 已验；物理 Safari 待验） | transport 重连不销毁 Codex follower；双 turn cache、lease、latest-only 队列与跨 epoch 只读恢复共同避免会话反复白屏 |
 
 ## 设计基线
 

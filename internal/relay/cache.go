@@ -39,24 +39,26 @@ type cacheWatcher struct {
 
 type cacheEntry struct {
 	cacheSnapshot
-	watchers      map[string]cacheWatcher
-	lastUsed      time.Time
-	warmUntil     time.Time
-	stale         bool
-	staleReason   string
-	retainedBytes int64
+	watchers        map[string]cacheWatcher
+	lastUsed        time.Time
+	warmUntil       time.Time
+	stale           bool
+	staleReason     string
+	leaseValidUntil time.Time
+	retainedBytes   int64
 }
 
 type cacheStore struct {
 	maxBytes      int64
 	maxEntryBytes int64
 	warmGrace     time.Duration
+	freshness     time.Duration
 	totalBytes    int64
 	entries       map[cacheKey]*cacheEntry
 }
 
-func newCacheStore(maxBytes, maxEntryBytes int64, warmGrace time.Duration) *cacheStore {
-	return &cacheStore{maxBytes: maxBytes, maxEntryBytes: maxEntryBytes, warmGrace: warmGrace, entries: map[cacheKey]*cacheEntry{}}
+func newCacheStore(maxBytes, maxEntryBytes int64, warmGrace, freshness time.Duration) *cacheStore {
+	return &cacheStore{maxBytes: maxBytes, maxEntryBytes: maxEntryBytes, warmGrace: warmGrace, freshness: freshness, entries: map[cacheKey]*cacheEntry{}}
 }
 
 func (s *cacheStore) watch(key cacheKey, watchID string, web *peer, now time.Time) *cacheEntry {
@@ -145,6 +147,7 @@ func (s *cacheStore) put(snapshot cacheSnapshot, now time.Time) error {
 	prior.lastUsed = now
 	prior.stale = false
 	prior.staleReason = ""
+	prior.leaseValidUntil = now.Add(s.freshness)
 	return nil
 }
 

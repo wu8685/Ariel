@@ -8,7 +8,7 @@ const turn = (id: string, text = id): Turn => ({ turnId: id, status: "completed"
 const value = (threadId: string, text = threadId) => ({
   history: emptyHistoryState(),
   itemOverrides: {},
-  thread: { threadId, title: threadId, cwd: "/fixture", updatedAt: "2026-10-15T00:00:00Z", runtime: "idle", turns: [turn(`${threadId}-turn`, text)], pendingInteractions: [] } as Thread,
+  thread: { threadId, title: threadId, cwd: "/fixture", updatedAt: "2026-10-15T00:00:00Z", runtime: "idle", turns: [turn(`${threadId}-turn`, text)], pendingInteractions: [{ interactionId: "pending", kind: "command_approval", prompt: "stale", availableDecisions: ["accept_once"] }], queuedMessages: [{ queueId: "queued", clientMessageId: "client", text: "stale", editable: true }], permissions: { sandbox: "full_access", approval: "never" } } as Thread,
 });
 
 describe("durable local conversation cache", () => {
@@ -21,8 +21,26 @@ describe("durable local conversation cache", () => {
     const restored = new DurableHistoryCache({ backend, now: () => 2_000 });
     expect((await restored.get(identity("one")))?.thread?.turns[0].items[0].text).toBe("本机缓存正文");
     expect((await restored.get(identity("one")))?.thread?.runtime).toBe("unknown");
+    expect((await restored.get(identity("one")))?.thread?.pendingInteractions).toEqual([]);
+    expect((await restored.get(identity("one")))?.thread?.queuedMessages).toBeUndefined();
+    expect((await restored.get(identity("one")))?.thread?.permissions).toBeUndefined();
     expect(await restored.lastSelection()).toEqual(identity("one"));
     expect(await restored.get(identity("one", "other-epoch"))).toBeNull();
+    expect((await restored.latest("mac", "one"))?.value.thread?.turns[0].items[0].text).toBe("本机缓存正文");
+    expect((await restored.latest("mac", "one"))?.identity.agentEpoch).toBe("epoch-a");
+  });
+
+  it("selects the newest safe display cache across Agent epochs", async () => {
+    let now = 1_000;
+    const backend = new MemoryDurableHistoryBackend();
+    const cache = new DurableHistoryCache({ backend, now: () => now });
+    await cache.set(identity("one", "epoch-a"), value("one", "旧内容"));
+    now = 2_000;
+    await cache.set(identity("one", "epoch-b"), value("one", "新内容"));
+    const restored = await cache.latest("mac", "one");
+    expect(restored?.identity.agentEpoch).toBe("epoch-b");
+    expect(restored?.value.thread?.runtime).toBe("unknown");
+    expect(restored?.value.thread?.turns[0].items[0].text).toBe("新内容");
   });
 
   it("enforces entry, byte and TTL bounds without breaking when storage rejects", async () => {

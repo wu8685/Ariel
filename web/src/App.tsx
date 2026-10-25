@@ -145,6 +145,16 @@ function responseQueue(response: Response): QueuedMessage[] | null {
   return items as QueuedMessage[];
 }
 
+function asReadOnlyThread(thread: Thread): Thread {
+  return {
+    ...thread,
+    runtime: "unknown",
+    pendingInteractions: [],
+    queuedMessages: [],
+    permissions: { sandbox: "unknown", approval: "unknown" },
+  };
+}
+
 function QueueHandleIcon() {
   return <svg aria-hidden="true" viewBox="0 0 16 18" fill="currentColor"><circle cx="5" cy="4" r="1.2"/><circle cx="11" cy="4" r="1.2"/><circle cx="5" cy="9" r="1.2"/><circle cx="11" cy="9" r="1.2"/><circle cx="5" cy="14" r="1.2"/><circle cx="11" cy="14" r="1.2"/></svg>;
 }
@@ -684,6 +694,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     offlineDevice.current = id;
     pendingSelect.current++;
     expectedSubscription.current = "";
+    if (selection.current.view) {
+      const stale = { ...selection.current.view, subscriptionId: "", streamId: "cache-pending", seq: 0, thread: asReadOnlyThread(selection.current.view.thread) };
+      selection.current.view = stale;
+      setView(stale);
+    }
     setRecoveringDeviceId(id);
     setSyncingView(true);
     setNotice(current => current === agentOfflineNotice ? "" : current);
@@ -692,10 +707,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       offlineDeviceTimer.current = null;
       pendingSelect.current++;
       expectedSubscription.current = "";
-      selection.current.view = null;
-      setView(null);
       setSyncingView(false);
-      setReadOnlyHistory(false);
+      setReadOnlyHistory(true);
+      setReadOnlyReason("DEVICE_OFFLINE");
       setNotice(agentOfflineNotice);
     }, agentOfflineGraceMs);
   }
@@ -800,11 +814,14 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     rememberReadingPosition();
     pendingSelect.current++;
     expectedSubscription.current = "";
-    selection.current.view = null;
-    setView(null);
-    setSyncingView(false);
+    if (selection.current.view) {
+      const stale = { ...selection.current.view, subscriptionId: "", streamId: "cache-pending", seq: 0, thread: asReadOnlyThread(selection.current.view.thread) };
+      selection.current.view = stale;
+      setView(stale);
+    }
+    setSyncingView(true);
     setReadOnlyHistory(false);
-    resetHistory();
+    setReadOnlyReason("RESYNC_REQUIRED");
     setNotice(message);
   }
 
@@ -1058,9 +1075,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       if (previous?.agentEpoch && previous.agentEpoch !== candidate.agentEpoch) {
         clearWarmSubscriptions(candidate.deviceId);
         historyCache.current.clearDevice(candidate.deviceId);
-        void durableCache.clearDevice(candidate.deviceId);
         threadListCache.current.clearDevice(candidate.deviceId);
-        discardRestoredHistory(candidate.deviceId, selection.current.threadId);
         if (offlineDevice.current !== candidate.deviceId) invalidateOwnerView(candidate.deviceId, "Desktop Agent 已重连，正在重新同步当前会话。");
       }
     }
@@ -1234,7 +1249,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       setNotice("历史页身份无法确认。");
       return false;
     }
-    const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
+    const readOnlyThread = asReadOnlyThread(thread);
     const readOnlyView: ThreadView = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: readOnlyThread };
     selection.current.view = readOnlyView;
     setView(readOnlyView);
@@ -1247,6 +1262,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true, retryCreatedSubscribe = false, initialThread?: Thread) {
     if (!targetDevice) return;
+    setShowList(false);
     if (cachePrevious) cacheCurrentHistory();
     const sameThread = selection.current.deviceId === targetDevice && selection.current.threadId === id;
     if (!sameThread) activateComposer({ deviceId: targetDevice, threadId: id });
@@ -1265,11 +1281,23 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     pruneWarmSubscriptions(new Set([targetKey, oldKey].filter(Boolean)));
     const warm = warmSubscription(targetDevice, id);
     expectedSubscription.current = "";
-    const restoredView = restoreCachedConversation(targetDevice, id);
+    const provisionalThread = initialThread || threads.find(candidate => candidate.threadId === id);
+    if (!warm && provisionalThread) {
+      const provisional = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "cache-pending", seq: 0, thread: { ...asReadOnlyThread(provisionalThread), recentComplete: true, historyComplete: true } };
+      selection.current = { deviceId: targetDevice, threadId: id, view: provisional };
+      setThreadId(id); setView(provisional); setSyncingView(true); setReadOnlyHistory(false); setNotice("");
+    }
+    let restoredView = restoreCachedConversation(targetDevice, id);
+    if (!restoredView) {
+      const durable = await durableCache.latest(targetDevice, id);
+      if (epoch !== pendingSelect.current) return;
+      const currentIdentity = historyCacheIdentity(targetDevice, id);
+      if (durable?.value?.thread && currentIdentity && historyCache.current.set(currentIdentity, durable.value)) restoredView = restoreCachedConversation(targetDevice, id);
+    }
     const cachedView = warm || restoredView || (initialThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: initialThread } : null);
     selection.current = { deviceId: targetDevice, threadId: id, view: cachedView };
     expectedSubscription.current = warm?.subscriptionId || "";
-    setThreadId(id); setView(cachedView); setSyncingView(!warm || warm.streamId === "cache-pending"); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
+    setThreadId(id); setView(cachedView); setSyncingView(!warm || warm.streamId === "cache-pending"); setReadOnlyHistory(false); setNotice(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!restoredView) resetHistory();
     if (warm) {
       if (warm.streamId === "cache-pending") setNotice("正在从 Desktop Agent 准备最近会话。");
@@ -1296,7 +1324,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         const source = cachedThread || cachedView?.thread;
         if (source) {
           const fresh = freshness === "fresh";
-          const thread = fresh ? source : { ...source, runtime: "unknown" as const, pendingInteractions: [], permissions: { sandbox: "unknown" as const, approval: "unknown" as const } };
+          const thread = fresh ? source : asReadOnlyThread(source);
           const next: ThreadView = {
             deviceId: targetDevice, threadId: id, subscriptionId: watchID,
             streamId: typeof cacheData.cacheStreamId === "string" ? cacheData.cacheStreamId : "cache-pending",
@@ -1349,7 +1377,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             if (selection.current.deviceId !== targetDevice || selection.current.threadId !== id || expectedSubscription.current !== watchID) return;
             const currentView = selection.current.view;
             if (currentView?.subscriptionId === watchID && currentView.streamId !== "cache-pending" && currentView.seq > 0) return;
-            const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
+            const readOnlyThread = asReadOnlyThread(thread);
             const next: ThreadView = {
               deviceId: targetDevice,
               threadId: id,
@@ -1413,7 +1441,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           return;
         }
         if (expectedSubscription.current || selection.current.view?.subscriptionId) return;
-        const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
+        const readOnlyThread = asReadOnlyThread(thread);
         const pendingView: ThreadView = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: readOnlyThread };
         progressiveInstalled = true;
         selection.current.view = pendingView;
@@ -1807,10 +1835,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = attempt;
     let active = true;
     void durableCache.lastSelection().then(async identity => {
-      if (!active || !identity || identity.deviceId !== deviceId || identity.agentEpoch !== epoch || selection.current.threadId) return;
-      const cached = await durableCache.get(identity);
+      if (!active || !identity || identity.deviceId !== deviceId || selection.current.threadId) return;
+      const cached = identity.agentEpoch === epoch ? await durableCache.get(identity) : (await durableCache.latest(deviceId, identity.threadId))?.value || null;
       if (!active || !cached?.thread || cached.thread.threadId !== identity.threadId || selection.current.threadId) return;
-      if (!historyCache.current.set(identity, cached)) return;
+      const currentIdentity = { deviceId, agentEpoch: epoch, threadId: identity.threadId };
+      if (!historyCache.current.set(currentIdentity, cached)) return;
       connectionResume.current = true;
       await selectThread(identity.threadId, identity.deviceId, false);
     });

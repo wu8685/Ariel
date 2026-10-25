@@ -82,21 +82,20 @@ func TestRelayServesHotCacheLocallyAndBroadcastsReplacement(t *testing.T) {
 		t.Fatalf("cache watch did not return Relay-local content: %+v", got)
 	}
 	watchID, _ := data["watchId"].(string)
-	touch := readJSON(t, agent)
-	if touch["method"] != "thread.cache.touch" || touch["params"].(map[string]any)["watching"] != true {
-		t.Fatalf("cache watch did not refresh Agent hot-set recency: %+v", touch)
+	probeID := "00000000-0000-4000-8000-000000000089"
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": probeID, "deviceId": "mock-mac", "method": "thread.list", "params": map[string]any{"limit": 1}})
+	probe := readJSON(t, agent)
+	if probe["method"] != "thread.list" {
+		t.Fatalf("fresh cache watch unexpectedly reached Agent before probe: %+v", probe)
 	}
+	relayProbeID := probe["requestId"].(string)
+	sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": relayProbeID, "outcome": "accepted", "data": map[string]any{"threads": []any{}, "cursor": ""}})
+	readJSON(t, web)
 
 	sendJSON(t, agent, cacheSnapshotEvent("thread-a", "epoch-a", "cache-a", 2))
 	update := readJSON(t, web)
 	if update["event"] != "thread.cache.update" || update["watchId"] != watchID || update["seq"].(float64) != 2 {
 		t.Fatalf("cache replacement not broadcast: %+v", update)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	var forwarded map[string]any
-	if err := wsjson.Read(ctx, agent, &forwarded); err == nil {
-		t.Fatalf("cache hit created more than one bounded Agent touch: %+v", forwarded)
 	}
 }
 
@@ -162,7 +161,91 @@ func TestRelayPreservesTerminalStatusReasonForMissingCache(t *testing.T) {
 	}
 }
 
-func TestRelayRestoresCachedFollowersAfterAgentReconnect(t *testing.T) {
+func TestRelayRejectedInternalPromotionCanBeRetried(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000180", "deviceId": "mock-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "retry"}})
+	watch := readJSON(t, web)
+	touch := readJSON(t, agent)
+	sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": touch["requestId"], "outcome": "rejected", "error": map[string]any{"code": "OVERLOADED", "message": "OVERLOADED"}})
+	update := readJSON(t, web)
+	if update["event"] != "thread.cache.update" || update["staleReason"] != "OVERLOADED" {
+		t.Fatalf("rejected promotion was not surfaced: %+v", update)
+	}
+	watchID := watch["data"].(map[string]any)["watchId"]
+	if watchID == "" {
+		t.Fatal("missing watch id")
+	}
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000181", "deviceId": "mock-mac", "method": "thread.cache.promote", "params": map[string]any{"threadId": "retry"}})
+	if got := readJSON(t, web); got["outcome"] != "accepted" || got["data"].(map[string]any)["promoting"] != true {
+		t.Fatalf("retry promotion was suppressed: %+v", got)
+	}
+	if retry := readJSON(t, agent); retry["method"] != "thread.cache.touch" || retry["requestId"] == touch["requestId"] {
+		t.Fatalf("retry did not create a fresh internal operation: %+v", retry)
+	}
+}
+
+func TestRelayCacheFreshnessRequiresLiveFollowerLease(t *testing.T) {
+	now := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, CacheFreshness: time.Minute})
+	r.now = func() time.Time { return now }
+	agent := &peer{deviceID: "mock-mac", agentEpoch: "epoch-a"}
+	thread := json.RawMessage(`{"threadId":"lease","title":"Lease","cwd":"/fixture","updatedAt":"2026-10-26T00:00:00Z","runtime":"idle","turns":[],"pendingInteractions":[]}`)
+	if err := r.cache.put(cacheSnapshot{deviceID: "mock-mac", threadID: "lease", agentEpoch: "epoch-a", streamID: "stream", seq: 1, capturedAt: now, thread: thread, bytes: int64(len(thread))}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.cacheDataLocked(r.cache.entries[cacheKey{"mock-mac", "lease"}], agent); got["freshness"] != "fresh" {
+		t.Fatalf("fresh lease: %+v", got)
+	}
+	now = now.Add(time.Minute + time.Nanosecond)
+	if got := r.cacheDataLocked(r.cache.entries[cacheKey{"mock-mac", "lease"}], agent); got["freshness"] != "stale" || got["staleReason"] != "follower_lease_expired" {
+		t.Fatalf("expired lease: %+v", got)
+	}
+}
+
+func TestRelayDropsCacheEventsFromReplacedAgentTransport(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	old := &peer{deviceID: "mock-mac", agentEpoch: "epoch-a"}
+	current := &peer{deviceID: "mock-mac", agentEpoch: "epoch-a"}
+	r.agents[old.deviceID] = current
+
+	body, err := json.Marshal(cacheSnapshotEvent("late", "epoch-a", "old-stream", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.handleCacheAgentEvent(context.Background(), old, body) {
+		t.Fatal("late cache event should be ignored without closing the stale transport twice")
+	}
+	if cached := r.cache.entries[cacheKey{"mock-mac", "late"}]; cached != nil {
+		t.Fatalf("replaced Agent transport mutated Relay cache: %+v", cached)
+	}
+}
+
+func TestRelayCacheDeliveryQueueKeepsOnlyLatestWatcherUpdate(t *testing.T) {
+	web := &peer{cachePending: map[string]map[string]any{}, cacheWake: make(chan struct{}, 1)}
+	sendCacheDeliveries(context.Background(), []cacheDelivery{
+		{web: web, key: "watch-a", message: map[string]any{"seq": 1}},
+		{web: web, key: "watch-a", message: map[string]any{"seq": 2}},
+	})
+	web.cacheSendMu.Lock()
+	defer web.cacheSendMu.Unlock()
+	if len(web.cachePending) != 1 || web.cachePending["watch-a"]["seq"] != 2 {
+		t.Fatalf("cache delivery backlog was not coalesced: %+v", web.cachePending)
+	}
+	if len(web.cacheWake) != 1 {
+		t.Fatalf("cache delivery wakeups were not bounded: %d", len(web.cacheWake))
+	}
+}
+
+func TestRelayDoesNotRestoreUnwatchedCachedFollowersAfterAgentReconnect(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
@@ -189,13 +272,11 @@ func TestRelayRestoresCachedFollowersAfterAgentReconnect(t *testing.T) {
 	hello["agentEpoch"] = "epoch-b"
 	sendJSON(t, second, hello)
 	readJSON(t, second)
-	firstTouch := readJSON(t, second)
-	secondTouch := readJSON(t, second)
-	if firstTouch["method"] != "thread.cache.touch" || firstTouch["params"].(map[string]any)["threadId"] != "remembered" || firstTouch["params"].(map[string]any)["watching"] != true {
-		t.Fatalf("restore touch: %+v", firstTouch)
-	}
-	if secondTouch["method"] != "thread.cache.touch" || secondTouch["params"].(map[string]any)["watching"] != false {
-		t.Fatalf("restore release: %+v", secondTouch)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	var touch map[string]any
+	if err := wsjson.Read(ctx, second, &touch); err == nil {
+		t.Fatalf("unwatched cache was eagerly restored after reconnect: %+v", touch)
 	}
 }
 
@@ -239,7 +320,7 @@ func TestRelayAuthenticatesRolesAndListsOnlyOnlineDevice(t *testing.T) {
 	}
 }
 
-func TestRelayRejectsBadOriginTokenAndDuplicateAgent(t *testing.T) {
+func TestRelayRejectsBadOriginTokenAndReplacesAuthenticatedAgent(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, HelloTimeout: 100 * time.Millisecond})
 	s := httptest.NewServer(r.Handler())
 	defer s.Close()
@@ -263,8 +344,13 @@ func TestRelayRejectsBadOriginTokenAndDuplicateAgent(t *testing.T) {
 	readJSON(t, first)
 	second := dialTest(t, s.URL, "")
 	sendJSON(t, second, hello)
-	if err := wsjson.Read(readCtx, second, &denied); err == nil {
-		t.Fatal("duplicate agent accepted")
+	if got := readJSON(t, second); got["type"] != "hello.ok" {
+		t.Fatalf("replacement agent was not accepted: %+v", got)
+	}
+	closedCtx, cancelClosed := context.WithTimeout(context.Background(), time.Second)
+	defer cancelClosed()
+	if err := wsjson.Read(closedCtx, first, &denied); err == nil {
+		t.Fatal("replaced agent connection remained active")
 	}
 }
 

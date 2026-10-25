@@ -2280,7 +2280,7 @@ describe("Ariel app interactions", () => {
       act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentOnline: false, codexReady: false }));
       expect(screen.getByText("Stable history content")).toBeTruthy();
       await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
-      expect(screen.queryByText("Stable history content")).toBeNull();
+      expect(screen.getByText("Stable history content")).toBeTruthy();
       expect(screen.getByText("Desktop Agent 暂时离线，恢复后会重新同步当前会话。")).toBeTruthy();
     } finally {
       vi.useRealTimers();

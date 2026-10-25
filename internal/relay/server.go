@@ -39,6 +39,7 @@ type Config struct {
 	CacheMaxBytes       int64
 	CacheEntryMaxBytes  int64
 	CacheWarmGrace      time.Duration
+	CacheFreshness      time.Duration
 }
 
 const (
@@ -53,27 +54,30 @@ const webSessionLifetime = 24 * time.Hour
 const webPairingLifetime = 2 * time.Minute
 const defaultCacheMaxBytes = 512 << 20
 const defaultCacheEntryMaxBytes = 8 << 20
+const defaultCacheFreshness = 90 * time.Second
 
 type Server struct {
-	cfg            Config
-	epoch          string
-	now            func() time.Time
-	origins        map[string]struct{}
-	mu             sync.Mutex
-	deviceStatusMu sync.Mutex
-	webPINFailures int
-	webSessions    map[[32]byte]time.Time
-	sessionOrder   [][32]byte
-	pairings       map[[32]byte]pairing
-	pairingByWeb   map[*peer][32]byte
-	agents         map[string]*peer
-	webs           map[*peer]struct{}
-	routes         map[string]*route
-	byWeb          map[*peer]map[string]string
-	subs           map[*peer]map[string]*subscription
-	taskRoutes     map[string]*taskRoute
-	cache          *cacheStore
-	cachePromoting map[cacheKey]bool
+	cfg                    Config
+	epoch                  string
+	now                    func() time.Time
+	origins                map[string]struct{}
+	mu                     sync.Mutex
+	deviceStatusMu         sync.Mutex
+	webPINFailures         int
+	webSessions            map[[32]byte]time.Time
+	sessionOrder           [][32]byte
+	pairings               map[[32]byte]pairing
+	pairingByWeb           map[*peer][32]byte
+	agents                 map[string]*peer
+	webs                   map[*peer]struct{}
+	routes                 map[string]*route
+	byWeb                  map[*peer]map[string]string
+	subs                   map[*peer]map[string]*subscription
+	taskRoutes             map[string]*taskRoute
+	cache                  *cacheStore
+	cachePromoting         map[cacheKey]bool
+	cachePromotionIDs      map[cacheKey]string
+	cachePromotionRequests map[string]cacheKey
 }
 
 type pairing struct {
@@ -113,6 +117,9 @@ type peer struct {
 	adapterVersion string
 	capabilities   map[string]bool
 	writeMu        sync.Mutex
+	cacheSendMu    sync.Mutex
+	cachePending   map[string]map[string]any
+	cacheWake      chan struct{}
 }
 
 func New(cfg Config) (*Server, error) {
@@ -188,10 +195,13 @@ func New(cfg Config) (*Server, error) {
 	if cfg.CacheWarmGrace <= 0 {
 		cfg.CacheWarmGrace = 90 * time.Second
 	}
+	if cfg.CacheFreshness <= 0 {
+		cfg.CacheFreshness = defaultCacheFreshness
+	}
 	if cfg.CacheEntryMaxBytes > cfg.CacheMaxBytes {
 		return nil, errors.New("cache entry limit exceeds cache budget")
 	}
-	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace), cachePromoting: map[cacheKey]bool{}}, nil
+	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}}, nil
 }
 
 func ValidWebPIN(pin string) bool {
@@ -369,6 +379,10 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := &peer{conn: conn, id: rand.Text(), role: hello.Role, deviceID: hello.DeviceID, deviceName: hello.DeviceName, agentEpoch: hello.AgentEpoch, adapterVersion: hello.AdapterVersion, capabilities: hello.Capabilities}
+	if p.role == "web" {
+		p.cachePending = map[string]map[string]any{}
+		p.cacheWake = make(chan struct{}, 1)
+	}
 	if p.role == "agent" {
 		credential, ok := s.cfg.TaskDevices[p.deviceID]
 		if s.cfg.TasksEnabled && ok {
@@ -392,12 +406,25 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	if p.role == "agent" {
-		if s.agents[p.deviceID] != nil {
-			s.mu.Unlock()
-			conn.Close(websocket.StatusPolicyViolation, "duplicate agent")
-			return
+		previous := s.agents[p.deviceID]
+		// Promotion receipts belong to one concrete transport. Fence any
+		// in-flight operation before the authenticated replacement becomes
+		// authoritative; restoreAgentCacheFollowers will create fresh receipts
+		// for the new transport.
+		if previous != nil {
+			for key := range s.cachePromotionIDs {
+				if key.deviceID == p.deviceID {
+					s.finishCachePromotionLocked(key)
+				}
+			}
 		}
 		s.agents[p.deviceID] = p
+		if previous != nil {
+			// The authenticated replacement is authoritative immediately. Closing
+			// the old socket after swapping the registry prevents duplicate-agent
+			// retry storms while removePeer's identity check fences stale cleanup.
+			go previous.conn.Close(websocket.StatusNormalClosure, "replaced by newer agent transport")
+		}
 	} else {
 		s.webs[p] = struct{}{}
 	}
@@ -416,6 +443,8 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	if p.role == "agent" {
 		s.broadcastDevice(p.deviceID, p)
 		go s.restoreAgentCacheFollowers(ctx, p)
+	} else {
+		go p.runCacheDeliverySender(ctx)
 	}
 	go s.heartbeat(ctx, p)
 	for {
@@ -456,6 +485,46 @@ func (p *peer) send(ctx context.Context, msg any) error {
 		return err
 	}
 	return nil
+}
+
+func (p *peer) enqueueCacheDelivery(key string, msg map[string]any) {
+	if p.cacheWake == nil {
+		return
+	}
+	p.cacheSendMu.Lock()
+	p.cachePending[key] = msg
+	p.cacheSendMu.Unlock()
+	select {
+	case p.cacheWake <- struct{}{}:
+	default:
+	}
+}
+
+func (p *peer) runCacheDeliverySender(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.cacheWake:
+		}
+		for {
+			p.cacheSendMu.Lock()
+			var key string
+			var message map[string]any
+			for candidate, pending := range p.cachePending {
+				key, message = candidate, pending
+				delete(p.cachePending, candidate)
+				break
+			}
+			p.cacheSendMu.Unlock()
+			if key == "" {
+				break
+			}
+			if err := p.send(ctx, message); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) removePeer(p *peer) {
@@ -502,6 +571,7 @@ func (s *Server) removePeer(p *peer) {
 			s.cache.markDeviceStale(p.deviceID, "agent_offline")
 			for key := range s.cache.entries {
 				if key.deviceID == p.deviceID {
+					s.finishCachePromotionLocked(key)
 					cacheDeliveries = append(cacheDeliveries, s.cacheUpdateMessagesLocked(key)...)
 				}
 			}
@@ -526,7 +596,7 @@ func (s *Server) removePeer(p *peer) {
 		_ = sendUnsubscribe(cleanupCtx, sub.agent, sub.id)
 	}
 	for _, release := range cacheReleases {
-		_ = sendCacheTouch(cleanupCtx, release.agent, release.key, false)
+		_ = sendCacheTouch(cleanupCtx, release.agent, release.key, false, newRequestID())
 	}
 	for _, pending := range failed {
 		if pending.method == "thread.subscribe" {
@@ -815,6 +885,29 @@ func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []by
 		return
 	}
 	s.mu.Lock()
+	if key, internal := s.cachePromotionRequests[relayID]; internal {
+		delete(s.cachePromotionRequests, relayID)
+		outcome, _ := reply["outcome"].(string)
+		if outcome != "accepted" {
+			reason := "RESYNC_REQUIRED"
+			if value, ok := reply["error"].(map[string]any); ok {
+				if code, ok := value["code"].(string); ok && code != "" {
+					reason = code
+				}
+			}
+			s.finishCachePromotionLocked(key)
+			if cached := s.cache.entries[key]; cached != nil {
+				cached.stale = true
+				cached.staleReason = reason
+			}
+			deliveries := s.cacheUpdateMessagesLocked(key)
+			s.mu.Unlock()
+			sendCacheDeliveries(ctx, deliveries)
+			return
+		}
+		s.mu.Unlock()
+		return
+	}
 	entry := s.routes[relayID]
 	if entry == nil || entry.agent != agent {
 		data, _ := reply["data"].(map[string]any)

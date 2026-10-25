@@ -11,34 +11,55 @@ func (s *Server) restoreAgentCacheFollowers(ctx context.Context, agent *peer) {
 	type candidate struct {
 		key      cacheKey
 		watching bool
+		active   bool
 		lastUsed time.Time
 	}
 	s.mu.Lock()
 	candidates := make([]candidate, 0)
 	for key, entry := range s.cache.entries {
-		if key.deviceID != agent.deviceID || len(entry.thread) == 0 {
+		active := cacheThreadActive(entry.thread)
+		// A Web client may install its watcher just before the Agent finishes
+		// reconnecting. Even when no snapshot exists yet, that watcher is demand
+		// for a follower and must be promoted once the Agent becomes available.
+		if key.deviceID != agent.deviceID || (len(entry.watchers) == 0 && !active) {
 			continue
 		}
-		candidates = append(candidates, candidate{key: key, watching: len(entry.watchers) > 0, lastUsed: entry.lastUsed})
-		s.cachePromoting[key] = true
+		candidates = append(candidates, candidate{key: key, watching: len(entry.watchers) > 0, active: active, lastUsed: entry.lastUsed})
+		s.beginCachePromotionLocked(key)
 	}
 	s.mu.Unlock()
 	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].active != candidates[j].active {
+			return candidates[i].active
+		}
 		if candidates[i].watching != candidates[j].watching {
 			return candidates[i].watching
 		}
 		return candidates[i].lastUsed.After(candidates[j].lastUsed)
 	})
 	for _, candidate := range candidates {
-		if err := sendCacheTouch(ctx, agent, candidate.key, true); err != nil {
+		requestID := s.promotionRequestID(candidate.key)
+		if err := sendCacheTouch(ctx, agent, candidate.key, true, requestID); err != nil {
+			s.mu.Lock()
+			s.finishCachePromotionLocked(candidate.key)
+			s.mu.Unlock()
 			return
 		}
-		if !candidate.watching {
-			if err := sendCacheTouch(ctx, agent, candidate.key, false); err != nil {
-				return
-			}
-		}
 	}
+}
+
+func cacheThreadActive(raw json.RawMessage) bool {
+	var thread struct {
+		Runtime string `json:"runtime"`
+	}
+	if json.Unmarshal(raw, &thread) != nil {
+		return false
+	}
+	switch thread.Runtime {
+	case "running", "processing", "inProgress":
+		return true
+	}
+	return false
 }
 
 func cacheRequestReference(raw json.RawMessage) (threadID, watchID string, ok bool) {
@@ -90,14 +111,17 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 		agent := s.agents[deviceID]
 		data := s.cacheDataLocked(entry, agent)
 		needsPromotion := data["freshness"] != "fresh"
+		promotionID := ""
 		if firstWatcher && agent != nil && needsPromotion {
-			s.cachePromoting[key] = true
+			promotionID = s.beginCachePromotionLocked(key)
 		}
 		data["watchId"] = watchID
 		s.mu.Unlock()
 		_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": data})
-		if firstWatcher && agent != nil {
-			_ = sendCacheTouch(ctx, agent, key, true)
+		if promotionID != "" {
+			if err := sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
+				s.failCachePromotion(key, "DEVICE_OFFLINE")
+			}
 		}
 		return true
 	case "thread.cache.unwatch":
@@ -110,7 +134,7 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 				s.mu.Unlock()
 				_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": map[string]any{}})
 				if lastWatcher && agent != nil {
-					_ = sendCacheTouch(ctx, agent, key, false)
+					_ = sendCacheTouch(ctx, agent, key, false, newRequestID())
 				}
 				return true
 			}
@@ -139,15 +163,14 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 			return true
 		}
 		already := s.cachePromoting[key]
+		promotionID := ""
 		if !already {
-			s.cachePromoting[key] = true
+			promotionID = s.beginCachePromotionLocked(key)
 		}
 		s.mu.Unlock()
 		if !already {
-			if err := sendCacheTouch(ctx, agent, key, true); err != nil {
-				s.mu.Lock()
-				delete(s.cachePromoting, key)
-				s.mu.Unlock()
+			if err := sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
+				s.failCachePromotion(key, "DEVICE_OFFLINE")
 				_ = web.send(ctx, responseError(requestID, "rejected", "DEVICE_OFFLINE", "cache promotion could not reach agent"))
 				return true
 			}
@@ -160,8 +183,63 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 	}
 }
 
-func sendCacheTouch(ctx context.Context, agent *peer, key cacheKey, watching bool) error {
-	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": newRequestID(), "deviceId": key.deviceID, "method": "thread.cache.touch", "params": map[string]any{"threadId": key.threadID, "watching": watching}})
+func sendCacheTouch(ctx context.Context, agent *peer, key cacheKey, watching bool, requestID string) error {
+	if requestID == "" {
+		requestID = newRequestID()
+	}
+	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": key.deviceID, "method": "thread.cache.touch", "params": map[string]any{"threadId": key.threadID, "watching": watching}})
+}
+
+func (s *Server) beginCachePromotionLocked(key cacheKey) string {
+	if s.cachePromoting[key] {
+		return ""
+	}
+	requestID := newRequestID()
+	s.cachePromoting[key] = true
+	s.cachePromotionIDs[key] = requestID
+	s.cachePromotionRequests[requestID] = key
+	time.AfterFunc(s.cfg.SubscriptionTimeout, func() {
+		s.mu.Lock()
+		if s.cachePromotionIDs[key] != requestID {
+			s.mu.Unlock()
+			return
+		}
+		s.finishCachePromotionLocked(key)
+		if entry := s.cache.entries[key]; entry != nil {
+			entry.stale = true
+			entry.staleReason = "TIMEOUT"
+		}
+		deliveries := s.cacheUpdateMessagesLocked(key)
+		s.mu.Unlock()
+		sendCacheDeliveries(context.Background(), deliveries)
+	})
+	return requestID
+}
+
+func (s *Server) promotionRequestID(key cacheKey) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cachePromotionIDs[key]
+}
+
+func (s *Server) finishCachePromotionLocked(key cacheKey) {
+	if requestID := s.cachePromotionIDs[key]; requestID != "" {
+		delete(s.cachePromotionRequests, requestID)
+	}
+	delete(s.cachePromotionIDs, key)
+	delete(s.cachePromoting, key)
+}
+
+func (s *Server) failCachePromotion(key cacheKey, reason string) {
+	s.mu.Lock()
+	s.finishCachePromotionLocked(key)
+	if entry := s.cache.entries[key]; entry != nil {
+		entry.stale = true
+		entry.staleReason = reason
+	}
+	deliveries := s.cacheUpdateMessagesLocked(key)
+	s.mu.Unlock()
+	sendCacheDeliveries(context.Background(), deliveries)
 }
 
 func randCacheID() string { return "watch-" + newRequestID() }
@@ -180,14 +258,18 @@ func (s *Server) cacheDataLocked(entry *cacheEntry, agent *peer) map[string]any 
 		}
 		return data
 	}
-	fresh := agent != nil && agent.agentEpoch == entry.agentEpoch && !entry.stale
+	fresh := agent != nil && agent.agentEpoch == entry.agentEpoch && !entry.stale && s.now().Before(entry.leaseValidUntil)
 	if fresh {
 		data["freshness"] = "fresh"
 	} else {
 		data["freshness"] = "stale"
 		reason := entry.staleReason
 		if reason == "" {
-			reason = "agent_epoch_changed"
+			if agent != nil && agent.agentEpoch == entry.agentEpoch && !s.now().Before(entry.leaseValidUntil) {
+				reason = "follower_lease_expired"
+			} else {
+				reason = "agent_epoch_changed"
+			}
 		}
 		data["staleReason"] = reason
 	}
@@ -195,6 +277,7 @@ func (s *Server) cacheDataLocked(entry *cacheEntry, agent *peer) map[string]any 
 	data["cacheStreamId"] = entry.streamID
 	data["seq"] = entry.seq
 	data["capturedAt"] = entry.capturedAt.UTC().Format(time.RFC3339Nano)
+	data["leaseValidUntil"] = entry.leaseValidUntil.UTC().Format(time.RFC3339Nano)
 	data["thread"] = json.RawMessage(entry.thread)
 	return data
 }
@@ -212,19 +295,21 @@ func (s *Server) cacheUpdateMessagesLocked(key cacheKey) []cacheDelivery {
 		for name, value := range base {
 			msg[name] = value
 		}
-		deliveries = append(deliveries, cacheDelivery{web: watcher.web, message: msg})
+		deliveries = append(deliveries, cacheDelivery{web: watcher.web, key: watcher.id, message: msg})
 	}
 	return deliveries
 }
 
 type cacheDelivery struct {
 	web     *peer
+	key     string
 	message map[string]any
 }
 
 func sendCacheDeliveries(ctx context.Context, deliveries []cacheDelivery) {
+	_ = ctx
 	for _, delivery := range deliveries {
-		_ = delivery.web.send(ctx, delivery.message)
+		delivery.web.enqueueCacheDelivery(delivery.key, delivery.message)
 	}
 }
 
@@ -247,11 +332,18 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 	}
 	key := cacheKey{agent.deviceID, envelope.ThreadID}
 	s.mu.Lock()
+	if s.agents[agent.deviceID] != agent {
+		// The connection was already replaced by a newer authenticated
+		// transport. A stable process-level agentEpoch intentionally survives
+		// reconnects, so transport identity is the final fence for late frames.
+		s.mu.Unlock()
+		return true
+	}
 	var deliveries []cacheDelivery
 	switch envelope.Event {
 	case "thread.cache.snapshot":
 		err := s.cache.put(cacheSnapshot{deviceID: agent.deviceID, threadID: envelope.ThreadID, agentEpoch: envelope.AgentEpoch, streamID: envelope.CacheStreamID, seq: envelope.Seq, capturedAt: envelope.CapturedAt, thread: envelope.Thread, bytes: envelope.PayloadBytes}, s.now())
-		delete(s.cachePromoting, key)
+		s.finishCachePromotionLocked(key)
 		if err != nil {
 			if entry := s.cache.entries[key]; entry != nil {
 				entry.stale = true
@@ -260,14 +352,17 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 		}
 		deliveries = s.cacheUpdateMessagesLocked(key)
 	case "thread.cache.status":
-		delete(s.cachePromoting, key)
+		s.finishCachePromotionLocked(key)
 		if entry := s.cache.entries[key]; entry != nil {
 			entry.stale = envelope.Freshness != "fresh"
 			entry.staleReason = envelope.Reason
+			if envelope.Freshness == "fresh" {
+				entry.leaseValidUntil = s.now().Add(s.cfg.CacheFreshness)
+			}
 		}
 		deliveries = s.cacheUpdateMessagesLocked(key)
 	case "thread.cache.remove":
-		delete(s.cachePromoting, key)
+		s.finishCachePromotionLocked(key)
 		if entry := s.cache.entries[key]; entry != nil {
 			s.cache.totalBytes -= entry.retainedBytes
 			entry.thread = nil

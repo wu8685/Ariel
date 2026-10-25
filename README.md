@@ -12,24 +12,39 @@ https://github.com/user-attachments/assets/0f0abfb1-7ee0-4bbe-a6ee-a5a9d36728ee
 
 ## Ariel 是什么
 
-Ariel 是一个面向桌面端 Agent App 的浏览器远程会话中继器。离开桌面端后，你仍可以在手机或其他浏览器中查看原会话的历史与实时输出、继续发送消息、停止任务、处理审批与补充问题，也可以管理排队输入或在指定项目中新建会话。Ariel 不复制会话，不接管工作目录，也不建立另一套聊天记录。桌面端 Agent App 始终是会话和执行状态的唯一来源。
+Ariel 是一个面向桌面端 Agent App 的浏览器远程会话中继器。离开桌面端后，你仍可以在手机或其他浏览器中打开原会话、查看实时输出、继续发送消息、停止任务、处理审批与补充问题，也可以管理排队输入或在指定项目中新建会话。
+
+它优先显示 Relay 和浏览器中已经安全缓存的最近两个 turn，再在后台接收增量更新。短暂断网、浏览器切到后台或 Desktop Agent 重连时，已显示的内容不会被整页 loading 替换；旧内容会暂时进入只读状态，等最新 owner 状态恢复后原位接管。
+
+## 主要能力
+
+- **远程继续原会话**：查看最近内容与实时输出，发送文字或图片，停止任务，处理 command／file approval 和结构化用户输入。
+- **会话管理**：按项目浏览会话，查看 unread 状态，重命名、置顶和归档会话；每个会话保留独立草稿。
+- **增量历史与稳定恢复**：首屏只取最近两个 turn；向上翻页时每次最多加载三个更早 turn。切换会话、切换应用和网络重连都优先复用已有内容。
+- **排队输入**：会话运行期间可以继续准备后续消息，并调整、引导或删除排队内容。
+- **文件上下文**：启用 Chilling 后，可以查看每个 turn 修改的文件、原文与 diff，也可以浏览当前 workspace 文件树、打开文档引用、选中片段并引用到当前会话。
+- **移动端交互**：针对手机 viewport、软键盘、长按菜单、滚动阅读和后台恢复做了独立适配。
+
+Ariel 不复制会话，不接管工作目录，也不建立另一套聊天记录。Codex Desktop 始终是会话、turn、权限和执行状态的唯一来源。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-  Browser["Browser"] <-->|HTTP + WebSocket| Relay["Ariel Relay"]
-  Relay <-->|WebSocket| Agent["Desktop Agent"]
-  Agent <-->|统一会话操作| Adapter["Agent App Adapter"]
-  Adapter <-->|本机集成| App["Desktop Agent App"]
+  Browser["Web<br/>双 turn 本地展示缓存"] <-->|HTTP + 一条多路复用 WebSocket| Relay["Ariel Relay<br/>进程内双 turn hot cache"]
+  Relay <-->|一条长期多路复用 WebSocket| Agent["Desktop Agent<br/>持续 follower + 自动重连"]
+  Agent <-->|统一会话操作| Adapter["Codex Adapter"]
+  Adapter <-->|本机 IPC / App Server| App["Codex Desktop<br/>会话与执行 SSOT"]
+  Agent -.->|可选文件上下文| Chilling["Chilling<br/>workspace 文件读取"]
 ```
 
-- **Web** 提供适配手机和桌面浏览器的会话界面。
-- **Relay** 负责浏览器认证、连接管理和消息转发。
-- **Desktop Agent** 运行在桌面设备上，维护与 Relay 的主动连接。
-- **Agent App Adapter** 把统一会话操作转换为目标 Agent App 的本机能力。
+- **Web** 提供手机与桌面浏览器界面，并在用户本地保存有界的双 turn 展示缓存和分会话草稿。
+- **Relay** 负责认证、连接管理、消息路由，以及每个 hot 会话最近两个 turn 的进程内只读 cache；cache 不写入磁盘。
+- **Desktop Agent** 在桌面设备上长期跟随 hot 会话。Relay transport 断开时，它会独立重连，不销毁 Codex Service 或已有 follower。
+- **Codex Adapter** 把统一会话操作转换为 Codex Desktop 的本机能力，并在每次 mutation 前现场核对当前 owner 和权限。
+- **Chilling** 是可选的本地文件上下文 backend；文件原文、diff 和 workspace tree 不由 Relay 持久化。
 
-所有运行状态都来自目标 Agent App；Relay 不持久化第二份会话正文，也不会自动重放结果不确定的操作。详细边界见[架构总览](docs/architecture/overview.md)。
+读链路优先从 Relay hot cache 返回，再由 Desktop Agent 的持续 follower 推送增量；写链路仍必须到达 Desktop Agent，并由 Codex 当前 owner 现场确认。Relay cache 和浏览器 cache 都不能授权发送、停止、审批或回答，也不会自动重放结果不确定的操作。详细边界见[架构总览](docs/architecture/overview.md)和[Agent Transport 与 Cache 恢复规格](docs/specs/0107-resilient-agent-transport-and-cache-recovery.md)。
 
 ## 当前支持范围
 
@@ -38,6 +53,8 @@ flowchart LR
 | 桌面平台 | macOS |
 | Agent App | Codex Desktop |
 | 本机接入 | Codex Desktop 私有 IPC 与内置 Codex App Server |
+| 会话同步 | Agent／Relay 与 Web／Relay 各使用一条多路复用 WebSocket；最近两个 turn 增量 cache |
+| 文件能力 | 可选 Chilling backend：turn 文件变更、原文、diff、文档引用与 workspace 浏览 |
 | 部署方式 | 单用户；可信局域网可用 6 位 PIN，公网可用原生 Passkey；Relay + Web 可用 Docker、ECS 单机脚本或 Kubernetes 交付 |
 
 这是当前实现矩阵，不是 Ariel 的产品边界。其他桌面平台和 Agent App 尚未适配，也不能由现有测试推断为可用。

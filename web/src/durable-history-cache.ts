@@ -115,6 +115,27 @@ export class DurableHistoryCache {
     }, null);
   }
 
+  latest(deviceId: string, threadId: string): Promise<{ identity: HistoryCacheIdentity; value: HistoryCacheValue } | null> {
+    return this.serial(async () => {
+      if (!deviceId || !threadId) return null;
+      const now = this.now();
+      let latest: DurableRecord | null = null;
+      for (const raw of await this.backend.all()) {
+        const record = validRecord(raw);
+        if (!record || record.accessedAt < now - this.ttlMs) {
+          const key = record?.key || String((raw as { key?: unknown })?.key || "");
+          if (key) await this.backend.delete(key);
+          continue;
+        }
+        if (record.identity.deviceId === deviceId && record.identity.threadId === threadId && (!latest || record.accessedAt > latest.accessedAt)) latest = record;
+      }
+      if (!latest) return null;
+      latest.accessedAt = now;
+      await this.backend.put(latest);
+      return { identity: { ...latest.identity }, value: latest.value };
+    }, null);
+  }
+
   rememberSelection(identity: HistoryCacheIdentity): Promise<void> {
     return this.serial(async () => {
       if (validIdentity(identity)) await this.backend.putSelection({ identity: { ...identity }, accessedAt: this.now() });

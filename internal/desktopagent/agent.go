@@ -29,10 +29,12 @@ type Config struct {
 	TaskPollInterval                                      time.Duration
 	TaskExecutionCheck                                    func(context.Context, string, string) error
 	URL, Token, DeviceID, DeviceName, Binary, Socket, CWD string
+	AgentEpoch                                            string
 	ChillingEndpoint                                      string
 	ChillingEnabled                                       bool
 	HeartbeatInterval, HeartbeatTimeout                   time.Duration
 	CacheWarmGrace, CachePublishInterval                  time.Duration
+	CacheLeaseInterval                                    time.Duration
 	CacheEntryMaxBytes                                    int
 	CachePrewarmRecent                                    bool
 	FileContext                                           FileContext
@@ -64,6 +66,15 @@ type agent struct {
 	cachePublishInterval time.Duration
 	cacheEntryMaxBytes   int
 	cacheLoad            chan struct{}
+	cacheSendMu          sync.Mutex
+	cachePending         map[string]cacheOutbound
+	cacheWake            chan struct{}
+}
+
+type cacheOutbound struct {
+	streamID string
+	seq      int64
+	thread   map[string]any
 }
 
 type cacheSubscription struct {
@@ -89,6 +100,7 @@ const (
 	threadListRequestTimeout   = 30 * time.Second
 	threadSubscribeLoadTimeout = 45 * time.Second
 	defaultCacheEntryMaxBytes  = 8 << 20
+	cacheSnapshotWriteTimeout  = 5 * time.Second
 )
 
 var errCacheSnapshotOversized = errors.New("CACHE_OVERSIZED")
@@ -174,7 +186,10 @@ func Run(ctx context.Context, cfg Config) error {
 			cancel()
 		}
 	}()
-	err = RunWithService(runCtx, cfg, service)
+	if cfg.AgentEpoch == "" {
+		cfg.AgentEpoch = rand.Text()
+	}
+	err = runTransportLoop(runCtx, cfg, service)
 	cancel()
 	select {
 	case healthErr := <-healthResult:
@@ -184,6 +199,31 @@ func Run(ctx context.Context, cfg Config) error {
 	default:
 	}
 	return err
+}
+
+func runTransportLoop(ctx context.Context, cfg Config, service *Service) error {
+	delay := 200 * time.Millisecond
+	for ctx.Err() == nil {
+		err := RunWithService(ctx, cfg, service)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Printf("Relay transport disconnected: %v; reconnecting without restarting Codex service", err)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if delay < 5*time.Second {
+			delay *= 2
+			if delay > 5*time.Second {
+				delay = 5 * time.Second
+			}
+		}
+	}
+	return ctx.Err()
 }
 
 func RunWithService(ctx context.Context, cfg Config, service *Service) error {
@@ -196,7 +236,10 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(8 << 20)
-	agentEpoch := rand.Text()
+	agentEpoch := cfg.AgentEpoch
+	if agentEpoch == "" {
+		agentEpoch = rand.Text()
+	}
 	cacheWarmGrace := cfg.CacheWarmGrace
 	if cacheWarmGrace <= 0 {
 		cacheWarmGrace = 90 * time.Second
@@ -209,10 +252,14 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	if cacheEntryMaxBytes <= 0 || cacheEntryMaxBytes > defaultCacheEntryMaxBytes {
 		cacheEntryMaxBytes = defaultCacheEntryMaxBytes
 	}
-	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1)}
+	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1), cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
+	defer a.releaseCacheSubscriptions()
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
+	var cacheSender sync.WaitGroup
+	cacheSender.Add(1)
+	go func() { defer cacheSender.Done(); a.runCacheSender(requestCtx) }()
 	queue := make(chan struct{}, 32)
 	type cacheTouchRequest struct {
 		id     string
@@ -230,6 +277,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}()
 	defer func() {
 		cancelRequests()
+		cacheSender.Wait()
 		close(cacheTouches)
 		cacheTouchWorker.Wait()
 		requests.Wait()
@@ -280,6 +328,13 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	a.tasks.start(requestCtx)
 	defer a.tasks.close()
+	leaseInterval := cfg.CacheLeaseInterval
+	if leaseInterval <= 0 {
+		leaseInterval = 30 * time.Second
+	}
+	leaseCtx, stopLeases := context.WithCancel(requestCtx)
+	defer stopLeases()
+	go a.publishCacheLeases(leaseCtx, leaseInterval)
 	if service != nil && cfg.CachePrewarmRecent {
 		requests.Add(1)
 		go func() {
@@ -337,6 +392,12 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 			select {
 			case cacheTouches <- cacheTouchRequest{id: req.RequestID, method: req.Method, params: append(json.RawMessage(nil), req.Params...)}:
 			default:
+				var touch struct {
+					ThreadID string `json:"threadId"`
+				}
+				if json.Unmarshal(req.Params, &touch) == nil && touch.ThreadID != "" {
+					a.sendCacheStatus(requestCtx, touch.ThreadID, "", "error", "OVERLOADED")
+				}
 				a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
 			}
 			continue
@@ -356,6 +417,24 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		default:
 			a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
 		}
+	}
+}
+
+func (a *agent) releaseCacheSubscriptions() {
+	a.cacheMu.Lock()
+	ids := make([]string, 0, len(a.cacheSubs))
+	for _, sub := range a.cacheSubs {
+		if sub.publishTimer != nil {
+			sub.publishTimer.Stop()
+		}
+		if strings.HasPrefix(sub.subscriptionID, "desktop-sub-") {
+			ids = append(ids, sub.subscriptionID)
+		}
+	}
+	a.cacheSubs = map[string]*cacheSubscription{}
+	a.cacheMu.Unlock()
+	for _, id := range ids {
+		a.service.Unsubscribe(id)
 	}
 }
 
@@ -390,6 +469,10 @@ func heartbeatRelay(ctx context.Context, conn *websocket.Conn, interval, timeout
 }
 
 func (a *agent) send(ctx context.Context, value any) error {
+	return a.sendWithin(ctx, value, wsheartbeat.DefaultWriteTimeout)
+}
+
+func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration) error {
 	body, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -399,7 +482,7 @@ func (a *agent) send(ctx context.Context, value any) error {
 	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
-	writeCtx, cancel := context.WithTimeout(ctx, wsheartbeat.DefaultWriteTimeout)
+	writeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return a.conn.Write(writeCtx, websocket.MessageText, body)
 }
@@ -674,26 +757,13 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	if existing := a.cacheSubs[threadID]; existing != nil {
 		existing.lastTouched = time.Now()
 		if watching {
-			// A warm follower can remain connected after its native owner has
-			// silently changed or stopped delivering events. The first Web watcher
-			// returning to that cache must rebind it instead of declaring the last
-			// retained snapshot fresh forever. Already-watched followers are left
-			// alone so additional Web clients do not cause subscription churn.
-			if !existing.watching && strings.HasPrefix(existing.subscriptionID, "desktop-sub-") {
-				delete(a.cacheSubs, threadID)
-				if existing.publishTimer != nil {
-					existing.publishTimer.Stop()
-				}
-				subscriptionID := existing.subscriptionID
-				a.cacheMu.Unlock()
-				a.service.UnsubscribeAndRetire(subscriptionID)
-				a.cacheMu.Lock()
-			} else {
-				existing.watching = true
-				existing.evictableAt = time.Time{}
-				a.cacheMu.Unlock()
-				return nil
-			}
+			// A follower that is still present is the live owner binding. Rewatching
+			// only promotes its recency; freshness is fenced independently by the
+			// Relay lease and by mutation-time owner validation.
+			existing.watching = true
+			existing.evictableAt = time.Time{}
+			a.cacheMu.Unlock()
+			return nil
 		} else {
 			existing.watching = false
 			existing.evictableAt = time.Now().Add(a.cacheWarmGrace)
@@ -838,7 +908,7 @@ func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, se
 		state.lastPublished = now
 		streamID := state.streamID
 		a.cacheMu.Unlock()
-		_ = a.publishCacheSnapshot(context.Background(), threadID, streamID, seq, thread)
+		a.enqueueCacheSnapshot(threadID, streamID, seq, thread)
 		return
 	}
 	state.pendingSeq = seq
@@ -862,7 +932,44 @@ func (a *agent) flushCacheSnapshot(threadID string, state *cacheSubscription) {
 	state.publishTimer = nil
 	state.lastPublished = time.Now()
 	a.cacheMu.Unlock()
-	_ = a.publishCacheSnapshot(context.Background(), threadID, streamID, seq, thread)
+	a.enqueueCacheSnapshot(threadID, streamID, seq, thread)
+}
+
+func (a *agent) enqueueCacheSnapshot(threadID, streamID string, seq int64, thread map[string]any) {
+	a.cacheSendMu.Lock()
+	a.cachePending[threadID] = cacheOutbound{streamID: streamID, seq: seq, thread: thread}
+	a.cacheSendMu.Unlock()
+	select {
+	case a.cacheWake <- struct{}{}:
+	default:
+	}
+}
+
+func (a *agent) runCacheSender(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.cacheWake:
+		}
+		for {
+			a.cacheSendMu.Lock()
+			var threadID string
+			var next cacheOutbound
+			for id, candidate := range a.cachePending {
+				threadID, next = id, candidate
+				delete(a.cachePending, id)
+				break
+			}
+			a.cacheSendMu.Unlock()
+			if threadID == "" {
+				break
+			}
+			if err := a.publishCacheSnapshot(ctx, threadID, next.streamID, next.seq, next.thread); err != nil && ctx.Err() == nil {
+				logPhase("cache-snapshot-send", threadID, "seq", next.seq, "error", requestErrorCode("thread.cache.touch", err))
+			}
+		}
+	}
 }
 
 func (a *agent) evictOneCacheFollower(exclude string) bool {
@@ -906,11 +1013,45 @@ func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID str
 		}
 		return errCacheSnapshotOversized
 	}
-	return a.send(ctx, map[string]any{
+	return a.sendWithin(ctx, map[string]any{
 		"type": "event", "v": 1, "event": "thread.cache.snapshot", "deviceId": a.deviceID, "threadId": threadID,
 		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "seq": seq, "capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
 		"payloadBytes": len(body), "thread": thread,
+	}, cacheSnapshotWriteTimeout)
+}
+
+func (a *agent) sendCacheStatus(ctx context.Context, threadID, streamID, freshness, reason string) {
+	if streamID == "" {
+		streamID = "cache-status-" + rand.Text()
+	}
+	_ = a.send(ctx, map[string]any{
+		"type": "event", "v": 1, "event": "thread.cache.status", "deviceId": a.deviceID, "threadId": threadID,
+		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "freshness": freshness, "reason": reason,
 	})
+}
+
+func (a *agent) publishCacheLeases(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.cacheMu.Lock()
+			type lease struct{ threadID, streamID string }
+			leases := make([]lease, 0, len(a.cacheSubs))
+			for threadID, sub := range a.cacheSubs {
+				if sub.subscriptionID != "" && sub.streamID != "" {
+					leases = append(leases, lease{threadID: threadID, streamID: sub.streamID})
+				}
+			}
+			a.cacheMu.Unlock()
+			for _, current := range leases {
+				a.sendCacheStatus(ctx, current.threadID, current.streamID, "fresh", "")
+			}
+		}
+	}
 }
 
 func responseMap(value any, prior error) (map[string]any, error) {

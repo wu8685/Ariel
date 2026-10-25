@@ -24,7 +24,7 @@ func cacheFixture(threadID string, textBytes int) cacheSnapshot {
 }
 
 func TestCacheStoreKeepsFiveDistinctWatchedThreadsWithoutCountThrash(t *testing.T) {
-	store := newCacheStore(1<<20, 1<<20, time.Minute)
+	store := newCacheStore(1<<20, 1<<20, time.Minute, 90*time.Second)
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("thread-%d", i)
 		store.watch(cacheKey{"device-a", id}, fmt.Sprintf("watch-%d", i), nil, time.Unix(1, 0))
@@ -46,7 +46,7 @@ func TestCacheStoreEvictsUnwatchedLRUByBytesAndNeverUsesWatchedEntryAsPressureVa
 	first := cacheFixture("first", 200)
 	second := cacheFixture("second", 200)
 	budget := first.bytes + second.bytes + 2*cacheEntryMetadataBytes - 1
-	store := newCacheStore(budget, 1<<20, 0)
+	store := newCacheStore(budget, 1<<20, 0, 90*time.Second)
 	if err := store.put(first, time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestCacheStoreEvictsUnwatchedLRUByBytesAndNeverUsesWatchedEntryAsPressureVa
 func TestCacheStoreRejectsOversizedAndNonMonotonicSnapshots(t *testing.T) {
 	large := cacheFixture("large", 256)
 	first := cacheFixture("thread", 1)
-	store := newCacheStore(1<<20, first.bytes, time.Minute)
+	store := newCacheStore(1<<20, first.bytes, time.Minute, 90*time.Second)
 	if err := store.put(large, time.Now()); !errors.Is(err, errCacheOversized) {
 		t.Fatalf("oversized: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestCacheStoreRejectsOversizedAndNonMonotonicSnapshots(t *testing.T) {
 }
 
 func TestCacheStoreExpiresOnlyUnwatchedStaleBodiesAfterTwentyFourHours(t *testing.T) {
-	store := newCacheStore(1<<20, 1<<20, time.Minute)
+	store := newCacheStore(1<<20, 1<<20, time.Minute, 90*time.Second)
 	now := time.Unix(1, 0)
 	stale := cacheFixture("stale", 32)
 	if err := store.put(stale, now); err != nil {
