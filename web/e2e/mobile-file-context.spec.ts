@@ -7,6 +7,7 @@ const thread: Thread = { threadId:"file-context-thread",title:"文件引用验�
 test("mobile opens a changed file and adds an exact quote to the next message", async ({ page }) => {
   let sent: Record<string,unknown> | null = null;
   let fileReads = 0;
+  const methods:string[]=[];
   const longSuffix = "x".repeat(180);
   await page.route("**/", async route => {
     const response = await route.fetch();
@@ -18,19 +19,20 @@ test("mobile opens a changed file and adds an exact quote to the next message", 
     const message=JSON.parse(String(raw));
     if(message.type==="hello"){socket.send(JSON.stringify({type:"hello.ok",v:1,connectionId:"fc",relayEpoch:"fc-epoch",sessionToken}));return;}
     if(message.type!=="request") return;
+    methods.push(message.method);
     let data:Record<string,unknown>={};
     if(message.method==="device.list") data={devices:[{deviceId:"mac",deviceName:"File Mac",agentOnline:true,codexReady:true,agentEpoch:"fc-agent",capabilities:{autoLoad:true,send:true,chillingFileContext:true}}]};
     if(message.method==="thread.list") data={threads:[thread],nextCursor:""};
-    if(message.method==="thread.subscribe") data={subscriptionId:"sub",streamId:"stream"};
+    if(message.method==="thread.cache.watch") data={watchId:"watch-file",freshness:"fresh",agentOnline:true,agentEpoch:"fc-agent",cacheStreamId:"cache-file",seq:1,capturedAt:"2026-10-25T00:00:00Z",thread};
     if(message.method==="file.context.changes") data={turns:[{turnId:"turn-a",fileChanges:[{itemId:"change-a",path:"internal/hello.go",kind:"update",diff:"@@ -1,3 +1,3 @@\n-package old\n+package hello\n+// "+longSuffix,diffTruncated:true}]}]};
     if(message.method==="file.context.read") { fileReads++; data={path:"internal/hello.go",content:"package hello\n\nfunc Hi() string { return \"hello\" } // "+longSuffix+"\n",sha256:"a".repeat(64),modifiedAtMs:42,lineCount:4,language:"go",diff:"@@ -1,3 +1,3 @@\n-package old\n+package hello\n+// "+longSuffix,diffTruncated:true,version:"current-workspace"}; }
     if(message.method==="turn.start") sent=message.params;
     socket.send(JSON.stringify({type:"response",v:1,requestId:message.requestId,outcome:"accepted",data:message.method==="turn.start"?{turnId:"next-turn"}:data}));
-    if(message.method==="thread.subscribe") socket.send(JSON.stringify({type:"event",v:1,event:"thread.snapshot",deviceId:"mac",threadId:thread.threadId,subscriptionId:"sub",streamId:"stream",seq:1,thread}));
   }));
   await page.goto("/");
   await page.getByRole("button",{name:"展开项目 file-context，/tmp/file-context"}).click();
   await page.getByText(thread.title).click();
+  expect(methods.filter(method=>method==="thread.read"||method==="thread.subscribe")).toEqual([]);
   await page.getByRole("textbox",{name:"发送消息"}).fill("打开文件前的草稿");
   await expect(page.getByRole("button",{name:"查看 Diff：internal/hello.go"})).toBeVisible();
   await page.getByRole("button",{name:"查看 Diff：internal/hello.go"}).click();
