@@ -21,6 +21,30 @@ func TestConfigurationRequiresTokenOriginAndBuiltWeb(t *testing.T) {
 	}
 }
 
+func TestConfigurationAcceptsBoundedRelayCacheBudgets(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	base := configInput{token: "secret", webPIN: "012345", webAuth: "pin", origins: "http://localhost:8080", dist: dir}
+	base.cacheMaxBytes, base.cacheEntryMaxBytes = "536870912", "8388608"
+	cfg, err := configFromInput(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.cacheMaxBytes != 512<<20 || cfg.cacheEntryMaxBytes != 8<<20 {
+		t.Fatalf("cache budgets = %d/%d", cfg.cacheMaxBytes, cfg.cacheEntryMaxBytes)
+	}
+	base.cacheEntryMaxBytes = "536870913"
+	if _, err := configFromInput(base); err == nil {
+		t.Fatal("entry budget larger than total accepted")
+	}
+	base.cacheEntryMaxBytes = "not-bytes"
+	if _, err := configFromInput(base); err == nil {
+		t.Fatal("invalid cache budget accepted")
+	}
+}
+
 func TestHandlerServesWebWithoutExposingToken(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<html><meta name="ariel-auth-mode" content="__ARIEL_WEB_AUTH__"><meta name="ariel-chilling-file-context" content="__ARIEL_CHILLING_FILE_CONTEXT__">Ariel</html>`), 0644); err != nil {

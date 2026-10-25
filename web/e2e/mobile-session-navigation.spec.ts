@@ -93,6 +93,9 @@ test("a transient Agent reconnect keeps the selected conversation visible and re
       if (message.method === "thread.list") {
         socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { threads: [reconnectThread], nextCursor: "" } }));
       }
+      if (message.method === "thread.cache.watch") {
+        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "fixture uses legacy subscription flow" } }));
+      }
       if (message.method === "thread.subscribe") {
         subscriptions++;
         const subscriptionId = `sub-${subscriptions}`;

@@ -31,6 +31,8 @@ test("an accepted send clears after a same-thread resync on a phone viewport", a
         socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Send Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true, send: true } }] } }));
       } else if (message.method === "thread.list") {
         socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { threads: [thread], nextCursor: "" } }));
+      } else if (message.method === "thread.cache.watch") {
+        socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "legacy fixture" } }));
       } else if (message.method === "thread.subscribe") {
         subscription++;
         const sub = `sub-${subscription}`;

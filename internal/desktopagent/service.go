@@ -1372,6 +1372,39 @@ func (s *Service) Unsubscribe(id string) bool {
 	return false
 }
 
+// UnsubscribeAndRetire releases a cache-owned subscription after its explicit
+// warm grace has elapsed. Unlike a Web subscription, it must not enter the
+// Service's second warm-grace window or the follower would remain resident for
+// twice the configured cache lifetime.
+func (s *Service) UnsubscribeAndRetire(id string) bool {
+	s.mu.Lock()
+	controllers := make([]*threadController, 0, len(s.threads))
+	for _, c := range s.threads {
+		controllers = append(controllers, c)
+	}
+	s.mu.Unlock()
+	for _, c := range controllers {
+		c.mu.Lock()
+		if _, ok := c.subs[id]; !ok {
+			c.mu.Unlock()
+			continue
+		}
+		delete(c.subs, id)
+		var live Live
+		if c.leases == 0 && len(c.subs) == 0 && !c.bootstrapHold && !c.migrating {
+			stopWarmRetireLocked(c)
+			live = c.live
+			c.live = nil
+		}
+		c.mu.Unlock()
+		if live != nil {
+			_ = live.Close()
+		}
+		return true
+	}
+	return false
+}
+
 func (s *Service) retireIdle(c *threadController) {
 	s.mu.Lock()
 	c.mu.Lock()

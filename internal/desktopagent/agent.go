@@ -32,6 +32,8 @@ type Config struct {
 	ChillingEndpoint                                      string
 	ChillingEnabled                                       bool
 	HeartbeatInterval, HeartbeatTimeout                   time.Duration
+	CacheWarmGrace, CachePublishInterval                  time.Duration
+	CachePrewarmRecent                                    bool
 	FileContext                                           FileContext
 	OnReady                                               func() error
 	OnNotReady                                            func()
@@ -43,12 +45,32 @@ type FileContext interface {
 	Prepare(context.Context, chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error)
 }
 type agent struct {
-	tasks       *taskRuntime
-	conn        *websocket.Conn
-	deviceID    string
-	service     *Service
-	fileContext FileContext
-	writeMu     sync.Mutex
+	tasks                *taskRuntime
+	conn                 *websocket.Conn
+	deviceID             string
+	agentEpoch           string
+	service              *Service
+	fileContext          FileContext
+	writeMu              sync.Mutex
+	cacheMu              sync.Mutex
+	cacheSubs            map[string]*cacheSubscription
+	cacheWarmGrace       time.Duration
+	cachePublishInterval time.Duration
+	cacheLoad            chan struct{}
+}
+
+type cacheSubscription struct {
+	subscriptionID string
+	streamID       string
+	runtime        string
+	watching       bool
+	evictableAt    time.Time
+	lastTouched    time.Time
+	lastPublished  time.Time
+	structure      string
+	publishTimer   *time.Timer
+	pendingSeq     int64
+	pendingThread  map[string]any
 }
 
 // Service.List may issue three sequential thread/list calls (recent, the
@@ -164,7 +186,16 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(8 << 20)
-	a := &agent{conn: conn, deviceID: cfg.DeviceID, service: service, fileContext: cfg.FileContext}
+	agentEpoch := rand.Text()
+	cacheWarmGrace := cfg.CacheWarmGrace
+	if cacheWarmGrace <= 0 {
+		cacheWarmGrace = 90 * time.Second
+	}
+	cachePublishInterval := cfg.CachePublishInterval
+	if cachePublishInterval <= 0 {
+		cachePublishInterval = time.Second
+	}
+	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheLoad: make(chan struct{}, 1)}
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
@@ -183,7 +214,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		capabilities["threadRename"] = service.ThreadRenameEnabled()
 		capabilities["threadPin"] = service.ThreadPinEnabled()
 	}
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": capabilities}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": agentEpoch, "adapterVersion": "desktop-ipc-0.160.0", "capabilities": capabilities}
 	if cfg.TasksEnabled {
 		capabilities["taskManagement"] = a.tasks.managementReady()
 		capabilities["taskExecution"] = a.tasks.executionReady(ctx)
@@ -216,6 +247,17 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	a.tasks.start(requestCtx)
 	defer a.tasks.close()
+	if service != nil && cfg.CachePrewarmRecent {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			prewarmCtx, stop := context.WithTimeout(requestCtx, threadSubscribeLoadTimeout+threadListRequestTimeout)
+			defer stop()
+			if err := a.prewarmRecent(prewarmCtx); err != nil && prewarmCtx.Err() == nil {
+				log.Printf("recent cache prewarm unavailable: %T", err)
+			}
+		}()
+	}
 	heartCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
 	heartbeatFailure := make(chan error, 1)
@@ -270,6 +312,32 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 			a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
 		}
 	}
+}
+
+func (a *agent) prewarmRecent(ctx context.Context) error {
+	threads, _, err := a.service.List(ctx, 1, "")
+	if err != nil {
+		return err
+	}
+	var threadID string
+	for _, thread := range threads {
+		id, _ := thread["threadId"].(string)
+		pinned, _ := thread["isPinned"].(bool)
+		if id != "" && !pinned {
+			threadID = id
+			break
+		}
+	}
+	if threadID == "" && len(threads) > 0 {
+		threadID, _ = threads[0]["threadId"].(string)
+	}
+	if threadID == "" {
+		return nil
+	}
+	if err := a.touchCache(ctx, threadID, true); err != nil {
+		return err
+	}
+	return a.touchCache(ctx, threadID, false)
 }
 
 func heartbeatRelay(ctx context.Context, conn *websocket.Conn, interval, timeout time.Duration) error {
@@ -327,6 +395,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		Pinned          *bool                      `json:"pinned"`
 		OperationID     string                     `json:"operationId"`
 		UpdateMode      string                     `json:"updateMode"`
+		Watching        *bool                      `json:"watching"`
 		FileContexts    []chillingclient.Selection `json:"fileContexts"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
@@ -455,6 +524,13 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		} else {
 			data = map[string]any{}
 		}
+	case "thread.cache.touch":
+		watching := true
+		if p.Watching != nil {
+			watching = *p.Watching
+		}
+		err = a.touchCache(ctx, p.ThreadID, watching)
+		data = map[string]any{}
 	case "turn.start":
 		var turnID string
 		var text string
@@ -497,6 +573,225 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		err = errors.New("INVALID_ARGUMENT")
 	}
 	a.reply(ctx, id, method, data, err)
+}
+
+func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) error {
+	if threadID == "" {
+		return errors.New("INVALID_ARGUMENT")
+	}
+	a.cacheMu.Lock()
+	if existing := a.cacheSubs[threadID]; existing != nil {
+		existing.lastTouched = time.Now()
+		if watching {
+			existing.watching = true
+			existing.evictableAt = time.Time{}
+		} else {
+			existing.watching = false
+			existing.evictableAt = time.Now().Add(a.cacheWarmGrace)
+		}
+		a.cacheMu.Unlock()
+		return nil
+	}
+	if !watching {
+		a.cacheMu.Unlock()
+		return nil
+	}
+	placeholder := "cache-" + rand.Text()
+	state := &cacheSubscription{subscriptionID: placeholder, streamID: placeholder, watching: true, lastTouched: time.Now()}
+	a.cacheSubs[threadID] = state
+	a.cacheMu.Unlock()
+
+	loadCtx, cancel := context.WithTimeout(ctx, threadSubscribeLoadTimeout)
+	defer cancel()
+	streamID := placeholder
+	emit := func(event map[string]any) {
+		kind, _ := event["event"].(string)
+		if kind == "thread.update" {
+			thread, _ := event["thread"].(map[string]any)
+			seq, _ := event["seq"].(int)
+			if thread != nil {
+				a.queueCacheSnapshot(threadID, state, int64(seq), thread)
+			}
+			return
+		}
+		if kind == "thread.error" {
+			code, _ := event["code"].(string)
+			_ = a.send(context.Background(), map[string]any{"type": "event", "v": 1, "event": "thread.cache.status", "deviceId": a.deviceID, "threadId": threadID, "agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "freshness": "error", "reason": code})
+		}
+	}
+	var err error
+	select {
+	case a.cacheLoad <- struct{}{}:
+		defer func() { <-a.cacheLoad }()
+	case <-loadCtx.Done():
+		err = loadCtx.Err()
+	}
+	var subID, nativeStreamID string
+	var thread map[string]any
+	var activate func()
+	if err == nil {
+		subID, nativeStreamID, thread, activate, err = a.service.SubscribeWithMode(loadCtx, threadID, "", emit)
+	}
+	if err != nil && requestErrorCode("thread.cache.touch", err) == "OVERLOADED" && a.evictOneCacheFollower(threadID) {
+		subID, nativeStreamID, thread, activate, err = a.service.SubscribeWithMode(loadCtx, threadID, "", emit)
+	}
+	if err != nil {
+		a.cacheMu.Lock()
+		delete(a.cacheSubs, threadID)
+		a.cacheMu.Unlock()
+		code := requestErrorCode("thread.cache.touch", err)
+		if code == "OVERLOADED" {
+			code = "AGENT_CAPACITY"
+		}
+		_ = a.send(context.Background(), map[string]any{"type": "event", "v": 1, "event": "thread.cache.status", "deviceId": a.deviceID, "threadId": threadID, "agentEpoch": a.agentEpoch, "cacheStreamId": placeholder, "freshness": "error", "reason": code})
+		if code == "AGENT_CAPACITY" {
+			return errors.New("AGENT_CAPACITY")
+		}
+		return err
+	}
+	streamID = nativeStreamID
+	a.cacheMu.Lock()
+	state.subscriptionID = subID
+	state.streamID = streamID
+	state.runtime, _ = thread["runtime"].(string)
+	state.structure = cacheStructure(thread)
+	a.cacheMu.Unlock()
+	if err := a.publishCacheSnapshot(ctx, threadID, streamID, 1, thread); err != nil {
+		a.service.Unsubscribe(subID)
+		a.cacheMu.Lock()
+		delete(a.cacheSubs, threadID)
+		a.cacheMu.Unlock()
+		return err
+	}
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] == state {
+		state.lastPublished = time.Now()
+	}
+	a.cacheMu.Unlock()
+	activate()
+	return nil
+}
+
+func cacheStructure(thread map[string]any) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprint(thread["runtime"]))
+	for _, turn := range cacheMapSlice(thread["turns"]) {
+		b.WriteByte('|')
+		b.WriteString(fmt.Sprint(turn["turnId"]))
+		b.WriteByte(':')
+		b.WriteString(fmt.Sprint(turn["status"]))
+		for _, item := range cacheMapSlice(turn["items"]) {
+			b.WriteByte('/')
+			b.WriteString(fmt.Sprint(item["itemId"]))
+			b.WriteByte(':')
+			b.WriteString(fmt.Sprint(item["role"]))
+		}
+	}
+	return b.String()
+}
+
+func cacheMapSlice(value any) []map[string]any {
+	switch values := value.(type) {
+	case []map[string]any:
+		return values
+	case []any:
+		result := make([]map[string]any, 0, len(values))
+		for _, value := range values {
+			if item, ok := value.(map[string]any); ok {
+				result = append(result, item)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, seq int64, thread map[string]any) {
+	now := time.Now()
+	runtime, _ := thread["runtime"].(string)
+	structure := cacheStructure(thread)
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] != state {
+		a.cacheMu.Unlock()
+		return
+	}
+	immediate := runtime != state.runtime || structure != state.structure || state.lastPublished.IsZero() || now.Sub(state.lastPublished) >= a.cachePublishInterval
+	state.runtime = runtime
+	state.structure = structure
+	if immediate {
+		if state.publishTimer != nil {
+			state.publishTimer.Stop()
+			state.publishTimer = nil
+		}
+		state.pendingThread = nil
+		state.pendingSeq = 0
+		state.lastPublished = now
+		streamID := state.streamID
+		a.cacheMu.Unlock()
+		_ = a.publishCacheSnapshot(context.Background(), threadID, streamID, seq, thread)
+		return
+	}
+	state.pendingSeq = seq
+	state.pendingThread = thread
+	if state.publishTimer == nil {
+		delay := a.cachePublishInterval - now.Sub(state.lastPublished)
+		state.publishTimer = time.AfterFunc(delay, func() { a.flushCacheSnapshot(threadID, state) })
+	}
+	a.cacheMu.Unlock()
+}
+
+func (a *agent) flushCacheSnapshot(threadID string, state *cacheSubscription) {
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] != state || state.pendingThread == nil {
+		a.cacheMu.Unlock()
+		return
+	}
+	thread, seq, streamID := state.pendingThread, state.pendingSeq, state.streamID
+	state.pendingThread = nil
+	state.pendingSeq = 0
+	state.publishTimer = nil
+	state.lastPublished = time.Now()
+	a.cacheMu.Unlock()
+	_ = a.publishCacheSnapshot(context.Background(), threadID, streamID, seq, thread)
+}
+
+func (a *agent) evictOneCacheFollower(exclude string) bool {
+	now := time.Now()
+	a.cacheMu.Lock()
+	var victimID string
+	var victim *cacheSubscription
+	for threadID, candidate := range a.cacheSubs {
+		if threadID == exclude || candidate.watching || candidate.evictableAt.IsZero() || now.Before(candidate.evictableAt) || candidate.runtime == "running" || candidate.runtime == "processing" || candidate.runtime == "inProgress" {
+			continue
+		}
+		if victim == nil || candidate.lastTouched.Before(victim.lastTouched) {
+			victimID, victim = threadID, candidate
+		}
+	}
+	if victim == nil {
+		a.cacheMu.Unlock()
+		return false
+	}
+	delete(a.cacheSubs, victimID)
+	if victim.publishTimer != nil {
+		victim.publishTimer.Stop()
+	}
+	subscriptionID := victim.subscriptionID
+	a.cacheMu.Unlock()
+	return subscriptionID != "" && a.service.UnsubscribeAndRetire(subscriptionID)
+}
+
+func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID string, seq int64, thread map[string]any) error {
+	body, err := json.Marshal(thread)
+	if err != nil {
+		return err
+	}
+	return a.send(ctx, map[string]any{
+		"type": "event", "v": 1, "event": "thread.cache.snapshot", "deviceId": a.deviceID, "threadId": threadID,
+		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "seq": seq, "capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
+		"payloadBytes": len(body), "thread": thread,
+	})
 }
 
 func responseMap(value any, prior error) (map[string]any, error) {

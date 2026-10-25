@@ -10,7 +10,7 @@ import (
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
 
-func TestNormalizeLiveKeepsOnlyLatestFourNativeTurns(t *testing.T) {
+func TestNormalizeLiveKeepsOnlyLatestTwoNativeTurns(t *testing.T) {
 	turns := make([]map[string]any, 12)
 	for i := range turns {
 		turns[i] = map[string]any{"turnId": fmt.Sprintf("turn-%02d", i+1), "status": "completed", "items": []any{}}
@@ -24,7 +24,7 @@ func TestNormalizeLiveKeepsOnlyLatestFourNativeTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	window := thread["turns"].([]any)
-	if len(window) != 4 || window[0].(map[string]any)["turnId"] != "turn-09" || window[3].(map[string]any)["turnId"] != "turn-12" {
+	if len(window) != 2 || window[0].(map[string]any)["turnId"] != "turn-11" || window[1].(map[string]any)["turnId"] != "turn-12" {
 		t.Fatalf("recent window: %+v", window)
 	}
 	if thread["historyComplete"] != false || thread["recentComplete"] != true {

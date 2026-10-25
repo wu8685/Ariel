@@ -53,6 +53,134 @@ func readJSON(t *testing.T, c *websocket.Conn) map[string]any {
 	return got
 }
 
+func cacheSnapshotEvent(threadID, epoch, stream string, seq int) map[string]any {
+	thread := map[string]any{"threadId": threadID, "title": "Cached", "cwd": "/fixture", "updatedAt": "2026-10-25T00:00:00Z", "runtime": "idle", "turns": []any{}, "pendingInteractions": []any{}}
+	body, _ := json.Marshal(thread)
+	return map[string]any{"type": "event", "v": 1, "event": "thread.cache.snapshot", "deviceId": "mock-mac", "threadId": threadID, "agentEpoch": epoch, "cacheStreamId": stream, "seq": seq, "capturedAt": "2026-10-25T00:00:00Z", "payloadBytes": len(body), "thread": thread}
+}
+
+func TestRelayServesHotCacheLocallyAndBroadcastsReplacement(t *testing.T) {
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, CacheMaxBytes: 1 << 20, CacheEntryMaxBytes: 1 << 19})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	sendJSON(t, agent, cacheSnapshotEvent("thread-a", "epoch-a", "cache-a", 1))
+
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+	id := "00000000-0000-4000-8000-000000000081"
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "thread-a"}})
+	got := readJSON(t, web)
+	data, _ := got["data"].(map[string]any)
+	if got["outcome"] != "accepted" || data["freshness"] != "fresh" || data["thread"].(map[string]any)["title"] != "Cached" {
+		t.Fatalf("cache watch did not return Relay-local content: %+v", got)
+	}
+	watchID, _ := data["watchId"].(string)
+	touch := readJSON(t, agent)
+	if touch["method"] != "thread.cache.touch" || touch["params"].(map[string]any)["watching"] != true {
+		t.Fatalf("cache watch did not refresh Agent hot-set recency: %+v", touch)
+	}
+
+	sendJSON(t, agent, cacheSnapshotEvent("thread-a", "epoch-a", "cache-a", 2))
+	update := readJSON(t, web)
+	if update["event"] != "thread.cache.update" || update["watchId"] != watchID || update["seq"].(float64) != 2 {
+		t.Fatalf("cache replacement not broadcast: %+v", update)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var forwarded map[string]any
+	if err := wsjson.Read(ctx, agent, &forwarded); err == nil {
+		t.Fatalf("cache hit created more than one bounded Agent touch: %+v", forwarded)
+	}
+}
+
+func TestRelayCacheMissPromotesOnceThroughBoundedAgentTouch(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000082", "deviceId": "mock-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "missing"}})
+	watch := readJSON(t, web)
+	if watch["data"].(map[string]any)["freshness"] != "missing" {
+		t.Fatalf("watch: %+v", watch)
+	}
+	for _, id := range []string{"00000000-0000-4000-8000-000000000083", "00000000-0000-4000-8000-000000000084"} {
+		sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.cache.promote", "params": map[string]any{"threadId": "missing"}})
+		if got := readJSON(t, web); got["outcome"] != "accepted" {
+			t.Fatalf("promote: %+v", got)
+		}
+	}
+	touch := readJSON(t, agent)
+	if touch["method"] != "thread.cache.touch" || touch["params"].(map[string]any)["threadId"] != "missing" {
+		t.Fatalf("touch: %+v", touch)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var duplicate map[string]any
+	if err := wsjson.Read(ctx, agent, &duplicate); err == nil {
+		t.Fatalf("duplicate promote reached Agent: %+v", duplicate)
+	}
+}
+
+func TestRelayRestoresCachedFollowersAfterAgentReconnect(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	first := dialTest(t, s.URL, "")
+	sendJSON(t, first, agentHello())
+	readJSON(t, first)
+	sendJSON(t, first, cacheSnapshotEvent("remembered", "epoch-a", "cache-a", 1))
+	first.CloseNow()
+	deadline := time.Now().Add(time.Second)
+	for {
+		r.mu.Lock()
+		offline := r.agents["mock-mac"] == nil
+		r.mu.Unlock()
+		if offline {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first Agent did not disconnect")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	second := dialTest(t, s.URL, "")
+	hello := agentHello()
+	hello["agentEpoch"] = "epoch-b"
+	sendJSON(t, second, hello)
+	readJSON(t, second)
+	firstTouch := readJSON(t, second)
+	secondTouch := readJSON(t, second)
+	if firstTouch["method"] != "thread.cache.touch" || firstTouch["params"].(map[string]any)["threadId"] != "remembered" || firstTouch["params"].(map[string]any)["watching"] != true {
+		t.Fatalf("restore touch: %+v", firstTouch)
+	}
+	if secondTouch["method"] != "thread.cache.touch" || secondTouch["params"].(map[string]any)["watching"] != false {
+		t.Fatalf("restore release: %+v", secondTouch)
+	}
+}
+
+func TestDefaultRelayFrameLimitIncludesCacheEnvelopeHeadroom(t *testing.T) {
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.cfg.MaxFrameBytes <= r.cfg.CacheEntryMaxBytes {
+		t.Fatalf("frame limit %d must exceed cache body limit %d", r.cfg.MaxFrameBytes, r.cfg.CacheEntryMaxBytes)
+	}
+}
+
 func TestRelayAuthenticatesRolesAndListsOnlyOnlineDevice(t *testing.T) {
 	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	if err != nil {

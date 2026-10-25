@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ type config struct {
 	enableChillingFileContext                                                             bool
 	enableTasks                                                                           bool
 	taskDevices                                                                           map[string]relay.TaskDeviceCredential
+	cacheMaxBytes, cacheEntryMaxBytes                                                     int64
 }
 
 type configInput struct {
@@ -34,6 +36,7 @@ type configInput struct {
 	enableChillingFileContext                                                                                  bool
 	enableTasks                                                                                                bool
 	taskCredentialsFile                                                                                        string
+	cacheMaxBytes, cacheEntryMaxBytes                                                                          string
 }
 
 func configFrom(token, webPIN, origins, dist, listen string) (config, error) {
@@ -67,6 +70,23 @@ func configFromInput(input configInput) (config, error) {
 		input.webAuth = relay.WebAuthPIN
 	}
 	cfg := config{token: input.token, webPIN: input.webPIN, webAuth: input.webAuth, publicOrigin: input.publicOrigin, rpID: input.rpID, credentialsFile: input.credentialsFile, setupToken: input.setupToken, dist: input.dist, listen: input.listen, origins: list, enableChillingFileContext: input.enableChillingFileContext}
+	for _, budget := range []struct {
+		raw    string
+		target *int64
+	}{{input.cacheMaxBytes, &cfg.cacheMaxBytes}, {input.cacheEntryMaxBytes, &cfg.cacheEntryMaxBytes}} {
+		raw, target := budget.raw, budget.target
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			return config{}, errors.New("ARIEL cache byte budgets must be positive integers")
+		}
+		*target = value
+	}
+	if cfg.cacheMaxBytes > 0 && cfg.cacheEntryMaxBytes > cfg.cacheMaxBytes {
+		return config{}, errors.New("ARIEL_CACHE_ENTRY_MAX_BYTES must not exceed ARIEL_CACHE_MAX_BYTES")
+	}
 	switch input.webAuth {
 	case relay.WebAuthPIN:
 		if !relay.ValidWebPIN(input.webPIN) {
@@ -133,7 +153,7 @@ func buildHandler(cfg config) (http.Handler, error) {
 		}
 		verifier = auth.Authenticated
 	}
-	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, WebAuthMode: cfg.webAuth, WebSessionVerifier: verifier, AllowedOrigins: cfg.origins, TasksEnabled: cfg.enableTasks, TaskDevices: cfg.taskDevices})
+	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, WebAuthMode: cfg.webAuth, WebSessionVerifier: verifier, AllowedOrigins: cfg.origins, TasksEnabled: cfg.enableTasks, TaskDevices: cfg.taskDevices, CacheMaxBytes: cfg.cacheMaxBytes, CacheEntryMaxBytes: cfg.cacheEntryMaxBytes})
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +201,7 @@ func main() {
 		token: os.Getenv("ARIEL_TOKEN"), webPIN: os.Getenv("ARIEL_WEB_PIN"), webAuth: os.Getenv("ARIEL_WEB_AUTH"), origins: os.Getenv("ARIEL_ORIGINS"),
 		publicOrigin: os.Getenv("ARIEL_PUBLIC_ORIGIN"), rpID: os.Getenv("ARIEL_WEBAUTHN_RP_ID"), credentialsFile: os.Getenv("ARIEL_WEBAUTHN_CREDENTIALS_FILE"),
 		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: *enableChilling, enableTasks: *enableTasks, taskCredentialsFile: *taskCredentials,
+		cacheMaxBytes: os.Getenv("ARIEL_CACHE_MAX_BYTES"), cacheEntryMaxBytes: os.Getenv("ARIEL_CACHE_ENTRY_MAX_BYTES"),
 	})
 	if err != nil {
 		log.Fatal(err)

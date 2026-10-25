@@ -269,7 +269,7 @@ func TestServiceInitialSnapshotBoundsRecentWindow(t *testing.T) {
 		t.Fatalf("initial snapshot with older turns must be marked incomplete: %v", snapshot["historyComplete"])
 	}
 	first := got[0].(map[string]any)["turnId"]
-	if first != "t3" {
+	if first != "t5" {
 		t.Fatalf("initial snapshot must keep the newest turns, first=%v", first)
 	}
 }

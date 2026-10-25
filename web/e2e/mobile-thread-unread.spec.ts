@@ -35,6 +35,10 @@ test("a batch update shows one local unread dot and rendered selection clears it
       socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { threads: listCalls === 1 ? [first, second] : [first, changed], nextCursor: "" } }));
       return;
     }
+    if (message.method === "thread.cache.watch") {
+      socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "legacy fixture" } }));
+      return;
+    }
     if (message.method === "thread.subscribe" && message.params.threadId === second.threadId) {
       socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { subscriptionId: "sub-unread" } }));
       socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: second.threadId, subscriptionId: "sub-unread", streamId: "stream-unread", seq: 1, thread: changed }));

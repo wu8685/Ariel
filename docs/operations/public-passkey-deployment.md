@@ -42,11 +42,15 @@ docker volume create ariel-auth
 docker run -d \
   --name ariel-relay \
   --restart unless-stopped \
+  --memory 1g \
   --network ariel \
   -v ariel-auth:/data \
   -e ARIEL_TOKEN \
   -e ARIEL_SESSION_KEY \
   -e ARIEL_PASSKEY_SETUP_TOKEN \
+  -e GOMEMLIMIT=768MiB \
+  -e ARIEL_CACHE_MAX_BYTES=536870912 \
+  -e ARIEL_CACHE_ENTRY_MAX_BYTES=8388608 \
   -e ARIEL_WEB_AUTH=passkey \
   -e "ARIEL_ORIGINS=${ARIEL_PUBLIC_ORIGIN}" \
   -e "ARIEL_PUBLIC_ORIGIN=${ARIEL_PUBLIC_ORIGIN}" \

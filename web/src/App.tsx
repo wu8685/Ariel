@@ -28,7 +28,7 @@ export { InteractionCard } from "./interaction-card";
 
 type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
-const recentTurnLimit = 4;
+const recentTurnLimit = 2;
 const historyTurnPageLimit = 10;
 const mobileViewportMaxWidth = 800;
 const composerMinHeight = 44;
@@ -502,18 +502,24 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     warmSubscriptions.current.set(key, next);
   }
 
+  function releaseSubscription(targetDevice: string, subscriptionId: string) {
+    if (!targetDevice || !subscriptionId) return;
+    if (subscriptionId.startsWith("watch-")) void client.request("thread.cache.unwatch", targetDevice, { watchId: subscriptionId });
+    else void client.request("thread.unsubscribe", targetDevice, { subscriptionId });
+  }
+
   function dropWarmSubscription(targetDevice: string, targetThread: string, unsubscribe = false) {
     const key = warmSubscriptionKey(targetDevice, targetThread);
     const existing = key ? warmSubscriptions.current.get(key) : null;
     if (key) warmSubscriptions.current.delete(key);
-    if (unsubscribe && existing?.subscriptionId) void client.request("thread.unsubscribe", existing.deviceId, { subscriptionId: existing.subscriptionId });
+    if (unsubscribe && existing?.subscriptionId) releaseSubscription(existing.deviceId, existing.subscriptionId);
   }
 
   function clearWarmSubscriptions(targetDevice = "", unsubscribe = false) {
     for (const [key, existing] of warmSubscriptions.current) {
       if (targetDevice && existing.deviceId !== targetDevice) continue;
       warmSubscriptions.current.delete(key);
-      if (unsubscribe && existing.subscriptionId) void client.request("thread.unsubscribe", existing.deviceId, { subscriptionId: existing.subscriptionId });
+      if (unsubscribe && existing.subscriptionId) releaseSubscription(existing.deviceId, existing.subscriptionId);
     }
   }
 
@@ -521,7 +527,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     for (const [key, existing] of warmSubscriptions.current) {
       if (keep.has(key)) continue;
       warmSubscriptions.current.delete(key);
-      void client.request("thread.unsubscribe", existing.deviceId, { subscriptionId: existing.subscriptionId });
+      releaseSubscription(existing.deviceId, existing.subscriptionId);
     }
   }
 
@@ -705,6 +711,17 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setHistory(restored.history);
     replaceItemOverrides(restored.itemOverrides);
     restoredHistoryCache.current = identity;
+    return true;
+  }
+
+  function demoteRotatedRecent(previous: Turn[], next: Turn[]): boolean {
+    const nextIDs = new Set(next.map(turn => turn.turnId));
+    const knownOlder = new Set(historyRef.current.older.map(turn => turn.turnId));
+    const rotated = previous.filter(turn => turn.status === "completed" && !nextIDs.has(turn.turnId) && !knownOlder.has(turn.turnId));
+    if (rotated.length === 0) return false;
+    const history = { ...historyRef.current, older: [...historyRef.current.older, ...rotated] };
+    historyRef.current = history;
+    setHistory(history);
     return true;
   }
 
@@ -1106,7 +1123,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (!threadCreateEnabled || !deviceId || !cwd || creatingThread) return;
     const oldSubscription = expectedSubscription.current;
     const oldDevice = selection.current.deviceId;
-    if (oldSubscription && oldDevice) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    if (oldSubscription && oldDevice) releaseSubscription(oldDevice, oldSubscription);
     dropWarmSubscription(oldDevice, selection.current.threadId);
     expectedSubscription.current = "";
     pendingSelect.current++;
@@ -1197,7 +1214,60 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setThreadId(id); setView(cachedView); setSyncingView(!warm); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!restoredView) resetHistory();
     if (warm) { persistView(warm); return; }
-    if (oldSubscription && !old?.subscriptionId) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    if (oldSubscription && !old?.subscriptionId) releaseSubscription(oldDevice, oldSubscription);
+    // Spec 0100: the hot path terminates at Relay. A fresh cache response is
+    // already a complete two-turn view, so opening it must not create a
+    // Web-owned Desktop subscription or wait for the owner snapshot.
+    const cacheResponse = await client.request("thread.cache.watch", targetDevice, { threadId: id });
+    if (epoch !== pendingSelect.current) {
+      const staleWatchID = cacheResponse.data?.watchId;
+      if (cacheResponse.outcome === "accepted" && typeof staleWatchID === "string") releaseSubscription(targetDevice, staleWatchID);
+      return;
+    }
+    if (cacheResponse.outcome === "accepted") {
+      const cacheData = cacheResponse.data || {};
+      const watchID = typeof cacheData.watchId === "string" ? cacheData.watchId : "";
+      const freshness = cacheData.freshness;
+      const cachedThread = cacheData.thread as Thread | undefined;
+      if (watchID && (!cachedThread || cachedThread.threadId === id)) {
+        expectedSubscription.current = watchID;
+        const source = cachedThread || cachedView?.thread;
+        if (source) {
+          const fresh = freshness === "fresh";
+          const thread = fresh ? source : { ...source, runtime: "unknown" as const, pendingInteractions: [], permissions: { sandbox: "unknown" as const, approval: "unknown" as const } };
+          const next: ThreadView = {
+            deviceId: targetDevice, threadId: id, subscriptionId: watchID,
+            streamId: typeof cacheData.cacheStreamId === "string" ? cacheData.cacheStreamId : "cache-pending",
+            seq: typeof cacheData.seq === "number" ? cacheData.seq : 0, thread,
+          };
+          const restoredHistory = restoreCachedHistory(targetDevice, id, source.turns);
+          const retainedRotation = cachedView?.thread ? demoteRotatedRecent(cachedView.thread.turns, source.turns) : false;
+          if (!restoredHistory && !retainedRotation) resetHistory();
+          selection.current.view = next;
+          setView(next);
+          retainWarmSubscription(next);
+          persistView(next);
+          // A stale Relay cache is mutation-disabled but remains draftable;
+          // ownerReady/syncingView gate writes without turning the composer
+          // into permanent history-only mode.
+          setReadOnlyHistory(false);
+          setReadOnlyReason(fresh ? "" : String(cacheData.staleReason || "RESYNC_REQUIRED"));
+        }
+        if (freshness === "fresh") {
+          setSyncingView(false);
+          setNotice("");
+          finishAgentRecovery(targetDevice);
+          return;
+        }
+        setSyncingView(true);
+        setNotice(freshness === "stale" ? "正在后台刷新 Relay 中的会话缓存。" : "正在从 Desktop Agent 准备最近会话。");
+        void client.request("thread.cache.promote", targetDevice, { threadId: id });
+        return;
+      }
+      // Rolling-upgrade compatibility: an older Relay/fixture may accept an
+      // unknown method with an empty response. Treat that as unsupported and
+      // continue through the legacy progressive-open path.
+    }
     // Progressive open (spec 0086): without any cached view, race the read-only
     // fast path against the owner subscription so history renders within
     // seconds instead of after a full owner cold load.
@@ -1450,6 +1520,42 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (event.threadId === selection.current.threadId) setNotice("交互已完成，会话状态已同步。");
         return;
       }
+      if (event.event === "thread.cache.update") {
+        const current = selection.current;
+        const currentEvent = current.deviceId === event.deviceId && current.threadId === event.threadId && expectedSubscription.current === event.watchId;
+        const warm = warmSubscription(event.deviceId, event.threadId);
+        const warmEvent = Boolean(warm && warm.subscriptionId === event.watchId);
+        if (!currentEvent && !warmEvent) return;
+        if (event.freshness !== "fresh" || !event.thread || !event.cacheStreamId || !event.seq) {
+          if (currentEvent) {
+            setReadOnlyHistory(false);
+            setReadOnlyReason(event.staleReason || "RESYNC_REQUIRED");
+            setSyncingView(true);
+          }
+          return;
+        }
+        const next: ThreadView = { deviceId: event.deviceId, threadId: event.threadId, subscriptionId: event.watchId, streamId: event.cacheStreamId, seq: event.seq, thread: event.thread };
+        observeUnread(event.deviceId, [event.thread]);
+        retainWarmSubscription(next);
+        if (!currentEvent) cacheWarmThread(next);
+        else {
+          const restoredHistory = restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns);
+          const retainedRotation = current.view?.thread ? demoteRotatedRecent(current.view.thread.turns, event.thread.turns) : false;
+          if (!restoredHistory && !retainedRotation) resetHistory();
+          selection.current.view = next;
+          setView(next);
+          setSyncingView(false);
+          setReadOnlyHistory(false);
+          setReadOnlyReason("");
+          setNotice("");
+          finishAgentRecovery(event.deviceId);
+          reconcileSubmission(event.thread, event.deviceId, event.threadId);
+          persistView(next);
+        }
+        setThreads(list => list.map(t => t.threadId === next.threadId ? { ...next.thread, searchSnippet: t.searchSnippet } : t));
+        return;
+      }
+      if (event.event === "thread.cache.snapshot" || event.event === "thread.cache.status" || event.event === "thread.cache.remove") return;
       const current = selection.current;
       const currentEvent = belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current);
       const warm = warmSubscription(event.deviceId, event.threadId);
@@ -1564,7 +1670,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const oldSubscription = expectedSubscription.current;
     const oldWarm = oldDevice ? warmSubscription(oldDevice, selection.current.threadId) : null;
     if (oldDevice) clearWarmSubscriptions(oldDevice, true);
-    if (oldDevice && oldSubscription && !oldWarm) void client.request("thread.unsubscribe", oldDevice, { subscriptionId: oldSubscription });
+    if (oldDevice && oldSubscription && !oldWarm) releaseSubscription(oldDevice, oldSubscription);
     expectedSubscription.current = "";
     selection.current = { deviceId, threadId: "", view: null };
     const cached = threadListIdentity(deviceId, searchTerm);
@@ -2214,7 +2320,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       setView(null);
       setSyncingView(false);
       resetHistory();
-      if (subscriptionId) void client.request("thread.unsubscribe", targetDevice, { subscriptionId });
+      if (subscriptionId) releaseSubscription(targetDevice, subscriptionId);
     }
     setArchiveUndoToast({ threadId: thread.threadId, title: thread.title || "未命名会话", operationId });
   }

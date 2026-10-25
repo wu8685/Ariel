@@ -25,6 +25,7 @@ describe("bounded browser history cache", () => {
     expect(cache.get(identity("one"))?.thread?.turns[0].turnId).toBe("recent");
     expect(cache.set(identity("wrong"), { history: emptyHistoryState(), itemOverrides: {}, thread: recent("another") })).toBe(false);
     expect(cache.set(identity("duplicate"), { history: emptyHistoryState(), itemOverrides: {}, thread: recent("duplicate", [turn("same"), turn("same")]) })).toBe(false);
+    expect(cache.set(identity("too-many"), { history: emptyHistoryState(), itemOverrides: {}, thread: recent("too-many", [turn("one"), turn("two"), turn("three")]) })).toBe(false);
   });
 
   it("updates an existing key and evicts the least recently used entry", () => {

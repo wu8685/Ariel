@@ -49,7 +49,7 @@ export function sanitizeHistoryCacheValue(value: HistoryCacheValue): HistoryCach
   }
   let thread: Thread | undefined;
   if (value.thread) {
-    if (value.thread.turns.length > 4) return null;
+    if (value.thread.turns.length > 2) return null;
     const recentIDs = new Set<string>();
     for (const turn of value.thread.turns) {
       if (!turn.turnId || recentIDs.has(turn.turnId) || !validItems(turn)) return null;

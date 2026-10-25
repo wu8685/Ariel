@@ -4,9 +4,9 @@ import type { Thread, Turn } from "../src/generated/protocol";
 const sessionToken = `s_${"f".repeat(64)}`;
 const turn = (id: string): Turn => ({ turnId: id, status: "completed", items: [{ itemId: `${id}-item`, role: "assistant", text: id }] });
 const recent: Thread = {
-  threadId: "four-turn-window",
-  title: "四回合首屏",
-  cwd: "/tmp/four-turn-window",
+  threadId: "two-turn-window",
+  title: "双回合首屏",
+  cwd: "/tmp/two-turn-window",
   updatedAt: "2026-10-11T00:00:00Z",
   runtime: "idle",
   historyComplete: false,
@@ -15,7 +15,7 @@ const recent: Thread = {
   pendingInteractions: [],
 };
 
-test("fills only four recent turns while manual history keeps ten-turn pages", async ({ page }) => {
+test("fills only two recent turns while manual history keeps ten-turn pages", async ({ page }) => {
   const historyLimits: number[] = [];
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
@@ -33,7 +33,7 @@ test("fills only four recent turns while manual history keeps ten-turn pages", a
     if (message.method === "thread.history") {
       historyLimits.push(message.params.limit);
       data = historyLimits.length === 1
-        ? { turns: [turn("turn-4"), turn("turn-3"), turn("turn-2"), turn("turn-1")], nextCursor: "older" }
+        ? { turns: [turn("turn-4"), turn("turn-3")], nextCursor: "older" }
         : { turns: [turn("turn-0")], nextCursor: "" };
     }
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
@@ -41,13 +41,13 @@ test("fills only four recent turns while manual history keeps ten-turn pages", a
   }));
 
   await page.goto("/");
-  await page.getByRole("button", { name: "展开项目 four-turn-window，/tmp/four-turn-window" }).click();
+  await page.getByRole("button", { name: "展开项目 two-turn-window，/tmp/two-turn-window" }).click();
   await page.getByText(recent.title).click();
-  await expect.poll(() => historyLimits).toEqual([3]);
-  await expect(page.getByText("turn-1")).toBeVisible();
+  await expect.poll(() => historyLimits).toEqual([1]);
+  await expect(page.getByText("turn-3")).toBeVisible();
   await expect(page.getByText("turn-4")).toBeVisible();
 
   await page.getByRole("button", { name: "加载更早消息" }).click();
-  await expect.poll(() => historyLimits).toEqual([3, 10]);
+  await expect.poll(() => historyLimits).toEqual([1, 10]);
   await expect(page.getByText("turn-0")).toBeVisible();
 });

@@ -38,7 +38,11 @@ export ARIEL_ORIGIN='http://<RELAY-LAN-IP>:8080'
 docker run -d \
   --name ariel-relay \
   --restart unless-stopped \
+  --memory 1g \
   -p 8080:8080 \
+  -e GOMEMLIMIT=768MiB \
+  -e ARIEL_CACHE_MAX_BYTES=536870912 \
+  -e ARIEL_CACHE_ENTRY_MAX_BYTES=8388608 \
   -e ARIEL_TOKEN \
   -e ARIEL_WEB_PIN \
   -e "ARIEL_ORIGINS=${ARIEL_ORIGIN}" \
@@ -46,6 +50,8 @@ docker run -d \
 ```
 
 `ARIEL_TOKEN`、`ARIEL_WEB_PIN` 和 `ARIEL_ORIGINS` 是 PIN 模式必填项。`ARIEL_WEB_AUTH` 未配置时默认使用 `pin`，兼容既有部署。镜像内已把 `ARIEL_LISTEN` 默认设为 `0.0.0.0:8080`，把 `ARIEL_WEB_DIST` 设为 production Web 目录；需要时仍可用 `-e` 覆盖。
+
+Relay 的双 turn hot cache 默认使用 512 MiB soft budget，单 entry 上限 8 MiB；可分别通过 `ARIEL_CACHE_MAX_BYTES` 和 `ARIEL_CACHE_ENTRY_MAX_BYTES`（十进制 bytes）调整。`GOMEMLIMIT=768MiB` 给连接、索引和 GC 保留空间，Docker `--memory 1g` 只作为最后的进程隔离边界。容量压力应由 cache eviction 或 `CACHE_CAPACITY` 处理，不能把 OOM 当成正常淘汰机制。
 
 不要把真实 token 或连接码写入 Dockerfile、镜像 build args、仓库文件或命令示例。上述 `-e NAME` 形式从当前 shell 传值，不会把值直接写入 shell history；但具有 Docker daemon 管理权限的同机用户仍可能检查容器环境变量。
 

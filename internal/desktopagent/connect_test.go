@@ -40,20 +40,27 @@ func TestOpenFollowerRejectsMissingSocketAndInvalidThreadBeforeDial(t *testing.T
 	}
 }
 
-func TestLargeFollowerHas64MiBBoundAndOneProcessLease(t *testing.T) {
+func TestLargeFollowerHas64MiBBoundAndProcessByteBudget(t *testing.T) {
 	regular := productionIPCOptions("thread")
 	large := productionLargeIPCOptions("thread")
 	if regular.MaxFrameBytes != 0 || large.MaxFrameBytes != 64<<20 || large.MaxEventBytes != 64<<20 {
 		t.Fatalf("follower options: ordinary=%+v large=%+v", regular, large)
 	}
-	release, err := acquireLargeFollower()
-	if err != nil {
-		t.Fatal(err)
+	resetLargeFollowerBudgetForTest()
+	releases := make([]func(), 0, 8)
+	for i := 0; i < 8; i++ {
+		release, err := acquireLargeFollower()
+		if err != nil {
+			t.Fatalf("large follower %d: %v", i+1, err)
+		}
+		releases = append(releases, release)
 	}
 	if _, err := acquireLargeFollower(); !errors.Is(err, desktopipc.ErrOverloaded) {
-		t.Fatalf("second large follower should be rejected: %v", err)
+		t.Fatalf("follower beyond 512 MiB budget should be rejected: %v", err)
 	}
-	release()
+	for _, release := range releases {
+		release()
+	}
 	releaseAgain, err := acquireLargeFollower()
 	if err != nil {
 		t.Fatalf("released slot was not reusable: %v", err)
@@ -62,6 +69,7 @@ func TestLargeFollowerHas64MiBBoundAndOneProcessLease(t *testing.T) {
 }
 
 func TestLargeFollowerFallbackRetriesOnlyFrameOverflowAndReleasesLease(t *testing.T) {
+	resetLargeFollowerBudgetForTest()
 	resetFrameHints()
 	attempts := []bool{}
 	live, err := openFollowerWithFallback("hint-retry", func(large bool) (Live, error) {
@@ -74,17 +82,15 @@ func TestLargeFollowerFallbackRetriesOnlyFrameOverflowAndReleasesLease(t *testin
 	if err != nil || len(attempts) != 2 || attempts[0] || !attempts[1] {
 		t.Fatalf("large fallback: attempts=%v err=%v", attempts, err)
 	}
-	if _, err := acquireLargeFollower(); !errors.Is(err, desktopipc.ErrOverloaded) {
-		t.Fatalf("successful large follower did not hold lease: %v", err)
+	if got := largeFollowerBytesInUse(); got != 64<<20 {
+		t.Fatalf("successful large follower reservation = %d, want 64 MiB", got)
 	}
 	if err := live.Close(); err != nil {
 		t.Fatal(err)
 	}
-	release, err := acquireLargeFollower()
-	if err != nil {
-		t.Fatalf("close did not release lease: %v", err)
+	if got := largeFollowerBytesInUse(); got != 0 {
+		t.Fatalf("close did not release reservation: %d", got)
 	}
-	release()
 	attempts = nil
 	_, err = openFollowerWithFallback("hint-protocol", func(large bool) (Live, error) {
 		attempts = append(attempts, large)

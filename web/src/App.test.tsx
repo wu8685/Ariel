@@ -9,6 +9,7 @@ import { emptyHistoryState } from "./history";
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];
+  static autoRejectCacheWatch = true;
   static readonly OPEN = 1;
   readyState = 1;
   sent: string[] = [];
@@ -16,7 +17,16 @@ class BrowserSocket {
   onclose: ((event: CloseEvent) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   constructor(_url: string) { BrowserSocket.sockets.push(this); }
-  send(value: string) { this.sent.push(value); }
+  send(value: string) {
+    this.sent.push(value);
+    const request = JSON.parse(value);
+    if (BrowserSocket.autoRejectCacheWatch && request.method === "thread.cache.watch") {
+      queueMicrotask(() => this.message({
+        type: "response", v: 1, requestId: request.requestId, outcome: "rejected",
+        error: { code: "PROTOCOL_UNSUPPORTED", message: "PROTOCOL_UNSUPPORTED" },
+      }));
+    }
+  }
   close(code = 1000) {
     this.readyState = 3;
     this.onclose?.({ code } as CloseEvent);
@@ -32,6 +42,7 @@ beforeEach(() => {
   originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
   BrowserSocket.sockets = [];
+  BrowserSocket.autoRejectCacheWatch = true;
   sessionStorage.clear();
   localStorage.clear();
   window.history.replaceState({}, "", "/");
@@ -67,6 +78,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
   await expandProject(thread.cwd);
   fireEvent.click((await screen.findByText(thread.title)).closest("button")!);
+  await waitFor(() => expect(requests("thread.cache.watch")).toHaveLength(1));
   await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub" } }));
   act(() => socket.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub", streamId: "stream", seq: 1, thread }));
@@ -75,6 +87,26 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+	it("opens a fresh two-turn Relay cache without creating an Agent read subscription", async () => {
+		BrowserSocket.autoRejectCacheWatch = false;
+		sessionStorage.setItem("ariel.web-session.v1", relaySession);
+		render(<App />);
+		const socket = BrowserSocket.sockets[0];
+		const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+		socket.onopen?.(new Event("open"));
+		act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+		await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true } }] } }));
+		await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+		await expandProject(fixtureThread.cwd);
+		fireEvent.click((await screen.findByText(fixtureThread.title)).closest("button")!);
+		await waitFor(() => expect(requests("thread.cache.watch")).toHaveLength(1));
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-a", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache-a", seq: 1, capturedAt: "2026-10-25T00:00:00Z", thread: fixtureThread } }));
+		await waitFor(() => expect(screen.getByRole("heading", { name: fixtureThread.title })).toBeTruthy());
+		expect(requests("thread.read")).toHaveLength(0);
+		expect(requests("thread.subscribe")).toHaveLength(0);
+	});
 	it("uses Passkey mode without exposing a PIN fallback", async () => {
 		const meta = document.createElement("meta");
 		meta.name = "ariel-auth-mode";
@@ -803,7 +835,7 @@ describe("Ariel app interactions", () => {
     const { socket, requests } = await openFixture(recent);
     await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
     const sent = requests("thread.history")[0];
-    expect(sent.params).toMatchObject({ threadId: "fixture", limit: 3 });
+    expect(sent.params).toMatchObject({ threadId: "fixture", limit: 1 });
     await act(async () => socket.message({ type: "response", v: 1, requestId: sent.requestId, outcome: "accepted", data: { turns: [recent.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "补齐内容" }] }], nextCursor: "" } }));
     expect(await screen.findByText("补齐内容")).toBeTruthy();
     expect(screen.getByText("最新内容")).toBeTruthy();

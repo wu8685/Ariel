@@ -16,7 +16,7 @@ import (
 var ErrNativeShape = errors.New("Desktop history or live state has unsupported structure")
 
 const (
-	recentTurnLimit     = 4
+	recentTurnLimit     = 2
 	historyTurnMaxLimit = 10
 )
 

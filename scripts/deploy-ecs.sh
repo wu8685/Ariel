@@ -596,6 +596,10 @@ start_relay() {
     --name "$relay_container"
     --label "$managed_label"
     --restart unless-stopped
+    --memory 1g
+    --env GOMEMLIMIT=768MiB
+    --env ARIEL_CACHE_MAX_BYTES=536870912
+    --env ARIEL_CACHE_ENTRY_MAX_BYTES=8388608
     --env-file "$runtime_env_file"
     --user 10001:10001
     --read-only

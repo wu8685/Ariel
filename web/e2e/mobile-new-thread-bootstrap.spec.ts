@@ -36,6 +36,8 @@ test("mobile local draft bootstraps once and keeps the composer stable", async (
       createdThread.turns[0].items[0].text = message.params.text;
       createdThread.turns[0].items[0].clientMessageId = message.params.clientMessageId;
       socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { thread: createdThread, threadId: createdThread.threadId, turnId: "turn-first", clientMessageId: message.params.clientMessageId } }));
+    } else if (message.method === "thread.cache.watch") {
+      socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "legacy fixture" } }));
     } else if (message.method === "thread.subscribe") {
       subscribeCount++;
       socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data: { subscriptionId: "created-sub" } }));

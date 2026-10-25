@@ -44,8 +44,8 @@
 - chilling 是看板任务的唯一 SSOT，不仅是数据库插件；Ariel 只连接／呈现任务和绑定主机 Agent，不复制任务状态机、调度或验收规则。native 事实回流 chilling 后更新任务，native turn 成功不等于任务完成；后端离线不接管任务写入。
 - Relay 的主机接入对象是 Ariel Desktop Agent，不是 Codex Agent；本机 Ariel Desktop Agent 再经 Codex Adapter 转发给 Codex。`role=agent`、`Agent(M/E)` 和 `agentEpoch` 均属 Ariel Desktop Agent，不得与任务负责人 Codex 或 ahsir Agent 混用。
 - 任务接入不引入 Ariel MySQL／云端 scheduler／持久任务队列。允许必要任务数据有界转发，不持久化正文或记录内容日志；native 写操作仍走执行机既有 owner，后台跨 Agent 路由必须新增授权与核对，不能视为现有 file-context 能力。
-- Codex 是会话和执行状态的 SSOT；Ariel 不建立第二套会话数据库、离线队列或正文日志。
-- Relay 与 Desktop Agent 均使用有界内存；断线后重建当前视图，不自动重放变更请求。
+- Codex 是会话和执行状态的 SSOT；Ariel 不建立第二套会话数据库、离线队列或正文日志。经 0100 明确批准，Relay 可以在进程内存中保存每个 hot 会话最近两个 turn 的有界只读 cache，用于 Web 通过 Relay-local read／watch 立即展示；Web watcher 不得创建 per-Web Agent follower。cache 不得写入磁盘、数据库、Docker volume、访问日志或 crash dump，也不能作为 mutation 的 owner receipt；所有 mutation 仍由 Desktop Agent 基于当前 hot controller 现场校验。
+- Relay 与 Desktop Agent 均使用有界内存；Relay 的双 turn cache 不设固定会话数上限，以 watcher 引用和实际字节预算管理：默认 cache soft budget 512 MiB、`GOMEMLIMIT=768MiB`、容器 hard limit 1 GiB。容量压力必须先淘汰无 watcher LRU 或返回 capacity error，不能把 OOM 当正常控制机制。cache 在 Agent 断线后只能标记 stale、在容器重启后丢失，并由 Agent 重建。任何断线恢复都不得自动重放变更请求。
 - Desktop 私有 IPC 只能存在于版本化 Adapter 内；Relay 和 Web 不得接触私有方法名。
 - 默认只读探针；发送、停止、审批和回答必须由显式开关启用，并限制到隔离 fixture。
 - 不提交 token、Codex 凭据、真实会话内容、未脱敏 IPC 快照或本机绝对路径。

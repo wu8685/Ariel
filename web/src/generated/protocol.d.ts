@@ -15,6 +15,10 @@ export type ArielProtocolV1Envelope =
   | ThreadSnapshot
   | ThreadUpdate
   | ThreadError
+  | ThreadCacheSnapshot
+  | ThreadCacheUpdate
+  | ThreadCacheStatus
+  | ThreadCacheRemove
   | InteractionResolved
   | AuthPairConsumed
   | HttpsGithubComWu8685ArielProtocolTasksSchemaJson;
@@ -41,6 +45,11 @@ export type Request = {
     | "thread.image"
     | "thread.subscribe"
     | "thread.unsubscribe"
+    | "thread.cache.read"
+    | "thread.cache.watch"
+    | "thread.cache.unwatch"
+    | "thread.cache.promote"
+    | "thread.cache.touch"
     | "file.context.changes"
     | "file.context.read"
     | "turn.start"
@@ -407,22 +416,17 @@ export interface QueuedMessage {
 export interface ThreadPatch {
   threadState: ThreadState;
   /**
-   * @maxItems 4
+   * @maxItems 2
    */
-  turnOrder: [] | [Id] | [Id, Id] | [Id, Id, Id] | [Id, Id, Id, Id];
+  turnOrder: [] | [Id] | [Id, Id];
   /**
-   * @maxItems 4
+   * @maxItems 2
    */
-  turnPatches:
-    | []
-    | [TurnPatch]
-    | [TurnPatch, TurnPatch]
-    | [TurnPatch, TurnPatch, TurnPatch]
-    | [TurnPatch, TurnPatch, TurnPatch, TurnPatch];
+  turnPatches: [] | [TurnPatch] | [TurnPatch, TurnPatch];
   /**
-   * @maxItems 4
+   * @maxItems 2
    */
-  removedTurnIds: [] | [Id] | [Id, Id] | [Id, Id, Id] | [Id, Id, Id, Id];
+  removedTurnIds: [] | [Id] | [Id, Id];
 }
 export interface ThreadState {
   threadId: Id;
@@ -462,6 +466,54 @@ export interface ThreadError {
   subscriptionId: Id;
   streamId: Id;
   code: "HISTORY_TOO_LARGE" | "RESYNC_REQUIRED" | "NATIVE_STATE_UNCERTAIN";
+}
+export interface ThreadCacheSnapshot {
+  type: "event";
+  v: 1;
+  event: "thread.cache.snapshot";
+  deviceId: Id;
+  threadId: Id;
+  agentEpoch: Id;
+  cacheStreamId: Id;
+  seq: number;
+  capturedAt: string;
+  payloadBytes: number;
+  thread: Thread;
+}
+export interface ThreadCacheUpdate {
+  type: "event";
+  v: 1;
+  event: "thread.cache.update";
+  deviceId: Id;
+  threadId: Id;
+  watchId: Id;
+  freshness: "fresh" | "stale" | "missing";
+  staleReason?: string;
+  agentOnline: boolean;
+  agentEpoch?: Id;
+  cacheStreamId?: Id;
+  seq?: number;
+  capturedAt?: string;
+  thread?: Thread;
+}
+export interface ThreadCacheStatus {
+  type: "event";
+  v: 1;
+  event: "thread.cache.status";
+  deviceId: Id;
+  threadId: Id;
+  agentEpoch: Id;
+  cacheStreamId: Id;
+  freshness: "fresh" | "stale" | "error";
+  reason?: string;
+}
+export interface ThreadCacheRemove {
+  type: "event";
+  v: 1;
+  event: "thread.cache.remove";
+  deviceId: Id;
+  threadId: Id;
+  agentEpoch: Id;
 }
 export interface InteractionResolved {
   type: "event";

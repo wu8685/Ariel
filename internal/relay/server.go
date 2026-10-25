@@ -36,6 +36,9 @@ type Config struct {
 	MutationTimeout     time.Duration
 	HeartbeatInterval   time.Duration
 	HeartbeatTimeout    time.Duration
+	CacheMaxBytes       int64
+	CacheEntryMaxBytes  int64
+	CacheWarmGrace      time.Duration
 }
 
 const (
@@ -48,6 +51,8 @@ const maxWebSessions = 32
 const maxWebPairings = 8
 const webSessionLifetime = 24 * time.Hour
 const webPairingLifetime = 2 * time.Minute
+const defaultCacheMaxBytes = 512 << 20
+const defaultCacheEntryMaxBytes = 8 << 20
 
 type Server struct {
 	cfg            Config
@@ -67,6 +72,8 @@ type Server struct {
 	byWeb          map[*peer]map[string]string
 	subs           map[*peer]map[string]*subscription
 	taskRoutes     map[string]*taskRoute
+	cache          *cacheStore
+	cachePromoting map[cacheKey]bool
 }
 
 type pairing struct {
@@ -148,9 +155,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HelloTimeout <= 0 {
 		cfg.HelloTimeout = 5 * time.Second
 	}
-	if cfg.MaxFrameBytes <= 0 {
-		cfg.MaxFrameBytes = 8 << 20
-	}
+	maxFrameConfigured := cfg.MaxFrameBytes > 0
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 10 * time.Second
 	}
@@ -169,7 +174,24 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = wsheartbeat.DefaultTimeout
 	}
-	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}}, nil
+	if cfg.CacheMaxBytes <= 0 {
+		cfg.CacheMaxBytes = defaultCacheMaxBytes
+	}
+	if cfg.CacheEntryMaxBytes <= 0 {
+		cfg.CacheEntryMaxBytes = defaultCacheEntryMaxBytes
+	}
+	if !maxFrameConfigured {
+		cfg.MaxFrameBytes = cfg.CacheEntryMaxBytes + (1 << 20)
+	} else if cfg.MaxFrameBytes <= cfg.CacheEntryMaxBytes {
+		return nil, errors.New("WebSocket frame limit must exceed cache entry limit")
+	}
+	if cfg.CacheWarmGrace <= 0 {
+		cfg.CacheWarmGrace = 90 * time.Second
+	}
+	if cfg.CacheEntryMaxBytes > cfg.CacheMaxBytes {
+		return nil, errors.New("cache entry limit exceeds cache budget")
+	}
+	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace), cachePromoting: map[cacheKey]bool{}}, nil
 }
 
 func ValidWebPIN(pin string) bool {
@@ -393,6 +415,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.role == "agent" {
 		s.broadcastDevice(p.deviceID, p)
+		go s.restoreAgentCacheFollowers(ctx, p)
 	}
 	go s.heartbeat(ctx, p)
 	for {
@@ -439,11 +462,17 @@ func (s *Server) removePeer(p *peer) {
 	s.removeTaskPeer(p)
 	s.mu.Lock()
 	failed := make([]*route, 0)
+	cacheDeliveries := make([]cacheDelivery, 0)
 	type orphan struct {
 		agent *peer
 		id    string
 	}
 	orphans := make([]orphan, 0)
+	type cacheRelease struct {
+		agent *peer
+		key   cacheKey
+	}
+	cacheReleases := make([]cacheRelease, 0)
 	for id, pending := range s.routes {
 		if pending.web == p || pending.agent == p {
 			delete(s.routes, id)
@@ -470,6 +499,12 @@ func (s *Server) removePeer(p *peer) {
 	if p.role == "agent" {
 		if s.agents[p.deviceID] == p {
 			delete(s.agents, p.deviceID)
+			s.cache.markDeviceStale(p.deviceID, "agent_offline")
+			for key := range s.cache.entries {
+				if key.deviceID == p.deviceID {
+					cacheDeliveries = append(cacheDeliveries, s.cacheUpdateMessagesLocked(key)...)
+				}
+			}
 		}
 	} else {
 		if key, ok := s.pairingByWeb[p]; ok {
@@ -477,12 +512,21 @@ func (s *Server) removePeer(p *peer) {
 		}
 		delete(s.webs, p)
 		delete(s.byWeb, p)
+		for _, key := range s.cache.removeWeb(p, s.now()) {
+			if agent := s.agents[key.deviceID]; agent != nil {
+				cacheReleases = append(cacheReleases, cacheRelease{agent: agent, key: key})
+			}
+		}
 	}
 	s.mu.Unlock()
+	sendCacheDeliveries(context.Background(), cacheDeliveries)
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelCleanup()
 	for _, sub := range orphans {
 		_ = sendUnsubscribe(cleanupCtx, sub.agent, sub.id)
+	}
+	for _, release := range cacheReleases {
+		_ = sendCacheTouch(cleanupCtx, release.agent, release.key, false)
 	}
 	for _, pending := range failed {
 		if pending.method == "thread.subscribe" {
@@ -608,12 +652,22 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 			return true
 		}
 		if msg.Type == "event" {
+			if isCacheEvent(body) {
+				return s.handleCacheAgentEvent(ctx, p, body)
+			}
 			return s.handleAgentEvent(ctx, p, body)
 		}
 		return false
 	}
 	if p.role != "web" || msg.Type != "request" {
 		return false
+	}
+	if strings.HasPrefix(msg.Method, "thread.cache.") {
+		if msg.Method == "thread.cache.touch" {
+			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "UNAUTHORIZED", "cache touch is agent-only"))
+			return true
+		}
+		return s.handleCacheRequest(ctx, p, msg.RequestID, msg.DeviceID, msg.Method, msg.Params)
 	}
 	if msg.Method == "auth.pair.create" || msg.Method == "auth.pair.cancel" {
 		if s.cfg.WebAuthMode != WebAuthPIN {

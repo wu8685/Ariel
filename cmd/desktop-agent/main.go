@@ -218,7 +218,7 @@ func main() {
 			backoff.connected()
 			return nil
 		}
-		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, ChillingEnabled: cfg.chillingEnabled, ChillingEndpoint: cfg.chillingEndpoint, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, OnReady: onReady, OnNotReady: clearReady})
+		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, ChillingEnabled: cfg.chillingEnabled, ChillingEndpoint: cfg.chillingEndpoint, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady})
 		if ctx.Err() != nil {
 			break
 		}

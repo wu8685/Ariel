@@ -40,6 +40,13 @@ spec:
                 name: ariel-relay-config
             - secretRef:
                 name: ariel-relay-secrets
+          env:
+            - name: GOMEMLIMIT
+              value: 768MiB
+            - name: ARIEL_CACHE_MAX_BYTES
+              value: "536870912"
+            - name: ARIEL_CACHE_ENTRY_MAX_BYTES
+              value: "8388608"
           startupProbe:
             httpGet:
               path: /healthz
@@ -64,10 +71,10 @@ spec:
           resources:
             requests:
               cpu: 25m
-              memory: 32Mi
+              memory: 256Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

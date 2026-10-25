@@ -12,6 +12,10 @@
     { "$ref": "#/$defs/threadSnapshot" },
     { "$ref": "#/$defs/threadUpdate" },
     { "$ref": "#/$defs/threadError" },
+    { "$ref": "#/$defs/threadCacheSnapshot" },
+    { "$ref": "#/$defs/threadCacheUpdate" },
+    { "$ref": "#/$defs/threadCacheStatus" },
+    { "$ref": "#/$defs/threadCacheRemove" },
     { "$ref": "#/$defs/interactionResolved" },
     { "$ref": "#/$defs/authPairConsumed" },
     { "$ref": "tasks.schema.json" }
@@ -78,7 +82,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "file.context.changes", "file.context.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.changes", "file.context.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -98,6 +102,9 @@
         { "if": { "properties": { "method": { "const": "thread.image" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/imageParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/subscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
+        { "if": { "properties": { "method": { "enum": ["thread.cache.read", "thread.cache.watch", "thread.cache.promote"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.cache.touch" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/cacheTouchParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.cache.unwatch" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/cacheUnwatchParams" } } } },
         { "if": { "properties": { "method": { "const": "file.context.changes" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/fileContextChangesParams" } } } },
         { "if": { "properties": { "method": { "const": "file.context.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/fileContextReadParams" } } } },
         { "if": { "properties": { "method": { "const": "turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/startParams" } } } },
@@ -178,6 +185,14 @@
     "unsubscribeParams": {
       "type": "object", "additionalProperties": false, "required": ["subscriptionId"],
       "properties": { "subscriptionId": { "$ref": "#/$defs/id" } }
+    },
+    "cacheUnwatchParams": {
+      "type": "object", "additionalProperties": false, "required": ["watchId"],
+      "properties": { "watchId": { "$ref": "#/$defs/id" } }
+    },
+    "cacheTouchParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId"],
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "watching": { "type": "boolean" } }
     },
     "relativeFilePath": {
       "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^/\\\\].*$",
@@ -323,9 +338,9 @@
       "required": ["threadState", "turnOrder", "turnPatches", "removedTurnIds"],
       "properties": {
         "threadState": { "$ref": "#/$defs/threadState" },
-        "turnOrder": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-        "turnPatches": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/turnPatch" } },
-        "removedTurnIds": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+        "turnOrder": { "type": "array", "maxItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "turnPatches": { "type": "array", "maxItems": 2, "items": { "$ref": "#/$defs/turnPatch" } },
+        "removedTurnIds": { "type": "array", "maxItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
       }
     },
     "queuedMessage": {
@@ -454,6 +469,45 @@
         "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
         "subscriptionId": { "$ref": "#/$defs/id" }, "streamId": { "$ref": "#/$defs/id" },
         "code": { "enum": ["HISTORY_TOO_LARGE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN"] }
+      }
+    },
+    "threadCacheSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "agentEpoch", "cacheStreamId", "seq", "capturedAt", "payloadBytes", "thread"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.cache.snapshot" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "agentEpoch": { "$ref": "#/$defs/id" },
+        "cacheStreamId": { "$ref": "#/$defs/id" }, "seq": { "type": "integer", "minimum": 1 },
+        "capturedAt": { "type": "string", "minLength": 1, "maxLength": 64 }, "payloadBytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "thread": { "$ref": "#/$defs/thread" }
+      }
+    },
+    "threadCacheUpdate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "watchId", "freshness", "agentOnline"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.cache.update" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "watchId": { "$ref": "#/$defs/id" },
+        "freshness": { "enum": ["fresh", "stale", "missing"] }, "staleReason": { "type": "string", "maxLength": 128 },
+        "agentOnline": { "type": "boolean" }, "agentEpoch": { "$ref": "#/$defs/id" }, "cacheStreamId": { "$ref": "#/$defs/id" },
+        "seq": { "type": "integer", "minimum": 1 }, "capturedAt": { "type": "string", "minLength": 1, "maxLength": 64 }, "thread": { "$ref": "#/$defs/thread" }
+      }
+    },
+    "threadCacheStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "agentEpoch", "cacheStreamId", "freshness"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.cache.status" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "agentEpoch": { "$ref": "#/$defs/id" },
+        "cacheStreamId": { "$ref": "#/$defs/id" }, "freshness": { "enum": ["fresh", "stale", "error"] }, "reason": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "threadCacheRemove": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "agentEpoch"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "thread.cache.remove" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "agentEpoch": { "$ref": "#/$defs/id" }
       }
     },
     "interactionResolved": {

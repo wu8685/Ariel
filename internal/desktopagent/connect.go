@@ -11,16 +11,44 @@ import (
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 )
 
-var largeFollowerSlot = make(chan struct{}, 1)
+const largeFollowerReservationBytes int64 = 64 << 20
+const defaultLargeFollowerBudgetBytes int64 = 512 << 20
+
+var largeFollowerBudget = struct {
+	sync.Mutex
+	used  int64
+	limit int64
+}{limit: defaultLargeFollowerBudgetBytes}
 
 func acquireLargeFollower() (func(), error) {
-	select {
-	case largeFollowerSlot <- struct{}{}:
-		var once sync.Once
-		return func() { once.Do(func() { <-largeFollowerSlot }) }, nil
-	default:
+	largeFollowerBudget.Lock()
+	if largeFollowerBudget.used+largeFollowerReservationBytes > largeFollowerBudget.limit {
+		largeFollowerBudget.Unlock()
 		return nil, desktopipc.ErrOverloaded
 	}
+	largeFollowerBudget.used += largeFollowerReservationBytes
+	largeFollowerBudget.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			largeFollowerBudget.Lock()
+			largeFollowerBudget.used -= largeFollowerReservationBytes
+			largeFollowerBudget.Unlock()
+		})
+	}, nil
+}
+
+func largeFollowerBytesInUse() int64 {
+	largeFollowerBudget.Lock()
+	defer largeFollowerBudget.Unlock()
+	return largeFollowerBudget.used
+}
+
+func resetLargeFollowerBudgetForTest() {
+	largeFollowerBudget.Lock()
+	defer largeFollowerBudget.Unlock()
+	largeFollowerBudget.used = 0
+	largeFollowerBudget.limit = defaultLargeFollowerBudgetBytes
 }
 
 // maxFrameHintEntries bounds the per-thread owner frame size hints (spec

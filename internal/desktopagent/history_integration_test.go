@@ -99,7 +99,7 @@ func TestReadOnlyPagedHistoryAgainstInstalledCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(recent["turns"].([]any)) > recentTurnLimit {
-		t.Fatal("recent window exceeds four turns")
+		t.Fatal("recent window exceeds two turns")
 	}
 	full, err := reader.ReadFull(ctx, id)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestReadOnlyLargeOwnerFollowerAgainstInstalledDesktop(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(thread["turns"].([]any)) > recentTurnLimit {
-		t.Fatal("owner window exceeds four turns")
+		t.Fatal("owner window exceeds two turns")
 	}
 	if err := checkThreadSize(thread); err != nil {
 		t.Fatal(err)

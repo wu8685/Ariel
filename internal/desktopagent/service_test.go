@@ -119,7 +119,7 @@ func (*wideMetadataHistory) Read(_ context.Context, id string) (appserver.Thread
 }
 
 func (pagedHistory) Turns(_ context.Context, id, cursor string, limit int, view string) (appserver.TurnPage, error) {
-	if id != "thread" || cursor != "" || (limit != 4 && limit != 10) || view != appserver.TurnItemsFull {
+	if id != "thread" || cursor != "" || (limit != 2 && limit != 10) || view != appserver.TurnItemsFull {
 		return appserver.TurnPage{}, fmt.Errorf("unexpected recent page request")
 	}
 	turns := make([]appserver.Turn, limit)
@@ -134,7 +134,7 @@ func (pagedHistory) Items(context.Context, string, string, string, int) (appserv
 	return appserver.ItemPage{}, fmt.Errorf("unexpected item request")
 }
 
-func TestServiceReadReturnsLatestFourFromPagedHistory(t *testing.T) {
+func TestServiceReadReturnsLatestTwoFromPagedHistory(t *testing.T) {
 	s := NewService(pagedHistory{}, nil)
 	defer s.Close()
 	thread, err := s.Read(context.Background(), "thread")
@@ -142,13 +142,13 @@ func TestServiceReadReturnsLatestFourFromPagedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	turns := thread["turns"].([]any)
-	if len(turns) != 4 || turns[0].(map[string]any)["turnId"] != "turn-09" || turns[3].(map[string]any)["turnId"] != "turn-12" || thread["historyComplete"] != false {
+	if len(turns) != 2 || turns[0].(map[string]any)["turnId"] != "turn-11" || turns[1].(map[string]any)["turnId"] != "turn-12" || thread["historyComplete"] != false {
 		t.Fatalf("recent stored history: %+v", thread)
 	}
 }
 
-func TestServiceReadSegmentsLatestFourWhenWebPageWouldOverflow(t *testing.T) {
-	large := strings.Repeat("x", 2<<20)
+func TestServiceReadSegmentsLatestTwoWhenWebPageWouldOverflow(t *testing.T) {
+	large := strings.Repeat("x", 4<<20)
 	h := &historyStub{turns: func(limit int, cursor, view string) (appserver.TurnPage, error) {
 		if cursor != "" || view != appserver.TurnItemsFull {
 			return appserver.TurnPage{}, fmt.Errorf("unexpected cursor or view")
@@ -167,13 +167,13 @@ func TestServiceReadSegmentsLatestFourWhenWebPageWouldOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	turns := thread["turns"].([]any)
-	if len(turns) != 2 || thread["recentComplete"] != false || thread["historyComplete"] != false || turns[len(turns)-1].(map[string]any)["turnId"] != "turn-10" {
+	if len(turns) != 1 || thread["recentComplete"] != false || thread["historyComplete"] != false || turns[len(turns)-1].(map[string]any)["turnId"] != "turn-10" {
 		t.Fatalf("recent window was not segmented without losing newest turn: count=%d recent=%v history=%v", len(turns), thread["recentComplete"], thread["historyComplete"])
 	}
 }
 
 func TestServiceReadLeavesEnvelopeRoomForLargeMetadata(t *testing.T) {
-	large := strings.Repeat("x", 2<<20)
+	large := strings.Repeat("x", 4<<20)
 	h := &wideMetadataHistory{}
 	h.turns = func(limit int, cursor, view string) (appserver.TurnPage, error) {
 		turns := make([]appserver.Turn, limit)
@@ -197,7 +197,7 @@ func TestServiceReadLeavesEnvelopeRoomForLargeMetadata(t *testing.T) {
 	}
 }
 
-func TestServiceSubscribeKeepsLatestFourWithoutDisconnecting(t *testing.T) {
+func TestServiceSubscribeKeepsLatestTwoWithoutDisconnecting(t *testing.T) {
 	item, _ := json.Marshal(map[string]any{"id": "one", "type": "agentMessage", "text": "small"})
 	turns := make([]map[string]any, 10)
 	for i := range turns {
@@ -213,7 +213,7 @@ func TestServiceSubscribeKeepsLatestFourWithoutDisconnecting(t *testing.T) {
 	}
 	activate()
 	got := thread["turns"].([]any)
-	if len(got) != 4 || got[0].(map[string]any)["turnId"] != "turn-07" || thread["recentComplete"] != true || thread["historyComplete"] != false || got[len(got)-1].(map[string]any)["turnId"] != "turn-10" {
+	if len(got) != 2 || got[0].(map[string]any)["turnId"] != "turn-09" || thread["recentComplete"] != true || thread["historyComplete"] != false || got[len(got)-1].(map[string]any)["turnId"] != "turn-10" {
 		t.Fatalf("live recent segment is not newest complete turns: count=%d recent=%v", len(got), thread["recentComplete"])
 	}
 }
@@ -574,6 +574,20 @@ func TestServiceBoundsControllersAndRetiresIdleFollower(t *testing.T) {
 
 func TestServicePreemptsIdleWarmLargeFollowerForSelectedThread(t *testing.T) {
 	resetFrameHints()
+	resetLargeFollowerBudgetForTest()
+	var reserved []func()
+	for range 7 {
+		release, err := acquireLargeFollower()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reserved = append(reserved, release)
+	}
+	defer func() {
+		for _, release := range reserved {
+			release()
+		}
+	}()
 	var mu sync.Mutex
 	attempts := map[string]int{}
 	lives := map[string]*fakeLive{}
@@ -623,6 +637,20 @@ func TestServicePreemptsIdleWarmLargeFollowerForSelectedThread(t *testing.T) {
 
 func TestServiceNeverPreemptsActiveLargeFollower(t *testing.T) {
 	resetFrameHints()
+	resetLargeFollowerBudgetForTest()
+	var reserved []func()
+	for range 7 {
+		release, err := acquireLargeFollower()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reserved = append(reserved, release)
+	}
+	defer func() {
+		for _, release := range reserved {
+			release()
+		}
+	}()
 	var first *fakeLive
 	s := NewService(anyThreadHistory{}, func(_ context.Context, id, _ string) (Live, error) {
 		return openFollowerWithFallback(id, func(large bool) (Live, error) {
