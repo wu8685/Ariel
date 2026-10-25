@@ -8,8 +8,9 @@
 ## 1. 已验证事实
 
 1. 当前 Codex Desktop `26.930.31730`／bundled Codex `0.160.0` 中，只发送 owner follow、不调用 `thread-follower-load-complete-history`，owner 仍主动发送约 39 MiB 的完整 baseline。
-2. 公共 App Server 的 `thread/read(includeTurns:false)` 可独立读取约百字节 metadata；`thread/turns/list(limit:2, itemsView:full)` 可有界读取最近两个完整 turn。
-3. Desktop Agent 已在发送 Relay 前规范化并裁剪 owner state；大帧只存在于 Codex App → Desktop Agent 本地 IPC，但仍造成冷启动等待与内存开销。
+2. 公共 App Server 的 `thread/read(includeTurns:false)` 可独立读取约百字节 metadata；普通会话可由 `thread/turns/list(limit:2, itemsView:full)` 有界读取最近两个完整 turn。若最新单个 turn 仍超过 App Server 单帧上限，必须退化为 `itemsView:notLoaded` + `thread/items/list` item 子分页。
+3. Codex `0.160.0` 的 `thread/items/list` 在真实大会话中返回 timeline entry（`{turnId,item,startedAtMs,completedAtMs}`），旧版 fixture 返回裸 item；Adapter 必须同时兼容两种形状，只向上层暴露规范化后的 item。
+4. Desktop Agent 已在发送 Relay 前规范化并裁剪 owner state；大帧只存在于 Codex App → Desktop Agent 本地 IPC，但仍造成冷启动等待与内存开销。
 
 ## 2. 目标与非目标
 
@@ -60,3 +61,4 @@
 3. Red：cache status error 在空 cache entry 上仍广播 `staleReason`；Web 停止无限同步并保留轻量历史。
 4. Red：fresh cache 命中仍为零 `thread.read`。
 5. Go 全量／race、Web 全量／build 和移动真实浏览器 fixture 通过；真实大会话验收记录首屏 read 与 owner fresh 各自耗时，不能用轻量历史出现冒充 owner 已就绪。
+6. `thread/items/list` 的裸 item 与 timeline entry 两种响应均有单元测试；真实超大会话必须能经 item 子分页返回不超过传输上限的首屏，而不是报 `HISTORY_TOO_LARGE` 或结构不兼容。

@@ -329,6 +329,21 @@ func TestHistoryReaderUsesBoundedFullTurnAndItemPages(t *testing.T) {
 	}
 }
 
+func TestHistoryReaderUnwrapsCurrentItemPageEntries(t *testing.T) {
+	f := &fakeRPC{wrappedItems: true}
+	items, err := (HistoryReader{RPC: f}).Items(context.Background(), "fixture-thread", "fixture-turn", "", 1)
+	if err != nil || len(items.Data) != 1 {
+		t.Fatalf("wrapped item page: %+v %v", items, err)
+	}
+	var item struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(items.Data[0], &item); err != nil || item.ID != "fixture-item" || item.Type != "agentMessage" {
+		t.Fatalf("item was not unwrapped: %s %v", items.Data[0], err)
+	}
+}
+
 func TestUnsupportedPaginationReturnsSpecificError(t *testing.T) {
 	a, b := net.Pipe()
 	defer b.Close()
@@ -388,6 +403,7 @@ type fakeRPC struct {
 	params         []any
 	unmarkedPinned bool
 	sectionPinned  bool
+	wrappedItems   bool
 }
 
 func (f *fakeRPC) Call(ctx context.Context, method string, params any, result any) error {
@@ -418,7 +434,11 @@ func (f *fakeRPC) Call(ctx context.Context, method string, params any, result an
 	case "thread/turns/list":
 		body = `{"data":[{"id":"fixture-turn","status":"completed","items":[]}],"nextCursor":"next-turn"}`
 	case "thread/items/list":
-		body = `{"data":[{"id":"fixture-item","type":"agentMessage","text":"ok"}],"nextCursor":"next-item"}`
+		if f.wrappedItems {
+			body = `{"data":[{"turnId":"fixture-turn","item":{"id":"fixture-item","type":"agentMessage","text":"ok"},"startedAtMs":1,"completedAtMs":2}],"nextCursor":"next-item"}`
+		} else {
+			body = `{"data":[{"id":"fixture-item","type":"agentMessage","text":"ok"}],"nextCursor":"next-item"}`
+		}
 	default:
 		return errors.New("unexpected mutation")
 	}

@@ -194,6 +194,28 @@ func (h HistoryReader) Items(ctx context.Context, threadID, turnID, cursor strin
 	if cursor != "" {
 		params["cursor"] = cursor
 	}
-	err := h.RPC.Call(ctx, "thread/items/list", params, &out)
-	return out, err
+	if err := h.RPC.Call(ctx, "thread/items/list", params, &out); err != nil {
+		return out, err
+	}
+	// Codex 0.160 may return either the legacy item itself or a timeline
+	// entry carrying the item under `item`. Keep both shapes compatible so
+	// giant turns can fall back to item pagination without reading all turns.
+	for index, raw := range out.Data {
+		var entry struct {
+			ID   string          `json:"id"`
+			Type string          `json:"type"`
+			Item json.RawMessage `json:"item"`
+		}
+		if json.Unmarshal(raw, &entry) != nil {
+			return ItemPage{}, ErrProtocol
+		}
+		if entry.ID != "" || entry.Type != "" {
+			continue
+		}
+		if len(entry.Item) == 0 || string(entry.Item) == "null" {
+			return ItemPage{}, ErrProtocol
+		}
+		out.Data[index] = entry.Item
+	}
+	return out, nil
 }
