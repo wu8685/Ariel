@@ -14,6 +14,9 @@ const streamVersion = 11
 
 type Observation struct {
 	OwnerFound            bool     `json:"ownerFound"`
+	EventsSeen            int      `json:"eventsSeen"`
+	FirstChangeType       string   `json:"firstChangeType,omitempty"`
+	FirstEventBytes       int      `json:"firstEventBytes,omitempty"`
 	SnapshotSeen          bool     `json:"snapshotSeen"`
 	Snapshots             int      `json:"snapshots"`
 	PatchBatches          int      `json:"patchBatches"`
@@ -153,6 +156,70 @@ func (c *Client) Observe(ctx context.Context, threadID string, watch time.Durati
 			}
 		case <-timer.C:
 			watched = true
+		case <-ctx.Done():
+			return o.summary, ctx.Err()
+		case <-c.Done():
+			return o.summary, c.Err()
+		}
+	}
+}
+
+// ObservePassive follows the exact Desktop owner for a bounded interval without
+// requesting complete history. It is a read-only compatibility probe for
+// determining whether the owner publishes a usable lightweight baseline on
+// follow alone.
+func (c *Client) ObservePassive(ctx context.Context, threadID string, watch time.Duration) (Observation, error) {
+	if threadID == "" || watch <= 0 {
+		return Observation{}, ErrProtocol
+	}
+	r, err := c.Call(ctx, Request{Method: "thread-owner-discovery", Version: 1, Params: map[string]string{"hostId": "local", "conversationId": threadID}})
+	if err != nil {
+		return Observation{}, err
+	}
+	owner := r.HandledByClientID
+	if owner == "" {
+		return Observation{}, ErrProtocol
+	}
+	o := newObservationStateWithLimit(threadID, owner, 64<<20)
+	params := map[string]any{"hostId": "local", "conversationId": threadID, "following": true}
+	if err := c.Broadcast(ctx, "thread-stream-following-changed", 1, params, []string{owner}); err != nil {
+		return o.summary, err
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = c.Broadcast(cleanup, "thread-stream-following-changed", 1, map[string]any{"hostId": "local", "conversationId": threadID, "following": false}, []string{owner})
+	}()
+	timer := time.NewTimer(watch)
+	defer timer.Stop()
+	for {
+		select {
+		case <-c.EventsReady():
+			for {
+				body, ok := c.NextEvent()
+				if !ok {
+					break
+				}
+				o.summary.EventsSeen++
+				if o.summary.EventsSeen == 1 {
+					o.summary.FirstEventBytes = len(body)
+					var event struct {
+						Params struct {
+							Change struct {
+								Type string `json:"type"`
+							} `json:"change"`
+						} `json:"params"`
+					}
+					if json.Unmarshal(body, &event) == nil {
+						o.summary.FirstChangeType = event.Params.Change.Type
+					}
+				}
+				if err := o.apply(body); err != nil {
+					return o.summary, err
+				}
+			}
+		case <-timer.C:
+			return o.summary, nil
 		case <-ctx.Done():
 			return o.summary, ctx.Err()
 		case <-c.Done():

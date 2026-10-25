@@ -114,6 +114,11 @@ function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMa
 }
 const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。", FEATURE_DISABLED: "文件引用功能尚未启用。", CHILLING_UNAVAILABLE: "本机 Chilling 暂不可用。", CONTRACT_UNSUPPORTED: "Chilling 文件协议版本不兼容。", FILE_NOT_FOUND: "文件已不存在。", PATH_NOT_ALLOWED: "该路径不允许读取。", UNSUPPORTED_FILE_TYPE: "当前只支持 UTF-8 文本文件。", FILE_TOO_LARGE: "文件超过 1 MiB，无法在这里打开。", FILE_CHANGED: "文件已经变化，请重新打开并选择片段。" };
 
+const terminalCacheReasons = new Set(["AGENT_CAPACITY", "CACHE_CAPACITY", "CACHE_OVERSIZED", "CACHE_SEQUENCE", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "NATIVE_STATE_UNCERTAIN", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "RESYNC_REQUIRED", "TIMEOUT"]);
+function isTerminalCacheReason(reason: unknown): reason is string {
+  return typeof reason === "string" && terminalCacheReasons.has(reason);
+}
+
 function errorText(response: Response): string {
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
 }
@@ -346,6 +351,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   // Spec 0086 progressive open: the most recent thread.read fast path, so a
   // failed or oversized owner sync can reuse it instead of re-requesting.
   const fastReadCache = useRef<{ deviceId: string; threadId: string; epoch: number; settled: boolean; thread: Thread | null; result: Promise<Thread | null> } | null>(null);
+  const terminalCacheFailure = useRef<{ deviceId: string; threadId: string; watchId: string; reason: string } | null>(null);
   const deviceListGeneration = useRef(0);
   const threadListGeneration = useRef(0);
   const threadCreateGeneration = useRef(0);
@@ -1235,6 +1241,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     pendingReadingAnchor.current = null;
     blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
+    terminalCacheFailure.current = null;
     const old = selection.current.view;
     const oldDevice = selection.current.deviceId;
     const oldSubscription = expectedSubscription.current;
@@ -1248,9 +1255,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const cachedView = warm || restoredView || (initialThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: initialThread } : null);
     selection.current = { deviceId: targetDevice, threadId: id, view: cachedView };
     expectedSubscription.current = warm?.subscriptionId || "";
-    setThreadId(id); setView(cachedView); setSyncingView(!warm); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
+    setThreadId(id); setView(cachedView); setSyncingView(!warm || warm.streamId === "cache-pending"); setReadOnlyHistory(false); setNotice(""); setShowList(false); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!restoredView) resetHistory();
-    if (warm) { persistView(warm); return; }
+    if (warm) {
+      if (warm.streamId === "cache-pending") setNotice("正在从 Desktop Agent 准备最近会话。");
+      persistView(warm);
+      return;
+    }
     if (oldSubscription && !old?.subscriptionId) releaseSubscription(oldDevice, oldSubscription);
     // Spec 0100: the hot path terminates at Relay. A fresh cache response is
     // already a complete two-turn view, so opening it must not create a
@@ -1298,6 +1309,55 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         }
         setSyncingView(true);
         setNotice(freshness === "stale" ? "正在后台刷新 Relay 中的会话缓存。" : "正在从 Desktop Agent 准备最近会话。");
+        // Spec 0103: a cache miss must not make the first render wait for the
+        // owner follower. App Server can return the bounded two-turn history
+        // independently while the long-lived owner is still being prepared.
+        // The cache watcher remains authoritative: once it publishes a fresh
+        // snapshot, a late read result is ignored.
+        if (freshness === "missing") {
+          const entry = {
+            deviceId: targetDevice,
+            threadId: id,
+            epoch,
+            settled: false,
+            thread: null as Thread | null,
+            result: Promise.resolve(null as Thread | null),
+          };
+          entry.result = client.request("thread.read", targetDevice, { threadId: id }).then(stored => {
+            const fetched = stored.data?.thread as Thread | undefined;
+            entry.thread = stored.outcome === "accepted" && fetched?.threadId === id ? fetched : null;
+            entry.settled = true;
+            return entry.thread;
+          }).catch(() => { entry.settled = true; return null; });
+          fastReadCache.current = entry;
+          void entry.result.then(thread => {
+            if (!thread || epoch !== pendingSelect.current) return;
+            if (selection.current.deviceId !== targetDevice || selection.current.threadId !== id || expectedSubscription.current !== watchID) return;
+            const currentView = selection.current.view;
+            if (currentView?.subscriptionId === watchID && currentView.streamId !== "cache-pending" && currentView.seq > 0) return;
+            const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
+            const next: ThreadView = {
+              deviceId: targetDevice,
+              threadId: id,
+              subscriptionId: watchID,
+              streamId: "cache-pending",
+              seq: 0,
+              thread: readOnlyThread,
+            };
+            const restoredHistory = restoreCachedHistory(targetDevice, id, thread.turns);
+            const retainedRotation = currentView?.thread ? demoteRotatedRecent(currentView.thread.turns, thread.turns) : false;
+            if (!restoredHistory && !retainedRotation) resetHistory();
+            selection.current.view = next;
+            setView(next);
+            retainWarmSubscription(next);
+            persistView(next);
+            const failed = terminalCacheFailure.current;
+            const terminalReason = failed?.deviceId === targetDevice && failed.threadId === id && failed.watchId === watchID ? failed.reason : "";
+            setReadOnlyHistory(Boolean(terminalReason));
+            setReadOnlyReason(terminalReason || "RESYNC_REQUIRED");
+            setSyncingView(!terminalReason);
+          });
+        }
         void client.request("thread.cache.promote", targetDevice, { threadId: id });
         return;
       }
@@ -1565,13 +1625,18 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (!currentEvent && !warmEvent) return;
         if (event.freshness !== "fresh" || !event.thread || !event.cacheStreamId || !event.seq) {
           if (currentEvent) {
-            setReadOnlyHistory(false);
-            setReadOnlyReason(event.staleReason || "RESYNC_REQUIRED");
-            setSyncingView(true);
+            const reason = event.staleReason || "RESYNC_REQUIRED";
+            const terminal = typeof event.staleReason === "string" && isTerminalCacheReason(reason);
+            terminalCacheFailure.current = terminal ? { deviceId: event.deviceId, threadId: event.threadId, watchId: event.watchId, reason } : null;
+            setReadOnlyHistory(terminal && Boolean(current.view?.thread));
+            setReadOnlyReason(reason);
+            setSyncingView(!terminal);
+            if (terminal) setNotice(resultText[reason] || "会话后台同步失败，已保留当前历史。");
           }
           return;
         }
         const next: ThreadView = { deviceId: event.deviceId, threadId: event.threadId, subscriptionId: event.watchId, streamId: event.cacheStreamId, seq: event.seq, thread: event.thread };
+        terminalCacheFailure.current = null;
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);
         if (!currentEvent) cacheWarmThread(next);

@@ -172,6 +172,12 @@ func (s *Server) cacheDataLocked(entry *cacheEntry, agent *peer) map[string]any 
 		data["agentEpoch"] = agent.agentEpoch
 	}
 	if entry == nil || len(entry.thread) == 0 {
+		// An empty entry can still carry the terminal result of a failed
+		// promotion. Preserve it so Web can stop the background-sync spinner
+		// instead of treating every empty cache as indefinitely pending.
+		if entry != nil && entry.staleReason != "" {
+			data["staleReason"] = entry.staleReason
+		}
 		return data
 	}
 	fresh := agent != nil && agent.agentEpoch == entry.agentEpoch && !entry.stale

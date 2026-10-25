@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
+	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/probe"
 )
 
@@ -25,7 +26,9 @@ func main() {
 const usage = `Ariel read-only compatibility probe
   probe detect [--app PATH] [--codex-binary PATH] [--ipc-socket PATH]
   probe history [--thread ID] [--codex-binary PATH] [--app PATH]
+  probe history-light --thread ID [--codex-binary PATH] [--app PATH]
   probe owner --thread ID [--watch 2s] [--ipc-socket PATH]
+  probe owner-passive --thread ID [--watch 2s] [--ipc-socket PATH]
   probe fixture create --manifest PATH --write-enabled [--workspace PARENT] [--purpose user-input]
   probe fixture exercise --manifest PATH --write-enabled
   probe fixture stale-interaction --manifest PATH --write-enabled
@@ -53,7 +56,7 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 	if args[0] == "fixture" {
 		return fixtureCommand(ctx, args[1:], out, errout)
 	}
-	if args[0] != "detect" && args[0] != "history" && args[0] != "owner" {
+	if args[0] != "detect" && args[0] != "history" && args[0] != "history-light" && args[0] != "owner" && args[0] != "owner-passive" {
 		fmt.Fprintln(errout, "unknown probe operation")
 		return 2
 	}
@@ -72,8 +75,8 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 	if f.Parse(args[1:]) != nil || f.NArg() != 0 {
 		return 2
 	}
-	if *watch <= 0 || *watch > 30*time.Second || (args[0] == "owner" && *thread == "") {
-		fmt.Fprintln(errout, "owner requires --thread; --watch must be >0 and <=30s")
+	if *watch <= 0 || *watch > 30*time.Second || ((args[0] == "owner" || args[0] == "owner-passive" || args[0] == "history-light") && *thread == "") {
+		fmt.Fprintln(errout, "owner probes require --thread; --watch must be >0 and <=30s")
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -84,7 +87,9 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 		result, err = probe.Detect(ctx, cfg)
 	case "history":
 		result, err = history(ctx, cfg, *thread)
-	case "owner":
+	case "history-light":
+		result, err = historyLight(ctx, cfg, *thread)
+	case "owner", "owner-passive":
 		// Check binary compatibility before using the inspected private profile.
 		_, version, e := probe.SelectBinary(cfg.Binary, probe.BundledBinary(cfg.AppPath), func(p string) (string, error) { return probe.BinaryVersion(ctx, p) })
 		if e != nil {
@@ -100,13 +105,22 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 		if profileStatus == probe.IPCProfileUnverified {
 			fmt.Fprintf(errout, "warning: Desktop %s / Codex %s is above the minimum profile and unverified\n", desktopVersion, version)
 		}
-		c, e := probe.ConnectThread(ctx, cfg.Socket, *thread)
+		var c *desktopipc.Client
+		if args[0] == "owner-passive" {
+			c, e = probe.ConnectThreadLarge(ctx, cfg.Socket, *thread)
+		} else {
+			c, e = probe.ConnectThread(ctx, cfg.Socket, *thread)
+		}
 		if e != nil {
 			err = e
 			break
 		}
 		defer c.Close()
-		result, err = c.Observe(ctx, *thread, *watch)
+		if args[0] == "owner-passive" {
+			result, err = c.ObservePassive(ctx, *thread, *watch)
+		} else {
+			result, err = c.Observe(ctx, *thread, *watch)
+		}
 	}
 	status := "supported"
 	if err != nil {
@@ -125,6 +139,48 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func historyLight(ctx context.Context, cfg probe.Config, threadID string) (any, error) {
+	binary, version, err := probe.SelectBinary(cfg.Binary, probe.BundledBinary(cfg.AppPath), func(p string) (string, error) { return probe.BinaryVersion(ctx, p) })
+	if err != nil {
+		return nil, err
+	}
+	c, err := appserver.Start(ctx, binary, os.TempDir())
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	h := appserver.HistoryReader{RPC: c}
+	metadata, err := h.Read(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	metadataBody, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	recent, err := h.Turns(ctx, threadID, "", 2, appserver.TurnItemsFull)
+	if err != nil {
+		return nil, err
+	}
+	recentBody, err := json.Marshal(recent)
+	if err != nil {
+		return nil, err
+	}
+	itemCount := 0
+	statuses := map[string]int{}
+	for _, turn := range recent.Data {
+		itemCount += len(turn.Items)
+		statuses[turn.Status]++
+	}
+	return map[string]any{
+		"binaryVersion": version, "threadIDMatches": metadata.ID == threadID,
+		"metadataBytes": len(metadataBody), "metadataTurns": len(metadata.Turns),
+		"recentPageBytes": len(recentBody), "recentTurnCount": len(recent.Data),
+		"recentItemCount": itemCount, "recentTurnStatuses": statuses,
+		"olderPageAvailable": recent.NextCursor != nil,
+	}, nil
 }
 
 func history(ctx context.Context, cfg probe.Config, threadID string) (any, error) {

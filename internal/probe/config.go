@@ -270,12 +270,22 @@ func Connect(ctx context.Context, socket string) (*desktopipc.Client, error) {
 	return ConnectThread(ctx, socket, "")
 }
 func ConnectThread(ctx context.Context, socket, threadID string) (*desktopipc.Client, error) {
+	return connectThread(ctx, socket, threadID, desktopipc.Options{ThreadID: threadID})
+}
+
+// ConnectThreadLarge is reserved for bounded compatibility probes that need to
+// observe whether Desktop emits a large owner snapshot without requesting one.
+func ConnectThreadLarge(ctx context.Context, socket, threadID string) (*desktopipc.Client, error) {
+	return connectThread(ctx, socket, threadID, desktopipc.Options{ThreadID: threadID, MaxFrameBytes: 64 << 20, MaxEventBytes: 64 << 20})
+}
+
+func connectThread(ctx context.Context, socket, threadID string, opts desktopipc.Options) (*desktopipc.Client, error) {
 	d := net.Dialer{Timeout: 5 * time.Second}
 	conn, err := d.DialContext(ctx, "unix", socket)
 	if err != nil {
 		return nil, errors.New("Desktop IPC unavailable")
 	}
-	c := desktopipc.NewClient(conn, desktopipc.Options{ThreadID: threadID})
+	c := desktopipc.NewClient(conn, opts)
 	if err := c.Initialize(ctx); err != nil {
 		c.Close()
 		return nil, err

@@ -8,7 +8,7 @@ import (
 )
 
 func TestCLIRejectsIncompleteOrUnknownOperations(t *testing.T) {
-	for _, args := range [][]string{{}, {"turn.start"}, {"owner"}, {"history", "--unknown"}, {"fixture"}, {"owner", "--thread", "x", "--watch", "-1s"}} {
+	for _, args := range [][]string{{}, {"turn.start"}, {"owner"}, {"history-light"}, {"history", "--unknown"}, {"fixture"}, {"owner", "--thread", "x", "--watch", "-1s"}} {
 		var out, errout bytes.Buffer
 		if code := run(context.Background(), args, &out, &errout); code != 2 {
 			t.Fatalf("%v returned %d: %s", args, code, errout.String())
@@ -24,7 +24,7 @@ func TestCLIHelpExplainsReadOnlyBoundary(t *testing.T) {
 	if code := run(context.Background(), []string{"help"}, &out, &errout); code != 0 {
 		t.Fatal(code)
 	}
-	if !strings.Contains(out.String(), "read-only") || !strings.Contains(out.String(), "--thread") {
+	if !strings.Contains(out.String(), "read-only") || !strings.Contains(out.String(), "--thread") || !strings.Contains(out.String(), "owner-passive") || !strings.Contains(out.String(), "history-light") {
 		t.Fatal(out.String())
 	}
 }

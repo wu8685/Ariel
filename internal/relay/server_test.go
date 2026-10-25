@@ -134,6 +134,34 @@ func TestRelayCacheMissPromotesOnceThroughBoundedAgentTouch(t *testing.T) {
 	}
 }
 
+func TestRelayPreservesTerminalStatusReasonForMissingCache(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000085", "deviceId": "mock-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "missing-terminal"}})
+	watch := readJSON(t, web)
+	data := watch["data"].(map[string]any)
+	watchID := data["watchId"].(string)
+	readJSON(t, agent) // initial bounded cache touch
+
+	sendJSON(t, agent, map[string]any{
+		"type": "event", "v": 1, "event": "thread.cache.status",
+		"deviceId": "mock-mac", "threadId": "missing-terminal", "agentEpoch": "epoch-a",
+		"cacheStreamId": "cache-missing-terminal", "freshness": "error", "reason": "TIMEOUT",
+	})
+	update := readJSON(t, web)
+	if update["event"] != "thread.cache.update" || update["watchId"] != watchID || update["freshness"] != "missing" || update["staleReason"] != "TIMEOUT" {
+		t.Fatalf("terminal reason was not preserved for empty cache: %+v", update)
+	}
+}
+
 func TestRelayRestoresCachedFollowersAfterAgentReconnect(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
 	s := httptest.NewServer(r.Handler())
