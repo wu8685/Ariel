@@ -1817,7 +1817,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const force = searchInputChanged.current;
     searchInputChanged.current = false;
     if (status === "ready" && deviceId) void loadThreads(deviceId, "", searchTerm, force);
-  }, [deviceId, status, searchRevision]);
+  }, [deviceId, device?.agentEpoch, status, searchRevision]);
 
   useEffect(() => {
     let hiddenAt = 0;

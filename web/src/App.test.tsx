@@ -2141,6 +2141,29 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("Thread B")).toBeTruthy();
   });
 
+  it("restarts a pending thread list read when the selected Agent epoch changes", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch-old", capabilities: { autoLoad: true } },
+    ] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+
+    act(() => socket.message({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentEpoch: "epoch-new", agentOnline: true, codexReady: true }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(2));
+    act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[1].requestId, outcome: "accepted", data: { devices: [
+      { deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch-new", capabilities: { autoLoad: true } },
+    ] } }));
+
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
+    expect(requests("thread.list")[1].deviceId).toBe("mac");
+  });
+
   it("restores a fresh same-epoch thread list without another request when switching devices", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

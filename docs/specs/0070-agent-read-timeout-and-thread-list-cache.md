@@ -23,6 +23,7 @@
 7. 切回设备时先显示最后确认的缓存列表：缓存仍新鲜时不重复请求；缓存过期时保留旧列表并后台刷新，失败只显示错误，不把已确认列表清空。
 8. 手动刷新必须绕过新鲜度判断并发起真实请求；成功响应以 thread identity 合并／替换缓存，分页 cursor 与列表一起保存。
 9. 缓存必须有界并采用 LRU 淘汰。设备消失、Agent epoch 改变或浏览器断开时清除不再有效的条目。
+10. 当前设备的 `agentEpoch` 改变时，即使 `deviceId`、Relay WebSocket 和搜索条件均未改变，也必须立即让旧列表请求失效并发起一次新 `thread.list`；不得清空缓存后继续等待旧 Agent 的请求超时。
 
 ## 超时预算
 
@@ -41,6 +42,7 @@
 6. Red：设备 A → B → A 时，A 的同 epoch 列表立即从缓存恢复；新 epoch 不复用旧列表；手动刷新绕过缓存；后台刷新失败保留缓存内容。
 7. 通过 Go 全包测试、race、Web 全量测试与 production build；使用真实浏览器验证设备切换不会先闪成空列表。
 8. 真实公网链路复验：本机 Agent 重启后在线；模拟／等待卡住读取时可自愈，手机不再看到“执行结果不确定”。
+9. Red：保持同一 `deviceId` 和 Relay 连接，令首个 `thread.list` 挂起后切换 `agentEpoch`；断言 Web 立即发起第二个 `thread.list`，旧响应不能覆盖新 epoch。
 
 ## 非目标
 
@@ -55,5 +57,6 @@
 - `context.DeadlineExceeded` 在 Agent、Relay 和 Web transport 中统一为 `rejected/TIMEOUT`；mutation 计时器仍返回 `unknown/OUTCOME_UNKNOWN`，没有扩大自动重放范围。
 - Web 新增 4 MiB／16 条目的内存 LRU 会话列表缓存，以 `deviceId + agentEpoch + normalized query` 隔离；60 秒内切回设备直接复用，过期条目先显示再后台刷新，最长保留 5 分钟。
 - 手动刷新显式绕过缓存；分页成功后缓存合并后的列表与 cursor。设备消失、epoch 改变或 WebSocket 断开时清除对应缓存。
+- Web 的列表加载 effect 以 `deviceId + agentEpoch` 为身份边界；Agent 原地重启时会立即重发列表读取，不再因 `deviceId` 未变而卡在旧请求上。
 - 本机 Agent 已重启以临时解除旧 endpoint 卡死；正式二进制与公网 Web／Relay 的部署结果记录在测试文档。
 - 验收证据见 [`docs/testing/2026-10-11-0070-agent-read-timeout-and-thread-list-cache.md`](../testing/2026-10-11-0070-agent-read-timeout-and-thread-list-cache.md)。

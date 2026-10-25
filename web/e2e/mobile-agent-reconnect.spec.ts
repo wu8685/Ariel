@@ -16,6 +16,7 @@ test("a new Agent epoch recovers once and fences late events from the departed e
   let relaySocket: { send(data: string): void } | null = null;
   let online = true;
   let epoch = "epoch-old";
+  let threadLists = 0;
   let subscriptions = 0;
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
   await page.routeWebSocket("**/ws", socket => {
@@ -29,7 +30,10 @@ test("a new Agent epoch recovers once and fences late events from the departed e
       if (message.type !== "request") return;
       let data: Record<string, unknown> = {};
       if (message.method === "device.list") data = { devices: online ? [{ deviceId: "mac", deviceName: "Reconnect Mac", agentOnline: true, codexReady: true, agentEpoch: epoch, capabilities: { autoLoad: true } }] : [] };
-      if (message.method === "thread.list") data = { threads: [thread], nextCursor: "" };
+      if (message.method === "thread.list") {
+        threadLists++;
+        data = { threads: [thread], nextCursor: "" };
+      }
       if (message.method === "thread.subscribe") {
         subscriptions++;
         data = { subscriptionId: `sub-${subscriptions}` };
@@ -45,6 +49,7 @@ test("a new Agent epoch recovers once and fences late events from the departed e
   await page.getByRole("button", { name: "展开项目 reconnect-fixture，/tmp/reconnect-fixture" }).click();
   await page.getByText(thread.title).click();
   await expect(page.getByText("已恢复的新快照")).toBeVisible();
+  expect(threadLists).toBe(1);
   await page.getByLabel("发送消息").fill("断线期间保留的草稿");
   expect(subscriptions).toBe(1);
 
@@ -63,6 +68,7 @@ test("a new Agent epoch recovers once and fences late events from the departed e
   relaySocket!.send(JSON.stringify({ type: "event", v: 1, event: "device.status", deviceId: "mac", agentEpoch: "epoch-old", agentOnline: false, codexReady: false }));
 
   await expect.poll(() => subscriptions).toBe(2);
+  await expect.poll(() => threadLists).toBe(2);
   await expect(page.getByText("已恢复的新快照")).toBeVisible();
   await expect(page.getByLabel("发送消息")).toHaveValue("断线期间保留的草稿");
   await expect(page.getByLabel("发送消息")).toBeEnabled();

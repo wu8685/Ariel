@@ -486,6 +486,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		thread, err = a.service.PinThread(ctx, p.ThreadID, *p.Pinned)
 		data = map[string]any{"thread": thread}
 	case "thread.list":
+		listStarted := time.Now()
 		if p.Limit == 0 {
 			p.Limit = 50
 		}
@@ -498,6 +499,11 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		} else {
 			list, cursor, err = a.service.List(listCtx, p.Limit, p.Cursor)
 		}
+		attrs := []any{"durationMs", millisSince(listStarted), "ok", err == nil, "count", len(list), "search", p.SearchTerm != "", "paged", p.Cursor != ""}
+		if err != nil {
+			attrs = append(attrs, "error", requestErrorCode("thread.list", err))
+		}
+		logPhase("thread-list", "", attrs...)
 		data = map[string]any{"threads": list, "nextCursor": cursor}
 	case "thread.read":
 		var thread map[string]any
