@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
@@ -179,6 +180,68 @@ func TestServiceHistoryItemsRejectsNonAdvancingNativePage(t *testing.T) {
 	defer s.Close()
 	if _, err := s.HistoryItems(context.Background(), "thread", "giant", "same", 10); err == nil {
 		t.Fatal("empty item page with repeated cursor accepted")
+	}
+}
+
+func TestServiceActivityReadsOnlyRequestedToolDetailWithBytePagination(t *testing.T) {
+	detail := "命令: printf\n输出: " + strings.Repeat("界", 30)
+	raw := json.RawMessage(fmt.Sprintf(`{"id":"tool","type":"commandExecution","command":"printf","status":"completed","output":%q}`, strings.Repeat("界", 30)))
+	h := &historyStub{items: func(turnID, cursor string, limit int) (appserver.ItemPage, error) {
+		if turnID != "turn" || cursor != "" || limit != 100 {
+			return appserver.ItemPage{}, fmt.Errorf("wrong activity item request")
+		}
+		return appserver.ItemPage{Data: []json.RawMessage{raw}}, nil
+	}}
+	s := NewService(h, nil)
+	defer s.Close()
+	first, err := s.Activity(context.Background(), "thread", "turn", "tool", "", "", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := first["text"].(string)
+	if text == "" || len([]byte(text)) > 32 || !utf8.ValidString(text) || first["complete"] != false || first["nextCursor"] == "" || first["revision"] == "" {
+		t.Fatalf("invalid first activity page: %+v", first)
+	}
+	second, err := s.Activity(context.Background(), "thread", "turn", "tool", first["nextCursor"].(string), first["revision"].(string), 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text+second["text"].(string) != detail || second["complete"] != true || second["nextCursor"] != "" || second["revision"] != first["revision"] {
+		t.Fatalf("activity pages do not reconstruct detail: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestServiceActivityRejectsStaleRevisionAndNonToolReference(t *testing.T) {
+	h := &historyStub{items: func(turnID, cursor string, limit int) (appserver.ItemPage, error) {
+		return appserver.ItemPage{Data: []json.RawMessage{
+			json.RawMessage(`{"id":"message","type":"agentMessage","text":"not a tool"}`),
+			json.RawMessage(`{"id":"tool","type":"commandExecution","command":"true","status":"completed","output":"done"}`),
+		}}, nil
+	}}
+	s := NewService(h, nil)
+	defer s.Close()
+	if _, err := s.Activity(context.Background(), "thread", "turn", "tool", "", strings.Repeat("0", 64), 64); err == nil || err.Error() != "DETAIL_CHANGED" {
+		t.Fatalf("stale revision accepted: %v", err)
+	}
+	if _, err := s.Activity(context.Background(), "thread", "turn", "message", "", "", 64); err == nil || err.Error() != "REFERENCE_NOT_FOUND" {
+		t.Fatalf("non-tool reference accepted: %v", err)
+	}
+}
+
+func TestServiceActivityNeverReturnsInlineImageBytes(t *testing.T) {
+	raw := json.RawMessage(`{"id":"tool","type":"mcpToolCall","server":"fixture","tool":"image","status":"completed","result":{"content":"data:image/png;base64,AAAAAAAAAAAAAAAA"}}`)
+	h := &historyStub{items: func(string, string, int) (appserver.ItemPage, error) {
+		return appserver.ItemPage{Data: []json.RawMessage{raw}}, nil
+	}}
+	s := NewService(h, nil)
+	defer s.Close()
+	page, err := s.Activity(context.Background(), "thread", "turn", "tool", "", "", 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := page["text"].(string)
+	if strings.Contains(text, "data:image/") || !strings.Contains(text, "图片内容已省略") {
+		t.Fatalf("inline image leaked through tool detail: %q", text)
 	}
 }
 

@@ -106,11 +106,7 @@ func run(ctx context.Context, args []string, out, errout io.Writer) int {
 			fmt.Fprintf(errout, "warning: Desktop %s / Codex %s is above the minimum profile and unverified\n", desktopVersion, version)
 		}
 		var c *desktopipc.Client
-		if args[0] == "owner-passive" {
-			c, e = probe.ConnectThreadLarge(ctx, cfg.Socket, *thread)
-		} else {
-			c, e = probe.ConnectThread(ctx, cfg.Socket, *thread)
-		}
+		c, e = probe.ConnectThreadLarge(ctx, cfg.Socket, *thread)
 		if e != nil {
 			err = e
 			break

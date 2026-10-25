@@ -2,6 +2,7 @@ package desktopagent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -166,7 +167,7 @@ func normalizeRuntime(native string) string {
 	}
 }
 
-const maxActivityDetailBytes = 16 << 10
+const lazyDetailOmitted = "__ARIEL_LAZY_OMITTED__"
 
 func boundedActivityText(limit int, parts ...string) (string, bool) {
 	var result strings.Builder
@@ -229,8 +230,104 @@ func nativeString(raw json.RawMessage) string {
 }
 
 func toolActivity(kind, label, status string, details ...string) map[string]any {
-	bounded, truncated := boundedActivityText(maxActivityDetailBytes, details...)
-	return map[string]any{"kind": kind, "label": activityLabel(label), "status": activityStatus(status), "details": bounded, "truncated": truncated}
+	activity := map[string]any{"kind": kind, "label": activityLabel(label), "status": activityStatus(status), "detailState": "unavailable", "truncated": false}
+	hash := sha256.New()
+	hasDetail := false
+	for _, part := range details {
+		if strings.Contains(part, lazyDetailOmitted) {
+			activity["detailState"] = "omitted"
+			return activity
+		}
+		part = omitInlineImageData(part)
+		if part != "" {
+			hasDetail = true
+		}
+		_, _ = hash.Write([]byte(part))
+	}
+	if hasDetail {
+		activity["detailState"] = "available"
+		activity["detailRevision"] = fmt.Sprintf("%x", hash.Sum(nil))
+	}
+	return activity
+}
+
+func nativeActivityDetail(raw json.RawMessage) (string, bool, error) {
+	var item struct {
+		ID, Type, Command                                     string
+		Output, Result, Arguments, DurationMs, ExitCode, Path json.RawMessage
+		Changes                                               []struct {
+			Path string          `json:"path"`
+			Diff json.RawMessage `json:"diff"`
+			Kind struct {
+				Type string `json:"type"`
+			} `json:"kind"`
+		} `json:"changes"`
+	}
+	if json.Unmarshal(raw, &item) != nil || item.ID == "" || item.Type == "" {
+		return "", false, ErrNativeShape
+	}
+	parts := []string{}
+	switch item.Type {
+	case "mcpToolCall":
+		if args := nativeDetail(item.Arguments); args != "" {
+			parts = append(parts, "参数: ", args)
+		}
+		if output := nativeDetail(item.Output); output != "" {
+			parts = append(parts, "\n输出: ", output)
+		} else if result := nativeDetail(item.Result); result != "" {
+			parts = append(parts, "\n输出: ", result)
+		}
+	case "commandExecution":
+		parts = append(parts, "命令: ", item.Command)
+		if output := nativeDetail(item.Output); output != "" {
+			parts = append(parts, "\n输出: ", output)
+		}
+		if len(item.ExitCode) != 0 {
+			parts = append(parts, "\n退出码: ", nativeDetail(item.ExitCode))
+		}
+	case "fileChange":
+		for _, change := range item.Changes {
+			if change.Path != "" {
+				parts = append(parts, change.Kind.Type, ": ", change.Path, "\n")
+			}
+			if diff := nativeDetail(change.Diff); diff != "" {
+				parts = append(parts, diff, "\n")
+			}
+		}
+	case "sleep":
+		if len(item.DurationMs) != 0 {
+			parts = append(parts, "时长: ", nativeDetail(item.DurationMs), " ms")
+		}
+	case "imageView":
+		if path := nativeDetail(item.Path); path != "" {
+			parts = append(parts, "路径: ", path)
+		}
+	default:
+		return "", false, nil
+	}
+	return omitInlineImageData(strings.Join(parts, "")), true, nil
+}
+
+func omitInlineImageData(value string) string {
+	const marker = "data:image/"
+	const replacement = "[图片内容已省略]"
+	start := strings.Index(value, marker)
+	if start < 0 {
+		return value
+	}
+	var out strings.Builder
+	for start >= 0 {
+		out.WriteString(value[:start])
+		out.WriteString(replacement)
+		end := start + len(marker)
+		for end < len(value) && !strings.ContainsRune("\"'\r\n\t )]}>", rune(value[end])) {
+			end++
+		}
+		value = value[end:]
+		start = strings.Index(value, marker)
+	}
+	out.WriteString(value)
+	return out.String()
 }
 
 func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]any, error) {
@@ -268,6 +365,7 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			Tool       json.RawMessage `json:"tool"`
 			Path       json.RawMessage `json:"path"`
 			Output     json.RawMessage `json:"output"`
+			Result     json.RawMessage `json:"result"`
 			Arguments  json.RawMessage `json:"arguments"`
 			DurationMs json.RawMessage `json:"durationMs"`
 			ExitCode   json.RawMessage `json:"exitCode"`
@@ -336,6 +434,8 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			}
 			if output := nativeDetail(item.Output); output != "" {
 				parts = append(parts, "\n输出: ", output)
+			} else if result := nativeDetail(item.Result); result != "" {
+				parts = append(parts, "\n输出: ", result)
 			}
 			activity = toolActivity(item.Type, label, item.Status, parts...)
 			text = "工具调用: " + activity["label"].(string)

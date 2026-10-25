@@ -99,20 +99,21 @@ function scrollToLatest(container: HTMLElement) {
   container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
 }
 
-type ContentMarker = { turnCount: number; turnId: string; itemCount: number; itemId: string; text: string; details: string; cardCount: number; cardId: string };
+type ContentMarker = { turnCount: number; turnId: string; itemCount: number; itemId: string; text: string; activityRevision: string; cardCount: number; cardId: string };
 function contentMarker(thread: Thread): ContentMarker {
   const lastTurn = thread.turns.at(-1);
   const lastItem = lastTurn?.items.at(-1);
   return {
     turnCount: thread.turns.length, turnId: lastTurn?.turnId || "", itemCount: lastTurn?.items.length || 0,
-    itemId: lastItem?.itemId || "", text: lastItem?.text || "", details: lastItem?.activity?.details || "",
+    itemId: lastItem?.itemId || "", text: lastItem?.text || "", activityRevision: lastItem?.activity?.detailRevision || lastItem?.activity?.status || "",
     cardCount: thread.pendingInteractions.length, cardId: thread.pendingInteractions.at(-1)?.interactionId || "",
   };
 }
 function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
   return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
 }
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。", FEATURE_DISABLED: "文件引用功能尚未启用。", CHILLING_UNAVAILABLE: "本机 Chilling 暂不可用。", CONTRACT_UNSUPPORTED: "Chilling 文件协议版本不兼容。", FILE_NOT_FOUND: "文件已不存在。", PATH_NOT_ALLOWED: "该路径不允许读取。", UNSUPPORTED_FILE_TYPE: "当前只支持 UTF-8 文本文件。", FILE_TOO_LARGE: "文件超过 1 MiB，无法在这里打开。", FILE_CHANGED: "文件已经变化，请重新打开并选择片段。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "事件顺序发生变化，正在重新同步。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。", FEATURE_DISABLED: "文件引用功能尚未启用。", CHILLING_UNAVAILABLE: "本机 Chilling 暂不可用。", CONTRACT_UNSUPPORTED: "Chilling 文件协议版本不兼容。", FILE_NOT_FOUND: "文件已不存在。", PATH_NOT_ALLOWED: "该路径不允许读取。", REFERENCE_NOT_FOUND: "这项工具记录已不存在。", DETAIL_PENDING: "工具详情仍在生成，请稍后重试。", DETAIL_CHANGED: "工具详情已经更新，请重新打开。", DETAIL_TOO_LARGE: "这项工具详情无法安全分页，请在 Codex Desktop 查看。", UNSUPPORTED_FILE_TYPE: "当前只支持 UTF-8 文本文件。", FILE_TOO_LARGE: "文件超过 1 MiB，无法在这里打开。", FILE_CHANGED: "文件已经变化，请重新打开并选择片段。" };
+type ActivityPage = { text: string; nextCursor: string; revision: string; complete: boolean };
 
 const terminalCacheReasons = new Set(["AGENT_CAPACITY", "CACHE_CAPACITY", "CACHE_OVERSIZED", "CACHE_SEQUENCE", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "NATIVE_STATE_UNCERTAIN", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "RESYNC_REQUIRED", "TIMEOUT"]);
 function isTerminalCacheReason(reason: unknown): reason is string {
@@ -2362,6 +2363,17 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     return response.data.dataUri;
   }
 
+  async function loadActivity(turnId: string, item: Item, cursor = "", expectedRevision = ""): Promise<ActivityPage> {
+    if (!view || !deviceId) throw new Error("会话已切换");
+    const targetDevice = deviceId;
+    const targetThread = view.threadId;
+    const response = await client.request("thread.activity.read", targetDevice, { threadId: targetThread, turnId, itemId: item.itemId, ...(cursor ? { cursor } : {}), limitBytes: 65536, ...(expectedRevision ? { expectedRevision } : {}) });
+    if (selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread) throw new Error("会话已切换");
+    const data = response.data;
+    if (response.outcome !== "accepted" || typeof data?.text !== "string" || typeof data?.revision !== "string" || typeof data?.nextCursor !== "string" || typeof data?.complete !== "boolean") throw new Error(errorText(response));
+    return data as ActivityPage;
+  }
+
   async function stop() {
     if (!view || !activeTurn || !ownerReady || stopping || readOnlyHistory) return;
     setStopping(true);
@@ -2630,9 +2642,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {[...pendingSubmissions.current.values()].filter(submission => submission.projectInTranscript && submission.deviceId === deviceId && submission.threadId === view?.threadId && submission.agentEpoch === agentEpochFor(deviceId)).map(submission => {
             const statusText = submission.status === "sending" ? "发送中" : submission.status === "accepted" ? "等待同步" : "结果待确认";
             return <article className={`message user pending-submission ${submission.status}`} aria-label={`你（${statusText}）`} key={submission.clientMessageId} data-client-message-id={submission.clientMessageId} data-pending-revision={pendingSubmissionRevision}>
@@ -2698,8 +2710,53 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   </div>;
 }
 
-function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; onOpenReference?: (itemId:string,reference:WorkspaceDocumentReference)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
+function ActivityDetail({ item, open, onToggle, onLoad }: { item: Item; open: boolean; onToggle: () => void; onLoad: (item: Item, cursor?: string, revision?: string) => Promise<ActivityPage> }) {
+  const [text, setText] = useState("");
+  const [cursor, setCursor] = useState("");
+  const [revision, setRevision] = useState("");
+  const [complete, setComplete] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const requestSerial = useRef(0);
+  useEffect(() => () => { requestSerial.current += 1; }, []);
+  useEffect(() => {
+    requestSerial.current += 1;
+    setText(""); setCursor(""); setRevision(""); setComplete(false); setError(""); setLoading(false);
+  }, [item.activity?.detailRevision, item.itemId]);
+  async function load(next = "", expected = "") {
+    const serial = ++requestSerial.current;
+    setLoading(true); setError("");
+    try {
+      const page = await onLoad(item, next, expected);
+      if (serial !== requestSerial.current) return;
+      setText(current => next ? current + page.text : page.text);
+      setCursor(page.nextCursor); setRevision(page.revision); setComplete(page.complete);
+    } catch (cause) {
+      if (serial === requestSerial.current) setError(cause instanceof Error ? cause.message : "工具详情暂时无法读取");
+    } finally {
+      if (serial === requestSerial.current) setLoading(false);
+    }
+  }
+  function toggle() {
+    if (open) requestSerial.current += 1;
+    onToggle();
+    if (!open && !text && !loading) void load("", item.activity?.detailRevision || "");
+  }
+  const state = item.activity!.detailState;
+  return <div className="activity-item" data-item-id={item.itemId}>
+    <div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div>
+    <div className="activity-kind">{item.activity!.kind}</div>
+    {state !== "unavailable" && <button className="activity-detail-toggle" type="button" aria-expanded={open} onClick={toggle}>{open ? "收起详情" : "查看详情"}</button>}
+    {!open && (state === "loading" || state === "omitted") ? <p className="activity-note">详情按需读取，不随会话正文同步。</p> : null}
+    {state === "unavailable" && <p className="activity-note">当前没有可读取的详情。</p>}
+    {open && <>{loading && !text && <p className="activity-note" role="status">正在读取详情…</p>}{text && <pre className="activity-details">{text}</pre>}{error && <p className="activity-note" role="alert">{error}</p>}{!loading && !complete && cursor && <button className="activity-detail-toggle" type="button" onClick={() => void load(cursor, revision)}>加载更多详情</button>}</>}
+    {item.activity!.truncated && <p className="activity-note">原生详情不完整；可在 Codex Desktop 查看。</p>}
+  </div>;
+}
+
+function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, loading, onLoadOlderItems, onLoadImage, onLoadActivity, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; onOpenReference?: (itemId:string,reference:WorkspaceDocumentReference)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; onLoadActivity: (item: Item, cursor?: string, revision?: string) => Promise<ActivityPage>; active: boolean }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
+  const [openActivityID, setOpenActivityID] = useState("");
   const parts = groupTurnItems(turn);
   const lastPart = parts.at(-1);
   const processing = active && lastPart?.kind === "activity";
@@ -2722,7 +2779,7 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
         {part === firstActivity && <button className={`activity-toggle ${activityExpanded ? "open" : ""}`} type="button" aria-label={activityLabel} title={activityLabel} aria-expanded={activityExpanded} onClick={() => setActivityExpanded(open => !open)}>{activityToggleText}</button>}
-        {activityExpanded && <div className="activity-list">{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <div className="activity-item" key={item.itemId} data-item-id={item.itemId}><div className="activity-item-head"><span>{item.activity!.label}</span><span>{activityStatusText(item.activity!.status)}</span></div><div className="activity-kind">{item.activity!.kind}</div>{item.activity!.details ? <pre className="activity-details">{item.activity!.details}</pre> : <p className="activity-note">当前历史没有更多详情。</p>}{item.activity!.truncated && <p className="activity-note">详情已截断；完整内容请在原 Codex Desktop 查看。</p>}</div>)}</div>}
+        {activityExpanded && <div className="activity-list">{part.firstLoaded && <p className="activity-note">此回合还有更早内容，可在上方按需加载。</p>}{part.items.map(item => <ActivityDetail key={item.itemId} item={item} open={openActivityID === item.itemId} onToggle={() => setOpenActivityID(current => current === item.itemId ? "" : item.itemId)} onLoad={onLoadActivity} />)}</div>}
       </section>;
     })}
 		{turn.status === "completed" && fileChanges && <TurnFileChanges changes={fileChanges} onOpen={onOpenFile}/>}

@@ -110,6 +110,7 @@ func resetFrameHints() {
 func productionLargeIPCOptions(threadID string) desktopipc.Options {
 	opts := productionIPCOptions(threadID)
 	opts.MaxFrameBytes = 64 << 20
+	opts.MaxWireFrameBytes = 256 << 20
 	opts.MaxEventBytes = 64 << 20
 	return opts
 }

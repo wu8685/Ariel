@@ -34,6 +34,10 @@ func ReadFrame(r io.Reader, limit uint32) (json.RawMessage, error) {
 	if size == 0 {
 		return nil, ErrInvalidFrame
 	}
+	return readFrameBody(r, size)
+}
+
+func readFrameBody(r io.Reader, size uint32) (json.RawMessage, error) {
 	body := make([]byte, int(size))
 	if _, err := io.ReadFull(r, body); err != nil {
 		return nil, err

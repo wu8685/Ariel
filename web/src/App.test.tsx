@@ -1530,26 +1530,43 @@ describe("Ariel app interactions", () => {
       { itemId: "user", role: "user", text: "**your emphasis**" },
       { itemId: "assistant", role: "assistant", text: "[source](https://example.test/)" },
       { itemId: "system", role: "system", text: "**system literal**" },
-      { itemId: "tool", role: "system", text: "tool", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", details: "**tool literal**", truncated: false } },
+      { itemId: "tool", role: "system", text: "tool", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", detailState: "available", detailRevision: "a".repeat(64), truncated: false } },
     ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "**approval literal**", availableDecisions: ["deny"] }] } as unknown as Thread;
-    await openFixture(thread);
+    const { socket, requests } = await openFixture(thread);
     expect(document.querySelector(".message.user strong")?.textContent).toBe("your emphasis");
     expect(document.querySelector(".message.assistant a")?.getAttribute("href")).toBe("https://example.test/");
     expect(document.querySelector(".message.system strong")).toBeNull();
     expect(screen.getByText("**system literal**")).toBeTruthy();
     expect(screen.getByText("**approval literal**")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /打开工具调用.*1 项/ }));
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    await waitFor(() => expect(requests("thread.activity.read")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.activity.read")[0].requestId, outcome: "accepted", data: { text: "**tool literal**", nextCursor: "", revision: "a".repeat(64), complete: true } }));
     expect(document.querySelector(".activity-details strong")).toBeNull();
     expect(screen.getByText("**tool literal**")).toBeTruthy();
+  });
+
+  it("discards a late lazy tool response after switching conversations", async () => {
+    const thread = { ...fixtureThread, turns: [{ turnId: "turn-tool", status: "completed", items: [
+      { itemId: "tool", role: "system", text: "tool", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", detailState: "available", detailRevision: "a".repeat(64), truncated: false } },
+    ] }] } as unknown as Thread;
+    const background: Thread = { ...fixtureThread, threadId: "background", title: "Background" };
+    const { socket, requests } = await openFixture(thread, false, false, [thread, background]);
+    fireEvent.click(screen.getByRole("button", { name: /打开工具调用.*1 项/ }));
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    await waitFor(() => expect(requests("thread.activity.read")).toHaveLength(1));
+    fireEvent.click(document.querySelector<HTMLElement>('.thread-row[data-thread-id="background"]')!);
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.activity.read")[0].requestId, outcome: "accepted", data: { text: "不应出现的迟到详情", nextCursor: "", revision: "a".repeat(64), complete: true } }));
+    expect(screen.queryByText("不应出现的迟到详情")).toBeNull();
   });
 
   it("hides all verified calls behind one quiet text control per turn and restores their interleaved order", async () => {
     const thread = { ...fixtureThread, turns: [{ turnId: "tools", status: "completed", items: [
       { itemId: "u", role: "user", text: "question" },
-      { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", details: "<img src=x onerror=alert(1)>", truncated: false } },
-      { itemId: "c", role: "system", text: "命令执行", activity: { kind: "commandExecution", label: "/usr/bin/true", status: "completed", details: "退出 0", truncated: false } },
+      { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", detailState: "available", detailRevision: "a".repeat(64), truncated: false } },
+      { itemId: "c", role: "system", text: "命令执行", activity: { kind: "commandExecution", label: "/usr/bin/true", status: "completed", detailState: "available", detailRevision: "b".repeat(64), truncated: false } },
       { itemId: "a", role: "assistant", text: "answer" },
-      { itemId: "f", role: "system", text: "文件变更", activity: { kind: "fileChange", label: "文件变更", status: "completed", details: "+safe", truncated: false } },
+      { itemId: "f", role: "system", text: "文件变更", activity: { kind: "fileChange", label: "文件变更", status: "completed", detailState: "available", detailRevision: "c".repeat(64), truncated: false } },
       { itemId: "unknown", role: "system", text: "[futureTool 项目]" },
     ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "Approve fixture only", availableDecisions: ["deny"] }] } as unknown as Thread;
     await openFixture(thread);
@@ -1581,7 +1598,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("keeps one tool opener expanded as live calls append to the same turn", async () => {
-    const activity = (itemId: string) => ({ itemId, role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: itemId, status: "completed", details: itemId, truncated: false } });
+    const activity = (itemId: string) => ({ itemId, role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: itemId, status: "completed", detailState: "available", detailRevision: "a".repeat(64), truncated: false } });
     const starting = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "live-tools", status: "inProgress", items: [activity("first")] }] } as unknown as Thread;
     const { socket } = await openFixture(starting);
     const controlAnchor = document.querySelector(".activity-group")?.getAttribute("data-item-id");
@@ -1598,7 +1615,7 @@ describe("Ariel app interactions", () => {
     const starting: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "u", role: "user", text: "work" }] }] };
     const { socket } = await openFixture(starting);
     expect(screen.getAllByText("思考中…")).toHaveLength(1);
-    const activity = { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "inProgress", details: "", truncated: false } };
+    const activity = { itemId: "m", role: "system", text: "工具调用", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "inProgress", detailState: "loading", truncated: false } };
     const running = { ...starting, turns: [{ ...starting.turns[0], items: [...starting.turns[0].items, activity] }] } as unknown as Thread;
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
     expect(screen.queryByText("思考中…")).toBeNull();

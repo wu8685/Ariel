@@ -276,7 +276,7 @@ func ConnectThread(ctx context.Context, socket, threadID string) (*desktopipc.Cl
 // ConnectThreadLarge is reserved for bounded compatibility probes that need to
 // observe whether Desktop emits a large owner snapshot without requesting one.
 func ConnectThreadLarge(ctx context.Context, socket, threadID string) (*desktopipc.Client, error) {
-	return connectThread(ctx, socket, threadID, desktopipc.Options{ThreadID: threadID, MaxFrameBytes: 64 << 20, MaxEventBytes: 64 << 20})
+	return connectThread(ctx, socket, threadID, desktopipc.Options{ThreadID: threadID, MaxFrameBytes: 64 << 20, MaxWireFrameBytes: 256 << 20, MaxEventBytes: 64 << 20})
 }
 
 func connectThread(ctx context.Context, socket, threadID string, opts desktopipc.Options) (*desktopipc.Client, error) {

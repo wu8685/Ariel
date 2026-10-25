@@ -109,7 +109,7 @@ func (c *Client) Observe(ctx context.Context, threadID string, watch time.Durati
 	if owner == "" {
 		return Observation{}, ErrProtocol
 	}
-	o := newObservationState(threadID, owner)
+	o := newObservationStateWithLimit(threadID, owner, int(c.opts.MaxFrameBytes))
 	params := map[string]any{"hostId": "local", "conversationId": threadID, "following": true}
 	if err := c.Broadcast(ctx, "thread-stream-following-changed", 1, params, []string{owner}); err != nil {
 		return o.summary, err

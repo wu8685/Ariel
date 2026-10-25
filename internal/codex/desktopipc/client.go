@@ -19,13 +19,14 @@ var (
 )
 
 type Options struct {
-	ClientType     string
-	MaxFrameBytes  uint32
-	MaxPending     int
-	MaxEvents      int
-	MaxEventBytes  int
-	ThreadID       string
-	RequestTimeout time.Duration
+	ClientType        string
+	MaxFrameBytes     uint32
+	MaxWireFrameBytes uint32
+	MaxPending        int
+	MaxEvents         int
+	MaxEventBytes     int
+	ThreadID          string
+	RequestTimeout    time.Duration
 }
 
 type Request struct {
@@ -72,6 +73,9 @@ type Client struct {
 func NewClient(conn net.Conn, opts Options) *Client {
 	if opts.MaxFrameBytes == 0 {
 		opts.MaxFrameBytes = DefaultMaxFrameBytes
+	}
+	if opts.MaxWireFrameBytes == 0 {
+		opts.MaxWireFrameBytes = opts.MaxFrameBytes
 	}
 	if opts.MaxPending <= 0 {
 		opts.MaxPending = 32
@@ -268,7 +272,7 @@ func (c *Client) write(ctx context.Context, body json.RawMessage) (bool, error) 
 
 func (c *Client) readLoop() {
 	for {
-		body, err := ReadFrame(c.conn, c.opts.MaxFrameBytes)
+		body, err := ReadProjectedFrame(c.conn, c.opts.MaxFrameBytes, c.opts.MaxWireFrameBytes)
 		if err != nil {
 			c.fail(err)
 			return

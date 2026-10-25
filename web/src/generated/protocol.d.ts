@@ -43,6 +43,7 @@ export type Request = {
     | "thread.history"
     | "thread.history.items"
     | "thread.image"
+    | "thread.activity.read"
     | "thread.subscribe"
     | "thread.unsubscribe"
     | "thread.cache.read"
@@ -94,7 +95,8 @@ export type Item = {
     kind: "mcpToolCall" | "commandExecution" | "fileChange" | "sleep" | "imageView";
     label: string;
     status: "inProgress" | "completed" | "failed" | "interrupted" | "unknown";
-    details: string;
+    detailState: "omitted" | "available" | "loading" | "unavailable";
+    detailRevision?: string;
     truncated: boolean;
   };
 };
@@ -229,6 +231,9 @@ export interface Error {
     | "FILE_NOT_FOUND"
     | "PATH_NOT_ALLOWED"
     | "REFERENCE_NOT_FOUND"
+    | "DETAIL_PENDING"
+    | "DETAIL_CHANGED"
+    | "DETAIL_TOO_LARGE"
     | "UNSUPPORTED_FILE_TYPE"
     | "FILE_TOO_LARGE"
     | "FILE_CHANGED"

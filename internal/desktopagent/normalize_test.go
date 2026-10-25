@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
@@ -163,7 +162,7 @@ func TestNormalizeKnownToolItemsWithoutNoisyReasoningPlaceholders(t *testing.T) 
 	}
 }
 
-func TestNormalizeToolActivitiesKeepBoundedVerifiedDetailsAndUnknownTypesVisible(t *testing.T) {
+func TestNormalizeToolActivitiesKeepOnlyLazySummariesAndUnknownTypesVisible(t *testing.T) {
 	items := []json.RawMessage{
 		json.RawMessage(`{"id":"m","type":"mcpToolCall","server":"fixture","tool":"lookup","arguments":{"query":"safe"},"status":"completed"}`),
 		json.RawMessage(`{"id":"c","type":"commandExecution","command":"/usr/bin/true","status":"completed","output":"done"}`),
@@ -186,15 +185,15 @@ func TestNormalizeToolActivitiesKeepBoundedVerifiedDetailsAndUnknownTypesVisible
 		if !ok || activity["kind"] != kind || activity["label"] == "" || activity["status"] == "" || activity["truncated"] != false {
 			t.Fatalf("missing structured activity for %s: %v", kind, item)
 		}
+		if _, leaked := activity["details"]; leaked {
+			t.Fatalf("tool detail leaked into resident turn for %s: %v", kind, activity)
+		}
 	}
-	if details := got[0].(map[string]any)["activity"].(map[string]any)["details"].(string); !strings.Contains(details, "safe") {
-		t.Fatalf("MCP arguments missing: %q", details)
-	}
-	if details := got[1].(map[string]any)["activity"].(map[string]any)["details"].(string); !strings.Contains(details, "done") {
-		t.Fatalf("command output missing: %q", details)
-	}
-	if details := got[2].(map[string]any)["activity"].(map[string]any)["details"].(string); !strings.Contains(details, "+safe") {
-		t.Fatalf("file diff missing: %q", details)
+	for _, index := range []int{0, 1, 2, 3, 4} {
+		activity := got[index].(map[string]any)["activity"].(map[string]any)
+		if activity["detailState"] != "available" || activity["detailRevision"] == "" {
+			t.Fatalf("lazy detail availability/revision missing: %v", activity)
+		}
 	}
 	if _, present := got[5].(map[string]any)["activity"]; present {
 		t.Fatal("unknown type was silently treated as a tool")
@@ -204,7 +203,7 @@ func TestNormalizeToolActivitiesKeepBoundedVerifiedDetailsAndUnknownTypesVisible
 	}
 }
 
-func TestNormalizeToolDetailCapsAtSixteenKiBWithoutBreakingUTF8(t *testing.T) {
+func TestNormalizeLargeToolDetailNeverEntersResidentTurn(t *testing.T) {
 	raw, err := json.Marshal(map[string]any{"id": "large", "type": "commandExecution", "command": "/usr/bin/true", "status": "completed", "output": strings.Repeat("界", 10000)})
 	if err != nil {
 		t.Fatal(err)
@@ -214,8 +213,11 @@ func TestNormalizeToolDetailCapsAtSixteenKiBWithoutBreakingUTF8(t *testing.T) {
 		t.Fatal(err)
 	}
 	activity := turn["items"].([]any)[0].(map[string]any)["activity"].(map[string]any)
-	if activity["truncated"] != true || len([]byte(activity["details"].(string))) > 16<<10 || !utf8.ValidString(activity["details"].(string)) {
-		t.Fatalf("detail cap is missing or invalid UTF-8: bytes=%d truncated=%v", len([]byte(activity["details"].(string))), activity["truncated"])
+	if activity["truncated"] != false || activity["detailState"] != "available" || activity["detailRevision"] == "" {
+		t.Fatalf("large lazy detail summary is incomplete: %v", activity)
+	}
+	if _, leaked := activity["details"]; leaked {
+		t.Fatalf("large detail leaked into resident turn: %v", activity)
 	}
 }
 

@@ -478,6 +478,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .activity-kind, .activity-note { color: var(--color-subtle); font-size: 11px; line-height: 1.5; }
 .activity-kind { margin-top: 3px; }
 .activity-note { margin: 7px 0; }
+.activity-detail-toggle { margin-top: 7px; padding: 3px 0; border: 0; background: transparent; color: var(--color-link); font-size: 11px; text-align: left; }
+.activity-detail-toggle:hover { color: var(--color-text); }
 .activity-details { margin: 9px 0 0; padding: 9px 10px; max-height: 320px; overflow: auto; border-radius: 7px; background: var(--color-page); color: var(--color-muted); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.55; }
 .agent-progress { color: var(--color-muted); font-size: 12px; padding: 6px 0; }
 .interaction-card {

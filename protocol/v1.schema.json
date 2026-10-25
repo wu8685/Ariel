@@ -83,7 +83,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.changes", "file.context.read", "file.context.reference.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.changes", "file.context.read", "file.context.reference.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -101,6 +101,7 @@
         { "if": { "properties": { "method": { "const": "thread.history" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.history.items" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/historyItemsParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.image" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/imageParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.activity.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/activityParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/subscribeParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.unsubscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/unsubscribeParams" } } } },
         { "if": { "properties": { "method": { "enum": ["thread.cache.read", "thread.cache.watch", "thread.cache.promote"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
@@ -183,6 +184,15 @@
     "imageParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "turnId", "itemId", "imageIndex"],
       "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "itemId": { "$ref": "#/$defs/id" }, "imageIndex": { "type": "integer", "minimum": 0, "maximum": 23 } }
+    },
+    "activityParams": {
+      "type": "object", "additionalProperties": false, "required": ["threadId", "turnId", "itemId"],
+      "properties": {
+        "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "itemId": { "$ref": "#/$defs/id" },
+        "cursor": { "type": ["string", "null"], "pattern": "^[0-9]+$" },
+        "limitBytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "expectedRevision": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
     },
     "unsubscribeParams": {
       "type": "object", "additionalProperties": false, "required": ["subscriptionId"],
@@ -298,7 +308,7 @@
     "error": {
       "type": "object", "additionalProperties": false, "required": ["code", "message"],
       "properties": {
-        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT"] },
+        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT"] },
         "message": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     },
@@ -388,12 +398,13 @@
         "images": { "type": "array", "maxItems": 24, "items": { "type": "object", "additionalProperties": false, "required": ["index", "kind", "alt", "source"], "properties": { "index": { "type": "integer", "minimum": 0 }, "kind": { "enum": ["native", "markdown"] }, "alt": { "type": "string", "maxLength": 256 }, "source": { "type": "string", "maxLength": 2048 } } } },
         "activity": {
           "type": "object", "additionalProperties": false,
-          "required": ["kind", "label", "status", "details", "truncated"],
+          "required": ["kind", "label", "status", "detailState", "truncated"],
           "properties": {
             "kind": { "enum": ["mcpToolCall", "commandExecution", "fileChange", "sleep", "imageView"] },
             "label": { "type": "string", "minLength": 1, "maxLength": 512 },
             "status": { "enum": ["inProgress", "completed", "failed", "interrupted", "unknown"] },
-            "details": { "type": "string", "maxLength": 16384 },
+            "detailState": { "enum": ["omitted", "available", "loading", "unavailable"] },
+            "detailRevision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "truncated": { "type": "boolean" }
           }
         }

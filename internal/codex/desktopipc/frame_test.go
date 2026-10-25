@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +73,41 @@ func TestReadFrameRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := ReadFrame(bytes.NewReader(wireFrame(`{}`)), 0); !errors.Is(err, ErrInvalidLimit) {
 		t.Fatalf("zero limit: %v", err)
+	}
+}
+
+func TestReadProjectedFrameStreamsOversizedToolAndImagePayloads(t *testing.T) {
+	body := []byte(`{"type":"broadcast","params":{"conversationId":"thread","items":[{"id":"tool","type":"mcpToolCall","result":{"content":"` + strings.Repeat("x", 2<<20) + `"}},{"id":"image","type":"userMessage","content":[{"type":"image","url":"data:image/png;base64,` + strings.Repeat("A", 2<<20) + `"}]}]}}`)
+	projected, err := ReadProjectedFrame(bytes.NewReader(wireFrame(string(body))), 8<<10, 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) >= 8<<10 || bytes.Contains(projected, []byte(strings.Repeat("x", 128))) || bytes.Contains(projected, []byte("data:image/")) || bytes.Count(projected, []byte("__ARIEL_LAZY_OMITTED__")) != 2 {
+		t.Fatalf("large payload was not projected safely: bytes=%d body=%s", len(projected), projected)
+	}
+}
+
+func TestReadProjectedFrameFailsClosedForUnknownOversizedPayload(t *testing.T) {
+	body := `{"type":"broadcast","params":{"conversationId":"thread","unknown":"` + strings.Repeat("x", 32<<10) + `"}}`
+	if _, err := ReadProjectedFrame(bytes.NewReader(wireFrame(body)), 8<<10, 64<<10); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("unknown oversized field must fail closed: %v", err)
+	}
+}
+
+func TestReadProjectedFrameDoesNotAllocateProportionalToOmittedPayload(t *testing.T) {
+	body := `{"type":"broadcast","params":{"items":[{"type":"mcpToolCall","result":{"content":"` + strings.Repeat("x", 32<<20) + `"}}]}}`
+	wire := wireFrame(body)
+	body = ""
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	projected, err := ReadProjectedFrame(bytes.NewReader(wire), 8<<10, 64<<20)
+	runtime.ReadMemStats(&after)
+	if err != nil || len(projected) >= 8<<10 {
+		t.Fatalf("projection failed: bytes=%d err=%v", len(projected), err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+		t.Fatalf("projection allocated with omitted payload: allocated=%d", allocated)
 	}
 }
 

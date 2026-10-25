@@ -1,6 +1,7 @@
 package desktopipc
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -77,5 +78,19 @@ func TestReducerBoundsMemoryAndRequiresSnapshot(t *testing.T) {
 	}
 	if _, _, ok := r.Snapshot(); ok {
 		t.Fatal("oversize state retained")
+	}
+}
+
+func TestReducerIgnoresDetailPatchBelowProjectedSentinelButAdvancesRevision(t *testing.T) {
+	r := NewReducer(4096)
+	if err := r.Apply(json.RawMessage(`{"type":"snapshot","revision":1,"conversationState":{"items":[{"id":"tool","result":"__ARIEL_LAZY_OMITTED__"}],"requests":[]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Apply(json.RawMessage(`{"type":"patches","baseRevision":1,"revision":2,"patches":[{"op":"replace","path":["items",0,"result","content"],"value":"new detail"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	state, revision, ok := r.Snapshot()
+	if !ok || revision != 2 || !bytes.Contains(state, []byte(`"result":"__ARIEL_LAZY_OMITTED__"`)) || bytes.Contains(state, []byte("new detail")) {
+		t.Fatalf("projected subtree changed or revision stalled: revision=%d state=%s", revision, state)
 	}
 }

@@ -3,11 +3,14 @@ package desktopagent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1059,6 +1062,89 @@ func (s *Service) HistoryItems(ctx context.Context, threadID, turnID, cursor str
 	}
 	result := map[string]any{"turnId": turnID, "items": turn["items"], "nextItemCursor": next, "itemsComplete": page.NextCursor == nil}
 	return result, checkPayloadSize(result, maxHistoryPageBytes)
+}
+
+const defaultActivityPageBytes = 64 << 10
+const maxActivityPageBytes = 256 << 10
+
+func (s *Service) Activity(ctx context.Context, threadID, turnID, itemID, cursor, expectedRevision string, limitBytes int) (map[string]any, error) {
+	if threadID == "" || turnID == "" || itemID == "" || limitBytes < 0 || limitBytes > maxActivityPageBytes {
+		return nil, errors.New("INVALID_ARGUMENT")
+	}
+	if limitBytes == 0 {
+		limitBytes = defaultActivityPageBytes
+	}
+	paged, ok := s.history.(PagedHistory)
+	if !ok {
+		return nil, errors.New("PROTOCOL_UNSUPPORTED")
+	}
+	source, err := s.history.Read(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if source.ID != threadID || source.CWD == "" {
+		return nil, ErrNativeShape
+	}
+
+	nativeCursor := ""
+	for pages := 0; pages < 32; pages++ {
+		page, err := paged.Items(ctx, threadID, turnID, nativeCursor, 100)
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range page.Data {
+			var identity struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(raw, &identity) != nil || identity.ID == "" {
+				return nil, ErrNativeShape
+			}
+			if identity.ID != itemID {
+				continue
+			}
+			detail, tool, err := nativeActivityDetail(raw)
+			if err != nil {
+				return nil, err
+			}
+			if !tool {
+				return nil, errors.New("REFERENCE_NOT_FOUND")
+			}
+			if strings.Contains(detail, lazyDetailOmitted) {
+				return nil, errors.New("DETAIL_PENDING")
+			}
+			revision := fmt.Sprintf("%x", sha256.Sum256([]byte(detail)))
+			if expectedRevision != "" && expectedRevision != revision {
+				return nil, errors.New("DETAIL_CHANGED")
+			}
+			offset := 0
+			if cursor != "" {
+				offset, err = strconv.Atoi(cursor)
+				if err != nil || offset < 0 || offset > len(detail) || (offset < len(detail) && !utf8.RuneStart(detail[offset])) {
+					return nil, errors.New("INVALID_ARGUMENT")
+				}
+			}
+			end := min(len(detail), offset+limitBytes)
+			for end > offset && end < len(detail) && !utf8.RuneStart(detail[end]) {
+				end--
+			}
+			if end == offset && offset < len(detail) {
+				return nil, errors.New("DETAIL_TOO_LARGE")
+			}
+			next := ""
+			if end < len(detail) {
+				next = strconv.Itoa(end)
+			}
+			return map[string]any{"text": detail[offset:end], "nextCursor": next, "revision": revision, "complete": end == len(detail)}, nil
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		if *page.NextCursor == nativeCursor {
+			return nil, ErrNativeShape
+		}
+		nativeCursor = *page.NextCursor
+	}
+	return nil, errors.New("REFERENCE_NOT_FOUND")
 }
 
 func (s *Service) ensureLive(ctx context.Context, c *threadController) error {

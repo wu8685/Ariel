@@ -401,37 +401,39 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		return
 	}
 	var p struct {
-		ThreadID        string                     `json:"threadId"`
-		TurnID          string                     `json:"turnId"`
-		TurnIDs         []string                   `json:"turnIds"`
-		SubscriptionID  string                     `json:"subscriptionId"`
-		Cursor          string                     `json:"cursor"`
-		SearchTerm      string                     `json:"searchTerm"`
-		Limit           int                        `json:"limit"`
-		ClientMessageID string                     `json:"clientMessageId"`
-		Text            string                     `json:"text"`
-		Images          []string                   `json:"images"`
-		ItemID          string                     `json:"itemId"`
-		Path            string                     `json:"path"`
-		ReferenceKind   string                     `json:"referenceKind"`
-		RawReference    string                     `json:"rawReference"`
-		StartLine       int                        `json:"startLine"`
-		EndLine         int                        `json:"endLine"`
-		ImageIndex      int                        `json:"imageIndex"`
-		ExpectedTurnID  string                     `json:"expectedTurnId"`
-		QueueID         string                     `json:"queueId"`
-		QueueIDs        []string                   `json:"queueIds"`
-		InteractionID   string                     `json:"interactionId"`
-		Decision        string                     `json:"decision"`
-		Answers         map[string][]string        `json:"answers"`
-		CWD             string                     `json:"cwd"`
-		Archived        bool                       `json:"archived"`
-		Name            string                     `json:"name"`
-		Pinned          *bool                      `json:"pinned"`
-		OperationID     string                     `json:"operationId"`
-		UpdateMode      string                     `json:"updateMode"`
-		Watching        *bool                      `json:"watching"`
-		FileContexts    []chillingclient.Selection `json:"fileContexts"`
+		ThreadID         string                     `json:"threadId"`
+		TurnID           string                     `json:"turnId"`
+		TurnIDs          []string                   `json:"turnIds"`
+		SubscriptionID   string                     `json:"subscriptionId"`
+		Cursor           string                     `json:"cursor"`
+		SearchTerm       string                     `json:"searchTerm"`
+		Limit            int                        `json:"limit"`
+		LimitBytes       int                        `json:"limitBytes"`
+		ExpectedRevision string                     `json:"expectedRevision"`
+		ClientMessageID  string                     `json:"clientMessageId"`
+		Text             string                     `json:"text"`
+		Images           []string                   `json:"images"`
+		ItemID           string                     `json:"itemId"`
+		Path             string                     `json:"path"`
+		ReferenceKind    string                     `json:"referenceKind"`
+		RawReference     string                     `json:"rawReference"`
+		StartLine        int                        `json:"startLine"`
+		EndLine          int                        `json:"endLine"`
+		ImageIndex       int                        `json:"imageIndex"`
+		ExpectedTurnID   string                     `json:"expectedTurnId"`
+		QueueID          string                     `json:"queueId"`
+		QueueIDs         []string                   `json:"queueIds"`
+		InteractionID    string                     `json:"interactionId"`
+		Decision         string                     `json:"decision"`
+		Answers          map[string][]string        `json:"answers"`
+		CWD              string                     `json:"cwd"`
+		Archived         bool                       `json:"archived"`
+		Name             string                     `json:"name"`
+		Pinned           *bool                      `json:"pinned"`
+		OperationID      string                     `json:"operationId"`
+		UpdateMode       string                     `json:"updateMode"`
+		Watching         *bool                      `json:"watching"`
+		FileContexts     []chillingclient.Selection `json:"fileContexts"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -506,6 +508,8 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var uri string
 		uri, err = a.service.Image(ctx, p.ThreadID, p.TurnID, p.ItemID, p.ImageIndex)
 		data = map[string]any{"dataUri": uri}
+	case "thread.activity.read":
+		data, err = a.service.Activity(ctx, p.ThreadID, p.TurnID, p.ItemID, p.Cursor, p.ExpectedRevision, p.LimitBytes)
 	case "file.context.changes":
 		if a.fileContext == nil || !a.fileContext.Ready() {
 			err = errors.New("FEATURE_DISABLED")
@@ -930,7 +934,7 @@ func requestErrorCode(method string, err error) string {
 	}
 	if code := chillingclient.CodeOf(err); code != "INTERNAL" {
 		switch code {
-		case "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "INVALID_ARGUMENT", "OVERLOADED":
+		case "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED":
 			return code
 		}
 	}
@@ -948,7 +952,7 @@ func requestErrorCode(method string, err error) string {
 		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
-	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED":
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE":
 		return code
 	default:
 		return "RESYNC_REQUIRED"
@@ -957,7 +961,7 @@ func requestErrorCode(method string, err error) string {
 
 func isReadRequest(method string) bool {
 	switch method {
-	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "file.context.changes", "file.context.read", "file.context.reference.read":
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "file.context.changes", "file.context.read", "file.context.reference.read":
 		return true
 	default:
 		return false

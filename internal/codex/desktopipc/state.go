@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 )
 
@@ -36,7 +37,7 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 		}
 	}()
 	if len(body) > r.limit+64*1024 {
-		return ErrResyncRequired
+		return fmt.Errorf("%w: projected change envelope exceeds limit", ErrResyncRequired)
 	}
 	var change struct {
 		Type         string          `json:"type"`
@@ -45,64 +46,79 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 		State        json.RawMessage `json:"conversationState"`
 		Patches      []patch         `json:"patches"`
 	}
-	if json.Unmarshal(body, &change) != nil || change.Revision == nil || *change.Revision < 0 {
-		return ErrResyncRequired
+	if json.Unmarshal(body, &change) != nil {
+		return fmt.Errorf("%w: projected change cannot be decoded", ErrResyncRequired)
+	}
+	if change.Revision == nil || *change.Revision < 0 {
+		return fmt.Errorf("%w: projected change has no valid revision", ErrResyncRequired)
 	}
 	var state any
 	switch change.Type {
 	case "snapshot":
-		if !validObject(change.State) || len(change.State) > r.limit || (r.state != nil && *change.Revision < r.revision) {
-			return ErrResyncRequired
+		if !validObject(change.State) {
+			return fmt.Errorf("%w: projected snapshot is not an object", ErrResyncRequired)
+		}
+		if len(change.State) > r.limit {
+			return fmt.Errorf("%w: projected snapshot bytes %d exceed %d", ErrResyncRequired, len(change.State), r.limit)
+		}
+		if r.state != nil && *change.Revision < r.revision {
+			return fmt.Errorf("%w: snapshot revision regressed", ErrResyncRequired)
 		}
 		state, err = decodeValue(change.State)
 	case "patches":
-		if r.state == nil || change.Patches == nil || change.BaseRevision == nil || *change.BaseRevision != r.revision || *change.Revision <= r.revision {
-			return ErrResyncRequired
+		if r.state == nil {
+			return fmt.Errorf("%w: patch arrived before projected snapshot", ErrResyncRequired)
+		}
+		if change.Patches == nil || change.BaseRevision == nil || *change.BaseRevision != r.revision || *change.Revision <= r.revision {
+			return fmt.Errorf("%w: projected patch revision is invalid", ErrResyncRequired)
 		}
 		state, err = decodeValue(r.state)
 		if err != nil {
-			return ErrResyncRequired
+			return fmt.Errorf("%w: previous projected state cannot be decoded", ErrResyncRequired)
 		}
 		for _, p := range change.Patches {
 			var path []any
 			if len(p.Path) == 0 || json.Unmarshal(p.Path, &path) != nil || path == nil {
-				return ErrResyncRequired
+				return fmt.Errorf("%w: projected patch path is invalid", ErrResyncRequired)
 			}
 			// Decode numeric path indices exactly rather than converting through float64.
 			decoded, e := decodeValue(p.Path)
 			if e != nil {
-				return ErrResyncRequired
+				return fmt.Errorf("%w: projected patch path cannot be decoded", ErrResyncRequired)
 			}
 			path = decoded.([]any)
 			var value any
 			if p.Op == "add" || p.Op == "replace" {
 				if len(p.Value) == 0 {
-					return ErrResyncRequired
+					return fmt.Errorf("%w: projected patch value is missing", ErrResyncRequired)
 				}
 				value, err = decodeValue(p.Value)
 				if err != nil {
-					return ErrResyncRequired
+					return fmt.Errorf("%w: projected patch value cannot be decoded", ErrResyncRequired)
 				}
 			} else if p.Op != "remove" {
-				return ErrResyncRequired
+				return fmt.Errorf("%w: projected patch operation is unsupported", ErrResyncRequired)
 			}
 			state, err = applyPatch(state, path, p.Op, value)
 			if err != nil {
-				return ErrResyncRequired
+				return fmt.Errorf("%w: projected patch cannot be applied", ErrResyncRequired)
 			}
 		}
 	default:
-		return ErrResyncRequired
+		return fmt.Errorf("%w: projected change type is unsupported", ErrResyncRequired)
 	}
 	if err != nil {
-		return ErrResyncRequired
+		return fmt.Errorf("%w: projected snapshot value cannot be decoded", ErrResyncRequired)
 	}
 	if _, ok := state.(map[string]any); !ok {
-		return ErrResyncRequired
+		return fmt.Errorf("%w: projected snapshot root is not an object", ErrResyncRequired)
 	}
 	encoded, err := json.Marshal(state)
-	if err != nil || len(encoded) > r.limit {
-		return ErrResyncRequired
+	if err != nil {
+		return fmt.Errorf("%w: projected snapshot cannot be encoded", ErrResyncRequired)
+	}
+	if len(encoded) > r.limit {
+		return fmt.Errorf("%w: normalized snapshot bytes %d exceed %d", ErrResyncRequired, len(encoded), r.limit)
 	}
 	r.state = encoded
 	r.revision = *change.Revision
@@ -124,6 +140,11 @@ func decodeValue(b []byte) (any, error) {
 }
 
 func applyPatch(node any, path []any, op string, value any) (any, error) {
+	if node == "__ARIEL_LAZY_OMITTED__" {
+		// Detail-only patches below a projected-away payload do not change the
+		// resident owner summary. Advancing the revision preserves ordering.
+		return node, nil
+	}
 	if len(path) == 0 {
 		if op == "remove" {
 			return nil, ErrResyncRequired
