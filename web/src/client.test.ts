@@ -5,10 +5,10 @@ class FakeSocket {
   readyState = 1;
   sent: string[] = [];
   onopen: (() => void) | null = null;
-  onclose: ((event: { code: number }) => void) | null = null;
+  onclose: ((event: { code: number; reason: string }) => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   send(text: string) { this.sent.push(text); }
-  close(code = 1000) { this.readyState = 3; this.onclose?.({ code }); }
+  close(code = 1000, reason = "") { this.readyState = 3; this.onclose?.({ code, reason }); }
   message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
 }
 
@@ -48,7 +48,7 @@ describe("Ariel WebSocket client", () => {
       const statuses: string[] = [];
       client.onStatus = status => statuses.push(status);
       client.connect("012345"); sockets[0].onopen?.();
-      sockets[0].close(1008);
+      sockets[0].close(1008, "unauthorized");
       vi.advanceTimersByTime(60000);
       expect(sockets).toHaveLength(1);
       expect(statuses.at(-1)).toBe("invalid");
@@ -57,6 +57,44 @@ describe("Ariel WebSocket client", () => {
       client.connect("654321");
       expect(sockets).toHaveLength(2);
       client.disconnect();
+    } finally { vi.useRealTimers(); }
+  });
+  it("separates authentication rejection from protocol incompatibility", () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeSocket[] = [];
+      const client = new ArielSocket("ws://localhost/ws", () => {
+        const socket = new FakeSocket(); sockets.push(socket);
+        return socket as unknown as WebSocket;
+      });
+      const statuses: string[] = [];
+      client.onStatus = status => statuses.push(status);
+
+      client.connect("cookie"); sockets[0].onopen?.();
+      sockets[0].close(1008, "invalid message");
+      expect(statuses.at(-1)).toBe("incompatible");
+      vi.advanceTimersByTime(60000);
+      expect(sockets).toHaveLength(1);
+
+      client.connect("cookie"); sockets[1].onopen?.();
+      sockets[1].close(1008, "unexpected policy reason");
+      expect(statuses.at(-1)).toBe("incompatible");
+      vi.advanceTimersByTime(60000);
+      expect(sockets).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
+  it("keeps local schema failures terminal and distinct from authentication", () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const client = new ArielSocket("ws://localhost/ws", () => socket as unknown as WebSocket);
+      const statuses: string[] = [];
+      client.onStatus = status => statuses.push(status);
+      client.connect("cookie"); socket.onopen?.();
+      socket.message({ type: "event", v: 1, event: "future.event" });
+      expect(statuses.at(-1)).toBe("incompatible");
+      vi.advanceTimersByTime(60000);
+      expect(statuses.at(-1)).toBe("incompatible");
     } finally { vi.useRealTimers(); }
   });
   it("does not replay a one-time pairing credential after an uncertain disconnect", () => {

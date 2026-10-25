@@ -113,6 +113,8 @@
 | 0098 | [会话内用户输入卡片](0098-conversation-user-input-cards.md) | Approved（2026-10-20） | 完善现有 `requestUserInput` 链路，支持结构化选项、自定义回答及当前版本真实回归 |
 | 0105 | [当前工作区文件浏览器](0105-workspace-file-browser.md) | Implemented（Go／race／vet、Web 258、真实 Chromium 4、build 已验；物理 Safari 待验） | 在显式本机 capability 下按目录 lazy 浏览 thread cwd、打开文本文件并选段引用 |
 | 0107 | [Agent Transport 解耦与 Cache 自愈恢复](0107-resilient-agent-transport-and-cache-recovery.md) | Implemented（Go／race／vet、Web 259、真实 Chromium 47、build 已验；物理 Safari 待验） | transport 重连不销毁 Codex follower；双 turn cache、lease、latest-only 队列与跨 epoch 只读恢复共同避免会话反复白屏 |
+| 0108 | [登录失效与协议异常分离](0108-auth-and-protocol-failure-separation.md) | Implemented（2026-10-26） | 仅明确的 `1008 / unauthorized` 触发重新登录；协议不兼容停止重连并提示刷新，不再伪装成 Passkey session 失效 |
+| 0109 | [Web wire 向后兼容与协议非法帧修复](0109-web-wire-backward-compatibility.md) | Implemented（2026-10-26） | 将 Relay 内部 lease 元数据移出 v1 Web wire，并用上一版本契约阻止长期打开的旧页面再次被新增字段破坏 |
 
 ## 设计基线
 

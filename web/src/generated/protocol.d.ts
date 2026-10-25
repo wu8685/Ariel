@@ -515,7 +515,6 @@ export interface ThreadCacheUpdate {
   cacheStreamId?: Id;
   seq?: number;
   capturedAt?: string;
-  leaseValidUntil?: string;
   thread?: Thread;
 }
 export interface ThreadCacheStatus {

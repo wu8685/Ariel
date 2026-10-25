@@ -80,7 +80,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 3. follower lease 未超过 `leaseValidUntil`；
 4. entry 未被 owner invalidation、capacity eviction、oversized、native uncertainty 或明确 error 标记 stale。
 
-`capturedAt` 表示正文 snapshot 时间，`leaseValidUntil` 表示 follower 活性期限，两者不得混用。会话长期无内容变化时，旧 `capturedAt` 可以与 fresh lease 共存。
+`capturedAt` 表示正文 snapshot 时间，`leaseValidUntil` 表示 Relay 内部的 follower 活性期限，两者不得混用。`leaseValidUntil` 不进入 Web wire；会话长期无内容变化时，旧 `capturedAt` 可以与 fresh lease 共存。
 
 ### 5.3 Rewatch
 

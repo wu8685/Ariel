@@ -3,7 +3,7 @@ import { newRequestID } from "./ids";
 import type { ArielProtocolV1Envelope, Response } from "./generated/protocol";
 import { isPairingCredential } from "./pairing";
 
-export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
+export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid" | "incompatible";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
 type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.activity.read" | "thread.subscribe" | "thread.unsubscribe" | "thread.cache.read" | "thread.cache.watch" | "thread.cache.unwatch" | "thread.cache.promote" | "file.context.changes" | "file.context.read" | "file.context.reference.read" | "workspace.files.list" | "workspace.file.read" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { method: Method; finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
@@ -104,10 +104,10 @@ export class ArielSocket {
     };
     ws.onmessage = event => {
       let value: unknown;
-      try { value = JSON.parse(String(event.data)); } catch { this.onStatus("invalid"); ws.close(); return; }
-      if (!validateEnvelope(value)) { this.onStatus("invalid"); ws.close(); return; }
+      try { value = JSON.parse(String(event.data)); } catch { this.stopForIncompatibleProtocol(ws); return; }
+      if (!validateEnvelope(value)) { this.stopForIncompatibleProtocol(ws); return; }
       if (value.type === "hello.ok") {
-        if (this.ready) { this.onStatus("invalid"); ws.close(); return; }
+        if (this.ready) { this.stopForIncompatibleProtocol(ws); return; }
         if (this.helloTimer) clearTimeout(this.helloTimer);
         this.ready = true;
         this.retry = 0;
@@ -116,12 +116,12 @@ export class ArielSocket {
         this.onReady(value.relayEpoch, value.sessionToken);
         return;
       }
-      if (!this.ready) { this.onStatus("invalid"); ws.close(); return; }
+      if (!this.ready) { this.stopForIncompatibleProtocol(ws); return; }
       if (value.type === "response") {
         const pending = this.pending.get(value.requestId);
         if (pending) { clearTimeout(pending.timer); this.pending.delete(value.requestId); pending.finish(value); }
       } else if (value.type === "event") this.onEvent(value);
-      else { this.onStatus("invalid"); ws.close(); }
+      else this.stopForIncompatibleProtocol(ws);
     };
     ws.onclose = event => {
       if (this.ws !== ws) return;
@@ -129,9 +129,14 @@ export class ArielSocket {
       this.ready = false;
       if (this.helloTimer) clearTimeout(this.helloTimer);
       this.failPending();
-      if (event.code === 1008) {
+      if (event.code === 1008 && event.reason === "unauthorized") {
         this.token = "";
         this.onStatus("invalid");
+        return;
+      }
+      if (event.code === 1008) {
+        this.token = "";
+        this.onStatus("incompatible");
         return;
       }
       if (isPairingCredential(this.token)) {
@@ -142,6 +147,20 @@ export class ArielSocket {
       this.onStatus("disconnected");
       if (this.token) this.scheduleReconnect();
     };
+  }
+
+  private stopForIncompatibleProtocol(ws: WebSocket) {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    this.token = "";
+    this.ready = false;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.helloTimer) clearTimeout(this.helloTimer);
+    this.retryTimer = null;
+    this.helloTimer = null;
+    this.failPending();
+    this.onStatus("incompatible");
+    ws.close();
   }
 
   private scheduleReconnect() {

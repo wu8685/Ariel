@@ -277,7 +277,6 @@ func (s *Server) cacheDataLocked(entry *cacheEntry, agent *peer) map[string]any 
 	data["cacheStreamId"] = entry.streamID
 	data["seq"] = entry.seq
 	data["capturedAt"] = entry.capturedAt.UTC().Format(time.RFC3339Nano)
-	data["leaseValidUntil"] = entry.leaseValidUntil.UTC().Format(time.RFC3339Nano)
 	data["thread"] = json.RawMessage(entry.thread)
 	return data
 }

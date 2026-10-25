@@ -33,15 +33,15 @@ Ariel 不复制会话，不接管工作目录，也不建立另一套聊天记�
 flowchart LR
   Browser["Web<br/>双 turn 本地展示缓存"] <-->|HTTP + 一条多路复用 WebSocket| Relay["Ariel Relay<br/>进程内双 turn hot cache"]
   Relay <-->|一条长期多路复用 WebSocket| Agent["Desktop Agent<br/>持续 follower + 自动重连"]
-  Agent <-->|统一会话操作| Adapter["Codex Adapter"]
-  Adapter <-->|本机 IPC / App Server| App["Codex Desktop<br/>会话与执行 SSOT"]
+  Agent <-->|统一会话操作| Adapter["Agent App Adapter<br/>当前：Codex"]
+  Adapter <-->|本机 IPC / App Server| App["Desktop Agent App<br/>当前：Codex Desktop SSOT"]
   Agent -.->|可选文件上下文| Chilling["Chilling<br/>workspace 文件读取"]
 ```
 
 - **Web** 提供手机与桌面浏览器界面，并在用户本地保存有界的双 turn 展示缓存和分会话草稿。
 - **Relay** 负责认证、连接管理、消息路由，以及每个 hot 会话最近两个 turn 的进程内只读 cache；cache 不写入磁盘。
 - **Desktop Agent** 在桌面设备上长期跟随 hot 会话。Relay transport 断开时，它会独立重连，不销毁 Codex Service 或已有 follower。
-- **Codex Adapter** 把统一会话操作转换为 Codex Desktop 的本机能力，并在每次 mutation 前现场核对当前 owner 和权限。
+- **Agent App Adapter** 把统一会话操作转换为目标桌面应用的本机能力；当前实现是 Codex Adapter，并在每次 mutation 前现场核对当前 owner 和权限。
 - **Chilling** 是可选的本地文件上下文 backend；文件原文、diff 和 workspace tree 不由 Relay 持久化。
 
 读链路优先从 Relay hot cache 返回，再由 Desktop Agent 的持续 follower 推送增量；写链路仍必须到达 Desktop Agent，并由 Codex 当前 owner 现场确认。Relay cache 和浏览器 cache 都不能授权发送、停止、审批或回答，也不会自动重放结果不确定的操作。详细边界见[架构总览](docs/architecture/overview.md)和[Agent Transport 与 Cache 恢复规格](docs/specs/0107-resilient-agent-transport-and-cache-recovery.md)。
@@ -81,19 +81,7 @@ cd Ariel
 
 ## 基本使用
 
-1. 在手机浏览器中打开启动脚本输出的地址。
-2. 输入六位连接码，选择已有会话或创建新会话。
-3. 浏览器已连接时，可以使用“手机扫码登录”为另一台手机生成一次性登录二维码。
-4. 切换 Wi-Fi 或手机热点后，运行 `./scripts/ariel.sh restart-local` 自动发现新的局域网地址并重启。
-
-常用命令：
-
-```sh
-./scripts/ariel.sh up             # 使用已保存的配置启动
-./scripts/ariel.sh status         # 查看 Relay、Desktop Agent 和 Agent App 状态
-./scripts/ariel.sh restart-local  # 换网后发现新地址并重启
-./scripts/ariel.sh stop           # 停止 Ariel 管理的本地进程
-```
+在手机打开脚本输出的地址，输入六位连接码后选择会话；换网时运行 `./scripts/ariel.sh restart-local`，结束时运行 `./scripts/ariel.sh stop`。
 
 ## 安全边界
 
@@ -105,11 +93,7 @@ Ariel 当前采用单用户模型：登录者可操作全部会话，不提供 R
 
 - [当前 Codex Adapter 的安装、配置与故障排查](docs/operations/agent-install.md)
 - [用 Docker 部署 Relay + Web](docs/operations/container-deployment.md)
-- [在单台 ECS 上一键部署 Relay + Web](docs/operations/ecs-single-node-deployment.md)
-- [用 Kubernetes 快速交付 Relay + Web](docs/operations/kubernetes-deployment.md)
 - [公网 Passkey 部署与安全边界](docs/operations/public-passkey-deployment.md)
 - [系统架构总览与 Adapter 边界](docs/architecture/overview.md)
 - [当前 Codex Adapter 的兼容性与实测边界](docs/compatibility/2026-10-03-m0.md)
 - [功能规格索引](docs/specs/README.md)
-- [MVP 验收记录](docs/testing/2026-10-04-mvp-acceptance-audit.md)
-- [项目待办](docs/TODO.md)

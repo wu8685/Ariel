@@ -204,10 +204,56 @@ func TestRelayCacheFreshnessRequiresLiveFollowerLease(t *testing.T) {
 	}
 	if got := r.cacheDataLocked(r.cache.entries[cacheKey{"mock-mac", "lease"}], agent); got["freshness"] != "fresh" {
 		t.Fatalf("fresh lease: %+v", got)
+	} else if _, exposed := got["leaseValidUntil"]; exposed {
+		t.Fatalf("Relay-internal follower lease leaked onto the Web wire: %+v", got)
 	}
 	now = now.Add(time.Minute + time.Nanosecond)
 	if got := r.cacheDataLocked(r.cache.entries[cacheKey{"mock-mac", "lease"}], agent); got["freshness"] != "stale" || got["staleReason"] != "follower_lease_expired" {
 		t.Fatalf("expired lease: %+v", got)
+	}
+}
+
+func TestRelayCacheUpdateRemainsCompatibleWithPreviousWebShape(t *testing.T) {
+	now := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, CacheFreshness: time.Minute})
+	r.now = func() time.Time { return now }
+	web := &peer{id: "web", cachePending: map[string]map[string]any{}, cacheWake: make(chan struct{}, 1)}
+	key := cacheKey{"mock-mac", "legacy"}
+	r.cache.watch(key, "watch-legacy", web, now)
+	snapshot := cacheFixture("legacy", 8)
+	snapshot.deviceID = key.deviceID
+	snapshot.agentEpoch = "epoch-a"
+	if err := r.cache.put(snapshot, now); err != nil {
+		t.Fatal(err)
+	}
+	r.agents[key.deviceID] = &peer{deviceID: key.deviceID, agentEpoch: "epoch-a"}
+	deliveries := r.cacheUpdateMessagesLocked(key)
+	if len(deliveries) != 1 {
+		t.Fatalf("cache deliveries = %d, want 1", len(deliveries))
+	}
+	body, err := json.Marshal(deliveries[0].message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy struct {
+		Type          string          `json:"type"`
+		V             int             `json:"v"`
+		Event         string          `json:"event"`
+		DeviceID      string          `json:"deviceId"`
+		ThreadID      string          `json:"threadId"`
+		WatchID       string          `json:"watchId"`
+		Freshness     string          `json:"freshness"`
+		AgentOnline   bool            `json:"agentOnline"`
+		AgentEpoch    string          `json:"agentEpoch"`
+		CacheStreamID string          `json:"cacheStreamId"`
+		Seq           int             `json:"seq"`
+		CapturedAt    string          `json:"capturedAt"`
+		Thread        json.RawMessage `json:"thread"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&legacy); err != nil {
+		t.Fatalf("current cache update broke the previous Web shape: %v; frame=%s", err, body)
 	}
 }
 

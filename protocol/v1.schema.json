@@ -534,7 +534,7 @@
         "freshness": { "enum": ["fresh", "stale", "missing"] }, "staleReason": { "type": "string", "maxLength": 128 },
         "agentOnline": { "type": "boolean" }, "agentEpoch": { "$ref": "#/$defs/id" }, "cacheStreamId": { "$ref": "#/$defs/id" },
         "seq": { "type": "integer", "minimum": 1 }, "capturedAt": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "leaseValidUntil": { "type": "string", "minLength": 1, "maxLength": 64 }, "thread": { "$ref": "#/$defs/thread" }
+        "thread": { "$ref": "#/$defs/thread" }
       }
     },
     "threadCacheStatus": {

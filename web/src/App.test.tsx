@@ -27,9 +27,9 @@ class BrowserSocket {
       }));
     }
   }
-  close(code = 1000) {
+  close(code = 1000, reason = "") {
     this.readyState = 3;
-    this.onclose?.({ code } as CloseEvent);
+    this.onclose?.({ code, reason } as CloseEvent);
   }
   message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) } as MessageEvent); }
 }
@@ -233,6 +233,31 @@ describe("Ariel app interactions", () => {
 		await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(1));
 		BrowserSocket.sockets[0].onopen?.(new Event("open"));
 		expect(JSON.parse(BrowserSocket.sockets[0].sent[0]).token).toBe("cookie");
+	});
+	it("does not misreport a Passkey protocol mismatch as an expired login", async () => {
+		const meta = document.createElement("meta");
+		meta.name = "ariel-auth-mode";
+		meta.content = "passkey";
+		document.head.append(meta);
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ mode: "passkey", authenticated: true, enrollmentRequired: false }), { status: 200 })));
+		render(<App />);
+		await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(1));
+		const socket = BrowserSocket.sockets[0];
+		socket.onopen?.(new Event("open"));
+		act(() => socket.close(1008, "invalid message"));
+		expect(await screen.findByRole("heading", { name: "页面版本不兼容" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "刷新页面" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "使用 Passkey 登录" })).toBeNull();
+		expect(screen.queryByText("登录会话已失效，请重新使用 Passkey。")).toBeNull();
+	});
+	it("keeps confirmed conversation content visible on a protocol mismatch", async () => {
+		const content: Thread = { ...fixtureThread, turns: [{ turnId: "turn", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "已经确认的会话正文" }] }] };
+		const { socket } = await openFixture(content);
+		expect(await screen.findByText("已经确认的会话正文")).toBeTruthy();
+		act(() => socket.close(1008, "invalid role or message"));
+		expect(screen.getByText("已经确认的会话正文")).toBeTruthy();
+		expect(screen.getByText("页面版本与 Relay 不兼容，操作已暂停。请刷新页面。" )).toBeTruthy();
+		expect(screen.getByRole("button", { name: "正在同步会话，暂不可发送" }).hasAttribute("disabled")).toBe(true);
 	});
   it("keeps every sidebar action in a compact header without repeated labels or status rows", async () => {
     await openFixture(fixtureThread, false, true);
@@ -1981,7 +2006,7 @@ describe("Ariel app interactions", () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);
     expect(BrowserSocket.sockets).toHaveLength(1);
-    BrowserSocket.sockets[0].close(1008);
+    BrowserSocket.sockets[0].close(1008, "unauthorized");
     expect(await screen.findByText("保存的会话已失效，请重新输入连接码。")).toBeTruthy();
     expect(sessionStorage.getItem("ariel.web-session.v1")).toBeNull();
 
@@ -2011,7 +2036,7 @@ describe("Ariel app interactions", () => {
       const second = BrowserSocket.sockets[1];
       second.onopen?.(new Event("open"));
       expect(JSON.parse(second.sent[0]).token).toBe(relaySession);
-      act(() => second.close(1008));
+      act(() => second.close(1008, "unauthorized"));
 
       expect(screen.getByText("保存的会话已失效，请重新输入连接码。")).toBeTruthy();
       expect(screen.queryByText(/连接码错误或 Relay 已锁定/)).toBeNull();

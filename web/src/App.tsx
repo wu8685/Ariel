@@ -427,7 +427,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     ? dragQueueOrder.map(id => queuedMessages.find(item => item.queueId === id)).filter((item): item is QueuedMessage => !!item)
     : queuedMessages;
   const currentPermissions = view && !mock ? permissionSummary(view.thread.permissions) : null;
-  const connectionLabel = status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "连接未通过" : "Relay 未连接";
+  const connectionLabel = status === "ready" ? "Relay 已连接" : status === "connecting" ? "正在连接" : status === "invalid" ? "登录未通过" : status === "incompatible" ? "版本不兼容" : "Relay 未连接";
   const readOnlyMessage = readOnlyReason === "OVERLOADED"
     ? "历史只读 · 实时连接资源繁忙；当前历史可读，但发送暂时禁用。"
     : readOnlyReason === "HISTORY_TOO_LARGE"
@@ -2617,6 +2617,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       <small>{passkeyAuth.enrollmentRequired ? "首次登记成功后，请从云端部署 Secret 中移除 setup token。" : "Passkey 会校验当前 HTTPS 域名，不使用共享密码。"}</small>
     </form>}
   </section> : phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay">{accessHero}<form onSubmit={event => { event.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>;
+  const incompatiblePanel = <section className="connect-panel" aria-label="版本不兼容"><div><span className="eyebrow">UPDATE REQUIRED</span><h1>页面版本不兼容</h1><p>当前页面无法识别 Relay 的通信协议。你的登录状态没有失效，请刷新页面加载最新版本。</p></div><div className="compatibility-actions"><button className="primary" type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button><small>刷新后仍然出现时，请检查 Web 与 Relay 是否来自同一版本。</small></div></section>;
 
   return <div className={`app-shell ${status === "ready" ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
@@ -2651,7 +2652,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="thread-create-actions"><button className="secondary" type="button" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}>取消</button><button className="primary" type="button" aria-label="保存名称" onClick={() => void renameThread()} disabled={!!threadMetadataWorking || !validThreadName(renameThreadDialog.name)}>{threadMetadataWorking ? "正在保存…" : "保存"}</button></div>
       </section>
     </div>}
-    {(status === "invalid" || (status !== "ready" && !view && !localThreadDraft)) && accessPanel}
+    {status === "incompatible" && !view && !localThreadDraft ? incompatiblePanel : (status === "invalid" || (status !== "ready" && !view && !localThreadDraft)) && accessPanel}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
@@ -2680,6 +2681,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
+        {status === "incompatible" && view && <div className="readonly-banner protocol-incompatible" role="alert"><span>页面版本与 Relay 不兼容，操作已暂停。请刷新页面。</span><button type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button></div>}
         {readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
         {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
