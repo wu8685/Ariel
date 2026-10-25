@@ -16,7 +16,8 @@ export type ArielProtocolV1Envelope =
   | ThreadUpdate
   | ThreadError
   | InteractionResolved
-  | AuthPairConsumed;
+  | AuthPairConsumed
+  | HttpsGithubComWu8685ArielProtocolTasksSchemaJson;
 export type Id = string;
 export type Request = {
   type: "request";
@@ -103,6 +104,50 @@ export type ThreadUpdate = {
 export type ThreadUpdate1 = {
   [k: string]: unknown;
 };
+export type HttpsGithubComWu8685ArielProtocolTasksSchemaJson = Request1 | Frame | CapabilityUpdate;
+export type Request1 = {
+  type: "request";
+  v: 1;
+  requestId: string;
+  deviceId: string;
+  method: "task.list" | "task.read" | "task.create" | "task.action" | "task.feedback" | "task.readAck";
+  params: Params;
+};
+export type Frame = {
+  type: "task.dispatch" | "task.track" | "task.validate" | "task.validated" | "task.receipt" | "task.fact";
+  v: 1;
+  dispatchId: string;
+  managementDeviceId: string;
+  taskStoreId: string;
+  executionHostId: string;
+  command?: Command;
+  valid?: boolean;
+  receipt?: Receipt;
+  fact?: Fact;
+};
+export type Command = {
+  taskStoreId?: string;
+  commandId: string;
+  taskId: string;
+  attemptId: string;
+  executionHostId: string;
+  bindingGeneration: number;
+  taskVersion: number;
+  kind: "start" | "feedback" | "check" | "claim" | "work";
+  taskRevision?: string;
+  nativeThreadId?: string;
+  clientMessageId: string;
+  text: string;
+  leaseToken: string;
+  cwd?: string;
+  nativeTurnId?: string;
+  state?: "pending" | "leased" | "accepted" | "unknown" | "finished";
+  sourceSeq?: number;
+  /**
+   * @maxItems 100
+   */
+  feedbackIds?: string[];
+};
 
 export interface WebHello {
   type: "hello";
@@ -119,6 +164,7 @@ export interface AgentHello {
   deviceName: Id;
   agentEpoch: Id;
   adapterVersion: Id;
+  taskStoreId?: Id;
   capabilities: Capabilities;
 }
 export interface Capabilities {
@@ -136,6 +182,10 @@ export interface Capabilities {
   threadRename?: boolean;
   threadPin?: boolean;
   chillingFileContext?: boolean;
+  taskManagement?: boolean;
+  taskExecution?: boolean;
+  taskExecutionAuthorized?: boolean;
+  taskTracking?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";
@@ -169,7 +219,22 @@ export interface Error {
     | "PATH_NOT_ALLOWED"
     | "UNSUPPORTED_FILE_TYPE"
     | "FILE_TOO_LARGE"
-    | "FILE_CHANGED";
+    | "FILE_CHANGED"
+    | "TASK_FEEDBACK_IDENTITY_MISMATCH"
+    | "TASK_IDEMPOTENCY_CONFLICT"
+    | "TASK_INVALID_ARGUMENT"
+    | "TASK_INVALID_STATE"
+    | "TASK_METHOD_NOT_ALLOWED"
+    | "TASK_NATIVE_IDENTITY_REQUIRED"
+    | "TASK_NOT_FOUND"
+    | "TASK_NOT_READY"
+    | "TASK_RECONCILIATION_REQUIRED"
+    | "TASK_RESOURCE_LIMIT"
+    | "TASK_STALE_BINDING"
+    | "TASK_STALE_LEASE"
+    | "TASK_STORE_NOT_FOUND"
+    | "TASK_UNAUTHORIZED"
+    | "TASK_VERSION_CONFLICT";
   message: string;
 }
 export interface DeviceStatus {
@@ -178,6 +243,7 @@ export interface DeviceStatus {
   event: "device.status";
   deviceId: Id;
   agentEpoch?: Id;
+  taskStoreId?: Id;
   agentOnline: boolean;
   codexReady: boolean;
   capabilities?: Capabilities;
@@ -409,4 +475,56 @@ export interface AuthPairConsumed {
   type: "event";
   v: 1;
   event: "auth.pair.consumed";
+}
+export interface Params {
+  taskStoreId: string;
+  taskId?: string;
+  clientSubmissionId?: string;
+  limit?: number;
+  cursor?: string;
+  title?: string;
+  goal?: string;
+  constraints?: string | string[];
+  acceptanceCriteria?: string | string[];
+  executionHostId?: string;
+  cwd?: string;
+  expectedVersion?: number;
+  action?: "start" | "pause" | "resume" | "accept" | "reopen";
+  body?: string;
+  readSeq?: number;
+}
+export interface Receipt {
+  commandId: string;
+  leaseToken: string;
+  outcome: "accepted" | "busy" | "unknown" | "failed";
+  nativeThreadId?: string;
+  nativeTurnId?: string;
+  clientMessageId?: string;
+  reason?: string;
+}
+export interface Fact {
+  eventId: string;
+  commandId: string;
+  taskId: string;
+  attemptId: string;
+  executionHostId: string;
+  bindingGeneration: number;
+  nativeThreadId: string;
+  nativeTurnId: string;
+  status: "running" | "completed" | "failed" | "waiting";
+  progress?: string;
+  taskAction?: "claim" | "done" | "blocked";
+  taskRevision?: string;
+  sourceSeq?: number;
+  /**
+   * @maxItems 100
+   */
+  feedbackIds?: string[];
+}
+export interface CapabilityUpdate {
+  type: "task.capabilities";
+  v: 1;
+  taskStoreId?: string;
+  managementReady: boolean;
+  executionReady: boolean;
 }

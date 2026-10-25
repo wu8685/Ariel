@@ -38,6 +38,59 @@ func TestParseTwoSetupModesAndRejectUnknownFlags(t *testing.T) {
 	}
 }
 
+func TestObsidianTaskSetupPersistsSafeDefaults(t *testing.T) {
+	root := t.TempDir()
+	vault := filepath.Join(root, "vault")
+	if err := os.MkdirAll(filepath.Join(vault, "tasks", "list"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tokenFile := filepath.Join(root, "token")
+	if err := os.WriteFile(tokenFile, []byte(strings.Repeat("a", 64)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts, err := parseArgs([]string{"up", "agent", "--relay-url", "wss://relay.example/ws", "--token-file", tokenFile, "--device-id", "wuke-mac-mini", "--device-name", "Wu Mac", "--obsidian-task-vault", vault})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := prepareConfig(root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedVault, _ := filepath.EvalSymlinks(vault)
+	if !cfg.TasksEnabled || cfg.ObsidianTaskVault != resolvedVault || cfg.TaskAllowedRoots != resolvedVault || cfg.TaskAllowedManagers != "wuke-mac-mini" {
+		t.Fatalf("task defaults=%+v", cfg)
+	}
+	loaded, err := loadConfig(root)
+	if err != nil || !loaded.TasksEnabled || loaded.ObsidianTaskVault != resolvedVault {
+		t.Fatalf("loaded task config=%+v, %v", loaded, err)
+	}
+	env := agentEnvironment(nil, root, loaded, "secret")
+	joined := strings.Join(env, "\n")
+	for _, want := range []string{"ARIEL_ENABLE_TASKS=true", "ARIEL_OBSIDIAN_TASK_VAULT=" + resolvedVault, "ARIEL_TASK_ALLOWED_ROOTS=" + resolvedVault, "ARIEL_TASK_ALLOWED_MANAGERS=wuke-mac-mini"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("agent environment missing %q: %v", want, env)
+		}
+	}
+}
+
+func TestObsidianTaskSetupRejectsRelativeOrEscapingRoots(t *testing.T) {
+	root := t.TempDir()
+	vault := filepath.Join(root, "vault")
+	if err := os.MkdirAll(filepath.Join(vault, "tasks", "list"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, roots := range []string{"relative", filepath.Join(root, "outside")} {
+		args := []string{"up", "agent", "--relay-url", "wss://relay.example/ws", "--device-id", "mac", "--device-name", "Mac", "--obsidian-task-vault", vault, "--task-allowed-roots", roots}
+		opts, err := parseArgs(args)
+		if err == nil {
+			_, err = configForOptions(opts)
+		}
+		if err == nil {
+			t.Fatalf("unsafe roots accepted: %s", roots)
+		}
+	}
+}
+
 func TestConfigPersistsPrivateIndependentCredentials(t *testing.T) {
 	root := t.TempDir()
 	opts, _ := parseArgs([]string{"up", "local", "--listen", "127.0.0.1:18080", "--device-id", "test-mac", "--device-name", "Test Mac"})

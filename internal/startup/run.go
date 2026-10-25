@@ -22,7 +22,7 @@ import (
 const helpText = `Ariel one-command setup (macOS)
 
   scripts/ariel.sh up local --listen <LAN-IP:port> --device-id <id> --device-name <name> [--token-file <path>] [--pin-file <path>]
-  scripts/ariel.sh up agent --relay-url <wss://host/ws> --device-id <id> --device-name <name> --token-file <path> [--allow-insecure-ws]
+  scripts/ariel.sh up agent --relay-url <wss://host/ws> --device-id <id> --device-name <name> --token-file <path> [--obsidian-task-vault <path>] [--task-allowed-roots <paths>] [--task-allowed-managers <ids>] [--allow-insecure-ws]
   scripts/ariel.sh up                  # start with saved configuration
   scripts/ariel.sh restart-local       # discover current private LAN IPv4 and safely restart local mode
   scripts/ariel.sh status              # no credentials shown
@@ -420,7 +420,7 @@ func startConfigured(root string, cfg config, output io.Writer) error {
 		host, _, _ := net.SplitHostPort(cfg.Listen)
 		agentEnv = localAgentEnvironment(agentEnv, host)
 	}
-	agentEnv = envWith(agentEnv, "ARIEL_TOKEN="+token, "ARIEL_RELAY_URL="+cfg.RelayURL, "ARIEL_DEVICE_ID="+cfg.DeviceID, "ARIEL_DEVICE_NAME="+cfg.DeviceName, "ARIEL_READY_FILE="+readyPath(root))
+	agentEnv = agentEnvironment(agentEnv, root, cfg, token)
 	agentPID, err := startManaged(root, "desktop-agent", agentEnv)
 	if err != nil {
 		return errors.Join(err, rollbackStarted(root, cfg.Mode))
@@ -434,6 +434,14 @@ func startConfigured(root string, cfg config, output io.Writer) error {
 		_, _ = fmt.Fprintln(output, "Agent 已与指定 Relay 握手；请在该 Relay 的 Web 页面确认设备列表")
 	}
 	return nil
+}
+
+func agentEnvironment(base []string, root string, cfg config, token string) []string {
+	env := envWith(base, "ARIEL_TOKEN="+token, "ARIEL_RELAY_URL="+cfg.RelayURL, "ARIEL_DEVICE_ID="+cfg.DeviceID, "ARIEL_DEVICE_NAME="+cfg.DeviceName, "ARIEL_READY_FILE="+readyPath(root))
+	if cfg.TasksEnabled {
+		env = envWith(env, "ARIEL_ENABLE_TASKS=true", "ARIEL_OBSIDIAN_TASK_VAULT="+cfg.ObsidianTaskVault, "ARIEL_TASK_ALLOWED_ROOTS="+cfg.TaskAllowedRoots, "ARIEL_TASK_ALLOWED_MANAGERS="+cfg.TaskAllowedManagers)
+	}
+	return env
 }
 
 type restartLocalOps struct {

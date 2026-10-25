@@ -103,8 +103,13 @@
 | 0084 | [Passkey 滑动会话与本地持久恢复](0084-passkey-sliding-session-and-durable-resume.md) | Implemented（Go／race／Web 207／真实移动 Chromium 29／build／公网 Docker 已验） | 24 小时不活跃滑动认证；真断线与 Safari reload 保留本机 stale view，后台静默恢复 owner |
 | 0085 | [后台同步期间的发送按钮加载态](0085-background-sync-send-button-loading.md) | Implemented（Web 207／真实移动 Chromium 29／截图／build／公网 Docker 已验） | 展示本地缓存正文并恢复 owner 时，将发送按钮原位变为同尺寸 spinner，并保持发送禁用 |
 | 0086 | [大会话渐进打开、follower 大帧 hint 与 live controller 暖保留](0086-progressive-open-frame-hint-and-warm-controller.md) | Implemented（Go 全量／Web 210／真实移动 Chromium 31／build 已验） | thread.read 快路径先渲染只读历史，owner 就绪后无闪空接管；已知大帧跳过注定失败的小 follower；退订后 90 秒暖保留 |
+| 0088 | [可选任务看板、本机 Codex 负责人及双向反馈](0088-task-kanban-codex-owner.md) | Superseded（2026-10-17；未实现） | 云端任务数据库方案保留历史；新方案分为 Ariel 0091 接入与 chilling 0001 本地后端 |
 | 0089 | [Chilling 文件上下文前端与可选接入](0089-turn-file-links-and-selection-context.md) | Implemented（2026-10-17；实际使用验收通过） | Ariel 提供可选 Web UI 与受限 gateway；Codex 文件读取和选区校验由本机 Chilling 负责 |
+| 0091 | [Chilling 任务看板统一入口与后台路由](0091-chilling-task-board-and-background-routing.md) | Approved（2026-10-17；首版已实现，Web／跨仓 fixture 已验，真实 native 与后续事件能力仍待验，未部署） | Ariel 统一 Web／云端／通道，本地 chilling 持有 MySQL／调度；负责人是任务所选主机的 Codex |
 | 0093 | [Large follower 空闲抢占与只读会话恢复](0093-large-follower-idle-preemption-and-readonly-recovery.md) | Implemented（Go／race／Web／真实移动 Chromium／build 已验） | 空闲暖缓存可被当前大会话安全接管；活跃会话不抢占，Web 展示明确只读原因并支持重新连接 |
+| 0095 | [Obsidian Task Source、稳定主机路由与 Codex 领取 POC](0095-obsidian-task-source-and-codex-claim.md) | Implemented（2026-10-18；隔离 M=E 真实 native POC 已验，物理跨主机待验） | `agent_host` 使用 Ariel `deviceId`；本地 vault source 定时发现，复用跨主机 dispatch，经 claim-only gate 后进入同一 Codex thread |
+| 0096 | [Obsidian 面板任务到 Codex Agent 的产品化链路](0096-productized-obsidian-task-agent.md) | Implemented（2026-10-18） | Bases 原生建卡自动规范化、持久订阅、重启恢复、同 thread 评论续投与本机／公网部署 |
+| 0097 | [撤回 Web 任务看板入口](0097-withdraw-web-task-board-entry.md) | Implemented（2026-10-18；Web／Go／桌面与手机 Chromium 专项已验，物理 Safari 待验） | Web 恢复为引入看板前的会话界面；后台 task protocol／路由与 chilling SSOT 保留 |
 | 0098 | [会话内用户输入卡片](0098-conversation-user-input-cards.md) | Approved（2026-10-20） | 完善现有 `requestUserInput` 链路，支持结构化选项、自定义回答及当前版本真实回归 |
 
 ## 设计基线

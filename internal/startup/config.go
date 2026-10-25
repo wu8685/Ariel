@@ -17,17 +17,22 @@ import (
 
 type options struct {
 	command, mode, listen, relayURL, deviceID, deviceName string
-	tokenFile, pinFile                                    string
+	tokenFile, pinFile, obsidianTaskVault                 string
+	taskAllowedRoots, taskAllowedManagers                 string
 	allowInsecureWS, replace                              bool
 }
 
 type config struct {
-	Mode            string `json:"mode"`
-	Listen          string `json:"listen,omitempty"`
-	RelayURL        string `json:"relayUrl"`
-	DeviceID        string `json:"deviceId"`
-	DeviceName      string `json:"deviceName"`
-	AllowInsecureWS bool   `json:"allowInsecureWs,omitempty"`
+	Mode                string `json:"mode"`
+	Listen              string `json:"listen,omitempty"`
+	RelayURL            string `json:"relayUrl"`
+	DeviceID            string `json:"deviceId"`
+	DeviceName          string `json:"deviceName"`
+	AllowInsecureWS     bool   `json:"allowInsecureWs,omitempty"`
+	TasksEnabled        bool   `json:"tasksEnabled,omitempty"`
+	ObsidianTaskVault   string `json:"obsidianTaskVault,omitempty"`
+	TaskAllowedRoots    string `json:"taskAllowedRoots,omitempty"`
+	TaskAllowedManagers string `json:"taskAllowedManagers,omitempty"`
 }
 
 var deviceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
@@ -88,6 +93,12 @@ func parseArgs(args []string) (options, error) {
 			opts.tokenFile = value
 		case "--pin-file":
 			opts.pinFile = value
+		case "--obsidian-task-vault":
+			opts.obsidianTaskVault = value
+		case "--task-allowed-roots":
+			opts.taskAllowedRoots = value
+		case "--task-allowed-managers":
+			opts.taskAllowedManagers = value
 		default:
 			return options{}, fmt.Errorf("unknown option %s", key)
 		}
@@ -123,6 +134,19 @@ func validateConfig(cfg config) error {
 	if !deviceIDPattern.MatchString(cfg.DeviceID) || strings.TrimSpace(cfg.DeviceName) == "" || strings.ContainsAny(cfg.DeviceName, "\r\n\x00") {
 		return errors.New("device ID/name is missing or invalid")
 	}
+	if cfg.TasksEnabled {
+		if cfg.ObsidianTaskVault == "" || cfg.TaskAllowedRoots == "" || cfg.TaskAllowedManagers == "" {
+			return errors.New("enabled Obsidian tasks require vault, roots and managers")
+		}
+		if err := validateTaskPaths(cfg.ObsidianTaskVault, cfg.TaskAllowedRoots); err != nil {
+			return err
+		}
+		if _, err := parseManagerIDs(cfg.TaskAllowedManagers); err != nil {
+			return err
+		}
+	} else if cfg.ObsidianTaskVault != "" || cfg.TaskAllowedRoots != "" || cfg.TaskAllowedManagers != "" {
+		return errors.New("task settings require tasksEnabled")
+	}
 	if cfg.Mode == "local" {
 		if err := validateListen(cfg.Listen); err != nil {
 			return err
@@ -139,11 +163,108 @@ func validateConfig(cfg config) error {
 	return validateRelayURL(cfg.RelayURL, cfg.AllowInsecureWS)
 }
 
+func canonicalDirectories(csv string) ([]string, error) {
+	var directories []string
+	seen := map[string]bool{}
+	for _, value := range strings.Split(csv, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !filepath.IsAbs(value) {
+			return nil, errors.New("task allowed roots must be absolute")
+		}
+		resolved, err := filepath.EvalSymlinks(filepath.Clean(value))
+		if err != nil {
+			return nil, errors.New("task allowed root is unavailable")
+		}
+		if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
+			return nil, errors.New("task allowed root must be a directory")
+		}
+		if !seen[resolved] {
+			seen[resolved] = true
+			directories = append(directories, resolved)
+		}
+	}
+	if len(directories) == 0 {
+		return nil, errors.New("at least one task allowed root is required")
+	}
+	return directories, nil
+}
+
+func parseManagerIDs(csv string) ([]string, error) {
+	var ids []string
+	seen := map[string]bool{}
+	for _, value := range strings.Split(csv, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !deviceIDPattern.MatchString(value) {
+			return nil, errors.New("task manager ID is invalid")
+		}
+		if !seen[value] {
+			seen[value] = true
+			ids = append(ids, value)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("at least one task manager ID is required")
+	}
+	return ids, nil
+}
+
+func validateTaskPaths(vault, roots string) error {
+	if !filepath.IsAbs(vault) {
+		return errors.New("Obsidian task vault must be absolute")
+	}
+	resolvedVault, err := filepath.EvalSymlinks(filepath.Clean(vault))
+	if err != nil {
+		return errors.New("Obsidian task vault is unavailable")
+	}
+	if info, err := os.Stat(filepath.Join(resolvedVault, "tasks", "list")); err != nil || !info.IsDir() {
+		return errors.New("Obsidian task vault must contain tasks/list")
+	}
+	_, err = canonicalDirectories(roots)
+	return err
+}
+
 func configForOptions(opts options) (config, error) {
 	if opts.deviceID == "" || opts.deviceName == "" {
 		return config{}, errors.New("--device-id and --device-name are required")
 	}
 	cfg := config{Mode: opts.mode, Listen: opts.listen, RelayURL: opts.relayURL, DeviceID: opts.deviceID, DeviceName: opts.deviceName, AllowInsecureWS: opts.allowInsecureWS}
+	if opts.obsidianTaskVault != "" {
+		if !filepath.IsAbs(opts.obsidianTaskVault) {
+			return config{}, errors.New("--obsidian-task-vault must be absolute")
+		}
+		vault, err := filepath.EvalSymlinks(filepath.Clean(opts.obsidianTaskVault))
+		if err != nil {
+			return config{}, errors.New("--obsidian-task-vault is unavailable")
+		}
+		roots := opts.taskAllowedRoots
+		if roots == "" {
+			roots = vault
+		}
+		resolvedRoots, err := canonicalDirectories(roots)
+		if err != nil {
+			return config{}, err
+		}
+		managers := opts.taskAllowedManagers
+		if managers == "" {
+			managers = opts.deviceID
+		}
+		managerIDs, err := parseManagerIDs(managers)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.TasksEnabled = true
+		cfg.ObsidianTaskVault = vault
+		cfg.TaskAllowedRoots = strings.Join(resolvedRoots, ",")
+		cfg.TaskAllowedManagers = strings.Join(managerIDs, ",")
+	} else if opts.taskAllowedRoots != "" || opts.taskAllowedManagers != "" {
+		return config{}, errors.New("task allowlists require --obsidian-task-vault")
+	}
 	switch opts.mode {
 	case "local":
 		if opts.listen == "" || opts.relayURL != "" || opts.allowInsecureWS {

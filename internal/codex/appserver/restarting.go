@@ -109,7 +109,7 @@ func (r *RestartingRPC) invalidate(generation uint64) {
 func (r *RestartingRPC) Call(ctx context.Context, method string, params any, result any) error {
 	retryable := true
 	switch method {
-	case "thread/list", "thread/search", "thread/read", "thread/turns/list", "thread/items/list", "thread/queue/list":
+	case "thread/list", "thread/search", "thread/read", "thread/turns/list", "thread/items/list", "thread/queue/list", "account/read", "config/read", "model/list":
 	case "thread/queue/add", "thread/queue/update", "thread/queue/delete", "thread/queue/reorder", "thread/archive", "thread/unarchive", "thread/name/set", "thread/section/move":
 		retryable = false
 	default:

@@ -2,6 +2,10 @@
 
 后续研发待办仅在本项目维护。验证通过记录在测试报告；勾选完成须由用户确认。
 
+任务看板最新分工：前端／云端代码及通道统一归 Ariel，本地 MySQL／scheduler／任务持久数据归 chilling；[0088](specs/0088-task-kanban-codex-owner.md) 的云端数据库方案仍仅作历史。
+
+- [ ] 验收 [0091 任务看板统一入口与后台路由](specs/0091-chilling-task-board-and-background-routing.md) 与 chilling 0001：规格已批准；Web 看板、默认关闭开关、受限管理 gateway、无浏览器跨主机 dispatch／事实回流及既有 native Service 集成首版已实现，254 项 Web 单元、42 项浏览器及真实 MySQL 跨仓 fixture 已验；真实 native 写入／App 可见、后续手工 turn、自由文本成果摘要与外部事件映射待补足，未部署。➕ 2026-10-17
+
 - [x] 验收 [0089 Chilling 文件上下文](specs/0089-turn-file-links-and-selection-context.md)：runtime flag、能力协商、turn 文件卡、按需文件页、选区引用和唯一 owner 发送已实现，并已完成实际使用复验。➕ 2026-10-17 ✅ 2026-10-17
 
 - [ ] 手机端点选历史会话后，自动让 Codex Desktop 加载并取得原会话 owner，保持原 threadId 与执行环境，无需用户回电脑打开会话或执行其他操作。隔离 fixture 已实现并实测；保留待用户验收确认。➕ 2026-10-03

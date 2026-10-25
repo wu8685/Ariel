@@ -13,7 +13,8 @@
     { "$ref": "#/$defs/threadUpdate" },
     { "$ref": "#/$defs/threadError" },
     { "$ref": "#/$defs/interactionResolved" },
-    { "$ref": "#/$defs/authPairConsumed" }
+    { "$ref": "#/$defs/authPairConsumed" },
+    { "$ref": "tasks.schema.json" }
   ],
   "$defs": {
     "id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -35,7 +36,11 @@
         "threadArchiveUndo": { "type": "boolean" },
         "threadRename": { "type": "boolean" },
         "threadPin": { "type": "boolean" },
-        "chillingFileContext": { "type": "boolean" }
+        "chillingFileContext": { "type": "boolean" },
+        "taskManagement": { "type": "boolean" },
+        "taskExecution": { "type": "boolean" },
+        "taskExecutionAuthorized": { "type": "boolean" },
+        "taskTracking": { "type": "boolean" }
       }
     },
     "webHello": {
@@ -54,6 +59,7 @@
         "token": { "type": "string", "minLength": 1 },
         "deviceId": { "$ref": "#/$defs/id" }, "deviceName": { "$ref": "#/$defs/id" },
         "agentEpoch": { "$ref": "#/$defs/id" }, "adapterVersion": { "$ref": "#/$defs/id" },
+        "taskStoreId": { "$ref": "#/$defs/id" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }
     },
@@ -264,7 +270,7 @@
     "error": {
       "type": "object", "additionalProperties": false, "required": ["code", "message"],
       "properties": {
-        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED"] },
+        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT"] },
         "message": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     },
@@ -408,6 +414,7 @@
         "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "device.status" },
         "deviceId": { "$ref": "#/$defs/id" },
         "agentEpoch": { "$ref": "#/$defs/id" },
+        "taskStoreId": { "$ref": "#/$defs/id" },
         "agentOnline": { "type": "boolean" }, "codexReady": { "type": "boolean" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }

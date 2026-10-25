@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -322,6 +323,7 @@ func (l *appServerBootstrapLive) Failure() error {
 	return l.failure
 }
 func (l *appServerBootstrapLive) fail(err error) {
+	log.Printf("native bootstrap live failed: %v", err)
 	l.mu.Lock()
 	if l.failure == nil {
 		l.failure = err

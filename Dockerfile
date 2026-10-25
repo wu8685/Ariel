@@ -7,7 +7,7 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
-COPY protocol/v1.schema.json /src/protocol/v1.schema.json
+COPY protocol/ /src/protocol/
 COPY web/ ./
 RUN npm run build
 

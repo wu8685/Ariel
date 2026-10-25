@@ -25,11 +25,15 @@ type config struct {
 	sessionKey                                                                            []byte
 	origins                                                                               []string
 	enableChillingFileContext                                                             bool
+	enableTasks                                                                           bool
+	taskDevices                                                                           map[string]relay.TaskDeviceCredential
 }
 
 type configInput struct {
 	token, webPIN, webAuth, origins, publicOrigin, rpID, credentialsFile, sessionKey, setupToken, dist, listen string
 	enableChillingFileContext                                                                                  bool
+	enableTasks                                                                                                bool
+	taskCredentialsFile                                                                                        string
 }
 
 func configFrom(token, webPIN, origins, dist, listen string) (config, error) {
@@ -106,6 +110,11 @@ func configFromInput(input configInput) (config, error) {
 	default:
 		return config{}, errors.New("ARIEL_WEB_AUTH must be pin or passkey")
 	}
+	devices, err := relay.LoadTaskDeviceCredentials(input.enableTasks, input.taskCredentialsFile)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.enableTasks, cfg.taskDevices = input.enableTasks, devices
 	return cfg, nil
 }
 
@@ -124,7 +133,7 @@ func buildHandler(cfg config) (http.Handler, error) {
 		}
 		verifier = auth.Authenticated
 	}
-	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, WebAuthMode: cfg.webAuth, WebSessionVerifier: verifier, AllowedOrigins: cfg.origins})
+	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, WebAuthMode: cfg.webAuth, WebSessionVerifier: verifier, AllowedOrigins: cfg.origins, TasksEnabled: cfg.enableTasks, TaskDevices: cfg.taskDevices})
 	if err != nil {
 		return nil, err
 	}
@@ -165,11 +174,13 @@ func buildHandler(cfg config) (http.Handler, error) {
 
 func main() {
 	enableChilling := flag.Bool("enable-chilling-file-context", os.Getenv("ARIEL_ENABLE_CHILLING_FILE_CONTEXT") == "true", "enable Chilling file-context UI")
+	enableTasks := flag.Bool("enable-tasks", os.Getenv("ARIEL_ENABLE_TASKS") == "true", "enable the local Chilling task gateway")
+	taskCredentials := flag.String("task-agent-credentials", os.Getenv("ARIEL_TASK_AGENT_CREDENTIALS_FILE"), "private per-device task credential file")
 	flag.Parse()
 	cfg, err := configFromInput(configInput{
 		token: os.Getenv("ARIEL_TOKEN"), webPIN: os.Getenv("ARIEL_WEB_PIN"), webAuth: os.Getenv("ARIEL_WEB_AUTH"), origins: os.Getenv("ARIEL_ORIGINS"),
 		publicOrigin: os.Getenv("ARIEL_PUBLIC_ORIGIN"), rpID: os.Getenv("ARIEL_WEBAUTHN_RP_ID"), credentialsFile: os.Getenv("ARIEL_WEBAUTHN_CREDENTIALS_FILE"),
-		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: *enableChilling,
+		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: *enableChilling, enableTasks: *enableTasks, taskCredentialsFile: *taskCredentials,
 	})
 	if err != nil {
 		log.Fatal(err)

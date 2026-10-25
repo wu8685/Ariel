@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -20,6 +21,8 @@ import (
 )
 
 type Config struct {
+	TasksEnabled        bool
+	TaskDevices         map[string]TaskDeviceCredential
 	Token               string
 	WebPIN              string
 	WebAuthMode         string
@@ -63,6 +66,7 @@ type Server struct {
 	routes         map[string]*route
 	byWeb          map[*peer]map[string]string
 	subs           map[*peer]map[string]*subscription
+	taskRoutes     map[string]*taskRoute
 }
 
 type pairing struct {
@@ -90,6 +94,9 @@ type subscription struct {
 }
 
 type peer struct {
+	taskState      atomic.Pointer[taskPeerState]
+	taskStoreID    string
+	taskCredential *TaskDeviceCredential
 	conn           *websocket.Conn
 	id             string
 	role           string
@@ -102,6 +109,11 @@ type peer struct {
 }
 
 func New(cfg Config) (*Server, error) {
+	if cfg.TasksEnabled {
+		if err := validateTaskDevices(cfg.TaskDevices, cfg.Token); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Token == "" || len(cfg.AllowedOrigins) == 0 {
 		return nil, errors.New("relay requires token and web origin allowlist")
 	}
@@ -226,9 +238,9 @@ func (s *Server) issueWebSessionLocked() (string, bool) {
 	return sessionToken, true
 }
 
-func (s *Server) authorize(role, token string, passkeySession bool) (string, *peer, bool) {
+func (s *Server) authorize(role, token, deviceID string, passkeySession bool) (string, *peer, bool) {
 	if role == "agent" {
-		return "", nil, subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) == 1
+		return "", nil, s.authorizeAgent(deviceID, token)
 	}
 	if role != "web" {
 		return "", nil, false
@@ -323,17 +335,39 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		AgentEpoch     string          `json:"agentEpoch"`
 		AdapterVersion string          `json:"adapterVersion"`
 		Capabilities   map[string]bool `json:"capabilities"`
+		TaskStoreID    string          `json:"taskStoreId"`
 	}
 	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || (hello.Role == "web" && origin == "") {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
-	sessionToken, pairingCreator, authorized := s.authorize(hello.Role, hello.Token, passkeySession)
+	sessionToken, pairingCreator, authorized := s.authorize(hello.Role, hello.Token, hello.DeviceID, passkeySession)
 	if !authorized {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
 	p := &peer{conn: conn, id: rand.Text(), role: hello.Role, deviceID: hello.DeviceID, deviceName: hello.DeviceName, agentEpoch: hello.AgentEpoch, adapterVersion: hello.AdapterVersion, capabilities: hello.Capabilities}
+	if p.role == "agent" {
+		credential, ok := s.cfg.TaskDevices[p.deviceID]
+		if s.cfg.TasksEnabled && ok {
+			p.taskCredential = &credential
+			if containsTaskValue(credential.TaskStoreIDs, hello.TaskStoreID) {
+				p.taskStoreID = hello.TaskStoreID
+			} else {
+				p.capabilities["taskManagement"] = false
+			}
+			if !credential.Execute {
+				p.capabilities["taskExecution"] = false
+				p.capabilities["taskExecutionAuthorized"] = false
+				p.capabilities["taskTracking"] = false
+			}
+		} else {
+			delete(p.capabilities, "taskManagement")
+			delete(p.capabilities, "taskExecution")
+			delete(p.capabilities, "taskExecutionAuthorized")
+			delete(p.capabilities, "taskTracking")
+		}
+	}
 	s.mu.Lock()
 	if p.role == "agent" {
 		if s.agents[p.deviceID] != nil {
@@ -402,6 +436,7 @@ func (p *peer) send(ctx context.Context, msg any) error {
 }
 
 func (s *Server) removePeer(p *peer) {
+	s.removeTaskPeer(p)
 	s.mu.Lock()
 	failed := make([]*route, 0)
 	type orphan struct {
@@ -522,7 +557,11 @@ func (s *Server) currentDeviceStatus(deviceID string, departed *peer) map[string
 	current := s.agents[deviceID]
 	s.mu.Unlock()
 	if current != nil {
-		return map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": deviceID, "agentEpoch": current.agentEpoch, "agentOnline": true, "codexReady": current.capabilities["codexReady"], "capabilities": current.capabilities}
+		status := map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": deviceID, "agentEpoch": current.agentEpoch, "agentOnline": true, "codexReady": current.capabilities["codexReady"], "capabilities": current.currentCapabilities()}
+		if store := current.currentTaskStoreID(); store != "" {
+			status["taskStoreId"] = store
+		}
+		return status
 	}
 	status := map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": deviceID, "agentOnline": false, "codexReady": false}
 	if departed != nil && departed.agentEpoch != "" {
@@ -558,6 +597,12 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		return false
 	}
 	if p.role == "agent" {
+		if msg.Type == "task.capabilities" {
+			return s.handleTaskCapabilities(ctx, p, body)
+		}
+		if isTaskFrameType(msg.Type) {
+			return s.handleTaskFrame(ctx, p, body)
+		}
 		if msg.Type == "response" {
 			s.handleAgentResponse(ctx, p, body, msg.RequestID)
 			return true
@@ -592,7 +637,11 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 	s.mu.Lock()
 	devices := make([]map[string]any, 0, len(s.agents))
 	for _, agent := range s.agents {
-		devices = append(devices, map[string]any{"deviceId": agent.deviceID, "deviceName": agent.deviceName, "agentOnline": true, "codexReady": agent.capabilities["codexReady"], "capabilities": agent.capabilities, "agentEpoch": agent.agentEpoch, "adapterVersion": agent.adapterVersion})
+		device := map[string]any{"deviceId": agent.deviceID, "deviceName": agent.deviceName, "agentOnline": true, "codexReady": agent.capabilities["codexReady"], "capabilities": agent.currentCapabilities(), "agentEpoch": agent.agentEpoch, "adapterVersion": agent.adapterVersion}
+		if store := agent.currentTaskStoreID(); store != "" {
+			device["taskStoreId"] = store
+		}
+		devices = append(devices, device)
 	}
 	s.mu.Unlock()
 	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices}})
@@ -621,6 +670,11 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	if agent == nil {
 		s.mu.Unlock()
 		web.send(ctx, responseError(webID, "rejected", "DEVICE_OFFLINE", "device offline"))
+		return true
+	}
+	if !s.taskPublicAllowed(agent, method, params) {
+		s.mu.Unlock()
+		web.send(ctx, responseError(webID, "rejected", "UNAUTHORIZED", "task access not authorized"))
 		return true
 	}
 	if method == "thread.unsubscribe" {

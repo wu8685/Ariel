@@ -40,6 +40,10 @@
 
 ## 安全与数据边界
 
+- 任务看板的 Web／云端代码统一归 Ariel，本地 chilling 承担 MySQL／scheduler／任务持久数据；管理与执行主机分开选择，负责人使用所选执行主机的本地 Codex。0091／chilling 0001 已于 2026-10-17 获准实现，严格按 TDD 与 compatibility gate 推进。
+- chilling 是看板任务的唯一 SSOT，不仅是数据库插件；Ariel 只连接／呈现任务和绑定主机 Agent，不复制任务状态机、调度或验收规则。native 事实回流 chilling 后更新任务，native turn 成功不等于任务完成；后端离线不接管任务写入。
+- Relay 的主机接入对象是 Ariel Desktop Agent，不是 Codex Agent；本机 Ariel Desktop Agent 再经 Codex Adapter 转发给 Codex。`role=agent`、`Agent(M/E)` 和 `agentEpoch` 均属 Ariel Desktop Agent，不得与任务负责人 Codex 或 ahsir Agent 混用。
+- 任务接入不引入 Ariel MySQL／云端 scheduler／持久任务队列。允许必要任务数据有界转发，不持久化正文或记录内容日志；native 写操作仍走执行机既有 owner，后台跨 Agent 路由必须新增授权与核对，不能视为现有 file-context 能力。
 - Codex 是会话和执行状态的 SSOT；Ariel 不建立第二套会话数据库、离线队列或正文日志。
 - Relay 与 Desktop Agent 均使用有界内存；断线后重建当前视图，不自动重放变更请求。
 - Desktop 私有 IPC 只能存在于版本化 Adapter 内；Relay 和 Web 不得接触私有方法名。

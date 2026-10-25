@@ -7,6 +7,7 @@ require (
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/image v0.46.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

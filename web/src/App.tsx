@@ -26,7 +26,7 @@ import "./interaction.css";
 
 export { InteractionCard } from "./interaction-card";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 4;
 const historyTurnPageLimit = 10;
@@ -774,7 +774,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   function onTranscriptScroll() {
     const container = transcriptRef.current;
-    if (!container) return;
+    if (!container || container.clientHeight === 0) return;
     const composerEditingWithoutTranscriptGesture = window.innerWidth <= mobileViewportMaxWidth
       && document.activeElement === composerInputRef.current
       && followLatestRef.current

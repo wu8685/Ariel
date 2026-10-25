@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,13 @@ import (
 )
 
 type Config struct {
+	TasksEnabled                                          bool
+	TasksManagerOnly                                      bool
+	TaskEndpoint                                          string
+	TaskBackend                                           TaskBackend
+	TaskAllowedRoots, TaskAllowedManagers                 []string
+	TaskPollInterval                                      time.Duration
+	TaskExecutionCheck                                    func(context.Context, string, string) error
 	URL, Token, DeviceID, DeviceName, Binary, Socket, CWD string
 	ChillingEndpoint                                      string
 	ChillingEnabled                                       bool
@@ -35,6 +43,7 @@ type FileContext interface {
 	Prepare(context.Context, chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error)
 }
 type agent struct {
+	tasks       *taskRuntime
 	conn        *websocket.Conn
 	deviceID    string
 	service     *Service
@@ -60,6 +69,21 @@ func threadListRequestContext(ctx context.Context, searchTerm string) (context.C
 }
 
 func Run(ctx context.Context, cfg Config) error {
+	if cfg.TasksEnabled && cfg.TaskBackend == nil && cfg.TaskEndpoint != "" {
+		client, err := chillingclient.NewTaskClient(ctx, chillingclient.Config{Enabled: true, Endpoint: cfg.TaskEndpoint})
+		if client != nil {
+			cfg.TaskBackend = client
+		}
+		if err != nil {
+			log.Printf("task backend unavailable: %s", chillingclient.CodeOf(err))
+		}
+	}
+	if cfg.TasksManagerOnly {
+		if !cfg.TasksEnabled {
+			return errors.New("task manager-only requires explicit task flag")
+		}
+		return RunWithService(ctx, cfg, nil)
+	}
 	if cfg.Binary == "" || cfg.Socket == "" {
 		return errors.New("Codex binary and Desktop IPC socket are required")
 	}
@@ -82,6 +106,10 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer readOnlyRPC.Close()
+	if cfg.TasksEnabled && cfg.TaskExecutionCheck == nil {
+		cfg.TaskExecutionCheck = NewOfficialTaskCheck(readOnlyRPC)
+	}
+	cfg.CWD = cwd
 	queueReader := appserver.QueueReader{RPC: readOnlyRPC}
 	queueSupported, err := queueReader.Supported(ctx)
 	if err != nil {
@@ -127,7 +155,7 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func RunWithService(ctx context.Context, cfg Config, service *Service) error {
-	if cfg.URL == "" || cfg.Token == "" || cfg.DeviceID == "" || cfg.DeviceName == "" || service == nil {
+	if cfg.URL == "" || cfg.Token == "" || cfg.DeviceID == "" || cfg.DeviceName == "" || (service == nil && !(cfg.TasksEnabled && cfg.TasksManagerOnly)) {
 		return errors.New("invalid Desktop Agent configuration")
 	}
 	conn, _, err := websocket.Dial(ctx, cfg.URL, nil)
@@ -137,6 +165,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	defer conn.CloseNow()
 	conn.SetReadLimit(8 << 20)
 	a := &agent{conn: conn, deviceID: cfg.DeviceID, service: service, fileContext: cfg.FileContext}
+	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
 	defer func() {
@@ -145,7 +174,25 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}()
 	queue := make(chan struct{}, 32)
 	fileContextReady := cfg.FileContext != nil && cfg.FileContext.Ready()
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": map[string]bool{"autoLoad": true, "codexReady": true, "history": true, "send": true, "interrupt": true, "interaction": true, "queue": service.QueueEnabled(), "threadBootstrap": service.ThreadBootstrapEnabled(), "threadArchive": service.ThreadArchiveEnabled(), "threadArchiveUndo": service.ThreadArchiveEnabled(), "threadRename": service.ThreadRenameEnabled(), "threadPin": service.ThreadPinEnabled(), "chillingFileContext": fileContextReady}}
+	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady}
+	if service != nil {
+		capabilities["queue"] = service.QueueEnabled()
+		capabilities["threadBootstrap"] = service.ThreadBootstrapEnabled()
+		capabilities["threadArchive"] = service.ThreadArchiveEnabled()
+		capabilities["threadArchiveUndo"] = service.ThreadArchiveEnabled()
+		capabilities["threadRename"] = service.ThreadRenameEnabled()
+		capabilities["threadPin"] = service.ThreadPinEnabled()
+	}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": rand.Text(), "adapterVersion": "desktop-ipc-0.160.0", "capabilities": capabilities}
+	if cfg.TasksEnabled {
+		capabilities["taskManagement"] = a.tasks.managementReady()
+		capabilities["taskExecution"] = a.tasks.executionReady(ctx)
+		capabilities["taskExecutionAuthorized"] = a.tasks.executionAuthorized()
+		capabilities["taskTracking"] = a.tasks.executionAuthorized()
+		if cfg.TaskBackend != nil && cfg.TaskBackend.TaskStoreID() != "" {
+			hello["taskStoreId"] = cfg.TaskBackend.TaskStoreID()
+		}
+	}
 	if err := a.send(ctx, hello); err != nil {
 		return err
 	}
@@ -167,6 +214,8 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 			defer cfg.OnNotReady()
 		}
 	}
+	a.tasks.start(requestCtx)
+	defer a.tasks.close()
 	heartCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
 	heartbeatFailure := make(chan error, 1)
@@ -202,17 +251,21 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 			Method    string          `json:"method"`
 			Params    json.RawMessage `json:"params"`
 		}
-		if json.Unmarshal(body, &req) != nil || req.Type != "request" {
+		if json.Unmarshal(body, &req) != nil || (req.Type != "request" && !strings.HasPrefix(req.Type, "task.")) {
 			return errors.New("unexpected Relay message")
 		}
 		select {
 		case queue <- struct{}{}:
 			requests.Add(1)
-			go func() {
+			go func(requestBody []byte) {
 				defer requests.Done()
 				defer func() { <-queue }()
-				a.handle(requestCtx, req.RequestID, req.Method, req.Params)
-			}()
+				if strings.HasPrefix(req.Type, "task.") {
+					a.tasks.handle(requestCtx, requestBody)
+				} else {
+					a.handle(requestCtx, req.RequestID, req.Method, req.Params)
+				}
+			}(body)
 		default:
 			a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
 		}
@@ -239,6 +292,15 @@ func (a *agent) send(ctx context.Context, value any) error {
 }
 
 func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage) {
+	if protocol.IsTaskMethod(method) {
+		data, err := a.tasks.public(ctx, method, raw)
+		a.reply(ctx, id, method, data, err)
+		return
+	}
+	if a.service == nil {
+		a.reply(ctx, id, method, nil, errors.New("PROTOCOL_UNSUPPORTED"))
+		return
+	}
 	var p struct {
 		ThreadID        string                     `json:"threadId"`
 		TurnID          string                     `json:"turnId"`
@@ -504,6 +566,12 @@ func (a *agent) reply(ctx context.Context, id, method string, data map[string]an
 }
 
 func requestErrorCode(method string, err error) string {
+	if protocol.IsTaskMethod(method) {
+		switch code := chillingclient.CodeOf(err); code {
+		case "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT":
+			return code
+		}
+	}
 	if code := chillingclient.CodeOf(err); code != "INTERNAL" {
 		switch code {
 		case "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "INVALID_ARGUMENT", "OVERLOADED":

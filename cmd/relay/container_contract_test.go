@@ -28,7 +28,7 @@ func TestContainerImageBuildsRelayAndWebOnly(t *testing.T) {
 		"FROM ${WEB_BUILD_IMAGE} AS web-build",
 		"apk add --cache-dir /var/cache/apk --update-cache nodejs npm",
 		"npm ci",
-		"COPY protocol/v1.schema.json /src/protocol/v1.schema.json",
+		"COPY protocol/ /src/protocol/",
 		"RUN npm run build",
 		"FROM golang:1.26-alpine AS relay-build",
 		"go build",
