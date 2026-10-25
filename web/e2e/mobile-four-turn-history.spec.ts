@@ -15,7 +15,7 @@ const recent: Thread = {
   pendingInteractions: [],
 };
 
-test("fills only two recent turns while manual history keeps ten-turn pages", async ({ page }) => {
+test("fills only two recent turns while manual history uses three-turn pages", async ({ page }) => {
   const historyLimits: number[] = [];
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
@@ -48,6 +48,6 @@ test("fills only two recent turns while manual history keeps ten-turn pages", as
   await expect(page.getByText("turn-4")).toBeVisible();
 
   await page.getByRole("button", { name: "加载更早消息" }).click();
-  await expect.poll(() => historyLimits).toEqual([1, 10]);
+  await expect.poll(() => historyLimits).toEqual([1, 3]);
   await expect(page.getByText("turn-0")).toBeVisible();
 });

@@ -52,11 +52,17 @@ test("an accepted send clears after a same-thread resync on a phone viewport", a
   await composer.fill("重同步期间仍应确认清空");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect.poll(() => sendRequest?.method).toBe("turn.start");
+  await expect(page.getByLabel("你（发送中）")).toContainText("重同步期间仍应确认清空");
 
   relaySocket!.send(JSON.stringify({ type: "event", v: 1, event: "thread.error", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub-1", streamId: "stream-1", code: "RESYNC_REQUIRED" }));
   await expect.poll(() => subscription).toBe(2);
   relaySocket!.send(JSON.stringify({ type: "response", v: 1, requestId: sendRequest!.requestId, outcome: "accepted", data: { turnId: "confirmed" } }));
 
   await expect(composer).toHaveValue("");
+  await expect(page.getByLabel("你（等待同步）")).toContainText("重同步期间仍应确认清空");
   expect(sendRequest!.params.clientMessageId).toMatch(/^[0-9a-f-]{36}$/);
+  const confirmed: Thread = { ...thread, runtime: "inProgress", turns: [{ turnId: "confirmed", status: "inProgress", items: [{ itemId: "confirmed-user", role: "user", clientMessageId: sendRequest!.params.clientMessageId, text: "重同步期间仍应确认清空" }] }] };
+  relaySocket!.send(JSON.stringify({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub-2", streamId: "stream-2", baseSeq: 1, seq: 2, thread: confirmed }));
+  await expect(page.getByLabel("你（等待同步）")).toHaveCount(0);
+  await expect(page.getByLabel("你")).toContainText("重同步期间仍应确认清空");
 });

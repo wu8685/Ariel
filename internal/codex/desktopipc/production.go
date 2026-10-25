@@ -130,15 +130,79 @@ func StartProductionTurn(ctx context.Context, c caller, owner, threadID, cwd str
 	return StartProductionTurnImages(ctx, c, owner, threadID, cwd, state, clientMessageID, text, nil)
 }
 
+// productionStartFence decodes the potentially large owner snapshot once.
+// The start path previously scanned the same frame three times to validate
+// addressability, check idleness and reject an existing receipt ID.
+func productionStartFence(state json.RawMessage, cwd string) (map[string]struct{}, error) {
+	var snapshot struct {
+		CWD     string `json:"cwd"`
+		Runtime struct {
+			Type string `json:"type"`
+		} `json:"threadRuntimeStatus"`
+		Requests []json.RawMessage `json:"requests"`
+		Turns    []nativeTurn      `json:"turns"`
+		History  struct {
+			Kind    string `json:"kind"`
+			History struct {
+				Islands []struct {
+					Entries []struct {
+						Value string `json:"value"`
+					} `json:"entries"`
+				} `json:"islands"`
+				Entities map[string]nativeTurn `json:"entitiesByKey"`
+			} `json:"history"`
+		} `json:"turnHistory"`
+	}
+	if json.Unmarshal(state, &snapshot) != nil {
+		return nil, ErrNativeStateUncertain
+	}
+	turns := snapshot.Turns
+	switch snapshot.History.Kind {
+	case "":
+		if snapshot.Turns == nil {
+			return nil, ErrNativeStateUncertain
+		}
+		for _, turn := range turns {
+			if turn.TurnID == "" {
+				return nil, ErrNativeStateUncertain
+			}
+		}
+	case "canonical":
+		if snapshot.History.History.Islands == nil || snapshot.History.History.Entities == nil {
+			return nil, ErrNativeStateUncertain
+		}
+		turns = turns[:0]
+		for _, island := range snapshot.History.History.Islands {
+			for _, entry := range island.Entries {
+				turn, ok := snapshot.History.History.Entities[entry.Value]
+				if !ok || turn.TurnID == "" {
+					return nil, ErrNativeStateUncertain
+				}
+				turns = append(turns, turn)
+			}
+		}
+	default:
+		return nil, ErrNativeStateUncertain
+	}
+	if snapshot.CWD != cwd || snapshot.Runtime.Type != "idle" || snapshot.Requests == nil || len(snapshot.Requests) != 0 {
+		return nil, ErrTurnBusy
+	}
+	existing := make(map[string]struct{}, len(turns))
+	for _, turn := range turns {
+		if turn.TurnID != "" && turn.Status != "" {
+			existing[turn.TurnID] = struct{}{}
+		}
+	}
+	return existing, nil
+}
+
 func StartProductionTurnImages(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string, images []string) (string, error) {
 	if owner == "" || threadID == "" || clientMessageID == "" || (strings.TrimSpace(text) == "" && len(images) == 0) {
 		return "", ErrProtocol
 	}
-	if !nativeCanonicalAddressable(state) {
-		return "", ErrNativeStateUncertain
-	}
-	if !idleFixture(state, cwd) {
-		return "", ErrTurnBusy
+	existingTurns, err := productionStartFence(state, cwd)
+	if err != nil {
+		return "", err
 	}
 	input := make([]any, 0, 1+len(images))
 	if text != "" {
@@ -163,7 +227,7 @@ func StartProductionTurnImages(ctx context.Context, c caller, owner, threadID, c
 	if json.Unmarshal(r.Result, &accepted) != nil || accepted.Result.Turn.ID == "" {
 		return "", &CallError{Cause: ErrProtocol, Outcome: "unknown"}
 	}
-	if _, alreadyPresent := nativeTurnStatus(state, accepted.Result.Turn.ID); alreadyPresent {
+	if _, alreadyPresent := existingTurns[accepted.Result.Turn.ID]; alreadyPresent {
 		return "", &CallError{Cause: errors.New("native returned existing turn"), Outcome: "unknown"}
 	}
 	return accepted.Result.Turn.ID, nil

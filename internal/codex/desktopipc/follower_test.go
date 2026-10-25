@@ -99,6 +99,55 @@ func TestFollowerWaitsForAddressableStateAfterCanonicalPlaceholder(t *testing.T)
 	}
 }
 
+func TestFollowerStartUsesWarmSnapshotAndReturnsNativeReceiptWithoutHistoryRefresh(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	client := NewClient(local, Options{ThreadID: "thread", RequestTimeout: time.Second})
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		readMessage(t, peer) // following changed
+		initial := readMessage(t, peer)
+		if stringField(initial, "method") != "thread-follower-load-complete-history" {
+			done <- ErrProtocol
+			return
+		}
+		sendReply(t, peer, stringField(initial, "requestId"), "success", map[string]any{})
+		state := map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "idle"}, "requests": []any{}, "turns": []any{}}
+		body, _ := json.Marshal(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": 1, "conversationState": state}}})
+		if err := WriteFrame(peer, body, DefaultMaxFrameBytes); err != nil {
+			done <- err
+			return
+		}
+		start := readMessage(t, peer)
+		if stringField(start, "method") != "thread-follower-start-turn" {
+			done <- ErrProtocol
+			return
+		}
+		sendReply(t, peer, stringField(start, "requestId"), "success", map[string]any{"result": map[string]any{"turn": map[string]any{"id": "turn-fast"}}})
+		_ = peer.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if _, err := ReadFrame(peer, DefaultMaxFrameBytes); err == nil {
+			done <- ErrProtocol
+			return
+		}
+		done <- nil
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	follower, err := Follow(ctx, client, "thread", "owner", "/fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer follower.Close()
+	turnID, err := follower.Start(ctx, "00000000-0000-4000-8000-000000000001", "hello")
+	if err != nil || turnID != "turn-fast" {
+		t.Fatalf("Start = %q, %v", turnID, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFollowerInterruptCanProceedWhileStartReceiptIsPending(t *testing.T) {
 	local, peer := net.Pipe()
 	defer peer.Close()
@@ -109,36 +158,40 @@ func TestFollowerInterruptCanProceedWhileStartReceiptIsPending(t *testing.T) {
 	releaseStart := make(chan struct{})
 	go func() {
 		readMessage(t, peer) // following changed
-		for rev := 1; rev <= 3; rev++ {
-			req := readMessage(t, peer)
-			if stringField(req, "method") != "thread-follower-load-complete-history" {
-				t.Errorf("expected refresh, got %s", stringField(req, "method"))
-				return
-			}
-			sendReply(t, peer, stringField(req, "requestId"), "success", map[string]any{})
-			status, turns := "idle", []any{}
-			if rev == 3 {
-				status = "inProgress"
-				turns = []any{map[string]any{"turnId": "turn-one", "status": "inProgress", "items": []any{}}}
-			}
-			state := map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": status}, "requests": []any{}, "turns": turns}
-			body, _ := json.Marshal(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": rev, "conversationState": state}}})
-			if err := WriteFrame(peer, body, DefaultMaxFrameBytes); err != nil {
-				t.Error(err)
-				return
-			}
-			if rev == 2 {
-				start := readMessage(t, peer)
-				if stringField(start, "method") != "thread-follower-start-turn" {
-					t.Errorf("expected start, got %s", stringField(start, "method"))
-					return
-				}
-				close(startSeen)
-				go func(id string) {
-					<-releaseStart
-					sendReply(t, peer, id, "success", map[string]any{"result": map[string]any{"turn": map[string]any{"id": "turn-one"}}})
-				}(stringField(start, "requestId"))
-			}
+		initial := readMessage(t, peer)
+		if stringField(initial, "method") != "thread-follower-load-complete-history" {
+			t.Errorf("expected initial refresh, got %s", stringField(initial, "method"))
+			return
+		}
+		sendReply(t, peer, stringField(initial, "requestId"), "success", map[string]any{})
+		idle := map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "idle"}, "requests": []any{}, "turns": []any{}}
+		body, _ := json.Marshal(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": 1, "conversationState": idle}}})
+		if err := WriteFrame(peer, body, DefaultMaxFrameBytes); err != nil {
+			t.Error(err)
+			return
+		}
+		start := readMessage(t, peer)
+		if stringField(start, "method") != "thread-follower-start-turn" {
+			t.Errorf("expected start, got %s", stringField(start, "method"))
+			return
+		}
+		close(startSeen)
+		go func(id string) {
+			<-releaseStart
+			sendReply(t, peer, id, "success", map[string]any{"result": map[string]any{"turn": map[string]any{"id": "turn-one"}}})
+		}(stringField(start, "requestId"))
+
+		refresh := readMessage(t, peer)
+		if stringField(refresh, "method") != "thread-follower-load-complete-history" {
+			t.Errorf("expected interrupt refresh, got %s", stringField(refresh, "method"))
+			return
+		}
+		sendReply(t, peer, stringField(refresh, "requestId"), "success", map[string]any{})
+		running := map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "inProgress"}, "requests": []any{}, "turns": []any{map[string]any{"turnId": "turn-one", "status": "inProgress", "items": []any{}}}}
+		body, _ = json.Marshal(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": 2, "conversationState": running}}})
+		if err := WriteFrame(peer, body, DefaultMaxFrameBytes); err != nil {
+			t.Error(err)
+			return
 		}
 		interrupt := readMessage(t, peer)
 		if stringField(interrupt, "method") != "thread-follower-interrupt-turn" {
@@ -147,17 +200,6 @@ func TestFollowerInterruptCanProceedWhileStartReceiptIsPending(t *testing.T) {
 		}
 		close(interruptSeen)
 		sendReply(t, peer, stringField(interrupt, "requestId"), "success", map[string]any{"ok": true, "interruptedTurnId": "turn-one"})
-		verify := readMessage(t, peer)
-		if stringField(verify, "method") != "thread-follower-load-complete-history" {
-			t.Errorf("expected post-start verification, got %s", stringField(verify, "method"))
-			return
-		}
-		sendReply(t, peer, stringField(verify, "requestId"), "success", map[string]any{})
-		verified := map[string]any{"cwd": "/fixture", "threadRuntimeStatus": map[string]any{"type": "idle"}, "requests": []any{}, "turns": []any{map[string]any{"turnId": "turn-one", "status": "interrupted", "items": []any{map[string]any{"id": "native-item", "clientId": "message-one", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "hello"}}}}}}}
-		body, _ := json.Marshal(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": 4, "conversationState": verified}}})
-		if err := WriteFrame(peer, body, DefaultMaxFrameBytes); err != nil {
-			t.Error(err)
-		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

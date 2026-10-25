@@ -30,7 +30,7 @@ export { InteractionCard } from "./interaction-card";
 type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 2;
-const historyTurnPageLimit = 10;
+const historyTurnPageLimit = 3;
 const mobileViewportMaxWidth = 800;
 const composerMinHeight = 44;
 const composerMaxHeight = 24 * 8 + 20; // Eight 24px lines plus vertical padding.
@@ -46,7 +46,19 @@ type ReadingAnchor = { key: string; itemId: string; top: number; scrollTop: numb
 type PhonePairing = { credential: string; phase: "confirm" | "connecting" | "error" };
 type PairingInvite = { status: "loading" | "waiting" | "consumed" | "expired" | "error"; credential: string; expiresAt: number; qr: string; message: string };
 type QueueDragState = { pointerId: number; queueId: string; startY: number; order: string[]; cleanup: () => void };
-type PendingSubmission = { deviceId: string; agentEpoch: string; threadId: string; clientMessageId: string; revision: number; queueId: string };
+type PendingSubmission = {
+  deviceId: string;
+  agentEpoch: string;
+  threadId: string;
+  clientMessageId: string;
+  revision: number;
+  queueId: string;
+  projectInTranscript: boolean;
+  status: "sending" | "accepted" | "unknown";
+  text: string;
+  images: ScreenshotDraft[];
+  fileQuotes: FileQuote[];
+};
 type ThreadMenuState = { threadId: string; left: number; top: number };
 type ThreadLongPress = { threadId: string; pointerId: number; startX: number; startY: number; timer: number };
 type ArchiveUndoToast = { threadId: string; title: string; operationId: string };
@@ -296,6 +308,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const composerDrafts = useRef(new ComposerDraftStore());
   const activeComposerIdentity = useRef<ComposerDraftIdentity | null>(null);
   const pendingSubmissions = useRef(new Map<string, PendingSubmission>());
+  const [pendingSubmissionRevision, setPendingSubmissionRevision] = useState(0);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
@@ -581,6 +594,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   function clearAllComposerDrafts() {
     composerDrafts.current.clear();
     pendingSubmissions.current.clear();
+    setPendingSubmissionRevision(revision => revision + 1);
     activeComposerIdentity.current = null;
     showComposerSnapshot(emptyComposerDraft());
   }
@@ -613,6 +627,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         || (thread.queuedMessages || []).some(item => item.clientMessageId === clientMessageId);
       if (!observed) continue;
       pendingSubmissions.current.delete(clientMessageId);
+      setPendingSubmissionRevision(revision => revision + 1);
       if (clearSubmittedComposer(submission) && sameSubmissionTarget(submission)) setNotice("消息已确认发送。");
     }
   }
@@ -1968,7 +1983,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     lastPaint.current = { key, seq: view.seq, marker };
   }, [view?.seq, view?.threadId, history, itemOverrides, syncingView]);
 
-  async function loadOlder(additionalTurns = 1, requestLimit = historyTurnPageLimit) {
+  async function loadOlder(additionalTurns = historyTurnPageLimit, requestLimit = historyTurnPageLimit) {
     if (!view || !deviceId || historyLoadingRef.current || historyRef.current.exhausted) return;
     const epoch = pendingSelect.current;
     const targetThread = view.threadId;
@@ -1991,6 +2006,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           setNotice("历史页格式无法识别，已保留当前会话。"); return;
         }
         const next = appendOlderPage(current, selection.current.view?.thread.turns || view.thread.turns, { turns, nextCursor });
+        if (next.older.length-current.older.length > requestLimit) {
+          setNotice("历史页返回数量超过请求范围，已保留当前会话。"); return;
+        }
         if (next.cursor === current.cursor && !next.exhausted && next.older.length === current.older.length) {
           if (discardRestoredHistory(deviceId, targetThread)) continue;
           setNotice("历史页没有继续前进，请稍后重试。"); return;
@@ -2098,8 +2116,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const clientMessageId = queueID ? "" : newRequestID();
     const sourceSnapshot = captureComposerSnapshot();
     composerDrafts.current.set({ deviceId: targetDevice, threadId: targetThread }, sourceSnapshot);
-    const submission: PendingSubmission = { deviceId: targetDevice, agentEpoch: agentEpochFor(targetDevice), threadId: targetThread, clientMessageId, revision: sourceSnapshot.revision, queueId: queueID };
-    if (clientMessageId) pendingSubmissions.current.set(clientMessageId, submission);
+    const queueMutation = !!queueID || (view.thread.runtime === "inProgress" && queueEnabled);
+    const submission: PendingSubmission = { deviceId: targetDevice, agentEpoch: agentEpochFor(targetDevice), threadId: targetThread, clientMessageId, revision: sourceSnapshot.revision, queueId: queueID, projectInTranscript: !queueMutation, status: "sending", text, images: [...images], fileQuotes: [...fileQuotes] };
+    if (clientMessageId) {
+      pendingSubmissions.current.set(clientMessageId, submission);
+      setPendingSubmissionRevision(revision => revision + 1);
+    }
     setWorking(true); setNotice("");
     const content = { text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}), ...(!queueID && fileQuotes.length ? { fileContexts:fileQuotes } : {}) };
     const response = queueID
@@ -2108,14 +2130,23 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         ? await client.request("queue.add", targetDevice, { threadId: targetThread, clientMessageId, ...content })
         : await client.request("turn.start", targetDevice, { threadId: targetThread, clientMessageId, ...content });
     setWorking(false);
-    const queueMutation = !!queueID || (view.thread.runtime === "inProgress" && queueEnabled);
     const accepted = response.outcome === "accepted" && (!queueMutation || applyQueueResponse(response, targetDevice, targetThread));
     if (accepted) {
-      if (clientMessageId) pendingSubmissions.current.delete(clientMessageId);
+      if (clientMessageId) {
+        const pending = pendingSubmissions.current.get(clientMessageId);
+        if (queueMutation) pendingSubmissions.current.delete(clientMessageId);
+        else if (pending) pending.status = "accepted";
+        setPendingSubmissionRevision(revision => revision + 1);
+      }
       clearSubmittedComposer(submission);
       return;
     }
-    if (response.outcome !== "unknown" && clientMessageId) pendingSubmissions.current.delete(clientMessageId);
+    if (clientMessageId) {
+      const pending = pendingSubmissions.current.get(clientMessageId);
+      if (response.outcome !== "unknown") pendingSubmissions.current.delete(clientMessageId);
+      else if (pending) pending.status = "unknown";
+      setPendingSubmissionRevision(revision => revision + 1);
+    }
     if (sameSubmissionTarget(submission)) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response));
   }
 
@@ -2537,6 +2568,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
           {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {[...pendingSubmissions.current.values()].filter(submission => submission.projectInTranscript && submission.deviceId === deviceId && submission.threadId === view?.threadId && submission.agentEpoch === agentEpochFor(deviceId)).map(submission => {
+            const statusText = submission.status === "sending" ? "发送中" : submission.status === "accepted" ? "等待同步" : "结果待确认";
+            return <article className={`message user pending-submission ${submission.status}`} aria-label={`你（${statusText}）`} key={submission.clientMessageId} data-client-message-id={submission.clientMessageId} data-pending-revision={pendingSubmissionRevision}>
+              <div className="message-body"><HistoricalFileQuotes quotes={submission.fileQuotes}/>{submission.text && <div className="message-text"><ConversationMarkdown text={submission.text}/></div>}{submission.images.length > 0 && <div className="pending-message-images">{submission.images.map((image,index)=><img key={`${image.name}:${index}`} src={image.dataUri} alt={image.name || `待发送截图 ${index+1}`}/>)}</div>}<small className="pending-message-status">{statusText}</small></div>
+            </article>;
+          })}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} submitting={working} />)}
         </div>
         {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}

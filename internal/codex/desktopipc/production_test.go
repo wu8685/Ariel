@@ -17,6 +17,16 @@ func TestProductionStartTreatsUnverifiableNativeReceiptAsUnknown(t *testing.T) {
 	}
 }
 
+func TestProductionStartTreatsExistingNativeTurnReceiptAsUnknown(t *testing.T) {
+	owner := &recordingOwner{reply: Reply{Result: json.RawMessage(`{"result":{"turn":{"id":"existing"}}}`)}}
+	idle := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[{"turnId":"existing","status":"completed"}]}`)
+	_, err := StartProductionTurn(context.Background(), owner, "owner", "thread", "/fixture", idle, "client-id", "hello")
+	var call *CallError
+	if !errors.As(err, &call) || call.Outcome != "unknown" || len(owner.calls) != 1 {
+		t.Fatalf("existing native turn receipt classified as accepted: %v", err)
+	}
+}
+
 func TestProductionStartRejectsUnaddressableCanonicalTurn(t *testing.T) {
 	owner := &recordingOwner{}
 	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"ghost"}]}],"entitiesByKey":{"ghost":{"turnId":"","status":"inProgress","items":[]}}}}}`)

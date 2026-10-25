@@ -859,13 +859,24 @@ describe("Ariel app interactions", () => {
     const { socket, requests } = await openFixture(recent);
     fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
     await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
-    expect(requests("thread.history")[0].params).toMatchObject({ threadId: "fixture", limit: 10 });
+    expect(requests("thread.history")[0].params).toMatchObject({ threadId: "fixture", limit: 3 });
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [recent.turns[0]], nextCursor: "after-latest" } }));
     await waitFor(() => expect(requests("thread.history")).toHaveLength(2));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[1].requestId, outcome: "accepted", data: { turns: [{ turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "更早内容" }] }], nextCursor: "" } }));
     expect(await screen.findByText("更早内容")).toBeTruthy();
     expect(screen.getByText("最新内容")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "加载更早消息" })).toBeNull();
+  });
+
+  it("rejects an oversized manual history page instead of silently skipping turns", async () => {
+    const recent: Thread = { ...fixtureThread, historyComplete: false, recentComplete: true, turns: [{ turnId: "latest", status: "completed", items: [{ itemId: "latest-item", role: "assistant", text: "最新内容" }] }] };
+    const { socket, requests } = await openFixture(recent);
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
+    const turns = [recent.turns[0], ...[1, 2, 3, 4].map(index => ({ turnId: `older-${index}`, status: "completed" as const, items: [{ itemId: `older-item-${index}`, role: "assistant" as const, text: `更早内容 ${index}` }] }))];
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns, nextCursor: "more" } }));
+    expect(screen.getByRole("alert").textContent).toContain("历史页返回数量超过请求范围");
+    expect(screen.queryByText("更早内容 1")).toBeNull();
   });
 
   it("loads older items inside a giant turn without replacing visible newest items", async () => {
@@ -1077,7 +1088,12 @@ describe("Ariel app interactions", () => {
     const { socket, requests } = await openFixture(first, false, false, [first, second]);
     fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
     await waitFor(() => expect(requests("thread.history")).toHaveLength(1));
-    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [first.turns[0], { turnId: "older", status: "completed", items: [{ itemId: "older-item", role: "assistant", text: "缓存旧历史" }] }], nextCursor: "cached-cursor" } }));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.history")[0].requestId, outcome: "accepted", data: { turns: [
+      first.turns[0],
+      { turnId: "older-1", status: "completed", items: [{ itemId: "older-item-1", role: "assistant", text: "缓存旧历史" }] },
+      { turnId: "older-2", status: "completed", items: [{ itemId: "older-item-2", role: "assistant", text: "缓存旧历史二" }] },
+      { turnId: "older-3", status: "completed", items: [{ itemId: "older-item-3", role: "assistant", text: "缓存旧历史三" }] },
+    ], nextCursor: "cached-cursor" } }));
 
     fireEvent.click(screen.getByText("Second").closest("button")!);
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
@@ -2146,8 +2162,10 @@ describe("Ariel app interactions", () => {
     expect(requests("turn.start")[0].params.clientMessageId).toMatch(/^[0-9a-f-]{36}$/);
     expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("fixture message");
     expect((screen.getByRole("button", { name: /发送/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByLabelText("你（发送中）").textContent).toContain("fixture message");
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "accepted", data: { turnId: "turn-1" } }));
     expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByLabelText("你（等待同步）").textContent).toContain("fixture message");
 
     const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "turn-1", status: "inProgress", items: [{ itemId: "reply", role: "assistant", text: "Working" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: running }));
@@ -2209,6 +2227,7 @@ describe("Ariel app interactions", () => {
     expect(requests("turn.start")).toHaveLength(1);
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("turn.start")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "owner receipt lost" } }));
     expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("do not replay");
+    expect(screen.getByLabelText("你（结果待确认）").textContent).toContain("do not replay");
     expect(screen.getByRole("alert").textContent).toContain("执行结果不确定");
     expect(requests("turn.start")).toHaveLength(1);
   });
@@ -2243,6 +2262,7 @@ describe("Ariel app interactions", () => {
     const confirmed: Thread = { ...wrongIdentity, turns: [{ turnId: "confirmed", status: "inProgress", items: [{ itemId: "confirmed-user", role: "user", clientMessageId, text: "uncertain message" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 2, seq: 3, thread: confirmed }));
     expect(composer.value).toBe("");
+    expect(screen.queryByLabelText("你（结果待确认）")).toBeNull();
     expect(requests("turn.start")).toHaveLength(1);
   });
 

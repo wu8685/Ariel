@@ -177,32 +177,11 @@ func (f *Follower) Start(ctx context.Context, clientMessageID, text string) (str
 func (f *Follower) StartWithImages(ctx context.Context, clientMessageID, text string, images []string) (string, error) {
 	f.startMu.Lock()
 	defer f.startMu.Unlock()
-	f.opMu.Lock()
-	state, err := f.refreshLocked(ctx)
-	f.opMu.Unlock()
+	state, err := f.Current()
 	if err != nil {
 		return "", err
 	}
-	turnID, err := StartProductionTurnImages(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, clientMessageID, text, images)
-	if err != nil {
-		return "", err
-	}
-	verifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	for {
-		current, err := f.Refresh(verifyCtx)
-		if err != nil {
-			return "", &CallError{Cause: err, Outcome: "unknown"}
-		}
-		if TurnContainsClientMessageImages(current, turnID, clientMessageID, text, len(images)) {
-			return turnID, nil
-		}
-		select {
-		case <-time.After(200 * time.Millisecond):
-		case <-verifyCtx.Done():
-			return "", &CallError{Cause: verifyCtx.Err(), Outcome: "unknown"}
-		}
-	}
+	return StartProductionTurnImages(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, clientMessageID, text, images)
 }
 
 func (f *Follower) Interrupt(ctx context.Context, expectedTurnID string) error {

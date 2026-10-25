@@ -127,6 +127,7 @@ type threadController struct {
 	bootstrapHold  bool
 	migrating      bool
 	live           Live
+	current        map[string]any
 	subs           map[string]*subscription
 	leases         int
 	lastUsed       uint64
@@ -504,6 +505,7 @@ func (s *Service) BootstrapThread(ctx context.Context, cwd, messageID, text stri
 	c.title, c.cwd, c.bootstrap = result.Title, canonical, true
 	c.bootstrapHold = true
 	c.live = live
+	c.current = nil
 	c.mu.Unlock()
 	s.rememberThread(result.ThreadID)
 	go s.pump(c, live)
@@ -534,6 +536,7 @@ func (s *Service) migrateBootstrap(c *threadController, live terminalBootstrapLi
 	}
 	c.migrating = true
 	c.live = nil
+	c.current = nil
 	c.mu.Unlock()
 	_ = live.Close()
 	var source appserver.Thread
@@ -566,6 +569,7 @@ func (s *Service) migrateBootstrap(c *threadController, live terminalBootstrapLi
 		return
 	}
 	c.live = desktop
+	c.current = nil
 	c.bootstrap = false
 	c.bootstrapHold = false
 	c.migrating = false
@@ -575,6 +579,7 @@ func (s *Service) migrateBootstrap(c *threadController, live terminalBootstrapLi
 
 func (s *Service) failMigration(c *threadController, code string) {
 	c.mu.Lock()
+	c.current = nil
 	c.bootstrapHold = false
 	c.migrating = false
 	out := make([]*subscription, 0, len(c.subs))
@@ -616,6 +621,7 @@ func (s *Service) controller(id string) (*threadController, error) {
 			victim.mu.Lock()
 			retired = victim.live
 			victim.live = nil
+			victim.current = nil
 			stopWarmRetireLocked(victim)
 			victim.mu.Unlock()
 			delete(s.threads, victim.id)
@@ -664,6 +670,7 @@ func (s *Service) retireWarm(c *threadController, live Live) {
 		return
 	}
 	c.live = nil
+	c.current = nil
 	c.mu.Unlock()
 	_ = live.Close()
 }
@@ -703,6 +710,7 @@ func (s *Service) detachIdleWarmLargeFollower(target *threadController) (Live, s
 	}
 	live := victim.live
 	victim.live = nil
+	victim.current = nil
 	stopWarmRetireLocked(victim)
 	return live, victim.id
 }
@@ -1076,6 +1084,7 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 		return err
 	}
 	c.live = live
+	c.current = nil
 	c.title = title
 	c.cwd = cwd
 	go s.pump(c, live)
@@ -1098,11 +1107,18 @@ func currentLiveThread(c *threadController, live Live) (map[string]any, json.Raw
 // Mutation requests may be sent without an active Web subscription. They
 // still need the same fail-closed native-state gate as thread.subscribe.
 func (s *Service) validateLive(c *threadController) error {
+	if c.current != nil {
+		return nil
+	}
 	thread, _, err := currentLiveThread(c, c.live)
 	if err != nil {
 		return desktopipc.ErrNativeStateUncertain
 	}
-	return s.boundLiveThread(context.Background(), thread)
+	if err := s.boundLiveThread(context.Background(), thread); err != nil {
+		return err
+	}
+	c.current = thread
+	return nil
 }
 
 func (s *Service) pump(c *threadController, live Live) {
@@ -1151,6 +1167,11 @@ func (s *Service) pump(c *threadController, live Live) {
 			if c.live != live {
 				c.mu.Unlock()
 				return
+			}
+			if tooLarge {
+				c.current = nil
+			} else {
+				c.current = thread
 			}
 			out := make([]delivery, 0, len(c.subs))
 			for _, sub := range c.subs {
@@ -1206,6 +1227,7 @@ func (s *Service) invalidateLive(c *threadController, live Live, code string) {
 		return
 	}
 	c.live = nil
+	c.current = nil
 	stopWarmRetireLocked(c)
 	out := make([]delivery, 0, len(c.subs))
 	for id, sub := range c.subs {
@@ -1298,6 +1320,7 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 		c.mu.Unlock()
 		return "", "", nil, nil, err
 	}
+	c.current = thread
 	logPhase("first-snapshot", id, "durationMs", millisSince(attachStart), "ok", true)
 	sub := &subscription{id: "desktop-sub-" + rand.Text(), streamID: "desktop-stream-" + rand.Text(), seq: 1, updateMode: updateMode, baseline: thread, emit: emit}
 	c.subs[sub.id] = sub
@@ -1323,9 +1346,15 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 			}
 			sub.active = true
 			if currentErr == nil && normalizeErr == nil && s.boundLiveThread(context.Background(), latest) != nil {
+				c.current = nil
 				delete(c.subs, sub.id)
 				sub.emit(map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "HISTORY_TOO_LARGE"})
-			} else if currentErr == nil && normalizeErr == nil && !sameThreadContent(latest, thread) {
+			} else if currentErr == nil && normalizeErr == nil {
+				c.current = latest
+				if sameThreadContent(latest, thread) {
+					c.mu.Unlock()
+					return
+				}
 				sub.seq++
 				if sub.updateMode == "item-delta-v1" {
 					patch, changed, diffErr := buildThreadPatch(sub.baseline, latest)
@@ -1395,6 +1424,7 @@ func (s *Service) UnsubscribeAndRetire(id string) bool {
 			stopWarmRetireLocked(c)
 			live = c.live
 			c.live = nil
+			c.current = nil
 		}
 		c.mu.Unlock()
 		if live != nil {
@@ -1438,17 +1468,22 @@ func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text
 		return "", errors.New("INVALID_ARGUMENT")
 	}
 	c.mu.Lock()
+	fenceStart := time.Now()
 	if err := s.ensureLive(ctx, c); err != nil {
+		logPhase("turn-start-fence", threadID, "durationMs", millisSince(fenceStart), "ok", false, "error", requestErrorCode("turn.start", err))
 		c.mu.Unlock()
 		return "", err
 	}
 	live := c.live
 	if err := s.validateLive(c); err != nil {
+		logPhase("turn-start-fence", threadID, "durationMs", millisSince(fenceStart), "ok", false, "error", requestErrorCode("turn.start", err))
 		c.mu.Unlock()
 		return "", err
 	}
 	c.mu.Unlock()
+	logPhase("turn-start-fence", threadID, "durationMs", millisSince(fenceStart), "ok", true)
 	var turnID string
+	nativeStart := time.Now()
 	if len(images) > 0 {
 		imageLive, ok := live.(interface {
 			StartWithImages(context.Context, string, string, []string) (string, error)
@@ -1460,6 +1495,11 @@ func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text
 	} else {
 		turnID, err = live.Start(ctx, messageID, text)
 	}
+	nativeAttrs := []any{"durationMs", millisSince(nativeStart), "ok", err == nil}
+	if err != nil {
+		nativeAttrs = append(nativeAttrs, "error", requestErrorCode("turn.start", err))
+	}
+	logPhase("turn-start-native", threadID, nativeAttrs...)
 	if errors.Is(err, desktopipc.ErrTurnBusy) {
 		return "", errors.New("TURN_BUSY")
 	}

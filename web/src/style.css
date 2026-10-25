@@ -396,6 +396,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message.assistant { justify-content: flex-start; }
 .message-body { min-width: 0; max-width: min(85%, 720px); padding: 11px 15px; }
 .message.user .message-body { background: var(--color-primary); color: var(--color-on-primary); border-radius: 18px 18px 5px 18px; }
+.message.user.pending-submission .message-body { opacity: .82; }
+.message.user.pending-submission.unknown .message-body { outline: 1px solid var(--color-warning-border); }
+.pending-message-status { display: block; margin-top: 6px; color: currentColor; font-size: 10px; line-height: 1.3; opacity: .72; text-align: right; }
+.pending-message-images { display: flex; gap: 6px; max-width: 100%; overflow-x: auto; margin-top: 8px; }
+.pending-message-images img { width: 64px; height: 64px; flex: none; object-fit: cover; border-radius: 8px; }
 .message.assistant .message-body { background: var(--color-panel); color: var(--color-text); border-radius: 18px 18px 18px 5px; }
 .message.system .message-body { max-width: 100%; padding: 4px 0 4px 12px; border-left: 2px solid var(--color-border-strong); color: var(--color-muted); }
 .message.assistant.pending .message-body { background: none; padding-left: 0; }

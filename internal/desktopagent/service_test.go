@@ -301,6 +301,16 @@ type staticLive struct {
 	state json.RawMessage
 }
 
+type countingLive struct {
+	*fakeLive
+	currentCalls atomic.Int32
+}
+
+func (l *countingLive) Current() (json.RawMessage, error) {
+	l.currentCalls.Add(1)
+	return l.fakeLive.Current()
+}
+
 func (l *staticLive) Current() (json.RawMessage, error) { return l.state, nil }
 
 type malformedLive struct {
@@ -896,6 +906,24 @@ func TestServiceDeliversUpdateAndAcceptsInterruptDuringSlowStart(t *testing.T) {
 	close(live.release)
 	if err := <-startDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServiceWarmStartUsesMaterializedControllerWithoutRenormalizingOwnerFrame(t *testing.T) {
+	live := &countingLive{fakeLive: &fakeLive{updates: make(chan struct{}, 1)}}
+	s := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer s.Close()
+	_, _, _, activate, err := s.Subscribe(context.Background(), "thread", func(map[string]any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate()
+	before := live.currentCalls.Load()
+	if _, err := s.Start(context.Background(), "thread", "message-fast", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if after := live.currentCalls.Load(); after != before {
+		t.Fatalf("warm Start called Current %d additional times", after-before)
 	}
 }
 

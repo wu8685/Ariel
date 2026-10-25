@@ -90,7 +90,7 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   await page.getByRole("button", { name: "加载更早消息" }).click();
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
   expect(historyRequests).toBe(1);
-  expect(historyLimits).toEqual([10]);
+  expect(historyLimits).toEqual([3]);
 
   await composer.fill("真实断线也保留");
   const readySendBox = await page.getByRole("button", { name: "发送" }).boundingBox();
@@ -145,5 +145,5 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   await expect(page.getByRole("button", { name: "发送" })).toBeVisible();
   await expect(page.getByText("只下载一次的旧历史")).toBeVisible();
   expect(historyRequests).toBe(1);
-  expect(historyLimits).toEqual([10]);
+  expect(historyLimits).toEqual([3]);
 });
