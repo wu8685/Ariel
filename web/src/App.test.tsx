@@ -191,6 +191,39 @@ describe("Ariel app interactions", () => {
 		expect(await screen.findByText("Owner 已接管")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "正在同步会话，暂不可发送" })).toBeNull();
 	});
+	it("promotes the existing Relay watcher when reconnecting a failed cache without losing the draft", async () => {
+		BrowserSocket.autoRejectCacheWatch = false;
+		sessionStorage.setItem("ariel.web-session.v1", relaySession);
+		render(<App />);
+		const socket = BrowserSocket.sockets[0];
+		const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+		socket.onopen?.(new Event("open"));
+		act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+		await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+		act(() => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true } }] } }));
+		await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+		act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+		await expandProject(fixtureThread.cwd);
+		fireEvent.click((await screen.findByText(fixtureThread.title)).closest("button")!);
+		await waitFor(() => expect(requests("thread.cache.watch")).toHaveLength(1));
+		const thread: Thread = { ...fixtureThread, turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old", role: "assistant", text: "失败期间仍可阅读" }] }] };
+		act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-retry", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache", seq: 1, capturedAt: thread.updatedAt, thread } }));
+		expect(await screen.findByText("失败期间仍可阅读")).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "恢复期间保留的草稿" } });
+		act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: thread.threadId, watchId: "watch-retry", freshness: "stale", staleReason: "RESYNC_REQUIRED", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache", seq: 1, capturedAt: thread.updatedAt, thread }));
+		fireEvent.click(await screen.findByRole("button", { name: "重新连接" }));
+		await waitFor(() => expect(requests("thread.cache.promote")).toHaveLength(1));
+		expect(requests("thread.subscribe")).toHaveLength(0);
+		expect(screen.getByText("失败期间仍可阅读")).toBeTruthy();
+		expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("恢复期间保留的草稿");
+		const recovered: Thread = { ...thread, turns: [{ turnId: "new", status: "completed", items: [{ itemId: "new", role: "assistant", text: "重新连接后自动更新" }] }] };
+		act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: thread.threadId, watchId: "watch-retry", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "new-cache", seq: 1, capturedAt: thread.updatedAt, thread: recovered }));
+		expect(await screen.findByText("重新连接后自动更新")).toBeTruthy();
+		// A fresh native snapshot is authoritative even if the promotion's
+		// request receipt subsequently times out or fails.
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.promote")[0].requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
+		expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(false);
+	});
 	it("keeps a fresh owner snapshot when the lightweight history response arrives late", async () => {
 		BrowserSocket.autoRejectCacheWatch = false;
 		sessionStorage.setItem("ariel.web-session.v1", relaySession);

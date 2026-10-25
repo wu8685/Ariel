@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"time"
 )
@@ -342,6 +343,12 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 	switch envelope.Event {
 	case "thread.cache.snapshot":
 		err := s.cache.put(cacheSnapshot{deviceID: agent.deviceID, threadID: envelope.ThreadID, agentEpoch: envelope.AgentEpoch, streamID: envelope.CacheStreamID, seq: envelope.Seq, capturedAt: envelope.CapturedAt, thread: envelope.Thread, bytes: envelope.PayloadBytes}, s.now())
+		if errors.Is(err, errCacheSequence) {
+			// Full replacement snapshots may be coalesced. A duplicate or older
+			// frame cannot invalidate the newer snapshot already held by Relay.
+			s.mu.Unlock()
+			return true
+		}
 		s.finishCachePromotionLocked(key)
 		if err != nil {
 			if entry := s.cache.entries[key]; entry != nil {
@@ -351,18 +358,32 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 		}
 		deliveries = s.cacheUpdateMessagesLocked(key)
 	case "thread.cache.status":
-		s.finishCachePromotionLocked(key)
 		if entry := s.cache.entries[key]; entry != nil {
-			entry.stale = envelope.Freshness != "fresh"
-			entry.staleReason = envelope.Reason
+			promotionFailure := s.cachePromoting[key] && envelope.Freshness != "fresh"
+			if len(entry.thread) > 0 && (entry.agentEpoch != envelope.AgentEpoch || entry.streamID != envelope.CacheStreamID) && !promotionFailure {
+				s.mu.Unlock()
+				return true
+			}
 			if envelope.Freshness == "fresh" {
+				// Lease renewal proves follower liveness, not snapshot validity.
+				// Explicit content errors require a newer snapshot to recover.
+				if entry.stale && !cacheLeaseRestorable(entry.staleReason) {
+					s.mu.Unlock()
+					return true
+				}
 				entry.leaseValidUntil = s.now().Add(s.cfg.CacheFreshness)
 			}
+			entry.stale = envelope.Freshness != "fresh"
+			entry.staleReason = envelope.Reason
 		}
+		s.finishCachePromotionLocked(key)
 		deliveries = s.cacheUpdateMessagesLocked(key)
 	case "thread.cache.remove":
-		s.finishCachePromotionLocked(key)
 		if entry := s.cache.entries[key]; entry != nil {
+			if entry.agentEpoch != envelope.AgentEpoch || entry.streamID != envelope.CacheStreamID {
+				s.mu.Unlock()
+				return true
+			}
 			s.cache.totalBytes -= entry.retainedBytes
 			entry.thread = nil
 			entry.bytes = 0
@@ -370,6 +391,7 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 			entry.stale = true
 			entry.staleReason = "removed"
 		}
+		s.finishCachePromotionLocked(key)
 		deliveries = s.cacheUpdateMessagesLocked(key)
 	default:
 		s.mu.Unlock()

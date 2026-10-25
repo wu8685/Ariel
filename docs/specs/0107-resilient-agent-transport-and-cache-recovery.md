@@ -100,6 +100,10 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 7. guard delay 必须可测试、可配置；production 默认值需覆盖 Agent 重启与 owner stream 重新稳定的竞态窗口，同时不得按会话正文大小动态延长。
 8. 任何用于大 frame、容量租约或兼容 fallback 的 `Live` wrapper，都必须显式保留 recovery 所需的可选能力；不得因 wrapper 只嵌入基础 `Live` interface 而静默丢失 `Refresh`。能力不存在时必须在 attach／测试阶段显式暴露，不能等 guard 到期后才失败。
 9. recovery refresh 失败只能把 Relay cache 标为 stale／`RESYNC_REQUIRED`，不得注销仍有效的 follower 或删除 cache subscription。后续 native update（特别是 terminal update）必须仍能沿原 stream 发布新 snapshot，并以 fresh cache 自动接管 stale 页面；不得要求用户 reload 才恢复。
+10. 原生 `thread.error` 与单次 recovery refresh 失败分开处理：原生 follower 已失效时必须移除对应 cache subscription、停止该订阅 timer，并允许下一次显式 promotion 重新 attach；旧订阅的迟到 callback 不得移除新订阅。
+11. recovery refresh 开始后若已有更新到达，迟到的 refresh failure 不得覆盖较新的 snapshot。lease 仅证明同一 epoch／stream follower 的活性，不能清除 `RESYNC_REQUIRED`、容量或原生状态错误；只有新的合法 snapshot 能清除这些错误。
+12. outbound snapshot mailbox 按同一 stream 的 seq 保留最新值；旧 timer 的迟到结果、重复 snapshot 和旧 stream status 均不得覆盖终态或使合法 cache 再次 stale。stream 替换必须按当前 subscription identity 核对。
+13. recovery 失败后，用户显式点击“重新连接”必须通过既有 watcher 发起 promotion；仍有效的 follower 在该次显式请求内允许一次有界 refresh，失效的 follower 则重新 attach。正常 warm rewatch 仍不刷新 owner；不得因此引入常驻轮询。Web 已接管更新 snapshot 后，迟到的 retry 错误回执不得覆盖它。
 
 ## 6. Promotion 状态机
 
@@ -162,6 +166,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 7. guard 前收到 follower update 会重置静默窗口；收到 terminal update 会取消 guard；idle 首帧不启动 guard。
 8. guard refresh 失败时 cache 进入 stale／`RESYNC_REQUIRED`，但 Agent transport、其他 follower 和旧只读正文不受影响。
 9. guard refresh 失败后原 follower 仍订阅；随后到达的 terminal native update 会发布 fresh snapshot，Web 无需 reload 即恢复正文和 idle 状态。
+10. 原生 follower 断开后可重新 promotion 并恢复终态；晚到的 recovery failure 不覆盖较新 update；outbound mailbox 不接受同 stream 的倒序 snapshot。
 
 ### 10.2 Relay
 
@@ -170,6 +175,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 3. 内部 touch 的 success、overload、timeout、disconnect 均清除 `cachePromoting`。
 4. Agent reconnect 只优先恢复有 watcher／active turn 的会话，不 cold attach 无 watcher cache。
 5. `capturedAt` 过旧但 lease 有效仍可 fresh；lease 过期后即使 Agent 在线也为 stale。
+6. 显式 cache error 不被 fresh lease 清除；旧 stream status 和倒序／重复 snapshot 不改变新 cache 的正文或 freshness。
 
 ### 10.3 Web
 
@@ -198,6 +204,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 8. 真实日志中不再出现由 snapshot write lock 导致的 Pong timeout；同设备正常重连不形成持续 `duplicate agent` 循环。
 9. Agent 在 active turn 期间重启、首帧恢复为 `inProgress` 且后续 terminal patch 被故障注入丢弃时，Web 在 guard deadline 后收到 terminal snapshot 或明确 stale 状态，不得无限显示“思考中”。
 10. 必须有覆盖真实 Relay WebSocket 的跨层回归：浏览器 watcher 保持打开，Agent 先发布 `inProgress`、再发布 terminal snapshot，页面无需 reload 即显示最终回复；Web transport 重连后必须建立新 watcher，并继续收到 terminal snapshot。
+11. 浏览器回归必须至少有一个用例运行真实 Go Desktop Agent Service、snapshot 合并／发送器与真实 Relay，注入 native follower 失效并重新 promotion；不能只由 JavaScript fixture 直接发送已构造好的 cache snapshot 代替 Agent 故障验收。
 
 ## 12. 实现与验收记录
 
@@ -212,3 +219,4 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 7. 自动化结果：`go test ./...`、`go vet ./...`、关键包 `go test -race`、259 个 Web unit、Web production build、47 个 Playwright 真实浏览器用例全部通过。物理 iPhone／Safari 弱网与后台切换仍按 §10.4 由用户复验。
 8. restart recovery guard 已接入 cache cold attach：`inProgress` 首帧在 45 秒静默窗口后至多触发一次既有 owner follower refresh；普通 update 重置窗口，terminal update 取消窗口，refresh 结果仍从原 follower update 通道发布。新增单次触发、终态取消、窗口重置、禁止 reattach 与终态发布测试；本轮全仓验收为 263 个 Web unit、48 个 Playwright 用例，并再次通过 Go 全量 test／vet 与关键包 race。
 9. 真实故障定位到两个组合问题：large-frame 会话使用的 `leasedLive` wrapper 丢失了可选 `Refresh` method，guard 因此返回 `RESYNC_REQUIRED`；失败分支随后又注销 follower，导致会话列表仍能看到 `inProgress`，但正文和 terminal update 只能等 reload 重建 follower 后恢复。现已显式转发 `Refresh`，且 guard 失败仅将 Relay cache 标 stale，不再删除原 subscription。新增 wrapper capability UT、失败后 late terminal update UT、WebSocket 重连后重建 cache watcher UT，以及“已完成会话继续对话 → running → recovery stale → terminal fresh”的真实 Relay WebSocket + Playwright 跨层 E2E。本轮最终验收为 264 个 Web unit、49 个 Playwright 用例，并通过 Go 全量 test／vet 与关键包 race。
+10. 第二轮故障注入已先复现并修复：原生 follower 失效后 cache subscription 未移除、迟到 refresh failure 覆盖新终态、倒序 mailbox 覆盖终态、lease／transport reconnect 清除显式内容错误、旧 stream status／remove 影响新 cache，以及 Web“重新连接”复用旧 warm view 而没有 promotion。显式 retry 已接到既有 watcher；仍有效但 recovery 失败的 follower 在用户请求内执行一次 refresh，终态先到时迟到错误回执被丢弃。新增真正运行 Go Desktop Agent Service／sender、真实 Relay 和 Chromium 手机 viewport 的故障注入 E2E；fixture 仅替换 native owner，且以 race build 运行。最终通过 Go 全量 test／vet、关键包 race、265 个 Web unit、production build 和 50 个 Playwright 用例。真实 Codex 只读被动订阅检查在 20 秒内收到 1 个 snapshot 与 25 批 patch；这只证明当前 stream 兼容性，不冒充对物理 iPhone／Safari 的验收。runtime 转换发布新增只含 opaque thread key、seq、runtime、bytes 的结构化日志。

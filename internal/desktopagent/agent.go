@@ -62,6 +62,7 @@ type agent struct {
 	fileContext             FileContext
 	writeMu                 sync.Mutex
 	cacheMu                 sync.Mutex
+	cachePublishMu          sync.Mutex
 	cacheSubs               map[string]*cacheSubscription
 	cacheWarmGrace          time.Duration
 	cachePublishInterval    time.Duration
@@ -80,19 +81,23 @@ type cacheOutbound struct {
 }
 
 type cacheSubscription struct {
-	subscriptionID string
-	streamID       string
-	runtime        string
-	watching       bool
-	evictableAt    time.Time
-	lastTouched    time.Time
-	lastPublished  time.Time
-	structure      string
-	publishTimer   *time.Timer
-	recoveryTimer  *time.Timer
-	recoveryUsed   bool
-	pendingSeq     int64
-	pendingThread  map[string]any
+	subscriptionID  string
+	streamID        string
+	runtime         string
+	watching        bool
+	evictableAt     time.Time
+	lastTouched     time.Time
+	lastPublished   time.Time
+	structure       string
+	publishTimer    *time.Timer
+	recoveryTimer   *time.Timer
+	recoveryUsed    bool
+	pendingSeq      int64
+	pendingThread   map[string]any
+	latestSeq       int64
+	lastSentSeq     int64
+	lastSentRuntime string
+	recoveryFailed  bool
 }
 
 // Service.List may issue three sequential thread/list calls (recent, the
@@ -774,7 +779,13 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 			// Relay lease and by mutation-time owner validation.
 			existing.watching = true
 			existing.evictableAt = time.Time{}
+			retryRecovery := existing.recoveryFailed
 			a.cacheMu.Unlock()
+			if retryRecovery {
+				// This is an explicit promotion, not another periodic guard.
+				// The refresh still publishes through the native Updates channel.
+				return a.service.RefreshLive(ctx, threadID)
+			}
 			return nil
 		} else {
 			existing.watching = false
@@ -809,7 +820,7 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 		}
 		if kind == "thread.error" {
 			code, _ := event["code"].(string)
-			_ = a.send(context.Background(), map[string]any{"type": "event", "v": 1, "event": "thread.cache.status", "deviceId": a.deviceID, "threadId": threadID, "agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "freshness": "error", "reason": code})
+			a.invalidateCacheSubscription(threadID, state, code)
 		}
 	}
 	var err error
@@ -848,6 +859,7 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	state.streamID = streamID
 	state.runtime, _ = thread["runtime"].(string)
 	state.structure = cacheStructure(thread)
+	state.latestSeq = 1
 	a.cacheMu.Unlock()
 	if err := a.publishCacheSnapshot(ctx, threadID, streamID, 1, thread); err != nil {
 		a.service.Unsubscribe(subID)
@@ -916,6 +928,7 @@ func (a *agent) runCacheRecoveryGuard(threadID string, state *cacheSubscription)
 	state.recoveryUsed = true
 	state.recoveryTimer = nil
 	streamID := state.streamID
+	seq := state.latestSeq
 	a.cacheMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), threadSubscribeLoadTimeout)
@@ -925,6 +938,17 @@ func (a *agent) runCacheRecoveryGuard(threadID string, state *cacheSubscription)
 	if err == nil {
 		return
 	}
+	a.cachePublishMu.Lock()
+	defer a.cachePublishMu.Unlock()
+	a.cacheMu.Lock()
+	current := a.cacheSubs[threadID] == state && state.latestSeq == seq && state.runtime == "inProgress"
+	if current {
+		state.recoveryFailed = true
+	}
+	a.cacheMu.Unlock()
+	if !current {
+		return
+	}
 
 	// A bounded refresh is only a recovery aid. Its failure does not prove that
 	// the existing follower is dead: native patches may still arrive later (in
@@ -932,6 +956,33 @@ func (a *agent) runCacheRecoveryGuard(threadID string, state *cacheSubscription)
 	// Keep the subscription alive so that such an update can replace the stale
 	// Relay cache without requiring the browser to reload and cold-attach again.
 	a.sendCacheStatus(context.Background(), threadID, streamID, "error", "RESYNC_REQUIRED")
+}
+
+func (a *agent) invalidateCacheSubscription(threadID string, state *cacheSubscription, code string) {
+	// Serialize status publication with snapshots, so a retired follower cannot
+	// invalidate the replacement after its first snapshot has already arrived.
+	a.cachePublishMu.Lock()
+	defer a.cachePublishMu.Unlock()
+	a.cacheMu.Lock()
+	if a.cacheSubs[threadID] != state {
+		a.cacheMu.Unlock()
+		return
+	}
+	delete(a.cacheSubs, threadID)
+	if state.publishTimer != nil {
+		state.publishTimer.Stop()
+	}
+	if state.recoveryTimer != nil {
+		state.recoveryTimer.Stop()
+	}
+	a.cacheSendMu.Lock()
+	if pending := a.cachePending[threadID]; pending.streamID == state.streamID {
+		delete(a.cachePending, threadID)
+	}
+	a.cacheSendMu.Unlock()
+	streamID := state.streamID
+	a.cacheMu.Unlock()
+	a.sendCacheStatus(context.Background(), threadID, streamID, "error", code)
 }
 
 func cacheStructure(thread map[string]any) string {
@@ -974,10 +1025,12 @@ func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, se
 	runtime, _ := thread["runtime"].(string)
 	structure := cacheStructure(thread)
 	a.cacheMu.Lock()
-	if a.cacheSubs[threadID] != state {
+	if a.cacheSubs[threadID] != state || seq <= state.latestSeq {
 		a.cacheMu.Unlock()
 		return
 	}
+	state.latestSeq = seq
+	state.recoveryFailed = false
 	immediate := runtime != state.runtime || structure != state.structure || state.lastPublished.IsZero() || now.Sub(state.lastPublished) >= a.cachePublishInterval
 	state.runtime = runtime
 	state.structure = structure
@@ -990,8 +1043,8 @@ func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, se
 		state.pendingSeq = 0
 		state.lastPublished = now
 		streamID := state.streamID
-		a.cacheMu.Unlock()
 		a.enqueueCacheSnapshot(threadID, streamID, seq, thread)
+		a.cacheMu.Unlock()
 		return
 	}
 	state.pendingSeq = seq
@@ -1014,12 +1067,16 @@ func (a *agent) flushCacheSnapshot(threadID string, state *cacheSubscription) {
 	state.pendingSeq = 0
 	state.publishTimer = nil
 	state.lastPublished = time.Now()
-	a.cacheMu.Unlock()
 	a.enqueueCacheSnapshot(threadID, streamID, seq, thread)
+	a.cacheMu.Unlock()
 }
 
 func (a *agent) enqueueCacheSnapshot(threadID, streamID string, seq int64, thread map[string]any) {
 	a.cacheSendMu.Lock()
+	if prior, ok := a.cachePending[threadID]; ok && prior.streamID == streamID && prior.seq >= seq {
+		a.cacheSendMu.Unlock()
+		return
+	}
 	a.cachePending[threadID] = cacheOutbound{streamID: streamID, seq: seq, thread: thread}
 	a.cacheSendMu.Unlock()
 	select {
@@ -1085,6 +1142,15 @@ func (a *agent) evictOneCacheFollower(exclude string) bool {
 }
 
 func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID string, seq int64, thread map[string]any) error {
+	a.cachePublishMu.Lock()
+	defer a.cachePublishMu.Unlock()
+	a.cacheMu.Lock()
+	state := a.cacheSubs[threadID]
+	current := state != nil && state.streamID == streamID && seq > state.lastSentSeq
+	a.cacheMu.Unlock()
+	if !current {
+		return nil
+	}
 	body, err := json.Marshal(thread)
 	if err != nil {
 		return err
@@ -1099,11 +1165,23 @@ func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID str
 		}
 		return errCacheSnapshotOversized
 	}
-	return a.sendWithin(ctx, map[string]any{
+	err = a.sendWithin(ctx, map[string]any{
 		"type": "event", "v": 1, "event": "thread.cache.snapshot", "deviceId": a.deviceID, "threadId": threadID,
 		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "seq": seq, "capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
 		"payloadBytes": len(body), "thread": thread,
 	}, cacheSnapshotWriteTimeout)
+	if err == nil {
+		runtime, _ := thread["runtime"].(string)
+		a.cacheMu.Lock()
+		runtimeChanged := state.lastSentRuntime != runtime
+		state.lastSentSeq = seq
+		state.lastSentRuntime = runtime
+		a.cacheMu.Unlock()
+		if runtimeChanged {
+			logPhase("cache-snapshot-published", threadID, "seq", seq, "runtime", runtime, "bytes", len(body))
+		}
+	}
+	return err
 }
 
 func (a *agent) sendCacheStatus(ctx context.Context, threadID, streamID, freshness, reason string) {

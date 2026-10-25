@@ -200,9 +200,21 @@ func (s *cacheStore) makeRoom(needed int64, preserve cacheKey, now time.Time) bo
 func (s *cacheStore) markDeviceStale(deviceID, reason string) {
 	for key, entry := range s.entries {
 		if key.deviceID == deviceID && len(entry.thread) > 0 {
+			if entry.stale && !cacheLeaseRestorable(entry.staleReason) {
+				continue
+			}
 			entry.stale = true
 			entry.staleReason = reason
 		}
+	}
+}
+
+func cacheLeaseRestorable(reason string) bool {
+	switch reason {
+	case "", "agent_offline", "follower_lease_expired":
+		return true
+	default:
+		return false
 	}
 }
 

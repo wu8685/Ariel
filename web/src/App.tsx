@@ -1300,7 +1300,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setThreadId(id); setView(cachedView); setSyncingView(!warm || warm.streamId === "cache-pending"); setReadOnlyHistory(false); setNotice(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!restoredView) resetHistory();
     if (warm) {
-      if (warm.streamId === "cache-pending") setNotice("正在从 Desktop Agent 准备最近会话。");
+      if (warm.streamId === "cache-pending") {
+        setNotice("正在从 Desktop Agent 准备最近会话。");
+        if (warm.subscriptionId.startsWith("watch-")) void client.request("thread.cache.promote", targetDevice, { threadId: id });
+      }
       persistView(warm);
       return;
     }
@@ -1558,6 +1561,19 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setReadOnlyHistory(false);
     setSyncingView(true);
     try {
+      if (current.view.subscriptionId.startsWith("watch-")) {
+        const retryView = current.view;
+        terminalCacheFailure.current = null;
+        const response = await client.request("thread.cache.promote", current.deviceId, { threadId: current.threadId });
+        if (selection.current.deviceId !== current.deviceId || selection.current.threadId !== current.threadId || expectedSubscription.current !== retryView.subscriptionId || selection.current.view !== retryView) return;
+        if (response.outcome !== "accepted") {
+          setReadOnlyHistory(true);
+          setReadOnlyReason(response.error?.code || "RESYNC_REQUIRED");
+          setSyncingView(false);
+          setNotice(errorText(response));
+        }
+        return;
+      }
       await selectThread(current.threadId, current.deviceId, false);
     } finally {
       readOnlyRetrying.current = false;
@@ -1666,6 +1682,15 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         const warmEvent = Boolean(warm && warm.subscriptionId === event.watchId);
         if (!currentEvent && !warmEvent) return;
         if (event.freshness !== "fresh" || !event.thread || !event.cacheStreamId || !event.seq) {
+          const source = currentEvent ? current.view : warm;
+          if (source) {
+            const stale = { ...source, streamId: "cache-pending", thread: asReadOnlyThread(source.thread) };
+            retainWarmSubscription(stale);
+            if (currentEvent) {
+              selection.current.view = stale;
+              setView(stale);
+            }
+          }
           if (currentEvent) {
             const reason = event.staleReason || "RESYNC_REQUIRED";
             const terminal = typeof event.staleReason === "string" && isTerminalCacheReason(reason);
