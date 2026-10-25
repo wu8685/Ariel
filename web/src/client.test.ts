@@ -82,7 +82,7 @@ describe("Ariel WebSocket client", () => {
     for (const method of ["thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image"] as const) {
       expect(timeoutFor(method)).toBe(40000);
     }
-    expect(timeoutFor("thread.subscribe")).toBe(35000);
+    expect(timeoutFor("thread.subscribe")).toBe(60000);
     expect(timeoutFor("turn.start")).toBe(50000);
     expect(timeoutFor("queue.add")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("queue.reorder")).toBe(timeoutFor("turn.start"));
@@ -117,6 +117,31 @@ describe("Ariel WebSocket client", () => {
     socket.close();
     expect((await pending).outcome).toBe("unknown");
     client.disconnect();
+  });
+
+  it("classifies an interrupted subscription as safely recoverable", async () => {
+    const socket = new FakeSocket();
+    const client = new ArielSocket("ws://localhost/ws", () => socket as unknown as WebSocket);
+    client.connect("secret"); socket.onopen?.();
+    socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e" });
+    const pending = client.request("thread.subscribe", "device", { threadId: "t" });
+    socket.close();
+    expect(await pending).toMatchObject({ outcome: "rejected", error: { code: "RESYNC_REQUIRED" } });
+    client.disconnect();
+  });
+
+  it("classifies a local subscription deadline as a retryable timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const client = new ArielSocket("ws://localhost/ws", () => socket as unknown as WebSocket);
+      client.connect("secret"); socket.onopen?.();
+      socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e" });
+      const pending = client.request("thread.subscribe", "device", { threadId: "t" });
+      await vi.advanceTimersByTimeAsync(timeoutFor("thread.subscribe"));
+      expect(await pending).toMatchObject({ outcome: "rejected", error: { code: "TIMEOUT" } });
+      client.disconnect();
+    } finally { vi.useRealTimers(); }
   });
 
   it("classifies a local thread-list deadline as a retryable timeout", async () => {

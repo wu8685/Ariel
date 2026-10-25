@@ -743,6 +743,35 @@ describe("Ariel app interactions", () => {
     expect(requests("turn.start")).toHaveLength(0);
   });
 
+  it("accepts the in-flight history after the owner subscription times out first", async () => {
+    sessionStorage.setItem("ariel.web-session.v1", relaySession);
+    render(<App />);
+    const socket = BrowserSocket.sockets[0];
+    const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    socket.onopen?.(new Event("open"));
+    act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+    await expandProject(fixtureThread.cwd);
+    fireEvent.click((await screen.findByText("Fixture")).closest("button")!);
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
+
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
+    expect(screen.getByText("正在同步会话…")).toBeTruthy();
+
+    const stored: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "迟到但仍应展示的历史" }] }] };
+    await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stored } }));
+    expect(await screen.findByText("迟到但仍应展示的历史")).toBeTruthy();
+    expect(screen.queryByText("正在同步会话…")).toBeNull();
+    expect(await screen.findByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).not.toContain("不要直接重发");
+    expect(requests("thread.read")).toHaveLength(1);
+    expect(requests("turn.start")).toHaveLength(0);
+  });
+
   it("ignores a late read fast path once the fresh owner snapshot arrived", async () => {
     sessionStorage.setItem("ariel.web-session.v1", relaySession);
     render(<App />);

@@ -47,8 +47,9 @@ type agent struct {
 // call shares one request budget; each individual attempt may use at most half
 // of it so a hung recent-list endpoint can still be rebuilt once.
 const (
-	threadListAttemptTimeout = 15 * time.Second
-	threadListRequestTimeout = 30 * time.Second
+	threadListAttemptTimeout   = 15 * time.Second
+	threadListRequestTimeout   = 30 * time.Second
+	threadSubscribeLoadTimeout = 45 * time.Second
 )
 
 func threadListRequestContext(ctx context.Context, searchTerm string) (context.Context, context.CancelFunc) {
@@ -356,7 +357,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		response, err = a.fileContext.Read(ctx, chillingclient.ReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, Path: p.Path})
 		data, err = responseMap(response, err)
 	case "thread.subscribe":
-		loadCtx, cancel := context.WithTimeout(ctx, 28*time.Second)
+		loadCtx, cancel := context.WithTimeout(ctx, threadSubscribeLoadTimeout)
 		defer cancel()
 		subscribeStart := time.Now()
 		var subID, streamID string

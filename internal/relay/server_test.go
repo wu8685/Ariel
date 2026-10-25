@@ -283,13 +283,23 @@ func TestRelayReleasesLateAcceptedSubscriptionAfterTimeout(t *testing.T) {
 	readJSON(t, w)
 	sendJSON(t, w, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000043", "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
 	forwarded := readJSON(t, a)
-	if got := readJSON(t, w); got["outcome"] != "unknown" {
+	if got := readJSON(t, w); got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "TIMEOUT" {
 		t.Fatalf("subscription did not time out: %v", got)
 	}
 	sendJSON(t, a, map[string]any{"type": "response", "v": 1, "requestId": forwarded["requestId"], "outcome": "accepted", "data": map[string]any{"subscriptionId": "timeout-sub", "streamId": "timeout-stream"}})
 	cleanup := readJSON(t, a)
 	if cleanup["method"] != "thread.unsubscribe" || cleanup["params"].(map[string]any)["subscriptionId"] != "timeout-sub" {
 		t.Fatalf("timed-out accepted subscription not cleaned: %v", cleanup)
+	}
+}
+
+func TestRelayDefaultSubscriptionBudgetLeavesTransportMargin(t *testing.T) {
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.cfg.SubscriptionTimeout != 50*time.Second {
+		t.Fatalf("subscription timeout = %s, want 50s", r.cfg.SubscriptionTimeout)
 	}
 }
 
@@ -454,6 +464,25 @@ func TestRelayDoesNotReplayForwardedMutationAfterAgentDisconnect(t *testing.T) {
 	r.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("mutation route survived agent replacement: %d", remaining)
+	}
+}
+
+func TestRelayClassifiesInterruptedSubscriptionAsRecoverable(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}})
+	s := httptest.NewServer(r.Handler())
+	defer s.Close()
+	agent := dialTest(t, s.URL, "")
+	sendJSON(t, agent, agentHello())
+	readJSON(t, agent)
+	web := dialTest(t, s.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+	id := "00000000-0000-4000-8000-000000000063"
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": id, "deviceId": "mock-mac", "method": "thread.subscribe", "params": map[string]any{"threadId": "mock-thread-a"}})
+	readJSON(t, agent)
+	agent.CloseNow()
+	if got := readJSON(t, web); got["requestId"] != id || got["outcome"] != "rejected" || got["error"].(map[string]any)["code"] != "RESYNC_REQUIRED" {
+		t.Fatalf("interrupted subscription was not recoverable: %+v", got)
 	}
 }
 

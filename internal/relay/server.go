@@ -146,7 +146,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.ReadTimeout = 35 * time.Second
 	}
 	if cfg.SubscriptionTimeout <= 0 {
-		cfg.SubscriptionTimeout = 30 * time.Second
+		cfg.SubscriptionTimeout = 50 * time.Second
 	}
 	if cfg.MutationTimeout <= 0 {
 		cfg.MutationTimeout = 45 * time.Second
@@ -450,6 +450,10 @@ func (s *Server) removePeer(p *peer) {
 		_ = sendUnsubscribe(cleanupCtx, sub.agent, sub.id)
 	}
 	for _, pending := range failed {
+		if pending.method == "thread.subscribe" {
+			pending.web.send(context.Background(), responseError(pending.webID, "rejected", "RESYNC_REQUIRED", "agent disconnected during subscription"))
+			continue
+		}
 		pending.web.send(context.Background(), responseError(pending.webID, "unknown", "OUTCOME_UNKNOWN", "agent disconnected after forwarding"))
 	}
 	if p.role == "agent" {
@@ -674,7 +678,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		timeout = s.cfg.MutationTimeout
 	}
 	entry.timer = time.AfterFunc(timeout, func() {
-		if isLongRead(method) {
+		if isLongRead(method) || method == "thread.subscribe" {
 			s.finishRoute(relayID, agent, responseError(webID, "rejected", "TIMEOUT", "agent read response timeout"))
 			return
 		}

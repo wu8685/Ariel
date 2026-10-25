@@ -1202,7 +1202,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     // fast path against the owner subscription so history renders within
     // seconds instead of after a full owner cold load.
     let progressiveInstalled = false;
-    let subscribeSettled = false;
+    let subscribeAccepted = false;
+    let subscribeFailure = "";
     if (!cachedView) {
       const entry = {
         deviceId: targetDevice,
@@ -1220,21 +1221,32 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       }).catch(() => { entry.settled = true; return null; });
       fastReadCache.current = entry;
       void entry.result.then(thread => {
-        if (!thread || subscribeSettled) return;
+        if (subscribeAccepted) return;
         if (epoch !== pendingSelect.current || selection.current.threadId !== id || selection.current.deviceId !== targetDevice) return;
+        if (!thread) {
+          if (subscribeFailure) {
+            setReadOnlyReason(subscribeFailure);
+            setReadOnlyHistory(true);
+            setSyncingView(false);
+          }
+          return;
+        }
         if (expectedSubscription.current || selection.current.view?.subscriptionId) return;
         const readOnlyThread: Thread = { ...thread, runtime: "unknown", pendingInteractions: [], permissions: { sandbox: "unknown", approval: "unknown" } };
         const pendingView: ThreadView = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: readOnlyThread };
         progressiveInstalled = true;
         selection.current.view = pendingView;
         setView(pendingView);
-        setSyncingView(true);
+        setSyncingView(!subscribeFailure);
+        if (subscribeFailure) {
+          setReadOnlyReason(subscribeFailure);
+          setReadOnlyHistory(true);
+        }
       });
     } else {
       fastReadCache.current = null;
     }
     let response = await client.request("thread.subscribe", targetDevice, { threadId: id, updateMode: "item-delta-v1" });
-    subscribeSettled = true;
     if (epoch !== pendingSelect.current) {
       const staleID = response.data?.subscriptionId;
       if (response.outcome === "accepted" && typeof staleID === "string") void client.request("thread.unsubscribe", targetDevice, { subscriptionId: staleID });
@@ -1250,10 +1262,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         return;
       }
     }
+    subscribeAccepted = response.outcome === "accepted";
+    subscribeFailure = response.outcome === "accepted" ? "" : response.error?.code || "NATIVE_STATE_UNCERTAIN";
     if (response.outcome !== "accepted") {
       const entry = fastReadCache.current;
       const fast = entry && entry.epoch === epoch && entry.deviceId === targetDevice && entry.threadId === id ? entry : null;
       const oversized = response.error?.code === "HISTORY_TOO_LARGE" || response.error?.code === "OVERLOADED";
+      const recoverable = response.error?.code === "TIMEOUT" || response.error?.code === "RESYNC_REQUIRED" || response.error?.code === "DEVICE_OFFLINE" || response.error?.code === "OUTCOME_UNKNOWN";
       // Oversized owner frames need the persisted history before degrading, so
       // wait for an in-flight fast path. That wait is bounded above by the
       // Relay request timeout backing the fast read, so it cannot hang the
@@ -1293,6 +1308,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         return;
       }
       if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
+      if (recoverable) {
+        setReadOnlyReason(response.error?.code || "NATIVE_STATE_UNCERTAIN");
+        setReadOnlyHistory(true);
+        if (!fast || fast.settled) setSyncingView(false);
+      }
       setNotice(errorText(response)); return;
     }
     const subID = response.data?.subscriptionId;

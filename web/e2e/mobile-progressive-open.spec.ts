@@ -110,6 +110,49 @@ test("keeps read-only history when the owner sync times out", async ({ page }) =
   await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
 });
 
+// Spec 0099: a subscription timeout must not invalidate the persisted-history
+// request that was already in flight for the same selection.
+test("renders a late persisted history response after the owner sync times out", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
+  let ws: WebSocketRoute | null = null;
+  let pendingSubscribeId = "";
+  let pendingReadId = "";
+  await page.routeWebSocket("**/ws", socket => {
+    ws = socket;
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === "hello") {
+        socket.send(JSON.stringify({ type: "hello.ok", v: 1, connectionId: "progressive-late", relayEpoch: "relay-progressive-late", sessionToken }));
+        return;
+      }
+      if (message.type !== "request") return;
+      if (message.method === "thread.subscribe") { pendingSubscribeId = message.requestId; return; }
+      if (message.method === "thread.read") { pendingReadId = message.requestId; return; }
+      let data: Record<string, unknown> = {};
+      if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "Progressive Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-progressive-late", capabilities: { autoLoad: true, history: true } }] };
+      if (message.method === "thread.list") data = { threads: [stored], nextCursor: "" };
+      socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "展开项目 progressive-open，/tmp/progressive-open" }).click();
+  await page.getByText(stored.title).click();
+  await expect.poll(() => pendingSubscribeId).not.toBe("");
+  await expect.poll(() => pendingReadId).not.toBe("");
+
+  ws!.send(JSON.stringify({ type: "response", v: 1, requestId: pendingSubscribeId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
+  await expect(page.getByRole("heading", { name: "正在同步会话…" })).toBeVisible();
+  ws!.send(JSON.stringify({ type: "response", v: 1, requestId: pendingReadId, outcome: "accepted", data: { thread: stored } }));
+
+  await expect(page.getByText("turn-stored-1")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "正在同步会话…" })).toHaveCount(0);
+  await expect(page.getByText(/历史只读.*Desktop 状态未确认/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
+  await expect(page.getByRole("alert")).not.toContainText("不要直接重发");
+});
+
 // Spec 0093: temporary large-follower pressure must be distinguishable from
 // a permanently oversized owner, and a user retry reuses visible history.
 test("retries an overloaded owner without blanking or rereading history", async ({ page }) => {

@@ -25,6 +25,12 @@ func TestProductionThreadListTimeoutBudgets(t *testing.T) {
 	}
 }
 
+func TestProductionSubscriptionLoadBudget(t *testing.T) {
+	if threadSubscribeLoadTimeout != 45*time.Second {
+		t.Fatalf("thread subscribe load timeout = %s, want 45s", threadSubscribeLoadTimeout)
+	}
+}
+
 func TestThreadListRequestContextBudgetsOnlyMenuRefresh(t *testing.T) {
 	parent := context.Background()
 	listCtx, cancel := threadListRequestContext(parent, "")

@@ -6,7 +6,7 @@ import { isPairingCredential } from "./pairing";
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
 type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.subscribe" | "thread.unsubscribe" | "file.context.changes" | "file.context.read" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
-type Pending = { finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
+type Pending = { method: Method; finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 function retryableRead(method: Method): boolean {
   return method === "thread.list" || method === "thread.read" || method === "thread.history" || method === "thread.history.items" || method === "thread.image" || method === "file.context.changes" || method === "file.context.read";
@@ -14,7 +14,7 @@ function retryableRead(method: Method): boolean {
 
 export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {
   if (retryableRead(method)) return 40000;
-  if (method === "thread.subscribe") return 35000;
+  if (method === "thread.subscribe") return 60000;
   if (method === "thread.create" || method === "thread.bootstrap" || method.startsWith("thread.archive.") || method === "thread.name.update" || method === "thread.pin.update" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
   return 12000;
 }
@@ -77,11 +77,11 @@ export class ArielSocket {
     return new Promise(resolve => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        resolve(retryableRead(method)
+        resolve(retryableRead(method) || method === "thread.subscribe"
           ? this.localFailure(requestId, "rejected", "TIMEOUT")
           : this.localFailure(requestId, "unknown", "OUTCOME_UNKNOWN"));
       }, timeoutFor(method, params));
-      this.pending.set(requestId, { finish: resolve, timer });
+      this.pending.set(requestId, { method, finish: resolve, timer });
       try { this.ws?.send(JSON.stringify(message)); }
       catch {
         clearTimeout(timer);
@@ -150,11 +150,16 @@ export class ArielSocket {
   }
 
   private failPending() {
-    for (const [id, pending] of this.pending) { clearTimeout(pending.timer); pending.finish(this.localFailure(id, "unknown", "OUTCOME_UNKNOWN")); }
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.finish(pending.method === "thread.subscribe"
+        ? this.localFailure(id, "rejected", "RESYNC_REQUIRED")
+        : this.localFailure(id, "unknown", "OUTCOME_UNKNOWN"));
+    }
     this.pending.clear();
   }
 
-  private localFailure(requestId: string, outcome: "rejected" | "unknown" | "not_submitted", code: "DEVICE_OFFLINE" | "OVERLOADED" | "INVALID_ARGUMENT" | "OUTCOME_UNKNOWN" | "TIMEOUT"): Response {
+  private localFailure(requestId: string, outcome: "rejected" | "unknown" | "not_submitted", code: "DEVICE_OFFLINE" | "OVERLOADED" | "INVALID_ARGUMENT" | "OUTCOME_UNKNOWN" | "RESYNC_REQUIRED" | "TIMEOUT"): Response {
     return { type: "response", v: 1, requestId, outcome, error: { code, message: code } };
   }
 }
