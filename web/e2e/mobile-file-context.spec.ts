@@ -107,3 +107,45 @@ test("a rejected optional file summary never interrupts opening the conversation
   await expect(page.getByText("我更新了文件。")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
+
+test("mobile opens an inline workspace document reference and preserves its proof when quoting", async ({ page }) => {
+  const inlineThread:Thread={...thread,threadId:"inline-reference",title:"正文文件引用",turns:[{turnId:"turn-inline",status:"completed",items:[{itemId:"reply-inline",role:"assistant",text:"事实审查已通过。文件：[周报](ops-2026-10-25.md:2)"}]}]};
+  let sent:Record<string,unknown>|null=null;
+  const methods:string[]=[];
+  await page.route("**/",async route=>{const response=await route.fetch();const body=(await response.text()).replace("__ARIEL_CHILLING_FILE_CONTEXT__","true");await route.fulfill({response,body});});
+  await page.addInitScript(token=>sessionStorage.setItem("ariel.web-session.v1",token),sessionToken);
+  await page.routeWebSocket("**/ws",socket=>socket.onMessage(raw=>{
+    const message=JSON.parse(String(raw));
+    if(message.type==="hello"){socket.send(JSON.stringify({type:"hello.ok",v:1,connectionId:"inline",relayEpoch:"inline-epoch",sessionToken}));return;}
+    if(message.type!=="request")return;
+    methods.push(message.method);
+    let data:Record<string,unknown>={};
+    if(message.method==="device.list")data={devices:[{deviceId:"mac",deviceName:"File Mac",agentOnline:true,codexReady:true,agentEpoch:"fc-agent",capabilities:{autoLoad:true,send:true,chillingFileContext:true,chillingMessageReferences:true}}]};
+    if(message.method==="thread.list")data={threads:[inlineThread],nextCursor:""};
+    if(message.method==="thread.cache.watch")data={watchId:"watch-inline",freshness:"fresh",agentOnline:true,agentEpoch:"fc-agent",cacheStreamId:"cache-inline",seq:1,capturedAt:"2026-10-25T00:00:00Z",thread:inlineThread};
+    if(message.method==="file.context.changes")data={turns:[{turnId:"turn-inline",fileChanges:[]}]};
+    if(message.method==="file.context.reference.read")data={path:"ops-2026-10-25.md",content:"first line\nsecond line\nthird line",sha256:"c".repeat(64),modifiedAtMs:25,lineCount:3,language:"md",version:"current-workspace"};
+    if(message.method==="turn.start"){sent=message.params;data={turnId:"quoted-turn"};}
+    socket.send(JSON.stringify({type:"response",v:1,requestId:message.requestId,outcome:"accepted",data}));
+  }));
+  await page.goto("/");
+  await page.getByRole("button",{name:"展开项目 file-context，/tmp/file-context"}).click();
+  await page.getByText(inlineThread.title).click();
+  const reference=page.getByRole("button",{name:"打开文档：周报"});
+  await expect(reference).toBeVisible();
+  await expect(page).toHaveScreenshot("mobile-inline-document-reference.png",{animations:"disabled",caret:"hide"});
+  await reference.click();
+  const dialog=page.getByRole("dialog",{name:"文件 ops-2026-10-25.md"});
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.file-line.reference-focus')).toContainText("second line");
+  const source=page.getByTestId("file-source");
+  await source.evaluate(element=>{
+    const code=element.querySelectorAll("code")[1];const node=code.firstChild!;const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);element.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}));
+  });
+  await page.getByRole("button",{name:"引用到会话"}).click();
+  await page.getByRole("textbox",{name:"发送消息"}).fill("解释这一段");
+  await page.getByRole("button",{name:"发送"}).click();
+  await expect.poll(()=>sent).not.toBeNull();
+  expect(sent?.fileContexts).toEqual([expect.objectContaining({path:"ops-2026-10-25.md",referenceKind:"markdown_link",rawReference:"ops-2026-10-25.md:2",startLine:2,endLine:2,text:"second line"})]);
+  expect(methods.filter(method=>method==="thread.read"||method==="thread.subscribe")).toEqual([]);
+});

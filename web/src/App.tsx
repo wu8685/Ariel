@@ -14,6 +14,7 @@ import { BrowserThreadUnreadStore } from "./thread-unread";
 import { ComposerDraftStore, composerDraftKey, emptyComposerDraft, type ComposerDraftIdentity, type ComposerDraftSnapshot } from "./composer-drafts";
 import { activityStatusText, groupTurnItems } from "./activity";
 import { ConversationMarkdown } from "./markdown";
+import type { WorkspaceDocumentReference } from "./markdown";
 import { ConversationImage, readScreenshotFiles, type ScreenshotDraft } from "./screenshots";
 import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential } from "./pairing";
 import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin, unreadProjectKeys } from "./projects";
@@ -26,7 +27,7 @@ import "./interaction.css";
 
 export { InteractionCard } from "./interaction-card";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 2;
 const historyTurnPageLimit = 10;
@@ -377,6 +378,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const threadRenameEnabled = device?.capabilities.threadRename === true;
   const threadPinEnabled = device?.capabilities.threadPin === true;
 	const fileContextEnabled = webFileContextEnabled() && device?.capabilities.chillingFileContext === true;
+	const documentReferencesVisible = webFileContextEnabled();
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
@@ -477,8 +479,28 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		setOpenFile({...base,file});
 	}
 
+	async function openDocumentReference(turnId:string,itemId:string,reference:WorkspaceDocumentReference){
+		if(!view||!deviceId)return;
+		if(!fileContextEnabled||device?.capabilities.chillingMessageReferences!==true){setNotice("当前 Desktop 尚不支持打开该文档引用。");return;}
+		const generation=++openFileGeneration.current;
+		const change:FileChange={itemId,path:reference.label,kind:"update"};
+		const base:FileView={threadId:view.threadId,turnId,change,mode:"source",loading:true,focusStartLine:reference.startLine,focusEndLine:reference.endLine};
+		const cacheKey=`${deviceId}\u0000${device?.agentEpoch||""}\u0000${view.threadId}\u0000${turnId}\u0000${itemId}\u0000ref\u0000${reference.kind}\u0000${reference.rawReference}`;
+		const cached=fileContentCache.current.get(cacheKey);
+		if(cached){setOpenFile({...base,change:{...change,path:cached.path},file:cached,loading:false});return;}
+		setOpenFile(base);
+		const response=await client.request("file.context.reference.read",deviceId,{threadId:view.threadId,turnId,itemId,referenceKind:reference.kind,rawReference:reference.rawReference,...(reference.startLine?{startLine:reference.startLine,endLine:reference.endLine||reference.startLine}:{})});
+		if(generation!==openFileGeneration.current)return;
+		if(response.outcome!=="accepted"){setOpenFile(null);setNotice(errorText(response));return;}
+		const value=response.data as Partial<OpenFile>|undefined;
+		if(!value||typeof value.path!=="string"||typeof value.content!=="string"||typeof value.sha256!=="string"||typeof value.modifiedAtMs!=="number"||typeof value.lineCount!=="number"||typeof value.language!=="string"||value.version!=="current-workspace"){setOpenFile(null);setNotice("文件响应格式无法识别。");return;}
+		const file:OpenFile={threadId:view.threadId,turnId,itemId,path:value.path,content:value.content,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace",referenceKind:reference.kind,rawReference:reference.rawReference};
+		fileContentCache.current.set(cacheKey,file);
+		setOpenFile({...base,change:{...change,path:file.path},file,loading:false});
+	}
+
 	function closeFile(){openFileGeneration.current++;setOpenFile(null);}
-	function changeFileMode(mode:FileViewMode){if(!openFile)return;void openChangedFile(openFile.turnId,openFile.change,mode);}
+	function changeFileMode(mode:FileViewMode){if(!openFile||mode===openFile.mode)return;void openChangedFile(openFile.turnId,openFile.change,mode);}
 
   function agentEpochFor(id: string): string {
     return devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || "";
@@ -2512,9 +2534,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} submitting={working} />)}
         </div>
         {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
@@ -2574,7 +2596,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   </div>;
 }
 
-function ConversationTurn({ turn, fileChanges, onOpenFile, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
+function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, loading, onLoadOlderItems, onLoadImage, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; onOpenReference?: (itemId:string,reference:WorkspaceDocumentReference)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; active: boolean }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
   const parts = groupTurnItems(turn);
   const lastPart = parts.at(-1);
@@ -2593,7 +2615,7 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, loading, onLoadOlderI
 		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];
-        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
+        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>

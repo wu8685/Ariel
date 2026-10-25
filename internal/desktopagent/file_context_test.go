@@ -15,11 +15,15 @@ type fakeFileContext struct {
 	prepareErr error
 }
 
-func (f *fakeFileContext) Ready() bool { return f.ready }
+func (f *fakeFileContext) Ready() bool             { return f.ready }
+func (f *fakeFileContext) MessageReferences() bool { return true }
 func (f *fakeFileContext) Changes(context.Context, chillingclient.ChangesRequest) (chillingclient.ChangesResponse, error) {
 	return chillingclient.ChangesResponse{}, nil
 }
 func (f *fakeFileContext) Read(context.Context, chillingclient.ReadRequest) (chillingclient.ReadResponse, error) {
+	return chillingclient.ReadResponse{}, nil
+}
+func (f *fakeFileContext) ReferenceRead(context.Context, chillingclient.ReferenceReadRequest) (chillingclient.ReadResponse, error) {
 	return chillingclient.ReadResponse{}, nil
 }
 func (f *fakeFileContext) Prepare(_ context.Context, request chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error) {

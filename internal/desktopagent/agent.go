@@ -40,8 +40,10 @@ type Config struct {
 }
 type FileContext interface {
 	Ready() bool
+	MessageReferences() bool
 	Changes(context.Context, chillingclient.ChangesRequest) (chillingclient.ChangesResponse, error)
 	Read(context.Context, chillingclient.ReadRequest) (chillingclient.ReadResponse, error)
+	ReferenceRead(context.Context, chillingclient.ReferenceReadRequest) (chillingclient.ReadResponse, error)
 	Prepare(context.Context, chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error)
 }
 type agent struct {
@@ -221,7 +223,8 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		requests.Wait()
 	}()
 	fileContextReady := cfg.FileContext != nil && cfg.FileContext.Ready()
-	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady}
+	messageReferences := fileContextReady && cfg.FileContext.MessageReferences()
+	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady, "chillingMessageReferences": messageReferences}
 	if service != nil {
 		capabilities["queue"] = service.QueueEnabled()
 		capabilities["threadBootstrap"] = service.ThreadBootstrapEnabled()
@@ -410,6 +413,10 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		Images          []string                   `json:"images"`
 		ItemID          string                     `json:"itemId"`
 		Path            string                     `json:"path"`
+		ReferenceKind   string                     `json:"referenceKind"`
+		RawReference    string                     `json:"rawReference"`
+		StartLine       int                        `json:"startLine"`
+		EndLine         int                        `json:"endLine"`
 		ImageIndex      int                        `json:"imageIndex"`
 		ExpectedTurnID  string                     `json:"expectedTurnId"`
 		QueueID         string                     `json:"queueId"`
@@ -514,6 +521,14 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		}
 		var response chillingclient.ReadResponse
 		response, err = a.fileContext.Read(ctx, chillingclient.ReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, Path: p.Path})
+		data, err = responseMap(response, err)
+	case "file.context.reference.read":
+		if a.fileContext == nil || !a.fileContext.Ready() || !a.fileContext.MessageReferences() {
+			err = errors.New("FEATURE_DISABLED")
+			break
+		}
+		var response chillingclient.ReadResponse
+		response, err = a.fileContext.ReferenceRead(ctx, chillingclient.ReferenceReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, ReferenceKind: p.ReferenceKind, RawReference: p.RawReference, StartLine: p.StartLine, EndLine: p.EndLine})
 		data, err = responseMap(response, err)
 	case "thread.subscribe":
 		loadCtx, cancel := context.WithTimeout(ctx, threadSubscribeLoadTimeout)
@@ -915,7 +930,7 @@ func requestErrorCode(method string, err error) string {
 	}
 	if code := chillingclient.CodeOf(err); code != "INTERNAL" {
 		switch code {
-		case "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "INVALID_ARGUMENT", "OVERLOADED":
+		case "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "INVALID_ARGUMENT", "OVERLOADED":
 			return code
 		}
 	}
@@ -933,7 +948,7 @@ func requestErrorCode(method string, err error) string {
 		return "PROTOCOL_UNSUPPORTED"
 	}
 	switch code := err.Error(); code {
-	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED":
+	case "INVALID_ARGUMENT", "NOT_FOUND", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "DEVICE_OFFLINE", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED":
 		return code
 	default:
 		return "RESYNC_REQUIRED"
@@ -942,7 +957,7 @@ func requestErrorCode(method string, err error) string {
 
 func isReadRequest(method string) bool {
 	switch method {
-	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "file.context.changes", "file.context.read":
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.subscribe", "file.context.changes", "file.context.read", "file.context.reference.read":
 		return true
 	default:
 		return false

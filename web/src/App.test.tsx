@@ -54,6 +54,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
 	 document.querySelector("meta[name='ariel-auth-mode']")?.remove();
+	 document.querySelector("meta[name='ariel-chilling-file-context']")?.remove();
 });
 
 const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
@@ -63,7 +64,7 @@ async function expandProject(cwd: string) {
   fireEvent.click(await screen.findByRole("button", { name: `展开项目 ${projectName(cwd)}，${path}` }));
 }
 
-async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false, threadMetadata = false) {
+async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false, threadMetadata = false, fileContext = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -72,7 +73,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadBootstrap: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadBootstrap: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}), ...(fileContext ? { chillingFileContext: true, chillingMessageReferences: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
@@ -87,6 +88,18 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+	it("opens an inline workspace document reference through the controlled gateway", async () => {
+		const meta = document.createElement("meta"); meta.name = "ariel-chilling-file-context"; meta.content = "true"; document.head.append(meta);
+		const thread: Thread = { ...fixtureThread, turns: [{ turnId: "turn-doc", status: "completed", items: [{ itemId: "reply-doc", role: "assistant", text: "文件：[周报](ops-2026-10-25.md:2)" }] }] };
+		const { socket, requests } = await openFixture(thread, false, false, [thread], false, false, true);
+		await waitFor(() => expect(requests("file.context.changes")).toHaveLength(1));
+		await act(async () => socket.message({ type:"response",v:1,requestId:requests("file.context.changes")[0].requestId,outcome:"accepted",data:{turns:[{turnId:"turn-doc",fileChanges:[]}]}}));
+		fireEvent.click(screen.getByRole("button", { name: "打开文档：周报" }));
+		await waitFor(() => expect(requests("file.context.reference.read")).toHaveLength(1));
+		expect(requests("file.context.reference.read")[0].params).toMatchObject({threadId:"fixture",turnId:"turn-doc",itemId:"reply-doc",referenceKind:"markdown_link",rawReference:"ops-2026-10-25.md:2"});
+		await act(async () => socket.message({type:"response",v:1,requestId:requests("file.context.reference.read")[0].requestId,outcome:"accepted",data:{path:"ops-2026-10-25.md",content:"first\nsecond",sha256:"a".repeat(64),modifiedAtMs:2,lineCount:2,language:"md",version:"current-workspace"}}));
+		expect(await screen.findByRole("dialog", { name:"文件 ops-2026-10-25.md" })).toBeTruthy();
+	});
 	it("opens a fresh two-turn Relay cache without creating an Agent read subscription", async () => {
 		BrowserSocket.autoRejectCacheWatch = false;
 		sessionStorage.setItem("ariel.web-session.v1", relaySession);

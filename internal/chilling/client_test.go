@@ -25,13 +25,16 @@ func testServer(t *testing.T, contract string) string {
 	t.Cleanup(func() { _ = listener.Close() })
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/file-context/capabilities", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"contract": contract, "enabled": true, "ready": true, "limits": map[string]int{"maxTurnBatch": 10, "maxFileBytes": 1048576, "maxSelections": 5, "maxSelectionBytes": 8192, "maxTotalBytes": 24576}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"contract": contract, "enabled": true, "ready": true, "messageReferences": true, "limits": map[string]int{"maxTurnBatch": 10, "maxFileBytes": 1048576, "maxSelections": 5, "maxSelectionBytes": 8192, "maxTotalBytes": 24576}})
 	})
 	mux.HandleFunc("POST /v1/file-context/changes", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"turns": []any{map[string]any{"turnId": "turn-a", "fileChanges": []any{map[string]any{"itemId": "item-a", "path": "a.go", "kind": "update"}}}}})
 	})
 	mux.HandleFunc("POST /v1/file-context/read", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"path": "a.go", "content": "hello", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "modifiedAtMs": 1, "lineCount": 1, "language": "go", "version": "current-workspace"})
+	})
+	mux.HandleFunc("POST /v1/file-context/reference/read", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"path": "ops.md", "content": "weekly", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "modifiedAtMs": 2, "lineCount": 1, "language": "md", "version": "current-workspace"})
 	})
 	go http.Serve(listener, mux)
 	return "unix://" + path
@@ -48,6 +51,9 @@ func TestClientRequiresFlagAndCompatibleHandshake(t *testing.T) {
 	if err != nil || !client.Ready() {
 		t.Fatalf("ready: %v", err)
 	}
+	if !client.MessageReferences() {
+		t.Fatal("message reference capability missing")
+	}
 }
 
 func TestClientOnlyExposesChangesReadAndPrepare(t *testing.T) {
@@ -62,5 +68,9 @@ func TestClientOnlyExposesChangesReadAndPrepare(t *testing.T) {
 	read, err := client.Read(context.Background(), ReadRequest{ThreadID: "thread-a", TurnID: "turn-a", ItemID: "item-a", Path: "a.go"})
 	if err != nil || read.Content != "hello" {
 		t.Fatalf("read: %+v %v", read, err)
+	}
+	reference, err := client.ReferenceRead(context.Background(), ReferenceReadRequest{ThreadID: "thread-a", TurnID: "turn-a", ItemID: "reply", ReferenceKind: "plain_path", RawReference: "ops.md"})
+	if err != nil || reference.Content != "weekly" {
+		t.Fatalf("reference: %+v %v", reference, err)
 	}
 }

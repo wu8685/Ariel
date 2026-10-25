@@ -52,6 +52,7 @@ export type Request = {
     | "thread.cache.touch"
     | "file.context.changes"
     | "file.context.read"
+    | "file.context.reference.read"
     | "turn.start"
     | "turn.interrupt"
     | "queue.add"
@@ -191,6 +192,7 @@ export interface Capabilities {
   threadRename?: boolean;
   threadPin?: boolean;
   chillingFileContext?: boolean;
+  chillingMessageReferences?: boolean;
   taskManagement?: boolean;
   taskExecution?: boolean;
   taskExecutionAuthorized?: boolean;
@@ -226,6 +228,7 @@ export interface Error {
     | "CONTRACT_UNSUPPORTED"
     | "FILE_NOT_FOUND"
     | "PATH_NOT_ALLOWED"
+    | "REFERENCE_NOT_FOUND"
     | "UNSUPPORTED_FILE_TYPE"
     | "FILE_TOO_LARGE"
     | "FILE_CHANGED"

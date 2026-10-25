@@ -4,7 +4,7 @@ test("mobile login shows the color hero without horizontal overflow and keeps th
   await page.goto("/");
   const hero = page.locator(".connect-logo.ariel-logo--color");
   await expect(hero).toBeVisible();
-  await expect(hero.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-color.png");
+  await expect(hero.locator("img")).toHaveAttribute("src", "/brand/ariel-logo-wind-messenger-color-512.png");
   const box = await hero.boundingBox();
   expect(box?.width || 0).toBe(128);
   expect(box?.height || 0).toBe(128);

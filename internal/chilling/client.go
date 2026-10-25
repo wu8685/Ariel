@@ -44,10 +44,11 @@ type Limits struct {
 	MaxTotalBytes     int `json:"maxTotalBytes"`
 }
 type Capability struct {
-	Contract string `json:"contract"`
-	Enabled  bool   `json:"enabled"`
-	Ready    bool   `json:"ready"`
-	Limits   Limits `json:"limits"`
+	Contract          string `json:"contract"`
+	Enabled           bool   `json:"enabled"`
+	Ready             bool   `json:"ready"`
+	MessageReferences bool   `json:"messageReferences"`
+	Limits            Limits `json:"limits"`
 }
 type Client struct {
 	http       *http.Client
@@ -86,6 +87,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	return client, nil
 }
 func (c *Client) Ready() bool { return c != nil && c.capability.Ready }
+func (c *Client) MessageReferences() bool {
+	return c != nil && c.capability.Ready && c.capability.MessageReferences
+}
 
 type ChangesRequest struct {
 	ThreadID string   `json:"threadId"`
@@ -122,16 +126,27 @@ type ReadResponse struct {
 	DiffTruncated bool   `json:"diffTruncated,omitempty"`
 	Version       string `json:"version"`
 }
+type ReferenceReadRequest struct {
+	ThreadID      string `json:"threadId"`
+	TurnID        string `json:"turnId"`
+	ItemID        string `json:"itemId"`
+	ReferenceKind string `json:"referenceKind"`
+	RawReference  string `json:"rawReference"`
+	StartLine     int    `json:"startLine,omitempty"`
+	EndLine       int    `json:"endLine,omitempty"`
+}
 type Selection struct {
-	ThreadID     string `json:"threadId"`
-	TurnID       string `json:"turnId"`
-	ItemID       string `json:"itemId"`
-	Path         string `json:"path"`
-	SHA256       string `json:"sha256"`
-	ModifiedAtMS int64  `json:"modifiedAtMs"`
-	StartLine    int    `json:"startLine"`
-	EndLine      int    `json:"endLine"`
-	Text         string `json:"text"`
+	ThreadID      string `json:"threadId"`
+	TurnID        string `json:"turnId"`
+	ItemID        string `json:"itemId"`
+	Path          string `json:"path"`
+	SHA256        string `json:"sha256"`
+	ModifiedAtMS  int64  `json:"modifiedAtMs"`
+	StartLine     int    `json:"startLine"`
+	EndLine       int    `json:"endLine"`
+	Text          string `json:"text"`
+	ReferenceKind string `json:"referenceKind,omitempty"`
+	RawReference  string `json:"rawReference,omitempty"`
 }
 type PrepareRequest struct {
 	Selections []Selection `json:"selections"`
@@ -156,6 +171,11 @@ func (c *Client) Changes(ctx context.Context, request ChangesRequest) (ChangesRe
 func (c *Client) Read(ctx context.Context, request ReadRequest) (ReadResponse, error) {
 	var out ReadResponse
 	err := c.call(ctx, http.MethodPost, "/v1/file-context/read", request, &out)
+	return out, err
+}
+func (c *Client) ReferenceRead(ctx context.Context, request ReferenceReadRequest) (ReadResponse, error) {
+	var out ReadResponse
+	err := c.call(ctx, http.MethodPost, "/v1/file-context/reference/read", request, &out)
 	return out, err
 }
 func (c *Client) Prepare(ctx context.Context, request PrepareRequest) (PrepareResponse, error) {

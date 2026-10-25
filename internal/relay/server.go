@@ -802,7 +802,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 
 func isLongRead(method string) bool {
 	switch method {
-	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "file.context.changes", "file.context.read":
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "file.context.changes", "file.context.read", "file.context.reference.read":
 		return true
 	default:
 		return false

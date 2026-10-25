@@ -44,9 +44,10 @@ func TestRunWithTicksStopsCleanlyWhenParentIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan time.Time)
 	done := make(chan error, 1)
+	var pingCalled atomic.Bool
 	go func() {
 		done <- runWithTicks(ctx, time.Second, 2, ticks, func(context.Context) error {
-			t.Fatal("ping called after cancellation")
+			pingCalled.Store(true)
 			return nil
 		})
 	}()
@@ -58,6 +59,9 @@ func TestRunWithTicksStopsCleanlyWhenParentIsCanceled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("canceled heartbeat did not exit")
+	}
+	if pingCalled.Load() {
+		t.Fatal("ping called after cancellation")
 	}
 }
 

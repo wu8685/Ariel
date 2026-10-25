@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConversationMarkdown } from "./markdown";
+import { ConversationMarkdown, type WorkspaceDocumentReference } from "./markdown";
 
 vi.mock("mermaid", () => ({ default: {
   initialize: vi.fn(),
@@ -45,6 +45,32 @@ describe("conversation Markdown projection", () => {
     for (const name of ["script", "data", "relative", "protocol-relative", "credentials"]) {
       expect(screen.getByText(name).closest("a")).toBeNull();
     }
+  });
+
+  it("projects Markdown and bare workspace documents as controlled buttons", () => {
+	const opened: WorkspaceDocumentReference[] = [];
+	render(<ConversationMarkdown text={'[周报](docs/ops.md:7) 文件：ops-2026-10-25.md'} onOpenDocument={reference => opened.push(reference)} />);
+	const markdown = screen.getByRole("button", { name: "打开文档：周报" });
+	const plain = screen.getByRole("button", { name: "打开文档：ops-2026-10-25.md" });
+	expect(markdown.closest("a")).toBeNull();
+	fireEvent.click(markdown);
+	fireEvent.click(plain);
+	expect(opened).toEqual([
+	  expect.objectContaining({ kind: "markdown_link", rawReference: "docs/ops.md:7", startLine: 7, endLine: 7 }),
+	  expect.objectContaining({ kind: "plain_path", rawReference: "ops-2026-10-25.md" }),
+	]);
+  });
+
+  it("does not promote code, URLs or email text as bare workspace documents", () => {
+	render(<ConversationMarkdown text={'`secret.md`\n\n```text\nblocked.md\n```\nhttps://example.test/remote.md me@example.test <span>hidden.md</span>'} onOpenDocument={() => undefined} />);
+	expect(screen.queryByRole("button", { name: /打开文档/ })).toBeNull();
+  });
+
+  it("limits one message to 24 controlled document references", () => {
+    const references = Array.from({ length: 25 }, (_, index) => `[文档 ${index + 1}](docs/file-${index + 1}.md)`).join(" ");
+    render(<ConversationMarkdown text={references} onOpenDocument={() => undefined} />);
+    expect(screen.getAllByRole("button", { name: /打开文档/ })).toHaveLength(24);
+    expect(screen.getByText("文档 25").closest("button")).toBeNull();
   });
 
   it("does not render raw HTML or auto-fetch Markdown images", () => {
