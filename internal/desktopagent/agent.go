@@ -199,11 +199,27 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
+	queue := make(chan struct{}, 32)
+	type cacheTouchRequest struct {
+		id     string
+		method string
+		params json.RawMessage
+	}
+	cacheTouches := make(chan cacheTouchRequest, 32)
+	var cacheTouchWorker sync.WaitGroup
+	cacheTouchWorker.Add(1)
+	go func() {
+		defer cacheTouchWorker.Done()
+		for request := range cacheTouches {
+			a.handle(requestCtx, request.id, request.method, request.params)
+		}
+	}()
 	defer func() {
 		cancelRequests()
+		close(cacheTouches)
+		cacheTouchWorker.Wait()
 		requests.Wait()
 	}()
-	queue := make(chan struct{}, 32)
 	fileContextReady := cfg.FileContext != nil && cfg.FileContext.Ready()
 	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady}
 	if service != nil {
@@ -295,6 +311,18 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		}
 		if json.Unmarshal(body, &req) != nil || (req.Type != "request" && !strings.HasPrefix(req.Type, "task.")) {
 			return errors.New("unexpected Relay message")
+		}
+		// Cache watch/unwatch transitions arrive in WebSocket order but can be
+		// expensive because a transition to watched may reopen a native owner.
+		// Keep them ordered on a dedicated worker without blocking mutations and
+		// the rest of the Agent request queue behind a cold follower load.
+		if req.Type == "request" && req.Method == "thread.cache.touch" {
+			select {
+			case cacheTouches <- cacheTouchRequest{id: req.RequestID, method: req.Method, params: append(json.RawMessage(nil), req.Params...)}:
+			default:
+				a.reply(requestCtx, req.RequestID, req.Method, nil, errors.New("OVERLOADED"))
+			}
+			continue
 		}
 		select {
 		case queue <- struct{}{}:
@@ -583,14 +611,32 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	if existing := a.cacheSubs[threadID]; existing != nil {
 		existing.lastTouched = time.Now()
 		if watching {
-			existing.watching = true
-			existing.evictableAt = time.Time{}
+			// A warm follower can remain connected after its native owner has
+			// silently changed or stopped delivering events. The first Web watcher
+			// returning to that cache must rebind it instead of declaring the last
+			// retained snapshot fresh forever. Already-watched followers are left
+			// alone so additional Web clients do not cause subscription churn.
+			if !existing.watching && strings.HasPrefix(existing.subscriptionID, "desktop-sub-") {
+				delete(a.cacheSubs, threadID)
+				if existing.publishTimer != nil {
+					existing.publishTimer.Stop()
+				}
+				subscriptionID := existing.subscriptionID
+				a.cacheMu.Unlock()
+				a.service.UnsubscribeAndRetire(subscriptionID)
+				a.cacheMu.Lock()
+			} else {
+				existing.watching = true
+				existing.evictableAt = time.Time{}
+				a.cacheMu.Unlock()
+				return nil
+			}
 		} else {
 			existing.watching = false
 			existing.evictableAt = time.Now().Add(a.cacheWarmGrace)
+			a.cacheMu.Unlock()
+			return nil
 		}
-		a.cacheMu.Unlock()
-		return nil
 	}
 	if !watching {
 		a.cacheMu.Unlock()

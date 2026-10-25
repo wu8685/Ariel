@@ -301,6 +301,98 @@ func TestAgentCacheTouchPublishesTwoTurnSnapshotWithoutWebSubscription(t *testin
 	}
 }
 
+func TestAgentCacheRewatchRebindsWarmFollowerAndPublishesCurrentOwnerState(t *testing.T) {
+	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	first := &fakeLive{updates: make(chan struct{}, 1)}
+	second := &fakeLive{updates: make(chan struct{}, 1), busy: true}
+	var opens int
+	service := NewService(pagedHistory{}, func(context.Context, string, string) (Live, error) {
+		opens++
+		if opens == 1 {
+			return first, nil
+		}
+		return second, nil
+	})
+	defer service.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunWithService(ctx, Config{URL: url, Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac"}, service)
+	wctx, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	web, _, err := websocket.Dial(wctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"http://localhost:5173"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer web.CloseNow()
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "hello", "v": 1, "role": "web", "token": "012345"}); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := wsjson.Read(wctx, web, &got); err != nil {
+		t.Fatal(err)
+	}
+	const firstWatchRequest = "00000000-0000-4000-8001-999999999997"
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": firstWatchRequest, "deviceId": "real-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "thread"}}); err != nil {
+		t.Fatal(err)
+	}
+	var watchID string
+	for {
+		got = nil
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["requestId"] == firstWatchRequest {
+			watchID, _ = got["data"].(map[string]any)["watchId"].(string)
+		}
+		if got["event"] == "thread.cache.update" && got["freshness"] == "fresh" {
+			break
+		}
+	}
+	if watchID == "" {
+		t.Fatal("first cache watch did not return a watch ID")
+	}
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8001-999999999998", "deviceId": "real-mac", "method": "thread.cache.unwatch", "params": map[string]any{"watchId": watchID}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		got = nil
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["requestId"] == "00000000-0000-4000-8001-999999999998" {
+			break
+		}
+	}
+
+	if err := wsjson.Write(wctx, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8001-999999999999", "deviceId": "real-mac", "method": "thread.cache.watch", "params": map[string]any{"threadId": "thread"}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		got = nil
+		if err := wsjson.Read(wctx, web, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["event"] == "thread.cache.update" {
+			thread, _ := got["thread"].(map[string]any)
+			if thread != nil && thread["runtime"] == "inProgress" {
+				break
+			}
+		}
+	}
+	if opens < 2 {
+		t.Fatalf("warm follower was reused without rebinding: opens=%d", opens)
+	}
+	first.mu.Lock()
+	closed := first.closed
+	first.mu.Unlock()
+	if !closed {
+		t.Fatal("stale warm follower remained open after rewatch")
+	}
+}
+
 func TestAgentPrewarmsMostRecentThreadWithoutWebWatcher(t *testing.T) {
 	r, _ := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(r.Handler())

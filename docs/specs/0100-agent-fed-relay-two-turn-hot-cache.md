@@ -151,7 +151,8 @@ Relay cache 对 Web 返回：
 1. Web 选择 thread 后调用 Relay-local `thread.cache.watch`。Relay 立即返回当前 cache，并将该 Web 注册为 watcher；整个读取路径不访问 Desktop Agent。
 2. Web 立即展示双 turn，不等待 Desktop Agent，不显示覆盖正文的全屏“正在同步会话”。
 3. 后续 `thread.cache.update` 直接由 Relay cache 广播；Web 按 cache stream identity／seq 原子替换 recent view，不自行拼接 token。
-4. 多个 Web 页面 watch 同一 thread 时只增加 Relay watcher，不增加 Agent follower、cache stream 或网络 WebSocket。
+4. cache follower 从无人查看的 warm 状态重新转为 watched 时，Desktop Agent 必须重新绑定当前 Codex owner 并发布新的完整 snapshot；不得仅修改本地 `watching` 标记并继续把可能已经静默停更的旧 snapshot 声明为 fresh。
+5. 多个 Web 页面 watch 同一 thread 时只增加 Relay watcher，不增加 Agent follower、cache stream 或网络 WebSocket。
 
 ### 7.2 Cache miss／stale
 
