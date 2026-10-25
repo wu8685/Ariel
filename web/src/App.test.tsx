@@ -129,6 +129,40 @@ describe("Ariel app interactions", () => {
 		expect(requests("thread.read")).toHaveLength(0);
 		expect(requests("thread.subscribe")).toHaveLength(0);
 	});
+	it("re-establishes a Relay cache watcher after WebSocket reconnect and receives the terminal snapshot", async () => {
+		BrowserSocket.autoRejectCacheWatch = false;
+		sessionStorage.setItem("ariel.web-session.v1", relaySession);
+		const running: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "active", status: "inProgress", items: [{ itemId: "working", role: "assistant", text: "重连前处理中" }] }] };
+		render(<App />);
+		const first = BrowserSocket.sockets[0];
+		const firstRequests = (method: string) => first.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+		first.onopen?.(new Event("open"));
+		act(() => first.message({ type: "hello.ok", v: 1, connectionId: "c1", relayEpoch: "e", sessionToken: relaySession }));
+		await waitFor(() => expect(firstRequests("device.list")).toHaveLength(1));
+		act(() => first.message({ type: "response", v: 1, requestId: firstRequests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true } }] } }));
+		await waitFor(() => expect(firstRequests("thread.list")).toHaveLength(1));
+		act(() => first.message({ type: "response", v: 1, requestId: firstRequests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [running] } }));
+		await expandProject(running.cwd);
+		fireEvent.click((await screen.findByText(running.title)).closest("button")!);
+		await waitFor(() => expect(firstRequests("thread.cache.watch")).toHaveLength(1));
+		act(() => first.message({ type: "response", v: 1, requestId: firstRequests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-before", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache", seq: 1, capturedAt: running.updatedAt, thread: running } }));
+		expect(await screen.findByText("重连前处理中")).toBeTruthy();
+
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		act(() => first.close(1006));
+		await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 900)); });
+		const second = BrowserSocket.sockets[1];
+		const secondRequests = (method: string) => second.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+		second.onopen?.(new Event("open"));
+		act(() => second.message({ type: "hello.ok", v: 1, connectionId: "c2", relayEpoch: "e", sessionToken: relaySession }));
+		await waitFor(() => expect(secondRequests("device.list")).toHaveLength(1));
+		act(() => second.message({ type: "response", v: 1, requestId: secondRequests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true } }] } }));
+		await waitFor(() => expect(secondRequests("thread.cache.watch")).toHaveLength(1));
+		const terminal: Thread = { ...running, runtime: "idle", turns: [{ turnId: "active", status: "completed", items: [{ itemId: "working", role: "assistant", text: "重连后自动完成" }] }] };
+		act(() => second.message({ type: "response", v: 1, requestId: secondRequests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-after", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache", seq: 2, capturedAt: terminal.updatedAt, thread: terminal } }));
+		expect(await screen.findByText("重连后自动完成")).toBeTruthy();
+		expect(secondRequests("thread.subscribe")).toHaveLength(0);
+	});
 	it("shows lightweight history while a missing Relay cache is promoted in the background", async () => {
 		BrowserSocket.autoRejectCacheWatch = false;
 		sessionStorage.setItem("ariel.web-session.v1", relaySession);

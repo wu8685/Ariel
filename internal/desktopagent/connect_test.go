@@ -2,6 +2,7 @@ package desktopagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -13,6 +14,16 @@ import (
 type mutationCapableLive struct {
 	*fakeLive
 	started, steered bool
+}
+
+type refreshableMutationCapableLive struct {
+	*mutationCapableLive
+	refreshes int
+}
+
+func (l *refreshableMutationCapableLive) Refresh(context.Context) (json.RawMessage, error) {
+	l.refreshes++
+	return l.Current()
 }
 
 func (l *mutationCapableLive) StartWithImages(context.Context, string, string, []string) (string, error) {
@@ -131,6 +142,30 @@ func TestLargeFollowerFallbackPreservesOwnerMutationCapabilities(t *testing.T) {
 	}
 	if err := steerer.Steer(context.Background(), "turn", "queue", "client", "guide", nil); err != nil || !capable.steered {
 		t.Fatalf("large follower did not forward Steer: %v", err)
+	}
+}
+
+func TestLargeFollowerFallbackPreservesRecoveryRefreshCapability(t *testing.T) {
+	resetFrameHints()
+	capable := &refreshableMutationCapableLive{mutationCapableLive: &mutationCapableLive{fakeLive: &fakeLive{updates: make(chan struct{})}}}
+	live, err := openFollowerWithFallback("hint-refresh", func(large bool) (Live, error) {
+		if !large {
+			return nil, desktopipc.ErrFrameTooLarge
+		}
+		return capable, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	refreshable, ok := live.(interface {
+		Refresh(context.Context) (json.RawMessage, error)
+	})
+	if !ok {
+		t.Fatal("large follower erased recovery Refresh capability")
+	}
+	if _, err := refreshable.Refresh(context.Background()); err != nil || capable.refreshes != 1 {
+		t.Fatalf("large follower did not forward recovery Refresh: refreshes=%d err=%v", capable.refreshes, err)
 	}
 }
 

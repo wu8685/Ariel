@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net"
 	"sync"
@@ -160,6 +161,20 @@ func (l *leasedLive) Steer(ctx context.Context, expectedTurnID, queuedMessageID,
 		return desktopipc.ErrProtocol
 	}
 	return capable.Steer(ctx, expectedTurnID, queuedMessageID, clientMessageID, text, images)
+}
+
+// Refresh preserves the optional recovery capability of the wrapped Desktop
+// follower. Embedding the narrower Live interface alone would erase this
+// method from leasedLive's method set and make large-history conversations
+// fail the restart recovery guard with RESYNC_REQUIRED.
+func (l *leasedLive) Refresh(ctx context.Context) (json.RawMessage, error) {
+	capable, ok := l.Live.(interface {
+		Refresh(context.Context) (json.RawMessage, error)
+	})
+	if !ok {
+		return nil, desktopipc.ErrProtocol
+	}
+	return capable.Refresh(ctx)
 }
 
 func (l *leasedLive) Close() error {

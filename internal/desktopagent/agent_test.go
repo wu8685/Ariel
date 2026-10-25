@@ -2,6 +2,7 @@ package desktopagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +127,82 @@ func TestRestartRecoveryGuardResetsQuietWindowOnFollowerUpdate(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("guard did not refresh after the reset quiet window elapsed")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func TestRestartRecoveryGuardFailureKeepsFollowerForLateTerminalUpdate(t *testing.T) {
+	serverConn := make(chan *websocket.Conn, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConn <- conn
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	client, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseNow()
+	conn := <-serverConn
+
+	live := &refreshableFakeLive{
+		fakeLive:   &fakeLive{busy: true, updates: make(chan struct{}, 2)},
+		refreshErr: errors.New("owner refresh unavailable"),
+	}
+	service := NewService(fakeHistory{}, func(context.Context, string, string) (Live, error) { return live, nil })
+	defer service.Close()
+	state := &cacheSubscription{runtime: "inProgress"}
+	a := &agent{
+		conn: conn, deviceID: "mac", agentEpoch: "epoch", service: service,
+		cacheSubs:            map[string]*cacheSubscription{"thread": state},
+		cachePublishInterval: time.Second, cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1),
+	}
+	subID, streamID, _, activate, err := service.Subscribe(context.Background(), "thread", func(event map[string]any) {
+		if event["event"] != "thread.update" {
+			return
+		}
+		thread, _ := event["thread"].(map[string]any)
+		seq, _ := event["seq"].(int)
+		a.queueCacheSnapshot("thread", state, int64(seq), thread)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.subscriptionID = subID
+	state.streamID = streamID
+	activate()
+
+	a.runCacheRecoveryGuard("thread", state)
+	a.cacheMu.Lock()
+	kept := a.cacheSubs["thread"] == state
+	a.cacheMu.Unlock()
+	if !kept {
+		t.Fatal("failed recovery deleted the cache subscription and orphaned later native updates")
+	}
+
+	live.mu.Lock()
+	live.busy = false
+	live.mu.Unlock()
+	live.updates <- struct{}{}
+	deadline := time.After(time.Second)
+	for {
+		a.cacheSendMu.Lock()
+		pending, ok := a.cachePending["thread"]
+		a.cacheSendMu.Unlock()
+		if ok {
+			if pending.thread["runtime"] != "idle" {
+				t.Fatalf("late native update did not publish terminal state: %+v", pending.thread)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("late terminal update was lost after recovery refresh failed")
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

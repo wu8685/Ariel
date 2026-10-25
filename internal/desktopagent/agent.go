@@ -926,15 +926,11 @@ func (a *agent) runCacheRecoveryGuard(threadID string, state *cacheSubscription)
 		return
 	}
 
-	a.cacheMu.Lock()
-	if a.cacheSubs[threadID] == state {
-		delete(a.cacheSubs, threadID)
-	}
-	subscriptionID := state.subscriptionID
-	a.cacheMu.Unlock()
-	if strings.HasPrefix(subscriptionID, "desktop-sub-") {
-		a.service.UnsubscribeAndRetire(subscriptionID)
-	}
+	// A bounded refresh is only a recovery aid. Its failure does not prove that
+	// the existing follower is dead: native patches may still arrive later (in
+	// particular the terminal patch that the guard was trying to recover).
+	// Keep the subscription alive so that such an update can replace the stale
+	// Relay cache without requiring the browser to reload and cold-attach again.
 	a.sendCacheStatus(context.Background(), threadID, streamID, "error", "RESYNC_REQUIRED")
 }
 

@@ -1,6 +1,6 @@
 # 0107：Agent Transport 解耦与 Cache 自愈恢复
 
-- 状态：Implemented（用户于 2026-10-25 确认主体设计；2026-10-26 明确批准并完成 restart recovery guard 方案 B）
+- 状态：Implemented（2026-10-26 已按真实故障补齐 large-follower capability、失败后 follower 保留与跨层端到端回归）
 - 日期：2026-10-25
 - 依据：[0100 Agent 持续跟随与 Relay 双 Turn Hot Cache](0100-agent-fed-relay-two-turn-hot-cache.md)、[0103 轻量历史首屏与 Owner 后台同步](0103-lightweight-history-first-owner-sync.md)、[0104 原生大字段 Lazy 化与当前会话 Tool 实时摘要](0104-lazy-native-payloads-and-selected-tool-sync.md)
 - 取代范围：本规格取代 0100 §6.3、§7.1.4、§7.2 中关于 freshness、重新 watched 必然重绑 owner、Agent 重连后全量恢复 cache follower 的行为；未明确取代的容量、安全和 mutation fencing 规则继续有效。
@@ -98,6 +98,8 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 5. refresh 成功后仍以正常 follower update 路径生成新的完整双 turn snapshot；不得另建 Relay/Web 状态分支。refresh 失败时将 cache 标为 stale／`RESYNC_REQUIRED`，旧正文只读保留，不能继续仅凭 lease 把旧 `inProgress` snapshot 声明为 fresh。
 6. recovery guard 是 cold attach 后的有界单次自愈，不是常驻轮询；同一 cache subscription 生命周期最多触发一次。Web 数量增加不得增加 guard 或 refresh 次数。
 7. guard delay 必须可测试、可配置；production 默认值需覆盖 Agent 重启与 owner stream 重新稳定的竞态窗口，同时不得按会话正文大小动态延长。
+8. 任何用于大 frame、容量租约或兼容 fallback 的 `Live` wrapper，都必须显式保留 recovery 所需的可选能力；不得因 wrapper 只嵌入基础 `Live` interface 而静默丢失 `Refresh`。能力不存在时必须在 attach／测试阶段显式暴露，不能等 guard 到期后才失败。
+9. recovery refresh 失败只能把 Relay cache 标为 stale／`RESYNC_REQUIRED`，不得注销仍有效的 follower 或删除 cache subscription。后续 native update（特别是 terminal update）必须仍能沿原 stream 发布新 snapshot，并以 fresh cache 自动接管 stale 页面；不得要求用户 reload 才恢复。
 
 ## 6. Promotion 状态机
 
@@ -159,6 +161,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 6. cold attach 首帧为 `inProgress` 且 follower 静默时，guard 只触发一次 owner refresh；refresh 得到 terminal 状态后发布新的 cache snapshot。
 7. guard 前收到 follower update 会重置静默窗口；收到 terminal update 会取消 guard；idle 首帧不启动 guard。
 8. guard refresh 失败时 cache 进入 stale／`RESYNC_REQUIRED`，但 Agent transport、其他 follower 和旧只读正文不受影响。
+9. guard refresh 失败后原 follower 仍订阅；随后到达的 terminal native update 会发布 fresh snapshot，Web 无需 reload 即恢复正文和 idle 状态。
 
 ### 10.2 Relay
 
@@ -194,6 +197,7 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 7. 既有 Go test／race／vet、Web unit／build、Playwright 全通过，并补齐上述故障注入回归。
 8. 真实日志中不再出现由 snapshot write lock 导致的 Pong timeout；同设备正常重连不形成持续 `duplicate agent` 循环。
 9. Agent 在 active turn 期间重启、首帧恢复为 `inProgress` 且后续 terminal patch 被故障注入丢弃时，Web 在 guard deadline 后收到 terminal snapshot 或明确 stale 状态，不得无限显示“思考中”。
+10. 必须有覆盖真实 Relay WebSocket 的跨层回归：浏览器 watcher 保持打开，Agent 先发布 `inProgress`、再发布 terminal snapshot，页面无需 reload 即显示最终回复；Web transport 重连后必须建立新 watcher，并继续收到 terminal snapshot。
 
 ## 12. 实现与验收记录
 
@@ -207,3 +211,4 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 6. Web 跨 `agentEpoch` 保留最近双 turn durable display cache，并在离线／恢复期间剥离 permissions、pending interactions 和 queue，仅以 stale／read-only 方式展示。
 7. 自动化结果：`go test ./...`、`go vet ./...`、关键包 `go test -race`、259 个 Web unit、Web production build、47 个 Playwright 真实浏览器用例全部通过。物理 iPhone／Safari 弱网与后台切换仍按 §10.4 由用户复验。
 8. restart recovery guard 已接入 cache cold attach：`inProgress` 首帧在 45 秒静默窗口后至多触发一次既有 owner follower refresh；普通 update 重置窗口，terminal update 取消窗口，refresh 结果仍从原 follower update 通道发布。新增单次触发、终态取消、窗口重置、禁止 reattach 与终态发布测试；本轮全仓验收为 263 个 Web unit、48 个 Playwright 用例，并再次通过 Go 全量 test／vet 与关键包 race。
+9. 真实故障定位到两个组合问题：large-frame 会话使用的 `leasedLive` wrapper 丢失了可选 `Refresh` method，guard 因此返回 `RESYNC_REQUIRED`；失败分支随后又注销 follower，导致会话列表仍能看到 `inProgress`，但正文和 terminal update 只能等 reload 重建 follower 后恢复。现已显式转发 `Refresh`，且 guard 失败仅将 Relay cache 标 stale，不再删除原 subscription。新增 wrapper capability UT、失败后 late terminal update UT、WebSocket 重连后重建 cache watcher UT，以及“已完成会话继续对话 → running → recovery stale → terminal fresh”的真实 Relay WebSocket + Playwright 跨层 E2E。本轮最终验收为 264 个 Web unit、49 个 Playwright 用例，并通过 Go 全量 test／vet 与关键包 race。
