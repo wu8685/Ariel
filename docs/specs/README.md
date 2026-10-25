@@ -111,6 +111,7 @@
 | 0096 | [Obsidian 面板任务到 Codex Agent 的产品化链路](0096-productized-obsidian-task-agent.md) | Implemented（2026-10-18） | Bases 原生建卡自动规范化、持久订阅、重启恢复、同 thread 评论续投与本机／公网部署 |
 | 0097 | [撤回 Web 任务看板入口](0097-withdraw-web-task-board-entry.md) | Implemented（2026-10-18；Web／Go／桌面与手机 Chromium 专项已验，物理 Safari 待验） | Web 恢复为引入看板前的会话界面；后台 task protocol／路由与 chilling SSOT 保留 |
 | 0098 | [会话内用户输入卡片](0098-conversation-user-input-cards.md) | Approved（2026-10-20） | 完善现有 `requestUserInput` 链路，支持结构化选项、自定义回答及当前版本真实回归 |
+| 0105 | [当前工作区文件浏览器](0105-workspace-file-browser.md) | Implemented（Go／race／vet、Web 258、真实 Chromium 4、build 已验；物理 Safari 待验） | 在显式本机 capability 下按目录 lazy 浏览 thread cwd、打开文本文件并选段引用 |
 
 ## 设计基线
 

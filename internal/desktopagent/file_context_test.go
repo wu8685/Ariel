@@ -17,6 +17,7 @@ type fakeFileContext struct {
 
 func (f *fakeFileContext) Ready() bool             { return f.ready }
 func (f *fakeFileContext) MessageReferences() bool { return true }
+func (f *fakeFileContext) WorkspaceBrowser() bool  { return true }
 func (f *fakeFileContext) Changes(context.Context, chillingclient.ChangesRequest) (chillingclient.ChangesResponse, error) {
 	return chillingclient.ChangesResponse{}, nil
 }
@@ -25,6 +26,12 @@ func (f *fakeFileContext) Read(context.Context, chillingclient.ReadRequest) (chi
 }
 func (f *fakeFileContext) ReferenceRead(context.Context, chillingclient.ReferenceReadRequest) (chillingclient.ReadResponse, error) {
 	return chillingclient.ReadResponse{}, nil
+}
+func (f *fakeFileContext) WorkspaceList(context.Context, chillingclient.WorkspaceListRequest) (chillingclient.WorkspaceListResponse, error) {
+	return chillingclient.WorkspaceListResponse{Revision: "r"}, nil
+}
+func (f *fakeFileContext) WorkspaceRead(context.Context, chillingclient.WorkspaceReadRequest) (chillingclient.ReadResponse, error) {
+	return chillingclient.ReadResponse{Path: "README.md", Content: "hello"}, nil
 }
 func (f *fakeFileContext) Prepare(_ context.Context, request chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error) {
 	f.prepares++

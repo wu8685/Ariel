@@ -48,6 +48,7 @@ type Capability struct {
 	Enabled           bool   `json:"enabled"`
 	Ready             bool   `json:"ready"`
 	MessageReferences bool   `json:"messageReferences"`
+	WorkspaceBrowser  bool   `json:"workspaceBrowser"`
 	Limits            Limits `json:"limits"`
 }
 type Client struct {
@@ -89,6 +90,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 func (c *Client) Ready() bool { return c != nil && c.capability.Ready }
 func (c *Client) MessageReferences() bool {
 	return c != nil && c.capability.Ready && c.capability.MessageReferences
+}
+func (c *Client) WorkspaceBrowser() bool {
+	return c != nil && c.capability.Ready && c.capability.WorkspaceBrowser
 }
 
 type ChangesRequest struct {
@@ -136,6 +140,7 @@ type ReferenceReadRequest struct {
 	EndLine       int    `json:"endLine,omitempty"`
 }
 type Selection struct {
+	Source        string `json:"source,omitempty"`
 	ThreadID      string `json:"threadId"`
 	TurnID        string `json:"turnId"`
 	ItemID        string `json:"itemId"`
@@ -147,6 +152,30 @@ type Selection struct {
 	Text          string `json:"text"`
 	ReferenceKind string `json:"referenceKind,omitempty"`
 	RawReference  string `json:"rawReference,omitempty"`
+}
+type WorkspaceListRequest struct {
+	ThreadID string `json:"threadId"`
+	Path     string `json:"path"`
+	Cursor   string `json:"cursor,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+}
+type WorkspaceEntry struct {
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	Kind         string `json:"kind"`
+	SizeBytes    int64  `json:"sizeBytes"`
+	ModifiedAtMS int64  `json:"modifiedAtMs"`
+	Readable     bool   `json:"readable"`
+}
+type WorkspaceListResponse struct {
+	Path       string           `json:"path"`
+	Entries    []WorkspaceEntry `json:"entries"`
+	NextCursor string           `json:"nextCursor,omitempty"`
+	Revision   string           `json:"revision"`
+}
+type WorkspaceReadRequest struct {
+	ThreadID string `json:"threadId"`
+	Path     string `json:"path"`
 }
 type PrepareRequest struct {
 	Selections []Selection `json:"selections"`
@@ -176,6 +205,16 @@ func (c *Client) Read(ctx context.Context, request ReadRequest) (ReadResponse, e
 func (c *Client) ReferenceRead(ctx context.Context, request ReferenceReadRequest) (ReadResponse, error) {
 	var out ReadResponse
 	err := c.call(ctx, http.MethodPost, "/v1/file-context/reference/read", request, &out)
+	return out, err
+}
+func (c *Client) WorkspaceList(ctx context.Context, request WorkspaceListRequest) (WorkspaceListResponse, error) {
+	var out WorkspaceListResponse
+	err := c.call(ctx, http.MethodPost, "/v1/file-context/workspace/files/list", request, &out)
+	return out, err
+}
+func (c *Client) WorkspaceRead(ctx context.Context, request WorkspaceReadRequest) (ReadResponse, error) {
+	var out ReadResponse
+	err := c.call(ctx, http.MethodPost, "/v1/file-context/workspace/file/read", request, &out)
 	return out, err
 }
 func (c *Client) Prepare(ctx context.Context, request PrepareRequest) (PrepareResponse, error) {

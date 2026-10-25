@@ -64,7 +64,7 @@ async function expandProject(cwd: string) {
   fireEvent.click(await screen.findByRole("button", { name: `展开项目 ${projectName(cwd)}，${path}` }));
 }
 
-async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false, threadMetadata = false, fileContext = false) {
+async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false, threadMetadata = false, fileContext = false, workspaceBrowser = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
   const socket = BrowserSocket.sockets[0];
@@ -73,7 +73,7 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
   act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
   await waitFor(() => expect(requests("device.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [
-    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadBootstrap: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}), ...(fileContext ? { chillingFileContext: true, chillingMessageReferences: true } : {}) } },
+    { deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true, ...(queue ? { queue: true } : {}), ...(threadCreate ? { threadBootstrap: true } : {}), ...(threadArchive ? { threadArchive: true, threadArchiveUndo: true } : {}), ...(threadMetadata ? { threadRename: true, threadPin: true } : {}), ...(fileContext ? { chillingFileContext: true, chillingMessageReferences: true } : {}), ...(workspaceBrowser ? { chillingWorkspaceBrowser: true } : {}) } },
   ] } }));
   await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
   await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: listedThreads } }));
@@ -88,6 +88,15 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+	it("shows the workspace browser only when Web flag and Agent capability are ready", async () => {
+		const meta=document.createElement("meta");meta.name="ariel-chilling-file-context";meta.content="true";document.head.append(meta);
+		const {socket,requests}=await openFixture(fixtureThread,false,false,[fixtureThread],false,false,true,true);
+		fireEvent.click(screen.getByRole("button",{name:"浏览工作区文件"}));
+		await waitFor(()=>expect(requests("workspace.files.list")).toHaveLength(1));
+		expect(requests("workspace.files.list")[0].params).toEqual({threadId:"fixture",path:"",limit:100});
+		await act(async()=>socket.message({type:"response",v:1,requestId:requests("workspace.files.list")[0].requestId,outcome:"accepted",data:{path:"",revision:"r",entries:[]}}));
+		expect(await screen.findByRole("dialog",{name:"工作区文件"})).toBeTruthy();
+	});
 	it("opens an inline workspace document reference through the controlled gateway", async () => {
 		const meta = document.createElement("meta"); meta.name = "ariel-chilling-file-context"; meta.content = "true"; document.head.append(meta);
 		const thread: Thread = { ...fixtureThread, turns: [{ turnId: "turn-doc", status: "completed", items: [{ itemId: "reply-doc", role: "assistant", text: "文件：[周报](ops-2026-10-25.md:2)" }] }] };

@@ -54,6 +54,8 @@ export type Request = {
     | "file.context.changes"
     | "file.context.read"
     | "file.context.reference.read"
+    | "workspace.files.list"
+    | "workspace.file.read"
     | "turn.start"
     | "turn.interrupt"
     | "queue.add"
@@ -204,6 +206,7 @@ export interface Capabilities {
   threadPin?: boolean;
   chillingFileContext?: boolean;
   chillingMessageReferences?: boolean;
+  chillingWorkspaceBrowser?: boolean;
   taskManagement?: boolean;
   taskExecution?: boolean;
   taskExecutionAuthorized?: boolean;
@@ -240,6 +243,7 @@ export interface Error {
     | "FILE_NOT_FOUND"
     | "PATH_NOT_ALLOWED"
     | "REFERENCE_NOT_FOUND"
+    | "DIRECTORY_CHANGED"
     | "DETAIL_PENDING"
     | "DETAIL_CHANGED"
     | "DETAIL_TOO_LARGE"

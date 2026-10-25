@@ -22,12 +22,13 @@ import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
 import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileView, type FileViewMode, type OpenFile } from "./file-context";
+import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
 export { InteractionCard } from "./interaction-card";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; chillingWorkspaceBrowser?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 2;
 const historyTurnPageLimit = 3;
@@ -168,6 +169,8 @@ function CloseIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>;
 }
 
+function FolderIcon(){return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z"/></svg>}
+
 function PlusIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>;
 }
@@ -306,6 +309,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 	const [editingQueueId, setEditingQueueId] = useState("");
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
 	const [openFile, setOpenFile] = useState<FileView | null>(null);
+	const [showWorkspaceBrowser,setShowWorkspaceBrowser]=useState(false);
+	const workspaceDirectoryCache=useRef(new WorkspaceDirectoryCache());
 	const openFileGeneration = useRef(0);
 	const fileChangeRequests = useRef(new Set<string>());
 	const fileContentCache = useRef(new FileContentCache());
@@ -398,6 +403,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const threadRenameEnabled = device?.capabilities.threadRename === true;
   const threadPinEnabled = device?.capabilities.threadPin === true;
 	const fileContextEnabled = webFileContextEnabled() && device?.capabilities.chillingFileContext === true;
+	const workspaceBrowserEnabled=fileContextEnabled&&device?.capabilities.chillingWorkspaceBrowser===true&&!!view;
 	const documentReferencesVisible = webFileContextEnabled();
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
@@ -442,8 +448,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		const epoch = deviceId ? `${deviceId}\u0000${device?.agentEpoch || ""}` : "";
 		if (fileContentCacheEpoch.current && fileContentCacheEpoch.current !== epoch) {
 			fileContentCache.current.clear();
+			workspaceDirectoryCache.current.clear();
 			openFileGeneration.current++;
 			setOpenFile(null);
+			setShowWorkspaceBrowser(false);
 		}
 		fileContentCacheEpoch.current = epoch;
 	}, [device?.agentEpoch, deviceId]);
@@ -472,6 +480,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 				const value = raw as {turnId?:unknown;fileChanges?:unknown}; if (typeof value.turnId !== "string" || !Array.isArray(value.fileChanges)) continue;
 				const changes = value.fileChanges.filter((entry): entry is FileChange => !!entry && typeof entry === "object" && typeof (entry as FileChange).itemId === "string" && typeof (entry as FileChange).path === "string" && ["add","update","delete"].includes((entry as FileChange).kind));
 				next[`${view.threadId}\u0000${value.turnId}`] = changes;
+				for(const change of changes){
+					const identity=`${deviceId}\u0000${device?.agentEpoch||""}\u0000${view.threadId}\u0000`;
+					const parts=change.path.split("/");parts.pop();workspaceDirectoryCache.current.delete(`${identity}${parts.join("/")}`);
+					fileContentCache.current.delete(`${identity}file\u0000${change.path}`);
+				}
 			}
 			setFileChanges(current=>({...current,...next}));
 		});
@@ -926,7 +939,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
     openFileGeneration.current++; setView(null); setThreadId(""); clearAllComposerDrafts(); setOpenFile(null); resetHistory();
-    fileContentCache.current.clear(); fileContentCacheEpoch.current = "";
+    fileContentCache.current.clear(); workspaceDirectoryCache.current.clear(); fileContentCacheEpoch.current = ""; setShowWorkspaceBrowser(false);
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
     if (webAuthMode === "passkey") {
@@ -2634,6 +2647,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           <button className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
+          {workspaceBrowserEnabled&&<button className="workspace-open icon-control" type="button" aria-label="浏览工作区文件" data-tooltip="工作区文件" onClick={()=>setShowWorkspaceBrowser(true)}><FolderIcon/></button>}
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
@@ -2706,7 +2720,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     })()}
     {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
-		{openFile && <FileViewer view={openFile} onClose={closeFile} onModeChange={changeFileMode} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);closeFile();window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
+		{showWorkspaceBrowser&&workspaceBrowserEnabled&&view&&<WorkspaceBrowser key={`${deviceId}:${device?.agentEpoch||""}:${view.threadId}`} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} threadId={view.threadId} cwd={view.thread.cwd} request={(method,target,params)=>client.request(method,target,params)} cache={workspaceDirectoryCache.current} fileCache={fileContentCache.current} onClose={()=>setShowWorkspaceBrowser(false)} onQuote={quote=>{setFileQuotes(current=>{if(current.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return current}return [...current,quote]});window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>}
+		{openFile && <FileViewer view={openFile} source={openFile.file?.referenceKind?"message_reference":"turn_change"} onClose={closeFile} onModeChange={changeFileMode} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);closeFile();window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
   </div>;
 }
 
