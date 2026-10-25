@@ -23,6 +23,7 @@ image_source="build"
 install_docker="0"
 follow_logs="0"
 log_service="relay"
+file_context="0"
 
 mode_explicit="0"
 origin_explicit="0"
@@ -34,6 +35,7 @@ https_port_explicit="0"
 image_explicit="0"
 build_explicit="0"
 caddy_image_explicit="0"
+file_context_explicit="0"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "$script_dir/.." && pwd -P)"
@@ -72,6 +74,8 @@ Ariel ECS 单机部署器
   --image IMAGE         Relay 镜像；默认 ariel-relay:ecs
   --build               从当前仓库构建 --image；否则显式镜像会从 Registry 拉取
   --caddy-image IMAGE   Caddy 镜像，默认 caddy:2-alpine
+  --enable-chilling-file-context   在 Relay/Web 启用 Chilling 文件入口
+  --disable-chilling-file-context  在 Relay/Web 关闭 Chilling 文件入口（默认）
   --install-docker      Docker 缺失时用系统包管理器安装（需要 root）
   --service NAME        logs 的目标：relay 或 proxy
   --follow              持续跟随日志
@@ -169,6 +173,16 @@ while [[ $# -gt 0 ]]; do
       caddy_image_explicit="1"
       shift 2
       ;;
+    --enable-chilling-file-context)
+      file_context="1"
+      file_context_explicit="1"
+      shift
+      ;;
+    --disable-chilling-file-context)
+      file_context="0"
+      file_context_explicit="1"
+      shift
+      ;;
     --install-docker)
       install_docker="1"
       shift
@@ -221,6 +235,7 @@ stored_https_port=""
 stored_relay_image=""
 stored_caddy_image=""
 stored_image_source=""
+stored_file_context=""
 
 load_config() {
   [[ -f "$config_file" ]] || return 1
@@ -237,6 +252,7 @@ load_config() {
       RELAY_IMAGE) stored_relay_image="$config_value" ;;
       CADDY_IMAGE) stored_caddy_image="$config_value" ;;
       IMAGE_SOURCE) stored_image_source="$config_value" ;;
+      FILE_CONTEXT) stored_file_context="$config_value" ;;
       '') ;;
       *) die "状态配置包含未知字段 $config_key；请人工检查 $config_file。" ;;
     esac
@@ -285,6 +301,9 @@ resolve_config() {
     if [[ "$caddy_image_explicit" != "1" ]]; then
       caddy_image="$stored_caddy_image"
     fi
+    if [[ "$file_context_explicit" != "1" ]]; then
+      file_context="${stored_file_context:-0}"
+    fi
   else
     [[ "$command_name" == "up" ]] || die "尚未初始化：$config_file。请先运行 up。"
     [[ "$mode_explicit" == "1" ]] || die "首次 up 必须指定 --mode pin 或 --mode passkey。"
@@ -331,6 +350,7 @@ validate_config() {
   validate_image "$relay_image"
   validate_image "$caddy_image"
   [[ "$image_source" == "build" || "$image_source" == "pull" ]] || die "镜像来源状态非法。"
+  [[ "$file_context" == "0" || "$file_context" == "1" ]] || die "文件上下文开关状态非法。"
 
   if [[ "$mode" == "pin" ]]; then
     [[ "$origin" == http://* ]] || die "PIN Origin 必须使用 http://。"
@@ -378,7 +398,8 @@ save_config() {
     "HTTPS_PORT=$https_port" \
     "RELAY_IMAGE=$relay_image" \
     "CADDY_IMAGE=$caddy_image" \
-    "IMAGE_SOURCE=$image_source")"
+    "IMAGE_SOURCE=$image_source" \
+    "FILE_CONTEXT=$file_context")"
   atomic_write "$config_file" "$config_body"$'\n'
 }
 
@@ -483,6 +504,9 @@ write_runtime_env() {
       setup_token="$(read_secret "$setup_token_file")"
       env_body+=$'\n'"ARIEL_PASSKEY_SETUP_TOKEN=$setup_token"
     fi
+  fi
+  if [[ "$file_context" == "1" ]]; then
+    env_body+=$'\n'"ARIEL_ENABLE_CHILLING_FILE_CONTEXT=true"
   fi
   atomic_write "$runtime_env_file" "$env_body"$'\n'
 }
