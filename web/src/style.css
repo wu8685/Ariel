@@ -42,10 +42,11 @@
 .file-kind.add { color:#61d99b; background:#143626; }.file-kind.delete { color:#ef8a8a; background:#3b1b1b; }.file-kind.update { color:#e9bc72; background:#3b2d14; }
 .turn-files-more { width:100%; border:0; border-top:1px solid #292929; background:#161616; color:#999; padding:8px; font-size:12px; cursor:pointer; }
 .file-viewer-backdrop { position:fixed; inset:0; z-index:90; display:flex; justify-content:flex-end; background:rgba(0,0,0,.58); backdrop-filter:blur(3px); }
-.file-viewer { width:min(760px,70vw); height:100%; min-width:0; display:grid; grid-template-rows:auto auto minmax(0,1fr) auto; background:#0b0b0b; border-left:1px solid #3a3a3a; box-shadow:-22px 0 60px rgba(0,0,0,.45); }
+.file-viewer { width:min(760px,70vw); max-width:100vw; height:100%; min-width:0; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(0,1fr) auto; overflow:hidden; background:#0b0b0b; border-left:1px solid #3a3a3a; box-shadow:-22px 0 60px rgba(0,0,0,.45); }
 .file-viewer.source-only { grid-template-rows:auto minmax(0,1fr) auto; }
-.file-viewer header,.file-viewer footer { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 18px; border-bottom:1px solid #2e2e2e; }
-.file-heading { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }.file-viewer header strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.file-viewer header small,.file-viewer footer span { color:#858585; font-size:12px; }
+.file-viewer > * { min-width:0; max-width:100%; }
+.file-viewer header,.file-viewer footer { min-width:0; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 18px; overflow:hidden; border-bottom:1px solid #2e2e2e; }
+.file-heading { min-width:0; max-width:100%; flex:1; display:flex; flex-direction:column; gap:3px; }.file-viewer header strong { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.file-viewer header small,.file-viewer footer span { min-width:0; overflow:hidden; color:#858585; font-size:12px; }
 .file-viewer-header button { flex:none; min-height:38px; border:1px solid #363636; background:#171717; color:#ddd; cursor:pointer; }
 .file-back { display:flex; align-items:center; gap:2px; border-radius:19px; padding:0 10px 0 7px; font-size:12px; font-weight:650; }.file-back svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
 .file-close { width:38px; border-radius:50%; font-size:22px; }
@@ -56,18 +57,18 @@
 .file-view-state { min-height:0; display:grid; place-items:center; color:#777; font-size:13px; }
 .file-code { min-width:0; overflow-x:hidden; overflow-y:auto; padding:12px 0 30px; font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace; user-select:text; }
 .file-code ::selection { background:#285f9f; color:#fff; }
-.file-line { min-width:0; display:grid; grid-template-columns:54px minmax(0,1fr); align-items:start; }.file-line:hover { background:#151515; }.file-line code { min-width:0; padding:0 20px 0 8px; color:#d4d4d4; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+.file-line { width:100%; max-width:100%; min-width:0; display:grid; grid-template-columns:54px minmax(0,1fr); align-items:start; }.file-line:hover { background:#151515; }.file-line code { width:100%; max-width:100%; min-width:0; padding:0 20px 0 8px; color:#d4d4d4; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
 .file-line.reference-focus { background: color-mix(in srgb, var(--color-accent) 14%, transparent); }
 .file-line-number { color:#606060; text-align:right; padding:0 12px 0 4px; font:inherit; user-select:none; }
 .file-diff-wrap { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }.file-diff-warning { flex:none; padding:8px 18px; border-bottom:1px solid #6b482e; background:#251a13; color:#efb47e; font-size:12px; }
 .file-diff { min-width:0; overflow-x:hidden; overflow-y:auto; padding:10px 0 28px; font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace; user-select:text; }
-.file-diff code { display:block; min-width:0; padding:0 18px; color:#bbb; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }.file-diff .diff-add { background:#10291d; color:#88d6a8; }.file-diff .diff-delete { background:#321919; color:#e8a0a0; }.file-diff .diff-hunk { color:#92b9e8; background:#132132; }.file-diff .diff-header { color:#b7a7dd; }.file-diff ::selection { background:#285f9f; color:#fff; }
+.file-diff code { display:block; width:100%; max-width:100%; min-width:0; padding:0 18px; color:#bbb; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }.file-diff .diff-add { background:#10291d; color:#88d6a8; }.file-diff .diff-delete { background:#321919; color:#e8a0a0; }.file-diff .diff-hunk { color:#92b9e8; background:#132132; }.file-diff .diff-header { color:#b7a7dd; }.file-diff ::selection { background:#285f9f; color:#fff; }
 .file-quote-chips { display:flex; gap:7px; flex-wrap:wrap; padding:0 4px; }.file-quote-chip { display:flex; align-items:center; gap:7px; max-width:100%; padding:6px 8px 6px 10px; border:1px solid #315477; border-radius:10px; background:#10263a; color:#a8cff5; font:600 11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; }.file-quote-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.file-quote-chip button { border:0; background:transparent; color:#8eb5d8; font-size:17px; cursor:pointer; }
 .historical-file-quotes { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }.historical-file-quotes span { max-width:100%; overflow:hidden; padding:4px 7px; border:1px solid #ffffff38; border-radius:7px; color:inherit; font:600 10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
 @media screen and (max-width: 800px) {
 	.workspace-browser { width:100vw; border-left:0; }
   .turn-files { margin-left:8px; max-width:calc(100% - 16px); }
-  .file-viewer { width:100vw; border-left:0; }
+  .file-viewer { width:100%; max-width:100%; border-left:0; }
   .file-viewer-backdrop { background:#0b0b0b; }
   .file-viewer header { padding-top:max(14px,env(safe-area-inset-top)); }
   .file-viewer footer { padding-bottom:max(14px,env(safe-area-inset-bottom)); }
