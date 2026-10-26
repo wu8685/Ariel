@@ -115,6 +115,7 @@
 | 0107 | [Agent Transport 解耦与 Cache 自愈恢复](0107-resilient-agent-transport-and-cache-recovery.md) | Implemented（Go／race／vet、Web 259、真实 Chromium 47、build 已验；物理 Safari 待验） | transport 重连不销毁 Codex follower；双 turn cache、lease、latest-only 队列与跨 epoch 只读恢复共同避免会话反复白屏 |
 | 0108 | [登录失效与协议异常分离](0108-auth-and-protocol-failure-separation.md) | Implemented（2026-10-26） | 仅明确的 `1008 / unauthorized` 触发重新登录；协议不兼容停止重连并提示刷新，不再伪装成 Passkey session 失效 |
 | 0109 | [Web wire 向后兼容与协议非法帧修复](0109-web-wire-backward-compatibility.md) | Implemented（2026-10-26） | 将 Relay 内部 lease 元数据移出 v1 Web wire，并用上一版本契约阻止长期打开的旧页面再次被新增字段破坏 |
+| 0111 | [紧凑会话顶部](0111-compact-conversation-header.md) | Implemented（2026-10-26；Web 266、真实 Chromium 53、Go／build 已验，未部署） | 52px 双行 header，缩小字体与图标，保留 44px 点击区域及历史折叠行为 |
 
 ## 设计基线
 
