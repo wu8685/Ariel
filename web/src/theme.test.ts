@@ -70,8 +70,8 @@ describe("fixed Night appearance", () => {
   it("fully collapses the mobile conversation header while keeping expanded touch targets", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(mobile).toMatch(/\.app-shell\.connected\s+\.masthead\s*\{[^}]*display:\s*none/s);
-    expect(mobile).toMatch(/\.conversation-head\s*\{[^}]*height:\s*6[4-8]px/s);
-    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*height:\s*0;[^}]*padding:\s*0\s+12px;[^}]*border-bottom-width:\s*0;[^}]*border-bottom-color:\s*transparent/s);
+    expect(mobile).toMatch(/\.conversation-head\s*\{[^}]*height:\s*52px/s);
+    expect(mobile).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*height:\s*0;[^}]*padding:\s*0\s+10px;[^}]*border-bottom-width:\s*0;[^}]*border-bottom-color:\s*transparent/s);
     expect(style).toMatch(/\.conversation-head\.history-collapsed\s*\{[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;[^}]*overflow:\s*hidden/s);
     expect(style).toMatch(/\.composer-wrap\s*\{[^}]*display:\s*grid;[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/s);
     expect(style).toMatch(/\.composer-wrap\.history-collapsed\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*0fr\);[^}]*padding-top:\s*0;[^}]*padding-bottom:\s*0;[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none/s);
@@ -106,12 +106,21 @@ describe("fixed Night appearance", () => {
     expect(desktop).toMatch(/\.sidebar\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-101%\)/s);
     expect(desktop).toMatch(/\.sidebar\.open\s*\{[^}]*transform:\s*translateX\(0\)/s);
     expect(desktop).toMatch(/\.mobile-list\s*\{[^}]*display:\s*grid;[^}]*min-width:\s*44px;[^}]*min-height:\s*44px/s);
-    expect(desktop).toMatch(/\.conversation-head\s*\{[^}]*height:\s*66px;[^}]*padding:\s*9px\s+12px/s);
+    expect(desktop).toMatch(/\.conversation-head\s*\{[^}]*height:\s*52px;[^}]*padding:\s*3px\s+10px/s);
     expect(desktop).toMatch(/\.permission-info\s*\{[^}]*display:\s*block/s);
     expect(desktop).toMatch(/\.permission-strip\s*\{[^}]*display:\s*none/s);
     expect(desktop).toMatch(/\.composer\s*\{[^}]*flex-direction:\s*column;[^}]*border-radius:\s*var\(--radius-work-item\)/s);
     expect(desktop).toMatch(/\.composer textarea\s*\{[^}]*min-height:\s*44px;[^}]*font-size:\s*14px/s);
     expect(desktop).toMatch(/\.send-label,\s*\.stop-label\s*\{[^}]*display:\s*none/s);
+  });
+
+  it("compacts only the conversation title and icons, preserving the reading type scale", () => {
+    expect(style).toMatch(/\.conversation-head h2\s*\{[^}]*font-size:\s*14px/s);
+    expect(style).toMatch(/\.head-path\s*\{[^}]*font-size:\s*10px/s);
+    expect(style).toMatch(/\.mobile-list > svg\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px/s);
+    expect(style).toMatch(/\.permission-info-button svg\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px/s);
+    expect(style).toMatch(/\.workspace-open svg\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px/s);
+    expect(style).toMatch(/\.message-text\s*\{[^}]*font-size:\s*14px/s);
   });
 
   it("shares one work-item corner radius between the queue and composer", () => {

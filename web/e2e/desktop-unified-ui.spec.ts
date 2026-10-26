@@ -43,7 +43,7 @@ test("desktop reuses the compact mobile shell and icon controls", async ({ page 
   await openFixture(page);
 
   await expect(page.locator(".masthead")).toBeHidden();
-  await expect(page.locator(".conversation-head")).toHaveCSS("height", "66px");
+  await expect(page.locator(".conversation-head")).toHaveCSS("height", "52px");
   await expect(page.locator(".permission-strip")).toBeHidden();
   await expect(page.locator(".permission-info-button")).toBeVisible();
   const conversationBox = await page.locator(".conversation").boundingBox();
