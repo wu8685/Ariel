@@ -142,7 +142,7 @@ describe("fixed Night appearance", () => {
 
   it("gives the conversation list most of the sidebar with a compact three-row header", () => {
     expect(style).toMatch(/\.sidebar-toolbar\s*\{[^}]*min-height:\s*52px;[^}]*padding:\s*6px\s+10px/s);
-    expect(style).toMatch(/\.sidebar-device-row\s*\{[^}]*height:\s*36px;[^}]*margin:\s*0\s+12px\s+6px/s);
+    expect(style).toMatch(/\.sidebar-device-row\s*\{[^}]*height:\s*40px;[^}]*margin:\s*10px\s+12px\s+6px/s);
     expect(style).toMatch(/\.sidebar-search\s*\{[^}]*height:\s*36px;[^}]*margin:\s*0\s+12px\s+6px/s);
     expect(style).toMatch(/\.list-caption\s*\{[^}]*padding:\s*5px\s+12px\s+6px/s);
   });

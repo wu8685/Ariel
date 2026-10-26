@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CircleButton, CloseGlyph } from "./circular-button";
 import type { ArielSocket } from "./client";
 import { newRequestID } from "./ids";
 import "./execution-settings.css";
@@ -40,7 +41,7 @@ export function ExecutionSettingsControl(p: Props) {
   const currentValues = p.draft ? draftValues : snapshot?.values, model = catalog?.models.find(m => m.id === currentValues?.model);
   const imagesBlocked = Boolean(p.hasImages && model && !model.inputModalities.includes("image"));
   const writable = p.connected && p.ownerReady && !p.busy && !p.queued && !saving && !uncertain && (p.draft || watchReady && snapshot?.writable && snapshot.freshness === "fresh");
-  useEffect(() => { callback.current({ key: p.targetKey, busy: saving || uncertain, imagesBlocked, ...(p.draft && draftValues ? { draftSettings: draftValues } : {}) }); }, [p.targetKey, p.draft, saving, uncertain, imagesBlocked, draftValues]);
+  useEffect(() => { callback.current({ key: p.targetKey, busy: saving || uncertain, imagesBlocked, editSupported:catalog?.editSupported === true, ...(p.draft && draftValues ? { draftSettings: draftValues } : {}) }); }, [p.targetKey, p.draft, saving, uncertain, imagesBlocked, draftValues, catalog?.editSupported]);
   useEffect(() => {
     let cancelled = false; if (!p.connected || !p.deviceId) return;if(!catalog)setSupported(null);
     const key = `${p.client.sessionGeneration}\0${p.deviceId}\0${p.agentEpoch}`;
@@ -48,7 +49,7 @@ export function ExecutionSettingsControl(p: Props) {
       const response = await p.client.request("model.catalog.read", p.deviceId, reload ? { refresh: true } : {});
       if (response.error?.code === "PROTOCOL_UNSUPPORTED"||response.outcome === "accepted" && response.data?.settingsSupported !== true) throw new Error("unsupported");
       if (response.outcome !== "accepted" || response.data?.agentEpoch !== p.agentEpoch || !response.data.settingsSupported) throw new Error("unavailable");
-      const result=parseCatalog(response.data.catalog);if(!result)throw new Error("unavailable");return result;
+      const result=parseCatalog(response.data.catalog);if(!result)throw new Error("unavailable");return {...result,editSupported:response.data?.editSupported===true};
     }, reload > 0).then(c => { if (!cancelled&&c) { setCatalog(c); setSupported(true); } },reason=>{if(!cancelled){setSupported(reason instanceof Error&&reason.message==="unsupported"?false:true);setError("模型选项暂不可用，请重试。原会话不受影响。");}});
     return () => { cancelled = true; };
   }, [p.connected, p.deviceId, p.agentEpoch, p.client, p.store, reload]);
@@ -102,7 +103,7 @@ export function ExecutionSettingsControl(p: Props) {
     <button type="button" className="execution-trigger" ref={trigger} aria-label="模型与推理设置" aria-describedby={summaryId} title={summary} aria-busy={saving} aria-expanded={open} onClick={() => { setEditing(currentValues || (catalog && defaultValues(catalog)));setEditingRevision(snapshot?.revision||""); setAdjustment(""); setOpen(true); }}><span className="execution-model">{modelLabel}</span><EffortGlyph effort={currentValues?.effort}/><SpeedGlyph speed={currentValues?.speed} model={model}/>{saving ? <svg className="execution-saving" aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="32 12"/></svg> : <svg className="execution-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>}</button>
     <span id={summaryId} className="sr-only">{summary}</span>
     {open && createPortal(<div className="execution-backdrop" onClick={e => { if (e.target === e.currentTarget) close(); }}><div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="execution-title" className="execution-dialog">
-      <header><div><h3 id="execution-title">模型与推理设置</h3><p>仅影响当前会话的下一轮，正在执行的这一轮不变。</p></div><button type="button" aria-label="关闭模型设置" onClick={close} disabled={saving}>×</button></header>
+      <header><div><h3 id="execution-title">模型与推理设置</h3><p>仅影响当前会话的下一轮，正在执行的这一轮不变。</p></div><CircleButton type="button" aria-label="关闭模型设置" onClick={close} disabled={saving}><CloseGlyph/></CircleButton></header>
       {catalog && editing ? <fieldset disabled={!writable}>
         <label>模型<select aria-label="模型" value={editing.model} onChange={e => { const m = catalog.models.find(m => m.id === e.target.value); if (m) { const next = changeModel(editing, m); setEditing(next.values); setAdjustment(next.changedDefaults ? "原强度或速度不适用于此模型，已改为下方显示的默认选项；保存后生效。" : ""); } }}>{!selectedModel && <option value={editing.model}>{editing.model}（当前模型）</option>}{catalog.models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><p>{selectedModel?.description}</p>
         <label>推理强度<select aria-label="推理强度" value={editing.effort} onChange={e => setEditing({ ...editing, effort: e.target.value })}><option value="">继承 Codex</option>{selectedModel?.efforts.map(e => <option value={e.id} key={e.id}>{effortLabel(e.id)}</option>)}</select></label><p>{selectedModel?.efforts.find(e => e.id === editing.effort)?.description}</p>

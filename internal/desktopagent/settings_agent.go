@@ -41,7 +41,7 @@ func (a *agent) handleSettings(ctx context.Context, id, method string, raw json.
 	case "model.catalog.read":
 		var catalog modelsettings.Catalog
 		catalog, err = a.service.ModelCatalog(ctx, p.Refresh)
-		data = map[string]any{"revision": modelsettings.Revision(catalog), "catalog": catalog, "settingsSupported": true, "agentEpoch": a.agentEpoch}
+		data = map[string]any{"revision": modelsettings.Revision(catalog), "catalog": catalog, "settingsSupported": true, "editSupported": a.service.EditEnabled(), "agentEpoch": a.agentEpoch}
 	case "thread.settings.read":
 		var snapshot modelsettings.Snapshot
 		snapshot, err = a.service.ReadSettings(ctx, p.ThreadID)

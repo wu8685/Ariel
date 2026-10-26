@@ -1,5 +1,6 @@
 import type { FileQuote } from "./file-context";
 import type { ScreenshotDraft } from "./screenshots";
+import type { MessageEdit } from "./message-edit";
 
 export type ComposerDraftIdentity = { deviceId: string; threadId: string };
 export type ComposerDraftSnapshot = {
@@ -8,6 +9,7 @@ export type ComposerDraftSnapshot = {
   fileQuotes: FileQuote[];
   editingQueueId: string;
   revision: number;
+  messageEdit?: MessageEdit;
 };
 
 export function emptyComposerDraft(revision = 0): ComposerDraftSnapshot {

@@ -23,6 +23,10 @@
   --color-danger-surface: #2a1517;
   --color-danger-border: #7d3e43;
   --radius-work-item: 16px;
+  --circle-icon-size: 14px;
+  --circle-visual-size: 28px;
+  --circle-target-size: 44px;
+  --color-sidebar-child: #171717;
   color: var(--color-text);
   background: var(--color-page);
 }
@@ -264,7 +268,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .sidebar-toolbar-actions .icon-control:last-child::after { right: 0; left: auto; transform: none; }
 .eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--color-subtle); }
 .icon-button { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border-radius: 50%; }
-.sidebar-device-row { display: flex; align-items: center; gap: 7px; height: 36px; margin: 0 12px 6px; padding-left: 10px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-panel); }
+.sidebar-device-row { display: flex; align-items: center; gap: 7px; height: 40px; margin: 10px 12px 6px; padding: 0; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-panel); }
 .sidebar-device-row .status-dot { width: 6px; height: 6px; }
 .sidebar-device-row select {
   flex: 1;
@@ -319,7 +323,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .project-unread { width: 7px; height: 7px; }
 .project-path { display: block; margin-top: 2px; overflow: hidden; color: var(--color-subtle); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .project-count { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--color-panel); color: var(--color-subtle); font-size: 10px; }
-.project-threads { min-width: 0; }
+.project-threads { min-width: 0; margin-left: 20px; border-left: 1px solid var(--color-border); border-radius: 0 6px 6px 0; background: var(--color-sidebar-child); }
+.project-threads .thread-row { padding-left: 26px; }
+.project-toggle, .thread-row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .thread-row {
   display: flex;
   flex-direction: column;
@@ -685,3 +691,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.device-trigger { display:flex;align-items:center;gap:8px;width:100%;min-width:0;height:100%;padding:0 10px;border:0;border-radius:inherit;background:transparent;color:var(--color-text);font-size:12px;text-align:left; }
+.device-name { flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.device-chevron { flex:none;width:12px;height:12px; }
+.device-options { position:fixed;z-index:82;padding:4px;border:1px solid var(--color-border-strong);border-radius:9px;background:var(--color-raised);box-shadow:0 12px 30px #0009;overflow-y:auto;overscroll-behavior:contain;font-size:12px; }
+.device-options button { display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--color-text);text-align:left;font:inherit; }
+.device-options button.active { background:var(--color-panel);outline:1px solid var(--color-border-strong);outline-offset:-1px; }
+.device-options button[aria-selected="true"] { color:var(--color-accent); }
+.device-options p { padding:8px 10px;color:var(--color-muted); }
+
+/* One real 44px button, with an independently sized 28px visual surface. */
+button.circle-control, button.circle-control:hover, button.circle-control:disabled { display:grid;place-items:center;flex-shrink:0;width:var(--circle-target-size);height:var(--circle-target-size);min-width:var(--circle-target-size);min-height:var(--circle-target-size);padding:0;border:0;border-radius:50%;background:transparent; }
+.circle-visual { --circle-fill:transparent;--circle-line:transparent;position:relative;display:grid;place-items:center;flex:none;width:var(--circle-visual-size);height:var(--circle-visual-size);border:1px solid var(--circle-line);border-radius:50%;background:var(--circle-fill);pointer-events:none; }
+.circle-visual > svg { display:block;width:var(--circle-icon-size);height:var(--circle-icon-size);flex:none; }
+button.circle-control > .circle-visual { margin:0; }
+.circle-control:hover:not(:disabled) .circle-visual { --circle-fill:var(--color-raised); }
+:is(.mobile-list,.workspace-open,.permission-info-button,.pair-entry,.workspace-close,.workspace-refresh,.file-close,.return-latest-bar button) > .circle-visual { --circle-fill:var(--color-panel);--circle-line:var(--color-border-strong); }
+.circle-control.permission-info-button.danger { background:transparent; }
+.circle-control.permission-info-button.danger > .circle-visual { --circle-fill:var(--color-warning-surface);--circle-line:var(--color-warning-border); }
+:is(.send-button,.stop-button) > .circle-visual { --circle-fill:var(--color-primary);--circle-line:var(--color-primary); }
+:is(.send-button,.stop-button):hover:not(:disabled) > .circle-visual { --circle-fill:var(--color-primary-hover);--circle-line:var(--color-primary-hover); }
+:is(.send-button,.stop-button):disabled > .circle-visual { --circle-fill:var(--color-border);--circle-line:var(--color-border); }
+:is(.send-button,.stop-button).circle-control:disabled { color:var(--color-muted);opacity:1; }
+.conversation-image-lightbox > .circle-control .circle-visual { --circle-fill:#333333; }
+.screenshot-draft .circle-visual { --circle-fill:#000c; }
+.circle-control:not(.stop-button):not(.send-button):is(:hover,:focus-visible) .circle-visual { border-color:var(--color-accent); }
+.execution-trigger .execution-glyph { width:var(--circle-icon-size);height:var(--circle-icon-size); }
+.sidebar-search { overflow:visible; }
+.message.user:has(.message-edit-button) { flex-direction:column;align-items:flex-end; }
+.message-edit-button { margin:0 0 0 auto; }
+.message-edit-banner { display:flex;align-items:center;gap:8px;padding:6px 10px;color:var(--color-muted);font-size:11px;line-height:1.5; }
+.message-edit-banner > span { min-width:0;flex:1;overflow-wrap:anywhere; }
+.message-edit-banner > button { flex:none;font-size:11px; }

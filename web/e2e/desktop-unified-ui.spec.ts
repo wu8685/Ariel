@@ -55,8 +55,8 @@ for (const width of [320, 390, 1280]) {
       const textarea = page.getByRole("textbox", { name: "发送消息" });
       await textarea.fill("保留尚未发送的草稿");
       await expect(stop).toBeEnabled();
-      await expect(stop).toHaveCSS("background-color", "rgb(29, 93, 198)");
-      await expect(stop).toHaveCSS("border-top-color", "rgb(29, 93, 198)");
+      await expect(stop.locator(".circle-visual")).toHaveCSS("background-color", "rgb(29, 93, 198)");
+      await expect(stop.locator(".circle-visual")).toHaveCSS("border-top-color", "rgb(29, 93, 198)");
       await expect(stop).toHaveCSS("color", "rgb(255, 255, 255)");
       await expect(stop).toHaveCSS("border-radius", "50%");
       const before = await stop.boundingBox();
@@ -66,8 +66,8 @@ for (const width of [320, 390, 1280]) {
 
       if (width >= 800) {
         await stop.hover();
-        await expect(stop).toHaveCSS("background-color", "rgb(36, 92, 186)");
-        await expect(stop).toHaveCSS("border-top-color", "rgb(36, 92, 186)");
+        await expect(stop.locator(".circle-visual")).toHaveCSS("background-color", "rgb(36, 92, 186)");
+        await expect(stop.locator(".circle-visual")).toHaveCSS("border-top-color", "rgb(36, 92, 186)");
         await page.mouse.move(0, 0);
       }
       await stop.focus();
@@ -79,8 +79,8 @@ for (const width of [320, 390, 1280]) {
 
       await stop.click();
       await expect(stop).toBeDisabled();
-      await expect(stop).toHaveCSS("background-color", "rgb(63, 63, 63)");
-      await expect(stop).toHaveCSS("border-top-color", "rgb(63, 63, 63)");
+      await expect(stop.locator(".circle-visual")).toHaveCSS("background-color", "rgb(63, 63, 63)");
+      await expect(stop.locator(".circle-visual")).toHaveCSS("border-top-color", "rgb(63, 63, 63)");
       await expect(stop).toHaveCSS("color", "rgb(224, 224, 224)");
       expect(await stop.boundingBox()).toEqual(before);
       expect(stopRequests).toHaveLength(1);

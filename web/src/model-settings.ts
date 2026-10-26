@@ -2,8 +2,8 @@ export type ExecutionSpeed = { mode: "inherit" | "standard" | "tier"; tierId?: s
 export type ExecutionValues = { model: string; effort: string; speed: ExecutionSpeed };
 export type ExecutionSnapshot = { revision: string; values: ExecutionValues; freshness: "fresh" | "stale"; writable: boolean };
 export type ExecutionModel = { id: string; name: string; description: string; efforts: { id: string; description: string }[]; defaultEffort: string; tiers: { id: string; name: string; description: string }[]; defaultTier: string | null; inputModalities: string[]; isDefault: boolean };
-export type ExecutionCatalog = { models: ExecutionModel[] };
-export type ExecutionGuard = { key: string; busy: boolean; imagesBlocked: boolean; draftSettings?: ExecutionValues };
+export type ExecutionCatalog = { models: ExecutionModel[]; editSupported?: boolean };
+export type ExecutionGuard = { key: string; busy: boolean; imagesBlocked: boolean; editSupported?: boolean; draftSettings?: ExecutionValues };
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const str = (v: unknown, max = 256): v is string => typeof v === "string" && v.length <= max;
 export function parseCatalog(v: unknown): ExecutionCatalog | null {

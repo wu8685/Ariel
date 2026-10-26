@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleButton, BackGlyph, RefreshGlyph } from "./circular-button";
 import { FileContentCache, FileViewer, type FileQuote, type FileView, type OpenFile } from "./file-context";
 
 export type WorkspaceEntry={name:string;path:string;kind:"file"|"directory"|"symlink";sizeBytes:number;modifiedAtMs:number;readable:boolean};
@@ -53,7 +54,7 @@ export function WorkspaceBrowser({deviceId,agentEpoch,threadId,cwd,request,cache
   if(file)return <div className="workspace-browser workspace-file-open"><FileViewer view={file} source="workspace_browser" showDiff={false} backLabel="返回文件列表" onClose={()=>setFile(null)} onModeChange={()=>{}} onQuote={quote=>{onQuote(quote);onClose()}}/></div>;
   const crumbs=path?path.split("/"):[];
   return <section className="workspace-browser" role="dialog" aria-modal="true" aria-label="工作区文件">
-    <header><button type="button" className="workspace-close" aria-label="返回会话" onClick={onClose}>‹</button><div><strong>{project}</strong><small>工作区文件</small></div><button type="button" className="workspace-refresh" aria-label="刷新目录" onClick={()=>void load(path)}>↻</button></header>
+    <header><CircleButton type="button" className="workspace-close" aria-label="返回会话" onClick={onClose}><BackGlyph/></CircleButton><div><strong>{project}</strong><small>工作区文件</small></div><CircleButton type="button" className="workspace-refresh" aria-label="刷新目录" onClick={()=>void load(path)}><RefreshGlyph/></CircleButton></header>
     <nav className="workspace-breadcrumb" aria-label="文件路径"><button type="button" onClick={()=>setPath("")}>{project}</button>{crumbs.map((crumb,index)=><span key={`${crumb}:${index}`}>/ <button type="button" onClick={()=>setPath(crumbs.slice(0,index+1).join("/"))}>{crumb}</button></span>)}</nav>
     <div className="workspace-tree">{page?.entries.map(entry=><button type="button" key={entry.path} className={`workspace-entry ${entry.kind}`} aria-label={`${entry.kind==="directory"?"打开目录":entry.kind==="file"?"打开文件":"不可打开"} ${entry.name}`} disabled={!entry.readable} onClick={()=>void open(entry)}><span aria-hidden="true">{entry.kind==="directory"?"▸":entry.kind==="file"?"·":"↗"}</span><span>{entry.name}</span>{entry.kind==="file"&&<small>{entry.sizeBytes} B</small>}</button>)}{loading&&<p role="status">正在读取目录…</p>}{error&&<p role="alert">{error}</p>}{!loading&&!error&&page?.entries.length===0&&<p>此目录为空</p>}</div>
     {page?.nextCursor&&<button className="workspace-more" type="button" aria-label="加载更多" disabled={loading} onClick={()=>void load(path,page.nextCursor,true)}>加载更多</button>}

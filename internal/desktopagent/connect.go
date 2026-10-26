@@ -135,6 +135,14 @@ type leasedLive struct {
 	release func()
 }
 
+func (l *leasedLive) EditLatest(ctx context.Context, turn, item, hash, text string) (string, error) {
+	capable, ok := l.Live.(editingLive)
+	if !ok {
+		return "", desktopipc.ErrProtocol
+	}
+	return capable.EditLatest(ctx, turn, item, hash, text)
+}
+
 // holdsLargeFollowerLease is an internal marker used by the Service capacity
 // controller. It never exposes the underlying Desktop state or lease handle.
 func (*leasedLive) holdsLargeFollowerLease() {}

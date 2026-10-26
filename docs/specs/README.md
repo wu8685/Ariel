@@ -122,6 +122,12 @@
 
 ## 设计基线
 
+最新批准的联合发布规格：
+
+- [0114 设备选择与侧栏层级](0114-sidebar-device-picker-and-hierarchy.md)：主题设备列表、父子缩进、只读导航文字。
+- [0115 停止后编辑并替换消息](0115-edit-stopped-latest-user-message.md)：原生 owner 编辑、草稿保护、历史失效与未知结果无重放。
+- [0116 统一紧凑圆形图标](0116-unified-compact-circular-icons.md)：14／28／44px 三层尺寸及真实浏览器几何回归。
+
 `baseline/` 是 2026-10-03 从 brain-spark 迁入的 v0.1 设计与证据快照。它定义产品目标、架构、协议草案、Adapter 边界、里程碑和验收矩阵。后续如有冲突，以最新的 `Approved` 规格为准。
 
 M1–M4 当前实测与未验边界见 [2026-10-04 测试记录](../testing/2026-10-04-m1-m4.md)。

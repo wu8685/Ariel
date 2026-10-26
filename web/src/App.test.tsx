@@ -2286,7 +2286,7 @@ describe("Ariel app interactions", () => {
     act(() => socket.message({ type: "response", v: 1, requestId: requestFor("device.list").requestId, outcome: "accepted", data: {
       devices: [{ deviceId: "mac", deviceName: "昊天的 Mac", agentOnline: true, codexReady: true, adapterVersion: "desktop", capabilities: { autoLoad: true } }],
     } }));
-    expect(await screen.findByRole("option", { name: "昊天的 Mac" })).toBeTruthy();
+    expect(await screen.findByRole("combobox", { name: "设备" })).toHaveProperty("textContent",expect.stringContaining("昊天的 Mac"));
     await waitFor(() => expect(requestFor("thread.list")).toBeTruthy());
     const thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
     act(() => socket.message({ type: "response", v: 1, requestId: requestFor("thread.list").requestId, outcome: "accepted", data: { threads: [thread] } }));
@@ -2401,7 +2401,7 @@ describe("Ariel app interactions", () => {
     ] } }));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
     expect(requests("thread.list")[0].deviceId).toBe("mac-a");
-    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-b" } });
+    fireEvent.click(screen.getByRole("combobox", {name:"设备"})); fireEvent.click(screen.getByRole("option",{name:"Mac B"}));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
     expect(requests("thread.list")[1].deviceId).toBe("mac-b");
     const makeThread = (threadId: string, title: string) => ({ threadId, title, cwd: `/tmp/${threadId}`, updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] });
@@ -2454,13 +2454,13 @@ describe("Ariel app interactions", () => {
     await expandProject("/tmp/a");
     expect(await screen.findByText("Cached A")).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-b" } });
+    fireEvent.click(screen.getByRole("combobox", {name:"设备"})); fireEvent.click(screen.getByRole("option",{name:"Mac B"}));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
     act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[1].requestId, outcome: "accepted", data: { threads: [makeThread("b", "Thread B")], nextCursor: "" } }));
     await expandProject("/tmp/b");
     expect(await screen.findByText("Thread B")).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-a" } });
+    fireEvent.click(screen.getByRole("combobox", {name:"设备"})); fireEvent.click(screen.getByRole("option",{name:"Mac A"}));
     await expandProject("/tmp/a");
     expect(await screen.findByText("Cached A")).toBeTruthy();
     expect(requests("thread.list")).toHaveLength(2);
@@ -2479,7 +2479,7 @@ describe("Ariel app interactions", () => {
       { deviceId: "mac-b", deviceName: "Mac B", agentOnline: true, codexReady: true, capabilities: { autoLoad: true } },
     ] } }));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
-    fireEvent.change(screen.getByLabelText("设备"), { target: { value: "mac-b" } });
+    fireEvent.click(screen.getByRole("combobox", {name:"设备"})); fireEvent.click(screen.getByRole("option",{name:"Mac B"}));
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
     act(() => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "unknown", error: { code: "OUTCOME_UNKNOWN", message: "late A" } }));
     expect(screen.queryByRole("alert")).toBeNull();

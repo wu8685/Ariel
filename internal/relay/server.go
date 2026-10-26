@@ -804,6 +804,11 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		return true
 	}
 	settingsMethod := method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.")
+	if (method == "turn.edit" || method == "turn.edit.read") && (!agent.capabilities["turnEditing"] || !web.settingsOptIn) {
+		s.mu.Unlock()
+		web.send(ctx, responseError(webID, "rejected", "PROTOCOL_UNSUPPORTED", "turn editing unavailable"))
+		return true
+	}
 	if settingsMethod || method == "thread.bootstrap" && len(reference.Settings) > 0 {
 		if !agent.capabilities["executionSettings"] || settingsMethod && method != "model.catalog.read" && !web.settingsOptIn {
 			s.mu.Unlock()
@@ -870,7 +875,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	if method == "thread.subscribe" {
 		timeout = s.cfg.SubscriptionTimeout
 	}
-	if method == "thread.settings.update" {
+	if method == "thread.settings.update" || method == "turn.edit" {
 		timeout = s.cfg.MutationTimeout
 	}
 	if method == "thread.create" || method == "thread.bootstrap" || method == "thread.archive.update" || method == "thread.archive.undo" || method == "thread.name.update" || method == "thread.pin.update" || method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
@@ -892,6 +897,9 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 }
 
 func isLongRead(method string) bool {
+	if method == "turn.edit.read" {
+		return true
+	}
 	switch method {
 	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
 		return true

@@ -181,6 +181,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
 	service.SetThreadBootstrapper(AppServerBootstrapper{Binary: cfg.Binary})
+	service.editEnabled = verifiedEditBinary(ctx, cfg.Binary)
 	if !cfg.DisableExecutionSettings {
 		service.SetModelReader(appserver.ModelReader{RPC: readOnlyRPC})
 	}
@@ -312,6 +313,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady, "chillingMessageReferences": messageReferences}
 	capabilities["chillingWorkspaceBrowser"] = workspaceBrowser
 	if service != nil {
+		capabilities["turnEditing"] = service.EditEnabled()
 		if !cfg.DisableExecutionSettings && service.SettingsEnabled() {
 			capabilities["executionSettings"] = true
 		}
@@ -518,6 +520,10 @@ func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration
 }
 
 func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage) {
+	if method == "turn.edit" || method == "turn.edit.read" {
+		a.handleEditing(ctx, id, method, raw)
+		return
+	}
 	if method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.") {
 		a.handleSettings(ctx, id, method, raw)
 		return
@@ -1346,6 +1352,9 @@ func requestErrorCode(method string, err error) string {
 }
 
 func isReadRequest(method string) bool {
+	if method == "turn.edit.read" {
+		return true
+	}
 	switch method {
 	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch":
 		return true
