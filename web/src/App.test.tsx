@@ -1763,6 +1763,30 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("Approve fixture only")).toBeTruthy();
   });
 
+  it("renders native retry and final error notices without a duplicate thinking indicator", async () => {
+    const thread: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "retry", status: "inProgress", items: [
+      { itemId: "retry-2", role: "system", text: "Codex 正在重试：Reconnecting... waiting for network" },
+      { itemId: "u", role: "user", text: "Codex 错误：this is user text" },
+    ] }] };
+    const { socket } = await openFixture(thread);
+    const retry = document.querySelector(".native-notice.retry");
+    expect(retry?.getAttribute("role")).toBe("status");
+    expect(retry?.textContent).toContain("Reconnecting... waiting for network");
+    expect(document.querySelector(".agent-progress")).toBeNull();
+    expect(document.querySelector(".message.user.native-notice")).toBeNull();
+    fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "保留这份草稿" } });
+    const failed: Thread = { ...thread, runtime: "idle", turns: [{ turnId: "retry", status: "failed", items: [
+      { itemId: "fatal", role: "system", text: "Codex 错误：Request failed <b>literal</b>" },
+      { itemId: "unknown", role: "system", text: "Codex 状态未确认：Unclassified error" },
+    ] }] };
+    await act(async () => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: failed }));
+    expect(document.querySelector(".native-notice.retry")).toBeNull();
+    expect(document.querySelector(".native-notice.failure")?.getAttribute("role")).toBe("alert");
+    expect(document.querySelector(".native-notice.failure b")).toBeNull();
+    expect(document.querySelector(".native-notice.unknown")?.textContent).toContain("Unclassified error");
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("保留这份草稿");
+  });
+
   it("formats only user and Codex bodies while keeping system, tool and approval text literal", async () => {
     const thread = { ...fixtureThread, turns: [{ turnId: "markdown", status: "completed", items: [
       { itemId: "user", role: "user", text: "**your emphasis**" },

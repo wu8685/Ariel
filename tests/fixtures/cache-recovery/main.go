@@ -47,13 +47,29 @@ func (o *owner) Current() (json.RawMessage, error) {
 	} else if o.history.continued {
 		text = "原生会话最终回复自动到达"
 	}
+	items := []any{
+		map[string]any{"type": "userMessage", "id": "native-user", "content": []any{map[string]any{"type": "text", "text": "从 Codex App 继续会话"}}},
+		map[string]any{"type": "agentMessage", "id": "native-reply", "text": text},
+	}
+	if stage := o.history.noticeStage; stage > 0 {
+		items = append(items, map[string]any{"id": "retry-1", "type": "error", "message": "Reconnecting... 1/5", "willRetry": true})
+		if stage >= 2 {
+			items = append(items, map[string]any{"id": "retry-2", "type": "error", "message": "Reconnecting... waiting for network", "willRetry": true})
+		}
+		switch stage {
+		case 3:
+			items = append(items, map[string]any{"id": "resumed", "type": "agentMessage", "text": "网络恢复后继续回复"})
+		case 4:
+			status = "failed"
+			items = append(items, map[string]any{"id": "fatal", "type": "error", "message": "Request failed after retries", "willRetry": false})
+		case 5:
+			items = append(items, map[string]any{"id": "unclassified", "type": "error", "message": "Unclassified native error"})
+		}
+	}
 	return json.Marshal(map[string]any{
 		"cwd": fixtureCWD, "threadRuntimeStatus": map[string]any{"type": runtime}, "requests": []any{},
 		"latestThreadSettings": map[string]any{"approvalPolicy": "on-request", "sandboxPolicy": map[string]any{"type": "dangerFullAccess"}},
-		"turns": []any{map[string]any{"turnId": "native-turn", "status": status, "items": []any{
-			map[string]any{"type": "userMessage", "id": "native-user", "content": []any{map[string]any{"type": "text", "text": "从 Codex App 继续会话"}}},
-			map[string]any{"type": "agentMessage", "id": "native-reply", "text": text},
-		}}},
+		"turns":                []any{map[string]any{"turnId": "native-turn", "status": status, "items": items}},
 	})
 }
 
@@ -90,6 +106,7 @@ type history struct {
 	mu                                     sync.Mutex
 	processing, continued                  bool
 	streamRevision, observedStreamRevision int
+	noticeStage                            int
 	current                                *owner
 	blocked                                chan struct{}
 	attaches, refreshes, finished          atomic.Int32
@@ -122,11 +139,15 @@ func (h *history) action(w http.ResponseWriter, r *http.Request) {
 		h.blocked = make(chan struct{})
 	case "continue":
 		h.processing, h.continued = true, true
+		h.noticeStage = 0
 		h.streamRevision, h.observedStreamRevision = 0, 0
 	case "stream":
 		h.streamRevision++
 	case "complete":
 		h.processing = false
+	case "retry", "retry-again", "retry-resume", "retry-fail", "retry-unknown":
+		h.noticeStage = map[string]int{"retry": 1, "retry-again": 2, "retry-resume": 3, "retry-fail": 4, "retry-unknown": 5}[r.URL.Query().Get("action")]
+		h.processing = h.noticeStage != 4
 	case "disconnect":
 		if h.current != nil {
 			h.current.Close()

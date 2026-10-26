@@ -115,9 +115,10 @@
 | 0107 | [Agent Transport 解耦与 Cache 自愈恢复](0107-resilient-agent-transport-and-cache-recovery.md) | Implemented（Go／race／vet、Web 259、真实 Chromium 47、build 已验；物理 Safari 待验） | transport 重连不销毁 Codex follower；双 turn cache、lease、latest-only 队列与跨 epoch 只读恢复共同避免会话反复白屏 |
 | 0108 | [登录失效与协议异常分离](0108-auth-and-protocol-failure-separation.md) | Implemented（2026-10-26） | 仅明确的 `1008 / unauthorized` 触发重新登录；协议不兼容停止重连并提示刷新，不再伪装成 Passkey session 失效 |
 | 0109 | [Web wire 向后兼容与协议非法帧修复](0109-web-wire-backward-compatibility.md) | Implemented（2026-10-26） | 将 Relay 内部 lease 元数据移出 v1 Web wire，并用上一版本契约阻止长期打开的旧页面再次被新增字段破坏 |
-| 0110 | [按会话选择模型、推理强度与速度](0110-conversation-model-effort-and-speed.md) | Implemented（核心 v0.9.0；同排图标化 UI 已验，待发布） | 动态模型／强度／速度沿用原生 owner；模型入口与发送同行，强度／速度以可访问图标展示 |
+| 0110 | [按会话选择模型、推理强度与速度](0110-conversation-model-effort-and-speed.md) | Implemented（核心 v0.9.0；同排图标化 UI 合入 v0.9.2） | 动态模型／强度／速度沿用原生 owner；模型入口与发送同行，强度／速度以可访问图标展示 |
 | 0111 | [紧凑会话顶部](0111-compact-conversation-header.md) | Implemented（合并至 v0.9.0） | 52px 双行 header，缩小字体与图标，保留 44px 点击区域及历史折叠行为 |
 | 0112 | [原地恢复登录](0112-in-place-session-reauthentication.md) | Implemented（Web 286、Chromium 56、native gate 通过；v0.9.0） | 认证失效保留正文与草稿，原位刷新 Cookie／重新登录；模型设置、紧凑顶部、连接竞态修复合并发布 |
+| 0113 | [原生重试与错误提示](0113-native-retry-and-error-notices.md) | Implemented（Go／race／vet、Web 291、Chromium 58 已验） | 区分 retry 与最终错误，消除重复 error 项目，占位不再掩盖原文；沿用 v1 wire |
 
 ## 设计基线
 

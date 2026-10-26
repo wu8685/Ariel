@@ -6,6 +6,7 @@ import { answersForSubmission } from "./interaction";
 import { InteractionCard } from "./interaction-card";
 import { newRequestID } from "./ids";
 import { ExecutionSettingsControl } from "./execution-settings";
+import { nativeNoticeKind } from "./native-notice";
 import { ExecutionSettingsStore, type ExecutionGuard } from "./model-settings";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
@@ -2880,6 +2881,7 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
   const [activityExpanded, setActivityExpanded] = useState(false);
   const [openActivityID, setOpenActivityID] = useState("");
   const parts = groupTurnItems(turn);
+  const retrying = turn.items.some(item => nativeNoticeKind(item) === "retry");
   const lastPart = parts.at(-1);
   const processing = active && lastPart?.kind === "activity";
   const activityParts = parts.filter(part => part.kind === "activity");
@@ -2897,10 +2899,11 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
     {parts.map(part => {
       if (part.kind === "message") {
         const item = part.item;
+		const notice = nativeNoticeKind(item);
 		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];
-        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
+        return <article className={`message ${item.role}${notice ? ` native-notice ${notice}` : ""}`} role={notice ? notice === "failure" ? "alert" : "status" : undefined} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
@@ -2909,6 +2912,6 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
       </section>;
     })}
 		{turn.status === "completed" && fileChanges && <TurnFileChanges changes={fileChanges} onOpen={onOpenFile}/>}
-    {active && <div className="agent-progress" role="status">{processing ? "处理中…" : "思考中…"}</div>}
+    {active && !retrying && <div className="agent-progress" role="status">{processing ? "处理中…" : "思考中…"}</div>}
   </section>;
 }
