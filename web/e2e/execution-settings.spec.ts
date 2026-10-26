@@ -1,7 +1,7 @@
 import { expect, test, type WebSocketRoute } from "@playwright/test";
 import type { Thread } from "../src/generated/protocol";
 const token=`s_${"d".repeat(64)}`;
-const first:Thread={threadId:"settings-one",title:"模型设置会话",cwd:"/work/ariel",updatedAt:"2026-10-26T00:00:00Z",runtime:"inProgress",turns:[{turnId:"active",status:"inProgress",items:[{itemId:"reply",role:"assistant",text:"现有内容持续展示"}]}],pendingInteractions:[]};
+const first:Thread={threadId:"settings-one",title:"模型设置会话",cwd:"/work/ariel",updatedAt:"2026-10-26T00:00:00Z",runtime:"inProgress",permissions:{sandbox:"full_access",approval:"on_request"},turns:[{turnId:"active",status:"inProgress",items:[{itemId:"reply",role:"assistant",text:"现有内容持续展示"}]}],pendingInteractions:[]};
 const second:Thread={...first,threadId:"settings-two",title:"另一个会话",runtime:"idle",turns:[]};
 const models=[{id:"model-a",name:"Model A",description:"A model with a long descriptive name to verify wrapping",efforts:[{id:"low",description:"Faster reasoning"},{id:"high",description:"Deeper reasoning"}],defaultEffort:"low",tiers:[{id:"native-priority",name:"Fast",description:"Increased usage"}],defaultTier:null,inputModalities:["text","image"],isDefault:true},{id:"model-b",name:"Model B",description:"Another model",efforts:[{id:"medium",description:"Balanced"}],defaultEffort:"medium",tiers:[],defaultTier:null,inputModalities:["text"],isDefault:false}];
 test("execution settings preserve the transcript, fence old events and remain usable on mobile and desktop",async({page})=>{
@@ -25,11 +25,13 @@ test("execution settings preserve the transcript, fence old events and remain us
   expect(await trigger.evaluate(el=>!!el.closest(".composer-actions"))).toBe(true);
   // Sample every rectangle atomically: separate round trips can observe
   // different resize frames and manufacture an overlap that never existed.
-  const controls=await page.locator(".composer-actions").evaluate(el=>[...el.querySelectorAll(".attach-button,.execution-trigger,.queue-cancel-button,.stop-button,.send-button")].map(control=>{const r=control.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};}));
+  const controls=await page.locator(".composer-actions").evaluate(el=>[...el.querySelectorAll(".attach-button,.permission-info-button,.execution-trigger,.queue-cancel-button,.stop-button,.send-button")].map(control=>{const r=control.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};}));
   let previousRight=0,center=0;
   for(const r of controls){expect(r.width).toBeGreaterThanOrEqual(44);expect(r.height).toBeGreaterThanOrEqual(44);expect(r.x).toBeGreaterThanOrEqual(previousRight-1);previousRight=r.x+r.width;if(center)expect(Math.abs(r.y+r.height/2-center)).toBeLessThanOrEqual(1);else center=r.y+r.height/2;}
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  expect(await page.locator(".composer-actions").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  const row=await page.locator(".composer-actions").evaluate(el=>({scroll:el.scrollWidth,width:el.clientWidth,controls:[...el.querySelectorAll("button")].map(b=>({name:b.getAttribute("aria-label"),x:b.getBoundingClientRect().x,width:b.getBoundingClientRect().width}))}));
+  expect(row.scroll,JSON.stringify(row)).toBeLessThanOrEqual(row.width);
+  expect(await trigger.evaluate(el=>{const box=el.getBoundingClientRect();return [...el.querySelectorAll(".execution-glyph")].every(glyph=>{const r=glyph.getBoundingClientRect();return r.left>=box.left && r.right<=box.right;});})).toBe(true);
  };
  for(const width of [320,390,1280]){await page.setViewportSize({width,height:844});await verifyActionRow();}
  await page.setViewportSize({width:390,height:844});

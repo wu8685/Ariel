@@ -1,12 +1,17 @@
-.execution-options { flex:0 1 auto; min-width:0; max-width:280px; margin-left:auto; padding:0; color:var(--color-muted); font-size:12px; line-height:1.4; }
-.execution-trigger { display:flex; align-items:center; gap:5px; width:100%; min-width:0; min-height:44px; padding:3px 6px; border:1px solid transparent; border-radius:8px; background:transparent; color:inherit; font-size:12px; cursor:pointer; }
+.execution-options { flex:0 1 auto; min-width:44px; max-width:280px; margin-left:auto; padding:0; color:var(--color-muted); font-size:12px; line-height:1.4; }
+.execution-trigger { display:flex; align-items:center; gap:5px; width:100%; min-width:44px; min-height:44px; padding:3px 6px; border:1px solid transparent; border-radius:8px; background:transparent; color:inherit; font-size:12px; cursor:pointer; }
 .execution-model { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
 .execution-glyph { flex:none; width:18px; height:18px; }
 .execution-speed[data-icon-state="fast"] { color:var(--color-accent); }
 .execution-chevron { flex:none; width:12px; height:12px; }
 .execution-saving { flex:none; width:12px; height:12px; animation:send-loading-spin 1s linear infinite; }
-.composer-actions:has(.execution-options) :is(.attach-button,.queue-cancel-button,.stop-button,.send-button) { flex:0 0 44px; width:44px; min-height:44px; }
+.composer-actions:has(.execution-options,.permission-info) :is(.attach-button,.queue-cancel-button,.stop-button,.send-button) { flex:0 0 44px; width:44px; min-height:44px; }
 .execution-image-warning { display:block; padding:4px 12px; color:var(--color-warning); font-size:12px; line-height:1.4; overflow-wrap:anywhere; }
+@media (max-width:360px) {
+  .composer-actions:has(.permission-info):has(.queue-cancel-button):has(.stop-button) .execution-trigger { gap:2px; padding-inline:2px; }
+  .composer-actions:has(.permission-info):has(.queue-cancel-button):has(.stop-button) .execution-glyph { width:16px; height:16px; }
+  .composer-actions:has(.permission-info):has(.queue-cancel-button):has(.stop-button) :is(.execution-chevron,.execution-saving) { display:none; }
+}
 .execution-trigger:hover { color:var(--color-text); background:var(--color-raised); }
 .execution-trigger:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
 .execution-backdrop { position:fixed; inset:0; z-index:60; display:grid; place-items:center; padding:20px; background:#000a; }

@@ -151,7 +151,10 @@ for (const width of [320, 390, 1280]) {
       expect(geometry.header.width).toBe(width);
       expect(geometry.transcriptTop).toBe(geometry.header.bottom);
       expect(geometry.pageWidth).toBe(width);
-      expect(geometry.controls).toHaveLength(3);
+      expect(geometry.controls).toHaveLength(2);
+      await expect(header.locator(".permission-info-button")).toHaveCount(0);
+      const fileEntry = (await header.getByRole("button", { name: "浏览工作区文件" }).boundingBox())!;
+      expect(fileEntry.x + fileEntry.width).toBe(width - 10);
       for (const control of geometry.controls) {
         expect(control.width).toBeGreaterThanOrEqual(44);
         expect(control.height).toBeGreaterThanOrEqual(44);
@@ -195,17 +198,33 @@ for (const width of [320, 390, 1280]) {
         page.getByRole("dialog", { name: "工作区文件", exact: true }),
       ).toBeVisible();
       await page.getByRole("button", { name: "返回会话", exact: true }).click();
-      await header.locator(".permission-info-button").click();
+      const permissions = page.locator(".composer-actions .permission-info-button");
+      await page.getByRole("textbox", { name: "发送消息" }).fill("权限弹层测试草稿");
+      const attachBox = (await page.getByRole("button", { name: "选择截图" }).boundingBox())!;
+      const permissionBox = (await permissions.boundingBox())!;
+      expect(permissionBox.x - attachBox.x - attachBox.width).toBeGreaterThanOrEqual(0);
+      expect(permissionBox.x - attachBox.x - attachBox.width).toBeLessThanOrEqual(4);
+      expect(permissionBox.width).toBeGreaterThanOrEqual(44);
+      expect(permissionBox.height).toBeGreaterThanOrEqual(44);
+      await permissions.click();
       const popover = page.getByRole("dialog", {
         name: "当前 Desktop 权限详情",
       });
       await expect(popover).toBeVisible();
       const popup = (await popover.boundingBox())!;
-      expect(popup.y).toBeGreaterThanOrEqual(geometry.header.bottom);
+      expect(popup.y).toBeGreaterThanOrEqual(12);
+      expect(popup.y + popup.height).toBeLessThanOrEqual(permissionBox.y - 7);
       expect(popup.x).toBeGreaterThanOrEqual(0);
       expect(popup.x + popup.width).toBeLessThanOrEqual(width);
-      await header.locator(".permission-info-button").click();
+      expect(await popover.evaluate(el => { const r=el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)); })).toBe(true);
+      if (width === 390) await expect(page).toHaveScreenshot("mobile-composer-permission-popover.png", { animations: "disabled", caret: "hide" });
+      await page.setViewportSize({ width, height: 450 });
+      await expect(popover).toBeVisible();
+      await expect.poll(async () => { const p=(await popover.boundingBox())!, b=(await permissions.boundingBox())!;return p.y>=12 && p.y+p.height<=b.y-7; }).toBe(true);
+      expect(await popover.evaluate(el => { const r=el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)); })).toBe(true);
+      await permissions.click();
       await expect(popover).toBeHidden();
+      await expect(page.getByRole("textbox", { name: "发送消息" })).toHaveValue("权限弹层测试草稿");
       await menu.focus();
       await page.keyboard.press("Enter");
       await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);

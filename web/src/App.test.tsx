@@ -1704,6 +1704,9 @@ describe("Ariel app interactions", () => {
     const thread: Thread = { ...fixtureThread, permissions: { sandbox: "full_access", approval: "on_request" } };
     await openFixture(thread);
     const info = screen.getByRole("button", { name: /Full Access.*on-request/ });
+    expect(info.closest(".conversation-head")).toBeNull();
+    expect(info.closest(".composer-actions")).toBeTruthy();
+    expect(info.closest(".permission-info")?.previousElementSibling?.getAttribute("aria-label")).toBe("选择截图");
     expect(info.classList.contains("danger")).toBe(true);
     expect(info.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(info);
