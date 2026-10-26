@@ -13,9 +13,10 @@ var ErrResyncRequired = errors.New("IPC state invalid; fresh snapshot required")
 // Reducer is confined to a subscription's ordered event loop. Any failed change
 // invalidates the entire view; a later snapshot can establish a new baseline.
 type Reducer struct {
-	state    json.RawMessage
-	revision int64
-	limit    int
+	state             json.RawMessage
+	executionMetadata json.RawMessage
+	revision          int64
+	limit             int
 }
 
 func NewReducer(limit int) *Reducer {
@@ -27,6 +28,15 @@ func NewReducer(limit int) *Reducer {
 
 func (r *Reducer) Snapshot() (json.RawMessage, int64, bool) {
 	return bytes.Clone(r.state), r.revision, r.state != nil
+}
+
+// ExecutionMetadata is a bounded scalar projection prepared while Apply already
+// has the decoded owner state. Settings watchers never copy/parse full history.
+func (r *Reducer) ExecutionMetadata() json.RawMessage {
+	if r.state == nil {
+		return nil
+	}
+	return bytes.Clone(r.executionMetadata)
 }
 
 func (r *Reducer) Apply(body json.RawMessage) (err error) {
@@ -121,6 +131,7 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 		return fmt.Errorf("%w: normalized snapshot bytes %d exceed %d", ErrResyncRequired, len(encoded), r.limit)
 	}
 	r.state = encoded
+	r.executionMetadata = projectExecutionMetadata(state.(map[string]any))
 	r.revision = *change.Revision
 	return nil
 }

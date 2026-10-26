@@ -18,7 +18,8 @@
     { "$ref": "#/$defs/threadCacheRemove" },
     { "$ref": "#/$defs/interactionResolved" },
     { "$ref": "#/$defs/authPairConsumed" },
-    { "$ref": "tasks.schema.json" }
+    { "$ref": "tasks.schema.json" },
+    { "$ref": "settings.schema.json" }
   ],
   "$defs": {
     "id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -29,6 +30,7 @@
       "properties": {
         "autoLoad": { "type": "boolean" },
         "codexReady": { "type": "boolean" },
+        "executionSettings": { "type": "boolean" },
         "history": { "type": "boolean" },
         "send": { "type": "boolean" },
         "interrupt": { "type": "boolean" },
@@ -140,6 +142,7 @@
       "type": "object", "additionalProperties": false, "required": ["cwd", "clientMessageId", "text"],
       "anyOf": [{ "properties": { "text": { "type": "string", "minLength": 1 } } }, { "required": ["images"], "properties": { "images": { "type": "array", "minItems": 1 } } }],
       "properties": {
+        "settings": {"$ref":"settings.schema.json#/$defs/values"},
         "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
         "clientMessageId": { "$ref": "#/$defs/requestId" },
         "text": { "type": "string", "maxLength": 65536 },

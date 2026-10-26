@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/desktopagent"
 	"github.com/wu8685/Ariel/internal/obsidiantasks"
 	"github.com/wu8685/Ariel/internal/probe"
@@ -124,6 +125,7 @@ func taskExecutionCheckForProfile(enabled, managerOnly bool, profile probe.IPCPr
 }
 
 func main() {
+	disableExecutionSettings := flag.Bool("disable-execution-settings", os.Getenv("ARIEL_DISABLE_EXECUTION_SETTINGS") == "true", "disable per-conversation model/effort/speed extension (for rollback or unverified Codex versions)")
 	enableChilling := flag.Bool("enable-chilling-file-context", os.Getenv("ARIEL_ENABLE_CHILLING_FILE_CONTEXT") == "true", "enable the local Chilling file-context gateway")
 	chillingEndpoint := flag.String("chilling-endpoint", os.Getenv("ARIEL_CHILLING_ENDPOINT"), "Chilling unix:// endpoint")
 	enableTasks := flag.Bool("enable-tasks", os.Getenv("ARIEL_ENABLE_TASKS") == "true", "enable task gateway / explicitly authorized task execution")
@@ -192,6 +194,10 @@ func main() {
 			log.Print("task writes disabled: native compatibility is unverified; management and read-only recovery remain available")
 		}
 		binary = selectedBinary
+		if !desktopipc.SettingsProfileSupported(desktopVersion, cliVersion) {
+			*disableExecutionSettings = true
+			log.Print("execution settings disabled: this native version has not passed the isolated settings compatibility gate")
+		}
 	}
 	backoff := newReconnectBackoff()
 	readyFile := os.Getenv("ARIEL_READY_FILE")
@@ -218,7 +224,7 @@ func main() {
 			backoff.connected()
 			return nil
 		}
-		err := desktopagent.Run(ctx, desktopagent.Config{URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, ChillingEnabled: cfg.chillingEnabled, ChillingEndpoint: cfg.chillingEndpoint, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady})
+		err := desktopagent.Run(ctx, desktopagent.Config{DisableExecutionSettings: *disableExecutionSettings, URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, ChillingEnabled: cfg.chillingEnabled, ChillingEndpoint: cfg.chillingEndpoint, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady})
 		if ctx.Err() != nil {
 			break
 		}

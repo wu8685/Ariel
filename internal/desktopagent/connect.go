@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
+	"github.com/wu8685/Ariel/internal/modelsettings"
 )
 
 const largeFollowerReservationBytes int64 = 64 << 20
@@ -175,6 +176,21 @@ func (l *leasedLive) Refresh(ctx context.Context) (json.RawMessage, error) {
 		return nil, desktopipc.ErrProtocol
 	}
 	return capable.Refresh(ctx)
+}
+
+func (l *leasedLive) ExecutionSettings() (modelsettings.Values, error) {
+	capable, ok := l.Live.(executionSettingsLive)
+	if !ok {
+		return modelsettings.Values{}, desktopipc.ErrProtocol
+	}
+	return capable.ExecutionSettings()
+}
+func (l *leasedLive) UpdateExecutionSettings(ctx context.Context, v modelsettings.Values) error {
+	capable, ok := l.Live.(executionSettingsLive)
+	if !ok {
+		return desktopipc.ErrProtocol
+	}
+	return capable.UpdateExecutionSettings(ctx, v)
 }
 
 func (l *leasedLive) Close() error {

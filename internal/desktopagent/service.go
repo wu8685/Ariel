@@ -18,6 +18,7 @@ import (
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
+	"github.com/wu8685/Ariel/internal/modelsettings"
 )
 
 type History interface {
@@ -120,23 +121,34 @@ type subscription struct {
 	active       bool
 	updateMode   string
 	baseline     map[string]any
+	settings     *modelsettings.Snapshot
 	emit         func(map[string]any)
 }
 type threadController struct {
-	mu             sync.Mutex
-	startMu        sync.Mutex
-	id, title, cwd string
-	bootstrap      bool
-	bootstrapHold  bool
-	migrating      bool
-	live           Live
-	current        map[string]any
-	subs           map[string]*subscription
-	leases         int
-	lastUsed       uint64
-	retireTimer    *time.Timer
+	mu                 sync.Mutex
+	startMu            sync.Mutex
+	id, title, cwd     string
+	bootstrap          bool
+	bootstrapHold      bool
+	migrating          bool
+	live               Live
+	current            map[string]any
+	subs               map[string]*subscription
+	leases             int
+	lastUsed           uint64
+	retireTimer        *time.Timer
+	settingsGeneration string
+	settingsVersion    uint64
+	settingsLast       modelsettings.Values
+	settingsKnown      bool
+	bootstrapSettings  *modelsettings.Values
 }
 type Service struct {
+	models           ModelReader
+	modelsMu         sync.Mutex
+	modelsLoading    chan struct{}
+	modelsCatalog    modelsettings.Catalog
+	modelsExpires    time.Time
 	history          History
 	queue            FollowUpQueue
 	creator          ThreadCreator
@@ -458,6 +470,10 @@ type terminalBootstrapLive interface {
 }
 
 func (s *Service) BootstrapThread(ctx context.Context, cwd, messageID, text string, images []string) (map[string]any, string, error) {
+	return s.BootstrapThreadWithSettings(ctx, cwd, messageID, text, images, nil)
+}
+
+func (s *Service) BootstrapThreadWithSettings(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (map[string]any, string, error) {
 	if s.bootstrapper == nil {
 		return nil, "", appserver.ErrMethodUnavailable
 	}
@@ -481,7 +497,25 @@ func (s *Service) BootstrapThread(ctx context.Context, cwd, messageID, text stri
 			<-s.bootstrapSlots
 		}
 	}()
-	result, err := s.bootstrapper.Bootstrap(ctx, canonical, messageID, text, images)
+	var result BootstrapResult
+	if settings != nil {
+		catalog, e := s.ModelCatalog(ctx, false)
+		if e != nil {
+			return nil, "", e
+		}
+		if e = catalog.Validate(*settings, len(images) > 0); e != nil {
+			return nil, "", e
+		}
+		capable, ok := s.bootstrapper.(interface {
+			BootstrapWithSettings(context.Context, string, string, string, []string, *modelsettings.Values) (BootstrapResult, error)
+		})
+		if !ok {
+			return nil, "", appserver.ErrMethodUnavailable
+		}
+		result, err = capable.BootstrapWithSettings(ctx, canonical, messageID, text, images, settings)
+	} else {
+		result, err = s.bootstrapper.Bootstrap(ctx, canonical, messageID, text, images)
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -511,7 +545,11 @@ func (s *Service) BootstrapThread(ctx context.Context, cwd, messageID, text stri
 	}
 	c.title, c.cwd, c.bootstrap = result.Title, canonical, true
 	c.bootstrapHold = true
-	c.live = live
+	if settings != nil {
+		intent := *settings
+		c.bootstrapSettings = &intent
+	}
+	setControllerLiveLocked(c, live)
 	c.current = nil
 	c.mu.Unlock()
 	s.rememberThread(result.ThreadID)
@@ -569,18 +607,42 @@ func (s *Service) migrateBootstrap(c *threadController, live terminalBootstrapLi
 		s.failMigration(c, "RESYNC_REQUIRED")
 		return
 	}
-	c.mu.Lock()
-	if c.live != nil {
-		c.mu.Unlock()
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		_ = desktop.Close()
 		return
 	}
-	c.live = desktop
+	c.mu.Lock()
+	intent := c.bootstrapSettings
+	c.mu.Unlock()
+	if err := initializeBootstrapSettings(ctx, desktop, intent); err != nil {
+		_ = desktop.Close()
+		s.failMigration(c, "NATIVE_STATE_UNCERTAIN")
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = desktop.Close()
+		return
+	}
+	c.mu.Lock()
+	if c.live != nil {
+		c.mu.Unlock()
+		s.mu.Unlock()
+		_ = desktop.Close()
+		return
+	}
+	setControllerLiveLocked(c, desktop)
 	c.current = nil
 	c.bootstrap = false
 	c.bootstrapHold = false
 	c.migrating = false
+	c.bootstrapSettings = nil
 	c.mu.Unlock()
+	s.mu.Unlock()
 	go s.pump(c, desktop)
 }
 
@@ -589,16 +651,28 @@ func (s *Service) failMigration(c *threadController, code string) {
 	c.current = nil
 	c.bootstrapHold = false
 	c.migrating = false
-	out := make([]*subscription, 0, len(c.subs))
+	c.bootstrapSettings = nil
+	type delivery struct {
+		emit  func(map[string]any)
+		event map[string]any
+	}
+	out := make([]delivery, 0, len(c.subs))
 	for id, sub := range c.subs {
 		if sub.active {
-			out = append(out, sub)
+			if sub.settings != nil {
+				stale := *sub.settings
+				stale.Freshness = "stale"
+				stale.Writable = false
+				out = append(out, delivery{sub.emit, settingsEvent(c, sub, stale)})
+			} else {
+				out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": code}})
+			}
 		}
 		delete(c.subs, id)
 	}
 	c.mu.Unlock()
 	for _, sub := range out {
-		sub.emit(map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": code})
+		sub.emit(sub.event)
 	}
 }
 
@@ -1173,7 +1247,7 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 	if err != nil {
 		return err
 	}
-	c.live = live
+	setControllerLiveLocked(c, live)
 	c.current = nil
 	c.title = title
 	c.cwd = cwd
@@ -1300,6 +1374,9 @@ func (s *Service) pump(c *threadController, live Live) {
 				if !sub.active {
 					continue
 				}
+				if sub.settings != nil {
+					continue
+				}
 				if tooLarge {
 					out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": "HISTORY_TOO_LARGE"}})
 					delete(c.subs, sub.id)
@@ -1325,6 +1402,7 @@ func (s *Service) pump(c *threadController, live Live) {
 				out = append(out, delivery{sub.emit, map[string]any{"event": "thread.update", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "baseSeq": base, "seq": sub.seq, "thread": thread}})
 			}
 			c.mu.Unlock()
+			s.publishSettings(c, live, raw)
 			for _, delivery := range out {
 				delivery.emit(delivery.event)
 			}
@@ -1354,7 +1432,14 @@ func (s *Service) invalidateLive(c *threadController, live Live, code string) {
 	out := make([]delivery, 0, len(c.subs))
 	for id, sub := range c.subs {
 		if sub.active {
-			out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": code}})
+			if sub.settings != nil {
+				stale := *sub.settings
+				stale.Freshness = "stale"
+				stale.Writable = false
+				out = append(out, delivery{sub.emit, settingsEvent(c, sub, stale)})
+			} else {
+				out = append(out, delivery{sub.emit, map[string]any{"event": "thread.error", "threadId": c.id, "subscriptionId": sub.id, "streamId": sub.streamID, "code": code}})
+			}
 		}
 		delete(c.subs, id)
 	}
@@ -1604,6 +1689,9 @@ func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text
 	}
 	c.mu.Unlock()
 	logPhase("turn-start-fence", threadID, "durationMs", millisSince(fenceStart), "ok", true)
+	if err := s.validateImageModel(ctx, live, images); err != nil {
+		return "", err
+	}
 	var turnID string
 	nativeStart := time.Now()
 	if len(images) > 0 {
@@ -1799,6 +1887,12 @@ func (s *Service) QueueAdd(ctx context.Context, threadID, clientMessageID, text 
 	defer s.releaseController(c)
 	c.startMu.Lock()
 	defer c.startMu.Unlock()
+	c.mu.Lock()
+	live := c.live
+	c.mu.Unlock()
+	if err := s.validateImageModel(ctx, live, images); err != nil {
+		return nil, err
+	}
 	before, err := s.queueMessages(ctx, threadID)
 	if err != nil {
 		return nil, err
@@ -1832,6 +1926,12 @@ func (s *Service) QueueUpdate(ctx context.Context, threadID, queueID, text strin
 	defer s.releaseController(c)
 	c.startMu.Lock()
 	defer c.startMu.Unlock()
+	c.mu.Lock()
+	live := c.live
+	c.mu.Unlock()
+	if err := s.validateImageModel(ctx, live, images); err != nil {
+		return nil, err
+	}
 	before, err := s.queueMessages(ctx, threadID)
 	if err != nil {
 		return nil, err

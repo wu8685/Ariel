@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
+	"github.com/wu8685/Ariel/internal/modelsettings"
 )
 
 type AppServerBootstrapper struct{ Binary string }
@@ -23,6 +24,7 @@ type appServerBootstrapLive struct {
 	mu                      sync.Mutex
 	thread                  map[string]any
 	failure                 error
+	settings                modelsettings.Values
 	pending                 map[string]appserver.IncomingFrame
 	updates                 chan struct{}
 	terminal                chan struct{}
@@ -30,6 +32,10 @@ type appServerBootstrapLive struct {
 }
 
 func (b AppServerBootstrapper) Bootstrap(ctx context.Context, cwd, messageID, text string, images []string) (BootstrapResult, error) {
+	return b.BootstrapWithSettings(ctx, cwd, messageID, text, images, nil)
+}
+
+func (b AppServerBootstrapper) BootstrapWithSettings(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (BootstrapResult, error) {
 	if b.Binary == "" {
 		return BootstrapResult{}, appserver.ErrMethodUnavailable
 	}
@@ -45,8 +51,20 @@ func (b AppServerBootstrapper) Bootstrap(ctx context.Context, cwd, messageID, te
 	}()
 	var started struct {
 		Thread appserver.Thread `json:"thread"`
+		Model  string           `json:"model"`
+		Effort string           `json:"reasoningEffort"`
+		Tier   *string          `json:"serviceTier"`
 	}
-	if err := process.Call(ctx, "thread/start", map[string]any{"cwd": cwd, "ephemeral": false, "serviceName": "ariel"}, &started); err != nil {
+	startParams := map[string]any{"cwd": cwd, "ephemeral": false, "serviceName": "ariel"}
+	if settings != nil {
+		p := appserver.ExecutionParams(*settings)
+		startParams["model"] = p["model"]
+		startParams["serviceTier"] = p["serviceTier"]
+		if settings.Effort != "" {
+			startParams["config"] = map[string]any{"model_reasoning_effort": settings.Effort}
+		}
+	}
+	if err := process.Call(ctx, "thread/start", startParams, &started); err != nil {
 		return BootstrapResult{}, appserver.ErrOutcomeUnknown
 	}
 	if !threadIDPattern.MatchString(started.Thread.ID) || started.Thread.CWD != cwd {
@@ -64,12 +82,29 @@ func (b AppServerBootstrapper) Bootstrap(ctx context.Context, cwd, messageID, te
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := process.Call(ctx, "turn/start", map[string]any{"threadId": started.Thread.ID, "clientUserMessageId": messageID, "input": input}, &turnStarted); err != nil || turnStarted.Turn.ID == "" {
+	turnParams := map[string]any{"threadId": started.Thread.ID, "clientUserMessageId": messageID, "input": input}
+	if settings != nil {
+		for k, v := range appserver.ExecutionParams(*settings) {
+			turnParams[k] = v
+		}
+	}
+	if err := process.Call(ctx, "turn/start", turnParams, &turnStarted); err != nil || turnStarted.Turn.ID == "" {
 		return BootstrapResult{}, appserver.ErrOutcomeUnknown
 	}
 	live := &appServerBootstrapLive{
 		process: process, threadID: started.Thread.ID, turnID: turnStarted.Turn.ID, cwd: cwd, clientMessageID: messageID,
 		pending: map[string]appserver.IncomingFrame{}, updates: make(chan struct{}, 1), terminal: make(chan struct{}),
+	}
+	live.settings = modelsettings.Values{Model: started.Model, Effort: started.Effort, Speed: modelsettings.Speed{Mode: "inherit"}}
+	if started.Tier != nil {
+		if *started.Tier == "default" {
+			live.settings.Speed.Mode = "standard"
+		} else {
+			live.settings.Speed = modelsettings.Speed{Mode: "tier", TierID: *started.Tier}
+		}
+	}
+	if settings != nil && (live.settings.Model != settings.Model || settings.Effort != "" && live.settings.Effort != settings.Effort) {
+		return BootstrapResult{}, appserver.ErrOutcomeUnknown
 	}
 	refreshCtx, cancelRefresh := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelRefresh()
@@ -304,6 +339,14 @@ func normalizeBootstrapInteraction(id string, frame appserver.IncomingFrame) map
 }
 
 func (l *appServerBootstrapLive) Current() (json.RawMessage, error) { return nil, nil }
+func (l *appServerBootstrapLive) ExecutionSettings() (modelsettings.Values, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.settings, nil
+}
+func (l *appServerBootstrapLive) UpdateExecutionSettings(context.Context, modelsettings.Values) error {
+	return appserver.ErrMethodUnavailable
+}
 func (l *appServerBootstrapLive) CurrentThread() (map[string]any, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

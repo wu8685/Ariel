@@ -148,7 +148,7 @@ test("scrolling into history fully collapses the chrome and gives its height to 
     transcriptHeight: document.querySelector(".transcript")?.getBoundingClientRect().height || 0,
     composerHeight: document.querySelector(".composer-wrap")?.getBoundingClientRect().height || 0,
   }));
-  expect(initial.headHeight).toBe(66);
+  expect(initial.headHeight).toBe(52);
 
   await transcript.evaluate(element => {
     element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
@@ -172,7 +172,7 @@ test("scrolling into history fully collapses the chrome and gives its height to 
     transcriptHeight: document.querySelector(".transcript")?.getBoundingClientRect().height || 0,
   }));
   expect(collapsed.headHeight).toBe(0);
-  expect(initial.transcriptTop - collapsed.transcriptTop).toBeGreaterThanOrEqual(66);
+  expect(initial.transcriptTop - collapsed.transcriptTop).toBeGreaterThanOrEqual(52);
   expect(collapsed.transcriptHeight - initial.transcriptHeight).toBeGreaterThanOrEqual(initial.headHeight + initial.composerHeight);
   const restore = page.getByRole("button", { name: "恢复输入区并回到最新" });
   await expect(restore).toBeVisible();
@@ -186,7 +186,7 @@ test("scrolling into history fully collapses the chrome and gives its height to 
 
   await restore.click();
   await expect(head).toHaveAttribute("data-history-collapsed", "false");
-  await expect(head).toHaveCSS("height", "66px");
+  await expect(head).toHaveCSS("height", "52px");
   await expect(head).toHaveCSS("visibility", "visible");
   await expect(head.locator(".head-path")).toBeVisible();
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
@@ -231,7 +231,7 @@ test("returning to latest restores the chrome once without oscillation", async (
   });
   expect(settled.states).toEqual(["false"]);
   expect(settled.distanceFromLatest).toBeLessThanOrEqual(1);
-  expect(settled.headHeight).toBe(66);
+  expect(settled.headHeight).toBe(52);
   expect(settled.composerHeight).toBeGreaterThan(0);
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
   await expect(page).toHaveScreenshot("mobile-history-latest-stable.png", { animations: "disabled", caret: "hide" });
@@ -277,7 +277,7 @@ test("a one-pixel final step to the latest restores the chrome", async ({ page }
   });
   expect(settled.states).toEqual(["false"]);
   expect(settled.distanceFromLatest).toBeLessThanOrEqual(1);
-  expect(settled.headHeight).toBe(66);
+  expect(settled.headHeight).toBe(52);
   expect(settled.composerHeight).toBeGreaterThan(0);
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "false");
   await expect(page).toHaveScreenshot("mobile-history-manual-latest-restored.png", { animations: "disabled", caret: "hide" });

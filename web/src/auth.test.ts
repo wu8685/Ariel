@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { base64URLToBuffer, bufferToBase64URL, loginWithPasskey, registerPasskey } from "./auth";
+import { base64URLToBuffer, bufferToBase64URL, loadAuthStatus, loginWithPasskey, registerPasskey } from "./auth";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Passkey Web client", () => {
+  it("bounds the silent status check so recovery cannot block manual login forever", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "AbortError")), { once: true });
+      })));
+      const result = loadAuthStatus().then(() => "accepted", () => "timeout");
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await Promise.race([result, Promise.resolve("still-pending")])).toBe("timeout");
+    } finally { vi.useRealTimers(); }
+  });
   it("round-trips unpadded base64url values", () => {
     const bytes = new Uint8Array([0, 1, 2, 250, 255]);
     const encoded = bufferToBase64URL(bytes);

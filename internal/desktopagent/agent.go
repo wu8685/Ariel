@@ -16,11 +16,13 @@ import (
 	chillingclient "github.com/wu8685/Ariel/internal/chilling"
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
+	"github.com/wu8685/Ariel/internal/modelsettings"
 	"github.com/wu8685/Ariel/internal/wsheartbeat"
 	"github.com/wu8685/Ariel/protocol"
 )
 
 type Config struct {
+	DisableExecutionSettings                              bool
 	TasksEnabled                                          bool
 	TasksManagerOnly                                      bool
 	TaskEndpoint                                          string
@@ -59,6 +61,8 @@ type agent struct {
 	deviceID                string
 	agentEpoch              string
 	service                 *Service
+	settingsMu              sync.Mutex
+	settingsSubs            map[string]struct{}
 	fileContext             FileContext
 	writeMu                 sync.Mutex
 	cacheMu                 sync.Mutex
@@ -175,6 +179,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
 	service.SetThreadBootstrapper(AppServerBootstrapper{Binary: cfg.Binary})
+	if !cfg.DisableExecutionSettings {
+		service.SetModelReader(appserver.ModelReader{RPC: readOnlyRPC})
+	}
 	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
 	service.SetThreadMetadataWriter(appserver.ThreadMetadataWriter{RPC: readOnlyRPC})
 	if cfg.FileContext == nil && cfg.ChillingEnabled {
@@ -268,6 +275,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheRecoveryGuardDelay: cacheRecoveryGuardDelay, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1), cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
 	defer a.releaseCacheSubscriptions()
+	defer a.releaseSettingsSubscriptions()
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var requests sync.WaitGroup
@@ -302,6 +310,9 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady, "chillingMessageReferences": messageReferences}
 	capabilities["chillingWorkspaceBrowser"] = workspaceBrowser
 	if service != nil {
+		if !cfg.DisableExecutionSettings && service.SettingsEnabled() {
+			capabilities["executionSettings"] = true
+		}
 		capabilities["queue"] = service.QueueEnabled()
 		capabilities["threadBootstrap"] = service.ThreadBootstrapEnabled()
 		capabilities["threadArchive"] = service.ThreadArchiveEnabled()
@@ -505,6 +516,10 @@ func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration
 }
 
 func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage) {
+	if method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.") {
+		a.handleSettings(ctx, id, method, raw)
+		return
+	}
 	if protocol.IsTaskMethod(method) {
 		data, err := a.tasks.public(ctx, method, raw)
 		a.reply(ctx, id, method, data, err)
@@ -548,6 +563,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		UpdateMode       string                     `json:"updateMode"`
 		Watching         *bool                      `json:"watching"`
 		FileContexts     []chillingclient.Selection `json:"fileContexts"`
+		Settings         *modelsettings.Values      `json:"settings"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -561,7 +577,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "thread.bootstrap":
 		var thread map[string]any
 		var turnID string
-		thread, turnID, err = a.service.BootstrapThread(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images)
+		thread, turnID, err = a.service.BootstrapThreadWithSettings(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings)
 		threadID := ""
 		if thread != nil {
 			threadID, _ = thread["threadId"].(string)
@@ -1323,6 +1339,8 @@ func requestErrorCode(method string, err error) string {
 
 func isReadRequest(method string) bool {
 	switch method {
+	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch":
+		return true
 	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
 		return true
 	default:

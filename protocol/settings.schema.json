@@ -1,0 +1,22 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "$id":"https://github.com/wu8685/Ariel/protocol/settings.schema.json",
+ "oneOf":[{"$ref":"#/$defs/request"},{"$ref":"#/$defs/update"}],
+ "$defs":{
+  "id":{"type":"string","minLength":1,"maxLength":128},
+  "speed":{"type":"object","additionalProperties":false,"required":["mode"],"properties":{"mode":{"enum":["inherit","standard","tier"]},"tierId":{"type":"string","minLength":1,"maxLength":128}},"allOf":[{"if":{"properties":{"mode":{"const":"tier"}}},"then":{"required":["tierId"]},"else":{"not":{"required":["tierId"]}}}]},
+  "values":{"type":"object","additionalProperties":false,"required":["model","effort","speed"],"properties":{"model":{"type":"string","maxLength":256},"effort":{"type":"string","maxLength":128},"speed":{"$ref":"#/$defs/speed"}}},
+  "patch":{"type":"object","additionalProperties":false,"minProperties":1,"properties":{"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","maxLength":128},"speed":{"$ref":"#/$defs/speed"}}},
+  "snapshot":{"type":"object","additionalProperties":false,"required":["revision","values","freshness","writable"],"properties":{"revision":{"$ref":"#/$defs/id"},"values":{"$ref":"#/$defs/values"},"freshness":{"enum":["fresh","stale"]},"writable":{"type":"boolean"}}},
+  "request":{
+   "type":"object","additionalProperties":false,"required":["type","v","requestId","deviceId","method","params"],
+   "properties":{"type":{"const":"request"},"v":{"const":1},"requestId":{"$ref":"v1.schema.json#/$defs/requestId"},"deviceId":{"$ref":"#/$defs/id"},"method":{"enum":["model.catalog.read","thread.settings.read","thread.settings.update","thread.settings.watch","thread.settings.unwatch"]},"params":{"type":"object","additionalProperties":false,"properties":{"refresh":{"type":"boolean"},"threadId":{"$ref":"#/$defs/id"},"subscriptionId":{"$ref":"#/$defs/id"},"expectedRevision":{"$ref":"#/$defs/id"},"operationId":{"$ref":"#/$defs/id"},"patch":{"$ref":"#/$defs/patch"}}}},
+   "allOf":[
+    {"if":{"properties":{"method":{"enum":["thread.settings.read","thread.settings.update","thread.settings.watch"]}}},"then":{"properties":{"params":{"type":"object","required":["threadId"]}}}},
+    {"if":{"properties":{"method":{"const":"thread.settings.update"}}},"then":{"properties":{"params":{"type":"object","required":["expectedRevision","operationId","patch"]}}}},
+    {"if":{"properties":{"method":{"const":"thread.settings.unwatch"}}},"then":{"properties":{"params":{"type":"object","required":["subscriptionId"]}}}}
+   ]
+  },
+  "update":{"type":"object","additionalProperties":false,"required":["type","v","event","deviceId","agentEpoch","threadId","subscriptionId","streamId","seq","settings"],"properties":{"type":{"const":"event"},"v":{"const":1},"event":{"const":"thread.settings.update"},"deviceId":{"$ref":"#/$defs/id"},"agentEpoch":{"$ref":"#/$defs/id"},"threadId":{"$ref":"#/$defs/id"},"subscriptionId":{"$ref":"#/$defs/id"},"streamId":{"$ref":"#/$defs/id"},"seq":{"type":"integer","minimum":2},"settings":{"$ref":"#/$defs/snapshot"}}}
+ }
+}

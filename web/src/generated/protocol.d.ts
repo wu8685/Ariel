@@ -21,7 +21,8 @@ export type ArielProtocolV1Envelope =
   | ThreadCacheRemove
   | InteractionResolved
   | AuthPairConsumed
-  | HttpsGithubComWu8685ArielProtocolTasksSchemaJson;
+  | HttpsGithubComWu8685ArielProtocolTasksSchemaJson
+  | HttpsGithubComWu8685ArielProtocolSettingsSchemaJson;
 export type Id = string;
 export type Request = {
   type: "request";
@@ -171,6 +172,31 @@ export type Command = {
    */
   feedbackIds?: string[];
 };
+export type HttpsGithubComWu8685ArielProtocolSettingsSchemaJson = Request2 | Update;
+export type Request2 = {
+  type: "request";
+  v: 1;
+  requestId: string;
+  deviceId: string;
+  method:
+    | "model.catalog.read"
+    | "thread.settings.read"
+    | "thread.settings.update"
+    | "thread.settings.watch"
+    | "thread.settings.unwatch";
+  params: {
+    refresh?: boolean;
+    threadId?: string;
+    subscriptionId?: string;
+    expectedRevision?: string;
+    operationId?: string;
+    patch?: Patch;
+  };
+};
+export type Speed = {
+  mode: "inherit" | "standard" | "tier";
+  tierId?: string;
+};
 
 export interface WebHello {
   type: "hello";
@@ -193,6 +219,7 @@ export interface AgentHello {
 export interface Capabilities {
   autoLoad: boolean;
   codexReady: boolean;
+  executionSettings?: boolean;
   history?: boolean;
   send?: boolean;
   interrupt?: boolean;
@@ -600,4 +627,32 @@ export interface CapabilityUpdate {
   taskStoreId?: string;
   managementReady: boolean;
   executionReady: boolean;
+}
+export interface Patch {
+  model?: string;
+  effort?: string;
+  speed?: Speed;
+}
+export interface Update {
+  type: "event";
+  v: 1;
+  event: "thread.settings.update";
+  deviceId: string;
+  agentEpoch: string;
+  threadId: string;
+  subscriptionId: string;
+  streamId: string;
+  seq: number;
+  settings: Snapshot;
+}
+export interface Snapshot {
+  revision: string;
+  values: Values;
+  freshness: "fresh" | "stale";
+  writable: boolean;
+}
+export interface Values {
+  model: string;
+  effort: string;
+  speed: Speed;
 }

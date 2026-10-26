@@ -97,6 +97,7 @@ type route struct {
 }
 
 type subscription struct {
+	settings bool
 	web      *peer
 	agent    *peer
 	deviceID string
@@ -105,6 +106,7 @@ type subscription struct {
 }
 
 type peer struct {
+	settingsOptIn  bool // protected by Server.mu
 	taskState      atomic.Pointer[taskPeerState]
 	taskStoreID    string
 	taskCredential *TaskDeviceCredential
@@ -663,7 +665,11 @@ func (s *Server) cancelPairing(ctx context.Context, web *peer, requestID string,
 }
 
 func sendUnsubscribe(ctx context.Context, agent *peer, subscriptionID string) error {
-	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": newRequestID(), "deviceId": agent.deviceID, "method": "thread.unsubscribe", "params": map[string]string{"subscriptionId": subscriptionID}})
+	method := "thread.unsubscribe"
+	if strings.HasPrefix(subscriptionID, "settings-") {
+		method = "thread.settings.unwatch"
+	}
+	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": newRequestID(), "deviceId": agent.deviceID, "method": method, "params": map[string]string{"subscriptionId": subscriptionID}})
 }
 
 func (s *Server) currentDeviceStatus(deviceID string, departed *peer) map[string]any {
@@ -784,9 +790,10 @@ func newRequestID() string {
 
 func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID, method string, params json.RawMessage) bool {
 	var reference struct {
-		ThreadID       string `json:"threadId"`
-		SubscriptionID string `json:"subscriptionId"`
-		SearchTerm     string `json:"searchTerm"`
+		ThreadID       string          `json:"threadId"`
+		SubscriptionID string          `json:"subscriptionId"`
+		SearchTerm     string          `json:"searchTerm"`
+		Settings       json.RawMessage `json:"settings"`
 	}
 	json.Unmarshal(params, &reference)
 	s.mu.Lock()
@@ -796,20 +803,31 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		web.send(ctx, responseError(webID, "rejected", "DEVICE_OFFLINE", "device offline"))
 		return true
 	}
+	settingsMethod := method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.")
+	if settingsMethod || method == "thread.bootstrap" && len(reference.Settings) > 0 {
+		if !agent.capabilities["executionSettings"] || settingsMethod && method != "model.catalog.read" && !web.settingsOptIn {
+			s.mu.Unlock()
+			web.send(ctx, responseError(webID, "rejected", "PROTOCOL_UNSUPPORTED", "execution settings unavailable"))
+			return true
+		}
+		if method == "model.catalog.read" {
+			web.settingsOptIn = true
+		}
+	}
 	if !s.taskPublicAllowed(agent, method, params) {
 		s.mu.Unlock()
 		web.send(ctx, responseError(webID, "rejected", "UNAUTHORIZED", "task access not authorized"))
 		return true
 	}
-	if method == "thread.unsubscribe" {
+	if method == "thread.unsubscribe" || method == "thread.settings.unwatch" {
 		sub := s.subs[agent][reference.SubscriptionID]
-		if sub == nil || sub.web != web {
+		if sub == nil || sub.web != web || sub.settings != (method == "thread.settings.unwatch") {
 			s.mu.Unlock()
 			web.send(ctx, responseError(webID, "rejected", "INVALID_ARGUMENT", "unknown subscription"))
 			return true
 		}
 	}
-	if method == "thread.subscribe" {
+	if method == "thread.subscribe" || method == "thread.settings.watch" {
 		count := 0
 		for _, byID := range s.subs {
 			for _, sub := range byID {
@@ -819,7 +837,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 			}
 		}
 		for _, pending := range s.routes {
-			if pending.web == web && pending.method == "thread.subscribe" {
+			if pending.web == web && (pending.method == "thread.subscribe" || pending.method == "thread.settings.watch") {
 				count++
 			}
 		}
@@ -852,6 +870,9 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	if method == "thread.subscribe" {
 		timeout = s.cfg.SubscriptionTimeout
 	}
+	if method == "thread.settings.update" {
+		timeout = s.cfg.MutationTimeout
+	}
 	if method == "thread.create" || method == "thread.bootstrap" || method == "thread.archive.update" || method == "thread.archive.undo" || method == "thread.name.update" || method == "thread.pin.update" || method == "turn.start" || method == "turn.interrupt" || method == "interaction.respond" || method == "queue.add" || method == "queue.update" || method == "queue.delete" || method == "queue.reorder" || method == "queue.steer" {
 		timeout = s.cfg.MutationTimeout
 	}
@@ -872,7 +893,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 
 func isLongRead(method string) bool {
 	switch method {
-	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
+	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
 		return true
 	default:
 		return false
@@ -935,7 +956,7 @@ func (s *Server) finishRoute(relayID string, agent *peer, response map[string]an
 	delete(s.byWeb[entry.web], entry.webID)
 	entry.timer.Stop()
 	if response["outcome"] == "accepted" {
-		if entry.method == "thread.subscribe" {
+		if entry.method == "thread.subscribe" || entry.method == "thread.settings.watch" {
 			data, _ := response["data"].(map[string]any)
 			subID, _ := data["subscriptionId"].(string)
 			streamID, _ := data["streamId"].(string)
@@ -945,10 +966,10 @@ func (s *Server) finishRoute(relayID string, agent *peer, response map[string]an
 				if s.subs[agent] == nil {
 					s.subs[agent] = map[string]*subscription{}
 				}
-				s.subs[agent][subID] = &subscription{web: entry.web, agent: agent, deviceID: entry.deviceID, threadID: entry.threadID, streamID: streamID}
+				s.subs[agent][subID] = &subscription{web: entry.web, agent: agent, deviceID: entry.deviceID, threadID: entry.threadID, streamID: streamID, settings: entry.method == "thread.settings.watch"}
 			}
 		}
-		if entry.method == "thread.unsubscribe" {
+		if entry.method == "thread.unsubscribe" || entry.method == "thread.settings.unwatch" {
 			delete(s.subs[agent], entry.subID)
 		}
 	}
@@ -963,6 +984,7 @@ func (s *Server) handleAgentEvent(ctx context.Context, agent *peer, body []byte)
 		ThreadID       string `json:"threadId"`
 		SubscriptionID string `json:"subscriptionId"`
 		StreamID       string `json:"streamId"`
+		AgentEpoch     string `json:"agentEpoch"`
 	}
 	if json.Unmarshal(body, &event) != nil || event.DeviceID != agent.deviceID || event.Event == "device.status" {
 		return false
@@ -977,7 +999,7 @@ func (s *Server) handleAgentEvent(ctx context.Context, agent *peer, body []byte)
 		}
 	} else {
 		sub := s.subs[agent][event.SubscriptionID]
-		if sub != nil && sub.threadID == event.ThreadID && sub.streamID == event.StreamID {
+		if sub != nil && sub.threadID == event.ThreadID && sub.streamID == event.StreamID && sub.settings == (event.Event == "thread.settings.update") && (!sub.settings || event.AgentEpoch == agent.agentEpoch && sub.web.settingsOptIn) {
 			webs = append(webs, sub.web)
 			if event.Event == "thread.error" {
 				delete(s.subs[agent], event.SubscriptionID)
