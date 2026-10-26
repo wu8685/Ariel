@@ -64,11 +64,22 @@
 
 1. Agent 继续接收 Codex owner 的细粒度更新，在本机校验 identity／revision 并 materialize 最新两个 turn。
 2. turn 开始、turn 完成、item 结构变化时立即发送 cache snapshot。
-3. 纯 streaming 文本增长时合并高频更新，默认最多每 1 秒向 Relay 发送一次；每份 snapshot 包含截至该时刻的完整最新 item 文本。
+3. 纯 streaming 文本增长时合并高频更新，默认最多每 5 秒向 Relay 发送一次；每份 snapshot 包含截至该时刻的完整最新 item 文本。
 4. Relay 按 `device registration + agentEpoch + threadId + cacheStreamId + seq` 校验后原子替换旧 cache；Relay 不应用 Codex item patch，也不拼接 token。
 5. 若中间一个 cache snapshot 丢失，下一份完整 snapshot 仍能独立恢复当前双 turn 内容；seq gap 只影响 freshness 标记，不要求 Relay 重放 mutation 或推断正文。
 
-该模型以最多约 1 秒的显示延迟换取简单、可恢复和有界的 Relay 实现。具体间隔必须可配置，并在兼容性与带宽测试后调整。
+该模型以最多约 5 秒的纯正文显示延迟换取更少的 snapshot 传输与 Web 重绘。具体间隔必须可配置，并在兼容性与带宽测试后调整。
+
+### 4.1 刷新间隔调整（2026-10-26）
+
+用户本轮明确指定将既有可调 streaming 默认间隔从 1 秒改为 5 秒，本次调整该参数并补齐交互变化的即时发布判断，不改变协议、状态归属、缓存窗口或安全边界：
+
+- 未指定或非正的 `CachePublishInterval` 使用 5 秒；显式指定的正值继续生效，兼容测试与嵌入场景。
+- 纯正文更新在固定窗口内仅保留最新 snapshot，不排队累积；持续输入不能不断延长窗口，也不能在停止更新后遗失尾部文本。
+- 首帧、runtime／turn 状态、item／交互结构变化继续立即推送；turn 完成不等 5 秒。mutation receipt、模型设置推送、heartbeat 与重连计时不调整。
+- TDD：先实际运行证明生产默认仍为 1 秒的失败测试，再调整默认值；回归同窗口 latest-only、尾部 flush、完成／交互立即发送，以及旧 stream／订阅 fencing。
+- 使用真实 Agent／Relay 的隔离 fixture 补 Chromium streaming 行为回归，不向真实业务会话发送内容；物理 Safari 不在本机验收结论内。
+- [本轮验收记录](../testing/2026-10-26-five-second-streaming-cache.md)：Go／vet／race、Web 286、Chromium 57 通过，5 秒专项连续 3 次通过；未部署。
 
 ## 5. Agent→Relay cache 协议
 
@@ -233,7 +244,7 @@ Relay cache 对 Web 返回：
 
 1. Desktop Agent 与 Relay 持续维护 watcher／active／recent hot set 的最新双 turn cache；没有固定会话数上限，五个客户端打开五个不同会话时不得发生固定四槽抖动。
 2. Web 打开 cache 命中的会话时立即出现正文；read／watch 全程停留在 Relay，不创建 Web-owned Agent subscription。
-3. hot 会话 streaming 内容在默认最多约 1 秒后出现在 Relay cache；turn 完成立即更新。
+3. hot 会话纯 streaming 正文在默认最多约 5 秒后出现在 Relay cache；turn 完成立即更新。
 4. 第三个 turn 到来后 Relay cache 只保留最新两个；当前 Web 已显示的 completed turn 不消失。
 5. Web 与 Relay、Agent 与 Relay 各维持单条多路复用 WebSocket；Web watcher 数量和 hot thread 数量都不创建额外网络连接或 per-Web Agent follower。
 6. Relay restart 清空 cache；任何路径都不把正文写入磁盘、数据库、volume 或日志。

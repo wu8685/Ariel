@@ -78,7 +78,7 @@
 1. click→pending projection 在同一浏览器 task／下一渲染帧完成，不等待网络。
 2. 每次普通发送恰好一次 native start mutation；发送路径产生 0 次 `thread-follower-load-complete-history` 和 0 次发送后主动 `Refresh`。
 3. 合法 native receipt 到达后立即返回 Web，不等待 user item 回显或 assistant output。
-4. turn／user item 结构更新由 cache 立即发送；后续纯文本增长延迟继续服从 0100 默认最多约 1 秒的合并窗口。
+4. turn／user item 结构更新由 cache 立即发送；后续纯文本增长延迟继续服从 0100 默认最多约 5 秒的合并窗口（2026-10-26 按用户要求调整，结构／完成／交互即时路径不变）。
 5. 性能报告分别给出 receipt latency 与 authoritative display latency，不能用 optimistic projection 冒充端到端同步完成。
 
 ## 6. TDD 计划

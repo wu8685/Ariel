@@ -16,7 +16,7 @@ test.beforeAll(async () => {
   const binary = join(scratch, "cache-recovery");
   const build = spawnSync("go", ["build", "-race", "-o", binary, "./tests/fixtures/cache-recovery"], { cwd: resolve(webRoot, ".."), stdio: "pipe" });
   if (build.status !== 0) throw new Error(build.stderr.toString());
-  fixture = spawn(binary, ["-dist", join(webRoot, "dist")], { stdio: "pipe" });
+  fixture = spawn(binary, ["-dist", join(webRoot, "dist"), "-stream-interval", "0"], { stdio: "pipe" });
   fixture.stderr?.on("data", chunk => { fixtureOutput += String(chunk); });
   for (let attempt = 0; attempt < 80; attempt++) {
     try {
@@ -71,4 +71,38 @@ test("real Agent keeps a terminal snapshot after late refresh failure and recove
   await expect(page.getByLabel("发送消息")).toHaveValue("恢复期间必须保留的草稿");
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
   expect((await (await request.get(`${origin}/fixture/state`)).json()).attaches).toBe(2);
+});
+
+test("production streaming cadence coalesces text for 5s but completes immediately", async ({ page, request }) => {
+  const action = async (name: string) => expect((await request.post(`${origin}/fixture/action?action=${name}`)).ok()).toBe(true);
+  // Also runnable by --grep on its own; do not depend on the previous case.
+  await action("continue");
+  await action("complete");
+  await page.goto(origin);
+  await page.getByLabel("6 位连接码").fill("012345");
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await page.getByRole("button", { name: "展开项目 native-cache-recovery，/tmp/native-cache-recovery" }).click();
+  await page.getByText("真实 Agent 恢复验收").click();
+  await expect(page.getByText("原生会话最终回复自动到达")).toBeVisible();
+  await page.getByLabel("发送消息").fill("streaming 期间保留的草稿");
+  await action("continue");
+  await expect(page.getByText("原生会话仍在处理")).toBeVisible();
+  const began = Date.now();
+  await action("stream");
+  await expect.poll(async () => (await (await request.get(`${origin}/fixture/state`)).json()).observedStreamRevision).toBe(1);
+  // Inspect an actual interval, rather than polling until eventual success.
+  await page.waitForTimeout(1400);
+  await expect(page.getByText("原生会话仍在处理")).toBeVisible();
+  await expect(page.getByText("原生增量正文 1")).toHaveCount(0);
+  await action("stream");
+  await expect.poll(async () => (await (await request.get(`${origin}/fixture/state`)).json()).observedStreamRevision).toBe(2);
+  await expect(page.getByText("原生增量正文 2")).toBeVisible({ timeout: 6000 });
+  expect(Date.now() - began).toBeGreaterThan(4000);
+  expect(Date.now() - began).toBeLessThan(6500);
+  await action("stream");
+  await expect.poll(async () => (await (await request.get(`${origin}/fixture/state`)).json()).observedStreamRevision).toBe(3);
+  await action("complete");
+  await expect(page.getByText("原生会话最终回复自动到达")).toBeVisible({ timeout: 2000 });
+  await expect(page.getByLabel("发送消息")).toHaveValue("streaming 期间保留的草稿");
+  await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
 });

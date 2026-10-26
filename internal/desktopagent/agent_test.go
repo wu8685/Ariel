@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/coder/websocket"
@@ -39,6 +40,74 @@ func TestCacheSnapshotWriteCannotConsumeHeartbeatDeadline(t *testing.T) {
 	if cacheSnapshotWriteTimeout >= wsheartbeat.DefaultTimeout {
 		t.Fatalf("cache snapshot write timeout %s must stay below heartbeat timeout %s", cacheSnapshotWriteTimeout, wsheartbeat.DefaultTimeout)
 	}
+}
+
+func TestDefaultStreamingSnapshotInterval(t *testing.T) {
+	if defaultCachePublishInterval != 5*time.Second {
+		t.Fatalf("streaming snapshot interval = %s, want 5s", defaultCachePublishInterval)
+	}
+}
+
+func TestStreamingSnapshotFiveSecondWindowAndImmediateChanges(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := &cacheSubscription{streamID: "stream"}
+		a := &agent{cachePublishInterval: defaultCachePublishInterval, cacheSubs: map[string]*cacheSubscription{"thread": state}, cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
+		thread := func(text string) map[string]any {
+			return map[string]any{"runtime": "inProgress", "turns": []map[string]any{{"turnId": "turn", "status": "inProgress", "items": []map[string]any{{"itemId": "reply", "role": "assistant", "text": text}}}}}
+		}
+		take := func() cacheOutbound {
+			a.cacheSendMu.Lock()
+			defer a.cacheSendMu.Unlock()
+			next := a.cachePending["thread"]
+			delete(a.cachePending, "thread")
+			return next
+		}
+		a.queueCacheSnapshot("thread", state, 1, thread("first"))
+		if take().seq != 1 {
+			t.Fatal("first snapshot was delayed")
+		}
+		a.queueCacheSnapshot("thread", state, 2, thread("intermediate"))
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if take().seq != 0 {
+			t.Fatal("pure streaming snapshot published after only 1 second")
+		}
+		a.queueCacheSnapshot("thread", state, 3, thread("latest"))
+		time.Sleep(4 * time.Second)
+		synctest.Wait()
+		if got := take(); got.seq != 3 {
+			t.Fatalf("fixed 5s window did not flush latest tail: %+v", got)
+		}
+		a.queueCacheSnapshot("thread", state, 4, thread("pending text"))
+		interaction := thread("pending text")
+		interaction["pendingInteractions"] = []map[string]any{{"interactionId": "question", "kind": "user_input", "prompt": "Choose"}}
+		a.queueCacheSnapshot("thread", state, 5, interaction)
+		if take().seq != 5 {
+			t.Fatal("new user input was delayed by the text throttle")
+		}
+		changed := thread("pending text")
+		changed["pendingInteractions"] = []map[string]any{{"interactionId": "question", "kind": "user_input", "prompt": "Updated choices"}}
+		a.queueCacheSnapshot("thread", state, 6, changed)
+		if take().seq != 6 {
+			t.Fatal("same-ID interaction content change was delayed")
+		}
+		a.queueCacheSnapshot("thread", state, 7, thread("answered"))
+		if take().seq != 7 {
+			t.Fatal("interaction removal was delayed")
+		}
+		a.queueCacheSnapshot("thread", state, 8, thread("pending again"))
+		completed := thread("final")
+		completed["runtime"] = "idle"
+		a.queueCacheSnapshot("thread", state, 9, completed)
+		if take().seq != 9 {
+			t.Fatal("completion was delayed")
+		}
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		if take().seq != 0 {
+			t.Fatal("cancelled timer replayed superseded text after completion")
+		}
+	})
 }
 
 func TestCacheSnapshotMailboxKeepsOnlyLatestPerThread(t *testing.T) {

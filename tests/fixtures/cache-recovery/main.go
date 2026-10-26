@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -39,6 +40,10 @@ func (o *owner) Current() (json.RawMessage, error) {
 	runtime := "idle"
 	if o.history.processing {
 		status, text, runtime = "inProgress", "原生会话仍在处理", "inProgress"
+		if o.history.streamRevision > 0 {
+			text = fmt.Sprintf("原生增量正文 %d", o.history.streamRevision)
+			o.history.observedStreamRevision = o.history.streamRevision
+		}
 	} else if o.history.continued {
 		text = "原生会话最终回复自动到达"
 	}
@@ -82,11 +87,12 @@ func (*owner) Respond(context.Context, string, string, map[string][]string) erro
 }
 
 type history struct {
-	mu                            sync.Mutex
-	processing, continued         bool
-	current                       *owner
-	blocked                       chan struct{}
-	attaches, refreshes, finished atomic.Int32
+	mu                                     sync.Mutex
+	processing, continued                  bool
+	streamRevision, observedStreamRevision int
+	current                                *owner
+	blocked                                chan struct{}
+	attaches, refreshes, finished          atomic.Int32
 }
 
 func (*history) Read(context.Context, string) (appserver.Thread, error) {
@@ -116,6 +122,9 @@ func (h *history) action(w http.ResponseWriter, r *http.Request) {
 		h.blocked = make(chan struct{})
 	case "continue":
 		h.processing, h.continued = true, true
+		h.streamRevision, h.observedStreamRevision = 0, 0
+	case "stream":
+		h.streamRevision++
 	case "complete":
 		h.processing = false
 	case "disconnect":
@@ -143,6 +152,7 @@ func (h *history) action(w http.ResponseWriter, r *http.Request) {
 func main() {
 	listen := flag.String("listen", "127.0.0.1:4182", "loopback fixture listen address")
 	dist := flag.String("dist", "web/dist", "built Web assets")
+	streamInterval := flag.Duration("stream-interval", 20*time.Millisecond, "snapshot cadence; 0 tests the production default")
 	flag.Parse()
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
@@ -161,7 +171,10 @@ func main() {
 	mux.Handle("/ws", r.Handler())
 	mux.HandleFunc("/fixture/action", h.action)
 	mux.HandleFunc("/fixture/state", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"attaches": h.attaches.Load(), "refreshes": h.refreshes.Load(), "finished": h.finished.Load()})
+		h.mu.Lock()
+		observed := h.observedStreamRevision
+		h.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"attaches": h.attaches.Load(), "refreshes": h.refreshes.Load(), "finished": h.finished.Load(), "observedStreamRevision": observed})
 	})
 	mux.Handle("/", http.FileServer(http.Dir(*dist)))
 	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: time.Second}
@@ -173,7 +186,7 @@ func main() {
 	go func() {
 		if err := desktopagent.RunWithService(ctx, desktopagent.Config{
 			URL: "ws://" + *listen + "/ws", Token: "isolated-cache-agent-token", DeviceID: "fixture-mac", DeviceName: "隔离 Native Fixture",
-			CachePublishInterval: 20 * time.Millisecond, CacheRecoveryGuardDelay: 100 * time.Millisecond, CacheLeaseInterval: 50 * time.Millisecond,
+			CachePublishInterval: *streamInterval, CacheRecoveryGuardDelay: 100 * time.Millisecond, CacheLeaseInterval: 50 * time.Millisecond,
 		}, service); err != nil && ctx.Err() == nil {
 			log.Printf("fixture agent stopped: %v", err)
 			cancel()

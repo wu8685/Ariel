@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,6 +115,7 @@ const (
 	threadSubscribeLoadTimeout     = 45 * time.Second
 	defaultCacheEntryMaxBytes      = 8 << 20
 	cacheSnapshotWriteTimeout      = 5 * time.Second
+	defaultCachePublishInterval    = 5 * time.Second
 	defaultCacheRecoveryGuardDelay = 45 * time.Second
 )
 
@@ -263,7 +265,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	cachePublishInterval := cfg.CachePublishInterval
 	if cachePublishInterval <= 0 {
-		cachePublishInterval = time.Second
+		cachePublishInterval = defaultCachePublishInterval
 	}
 	cacheEntryMaxBytes := cfg.CacheEntryMaxBytes
 	if cacheEntryMaxBytes <= 0 || cacheEntryMaxBytes > defaultCacheEntryMaxBytes {
@@ -1004,6 +1006,12 @@ func (a *agent) invalidateCacheSubscription(threadID string, state *cacheSubscri
 func cacheStructure(thread map[string]any) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprint(thread["runtime"]))
+	// Questions and approvals are structural, never ordinary streaming text.
+	// Hash only the bounded interaction projection, not full turn bodies.
+	if cards := cacheMapSlice(thread["pendingInteractions"]); len(cards) > 0 {
+		body, _ := json.Marshal(cards)
+		fmt.Fprintf(&b, "?%x", sha256.Sum256(body))
+	}
 	for _, turn := range cacheMapSlice(thread["turns"]) {
 		b.WriteByte('|')
 		b.WriteString(fmt.Sprint(turn["turnId"]))
