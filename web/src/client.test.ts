@@ -13,6 +13,78 @@ class FakeSocket {
 }
 
 describe("Ariel WebSocket client", () => {
+  it("does not let a retired handshake confirm its replacement", () => {
+    const sockets: FakeSocket[] = [];
+    const client = new ArielSocket("ws://localhost/ws", () => {
+      const socket = new FakeSocket(); sockets.push(socket);
+      return socket as unknown as WebSocket;
+    });
+    const ready = vi.fn(); client.onReady = ready;
+    client.connect("cookie"); sockets[0].onopen?.();
+    client.wake(); sockets[1].onopen?.();
+    sockets[0].message({ type: "hello.ok", v: 1, connectionId: "retired", relayEpoch: "old" });
+    expect(ready).not.toHaveBeenCalled();
+    sockets[1].message({ type: "hello.ok", v: 1, connectionId: "current", relayEpoch: "new" });
+    expect(ready).toHaveBeenCalledExactlyOnceWith("new", undefined);
+    client.disconnect();
+  });
+  it("ignores a retired response and event even when their schema is valid", async () => {
+    const sockets: FakeSocket[] = [];
+    const client = new ArielSocket("ws://localhost/ws", () => {
+      const socket = new FakeSocket(); sockets.push(socket);
+      return socket as unknown as WebSocket;
+    });
+    client.connect("cookie"); sockets[0].onopen?.();
+    client.connect("cookie"); sockets[1].onopen?.();
+    sockets[1].message({ type: "hello.ok", v: 1, connectionId: "new", relayEpoch: "new" });
+    const event = vi.fn(); client.onEvent = event;
+    const finished = vi.fn(); const pending = client.request("device.list", "relay", {}).then(finished);
+    const requestId = JSON.parse(sockets[1].sent.at(-1)!).requestId;
+    sockets[0].message({ type: "event", v: 1, event: "device.status", deviceId: "old", agentOnline: false, codexReady: false });
+    sockets[0].message({ type: "response", v: 1, requestId, outcome: "accepted", data: { devices: ["retired"] } });
+    await Promise.resolve();
+    expect(event).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    sockets[1].message({ type: "response", v: 1, requestId, outcome: "accepted", data: { devices: [] } });
+    await pending;
+    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ data: { devices: [] } }));
+    client.disconnect();
+  });
+  it("ignores late open and handshake callbacks after explicit disconnect", () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const client = new ArielSocket("ws://localhost/ws", () => socket as unknown as WebSocket);
+      const ready = vi.fn(), statuses = vi.fn(); client.onReady = ready; client.onStatus = statuses;
+      client.connect("cookie"); client.disconnect();
+      socket.onopen?.();
+      socket.message({ type: "hello.ok", v: 1, connectionId: "late", relayEpoch: "late" });
+      expect(socket.sent).toHaveLength(0);
+      expect(ready).not.toHaveBeenCalled();
+      expect(statuses).toHaveBeenLastCalledWith("disconnected");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("a retired open cannot replace the active handshake deadline", () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeSocket[] = [];
+      const client = new ArielSocket("ws://localhost/ws", () => {
+        const socket = new FakeSocket(); sockets.push(socket);
+        return socket as unknown as WebSocket;
+      });
+      const statuses = vi.fn(); client.onStatus = statuses;
+      client.connect("cookie"); client.connect("cookie");
+      sockets[1].onopen?.(); sockets[0].onopen?.();
+      sockets[1].message({ type: "hello.ok", v: 1, connectionId: "new", relayEpoch: "new" });
+      vi.advanceTimersByTime(60_000);
+      expect(sockets[0].sent).toHaveLength(0);
+      expect(sockets).toHaveLength(2);
+      expect(statuses).toHaveBeenLastCalledWith("ready");
+      expect(vi.getTimerCount()).toBe(0);
+      client.disconnect();
+    } finally { vi.useRealTimers(); }
+  });
   it("uses the Relay-issued session token on reconnect, not the PIN", () => {
     const sockets: FakeSocket[] = [];
     const client = new ArielSocket("ws://localhost/ws", () => {

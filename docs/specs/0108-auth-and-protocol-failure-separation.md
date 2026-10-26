@@ -48,9 +48,20 @@
 
 仅回滚 Web 状态分类和兼容性 UI。认证 Cookie、Passkey 凭据、Relay 数据及 Codex 会话无需迁移。
 
+## 连接生命周期回归修复（2026-10-26）
+
+这是既有状态分类与断线恢复契约的实现修复，不新增协议或改变认证边界。
+
+1. 每次 connect／wake 替换 transport 后，旧 WebSocket 的 open、message、close 和握手 deadline 均不再有权修改当前连接状态、token、pending request 或计时器。
+2. 旧连接晚到的 hello 不得提前确认新连接；旧 response／event 不得完成新请求或覆盖正文。显式 disconnect 后晚到回调不能恢复连接或触发登录 UI。
+3. 当前连接的真实 JSON／schema／时序错误仍进入 incompatible；当前连接明确的 unauthorized 仍进入 invalid，不降低严格校验，也不自动重放 mutation。
+4. 输入为多代 transport 的异步回调；输出只由当前 transport 生成的状态／事件。验证覆盖握手中被 wake 替换、关闭后晚到消息、迟到 open 干扰 deadline、重新连接后保留已确认正文与草稿。
+5. 实现前以单元测试及真实 Chromium 的隔离 WebSocket fixture 实际复现 red；修复后执行客户端、App、浏览器及 build 回归。浏览器故意延迟消息处理来固定复现窗口，不冒充物理 Safari 故障抓包。
+
 ## 实现与验证
 
-- Web unit：31 个测试文件、263 项测试通过。
-- Chromium UI：48 项测试通过，其中包含手机 viewport 下的协议异常专项回归。
+- Web unit：31 个测试文件、269 项测试通过（含连接生命周期追加回归）。
+- Chromium UI：51 项测试通过（最终完整运行使用 1 worker）；连接竞态专项连续 5 次通过。
 - Production build：通过；仅保留既有的大 chunk 提示。
 - 物理 iPhone / Safari：待公网发布后由用户复验。
+- 连接生命周期的 red／green、线上只读检查与归因边界见 [2026-10-26 追加验收记录](../testing/2026-10-26-0108-socket-generation-regression.md)。
