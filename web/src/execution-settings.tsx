@@ -1,11 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ArielSocket } from "./client";
 import { newRequestID } from "./ids";
 import "./execution-settings.css";
 import { changeModel, defaultValues, effortLabel, speedLabel, parseCatalog, parseSettings, type ExecutionCatalog, type ExecutionGuard, type ExecutionSnapshot, type ExecutionValues, type ExecutionSettingsStore } from "./model-settings";
 type Props = { client: ArielSocket; store: ExecutionSettingsStore; deviceId: string; agentEpoch: string; targetKey: string; threadId?: string; draft?: boolean; connected: boolean; ownerReady: boolean; queued: boolean; busy: boolean; hasImages: boolean; onState: (state: ExecutionGuard) => void };
+const effortLevels: Record<string, number> = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6, ultra: 7 };
+function EffortGlyph({ effort }: { effort?: string }) {
+  const level = effort === undefined ? undefined : effortLevels[effort];
+  const state = effort === "" ? "inherit" : level === undefined ? "unknown" : effort;
+  const label = `推理强度：${effort === undefined ? "未确认" : effortLabel(effort)}`;
+  return <svg className="execution-glyph execution-effort" role="img" aria-label={label} data-icon-state={state} viewBox="0 0 20 20" fill="none">
+    <title>{label}</title>
+    {state === "inherit" ? <path d="M4 7h10l-3-3m5 9H6l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/> : level === undefined ? <path d="M7 6.5a3 3 0 1 1 5 2.2c-1.4.7-2 1.3-2 2.8m0 3h.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/> : <>{Array.from({ length: 7 }, (_, i) => <rect key={i} x={2 + i * 2.4} y={16 - i * 1.6} width="1.5" height={2 + i * 1.6} rx=".6" fill="currentColor" opacity={i < level ? 1 : .2}/>)}{level === 0 && <path d="m3 4 14 14" stroke="currentColor" strokeWidth="1.2"/>}</>}
+  </svg>;
+}
+function SpeedGlyph({ speed, model }: { speed?: ExecutionValues["speed"]; model?: ExecutionCatalog["models"][number] }) {
+  const tier = model?.tiers.find(t => t.id === speed?.tierId);
+  // Unknown native tiers remain custom, rather than guessing that every tier is Fast.
+  const state = !speed ? "unknown" : speed.mode !== "tier" ? speed.mode : /^(fast|加速)$/i.test(tier?.name || "") ? "fast" : "custom";
+  const label = `速度：${speed ? speedLabel(speed, model) : "未确认"}`;
+  return <svg className="execution-glyph execution-speed" role="img" aria-label={label} data-icon-state={state} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <title>{label}</title>
+    {state === "fast" ? <path d="m11.5 2-7 9h5l-1 7 7-10h-5z"/> : state === "standard" ? <path d="m7 4 6 6-6 6"/> : state === "inherit" ? <path d="m8 7 2-2a3 3 0 0 1 4 4l-2 2m0 2-2 2a3 3 0 0 1-4-4l2-2m0 3 4-4"/> : state === "custom" ? <><path d="M3 5h14M3 10h14M3 15h14"/><path d="M7 3v4m6 1v4m-5 1v4"/></> : <path d="M7 6.5a3 3 0 1 1 5 2.2c-1.4.7-2 1.3-2 2.8m0 3h.01"/>}
+  </svg>;
+}
 export function ExecutionSettingsControl(p: Props) {
+  const summaryId = useId();
   const identity = `${p.deviceId}\0${p.agentEpoch}\0${p.targetKey}`;
   const [catalog, setCatalog] = useState<ExecutionCatalog | null>(null), [snapshot, setSnapshot] = useState<ExecutionSnapshot | null>(() => p.store.snapshots.get(identity) || null);
   const [draftValues, setDraftValues] = useState(() => p.store.drafts.get(identity));
@@ -74,10 +95,12 @@ export function ExecutionSettingsControl(p: Props) {
     if (response.outcome === "unknown" || response.outcome === "accepted") setUncertain(true); if (response.error?.code === "STALE_TURN") setWatchReady(false);
   }
   const selectedModel = catalog?.models.find(m => m.id === editing?.model);
+  const modelLabel = model?.name || currentValues?.model || "继承 Codex";
+  const summary = `模型：${modelLabel}；推理强度：${currentValues ? effortLabel(currentValues.effort) : "未确认"}；速度：${currentValues ? speedLabel(currentValues.speed, model) : "未确认"}${saving ? "；设置保存中" : ""}`;
   if (supported !== true || !p.targetKey) return null;
   return <div className="execution-options">
-    <button type="button" className="execution-trigger" ref={trigger} aria-label="模型与推理设置" aria-expanded={open} onClick={() => { setEditing(currentValues || (catalog && defaultValues(catalog)));setEditingRevision(snapshot?.revision||""); setAdjustment(""); setOpen(true); }}><span>{model?.name || currentValues?.model || "继承 Codex"}</span>{currentValues && <><span className="execution-separator">·</span><span>{effortLabel(currentValues.effort)}</span><span className="execution-separator">·</span><span>{speedLabel(currentValues.speed, model)}</span></>}<span aria-hidden="true">⌄</span>{saving && <span>保存中…</span>}</button>
-    {imagesBlocked && <small role="status">当前模型不支持图片，请更换模型或移除截图。</small>}
+    <button type="button" className="execution-trigger" ref={trigger} aria-label="模型与推理设置" aria-describedby={summaryId} title={summary} aria-busy={saving} aria-expanded={open} onClick={() => { setEditing(currentValues || (catalog && defaultValues(catalog)));setEditingRevision(snapshot?.revision||""); setAdjustment(""); setOpen(true); }}><span className="execution-model">{modelLabel}</span><EffortGlyph effort={currentValues?.effort}/><SpeedGlyph speed={currentValues?.speed} model={model}/>{saving ? <svg className="execution-saving" aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="32 12"/></svg> : <svg className="execution-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>}</button>
+    <span id={summaryId} className="sr-only">{summary}</span>
     {open && createPortal(<div className="execution-backdrop" onClick={e => { if (e.target === e.currentTarget) close(); }}><div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="execution-title" className="execution-dialog">
       <header><div><h3 id="execution-title">模型与推理设置</h3><p>仅影响当前会话的下一轮，正在执行的这一轮不变。</p></div><button type="button" aria-label="关闭模型设置" onClick={close} disabled={saving}>×</button></header>
       {catalog && editing ? <fieldset disabled={!writable}>
