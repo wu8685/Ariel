@@ -6,6 +6,7 @@ import type { Thread } from "./generated/protocol";
 import { normalizeProjectPath, projectName } from "./projects";
 import { DurableHistoryCache, MemoryDurableHistoryBackend } from "./durable-history-cache";
 import { emptyHistoryState } from "./history";
+import * as passkeyAPI from "./auth";
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];
@@ -67,6 +68,7 @@ async function expandProject(cwd: string) {
 async function openFixture(thread: Thread = fixtureThread, queue = false, threadCreate = false, listedThreads: Thread[] = [thread], threadArchive = false, threadMetadata = false, fileContext = false, workspaceBrowser = false) {
   sessionStorage.setItem("ariel.web-session.v1", relaySession);
   render(<App />);
+  await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(1));
   const socket = BrowserSocket.sockets[0];
   const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
   socket.onopen?.(new Event("open"));
@@ -88,6 +90,115 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+  it("keeps the transcript and editable draft on PIN expiry and resumes the same conversation", async () => {
+    const thread: Thread = { ...fixtureThread, turns: [{ turnId: "t", status: "completed", items: [{ itemId: "a", role: "assistant", text: "失效之前的正文" }] }] };
+    const { socket } = await openFixture(thread);
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "不应丢失的草稿" } });
+    act(() => socket.close(1008, "unauthorized"));
+    expect(screen.getByText("失效之前的正文")).toBeTruthy();
+    expect(screen.queryByLabelText("连接 Relay")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("value", "不应丢失的草稿");
+    expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "正在同步会话，暂不可发送" })).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("6 位连接码"), { target: { value: "012345" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+    const resumed = BrowserSocket.sockets[1];
+    resumed.onopen?.(new Event("open"));
+    act(() => resumed.message({ type: "hello.ok", v: 1, connectionId: "c2", relayEpoch: "e", sessionToken: relaySession }));
+    const requests = (method: string) => resumed.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+    await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+    await act(async () => resumed.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "agent-epoch", capabilities: { autoLoad: true } }] } }));
+    await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(1));
+    expect(requests("thread.subscribe")[0].params.threadId).toBe(thread.threadId);
+    expect(requests("turn.start")).toHaveLength(0);
+    expect(screen.getByText("失效之前的正文")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "正在同步会话，暂不可发送" })).toHaveProperty("disabled", true);
+    await act(async () => resumed.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "accepted", data: { subscriptionId: "sub2" } }));
+    act(() => resumed.message({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub2", streamId: "s2", seq: 1, thread }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", false));
+    expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("value", "不应丢失的草稿");
+  });
+
+  async function openPasskeyFixture(authenticated: () => boolean = () => true) {
+    const meta = document.createElement("meta"); meta.name = "ariel-auth-mode"; meta.content = "passkey"; document.head.append(meta);
+    const check = vi.spyOn(passkeyAPI, "loadAuthStatus").mockImplementation(async () => ({ mode: "passkey", authenticated: authenticated(), enrollmentRequired: false }));
+    const result = await openFixture({ ...fixtureThread, turns: [{ turnId: "t", status: "completed", items: [{ itemId: "a", role: "assistant", text: "Passkey 原会话正文" }] }] });
+    fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "Passkey 草稿" } });
+    return { ...result, check };
+  }
+
+  it("refreshes a valid Cookie in place only once, even when the new socket is also unauthorized", async () => {
+    const { socket, check } = await openPasskeyFixture();
+    act(() => socket.close(1008, "unauthorized"));
+    await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(2));
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Passkey 原会话正文")).toBeTruthy();
+    const retry = BrowserSocket.sockets[1]; retry.onopen?.(new Event("open"));
+    act(() => retry.message({ type: "hello.ok", v: 1, connectionId: "c2", relayEpoch: "e" }));
+    act(() => retry.close(1008, "unauthorized"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重新登录" })).toHaveProperty("disabled", false));
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(BrowserSocket.sockets).toHaveLength(2);
+    expect(screen.queryByLabelText("Passkey 登录")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("value", "Passkey 草稿");
+  });
+
+  it("keeps context after Passkey cancellation and retries only on a user gesture", async () => {
+    let valid = true;
+    const { socket } = await openPasskeyFixture(() => valid);
+    valid = false;
+    const login = vi.spyOn(passkeyAPI, "loginWithPasskey").mockRejectedValueOnce(new DOMException("cancel", "NotAllowedError")).mockResolvedValueOnce(undefined);
+    act(() => socket.close(1008, "unauthorized"));
+    const retry = await screen.findByRole("button", { name: "重新登录" });
+    await waitFor(() => expect(retry).toHaveProperty("disabled", false));
+    expect(login).not.toHaveBeenCalled();
+    fireEvent.click(retry);
+    expect(await screen.findByText("Passkey 操作已取消；你可以重新尝试。")).toBeTruthy();
+    expect(screen.getByText("Passkey 原会话正文")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("value", "Passkey 草稿");
+    fireEvent.click(retry);
+    await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(2));
+    expect(login).toHaveBeenCalledTimes(2);
+  });
+
+  it("fences a delayed Cookie refresh after explicit logout", async () => {
+    const { socket, check } = await openPasskeyFixture();
+    let finish!: (value: passkeyAPI.AuthStatus) => void;
+    check.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    vi.spyOn(passkeyAPI, "logoutPasskey").mockResolvedValue(undefined);
+    act(() => socket.close(1008, "unauthorized"));
+    fireEvent.click(screen.getByRole("button", { name: "退出", hidden: true }));
+    await act(async () => finish({ mode: "passkey", authenticated: true, enrollmentRequired: false }));
+    expect(BrowserSocket.sockets).toHaveLength(1);
+    expect(screen.queryByText("Passkey 原会话正文")).toBeNull();
+    expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeTruthy();
+  });
+
+  it("keeps context when the silent status check fails and allows manual login", async () => {
+    const { socket, check } = await openPasskeyFixture();
+    check.mockRejectedValueOnce(new Error("network"));
+    act(() => socket.close(1008, "unauthorized"));
+    expect(await screen.findByText("无法刷新登录状态，请重新登录。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新登录" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("value", "Passkey 草稿");
+  });
+
+  it("does not revive a conversation from a delayed manual authentication after logout", async () => {
+    let valid = true;
+    const { socket } = await openPasskeyFixture(() => valid);
+    valid = false;
+    let finish!: () => void;
+    vi.spyOn(passkeyAPI, "loginWithPasskey").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    vi.spyOn(passkeyAPI, "logoutPasskey").mockResolvedValue(undefined);
+    act(() => socket.close(1008, "unauthorized"));
+    const retry = await screen.findByRole("button", { name: "重新登录" });
+    await waitFor(() => expect(retry).toHaveProperty("disabled", false));
+    fireEvent.click(retry);
+    fireEvent.click(screen.getByRole("button", { name: "退出", hidden: true }));
+    await act(async () => finish());
+    expect(BrowserSocket.sockets).toHaveLength(1);
+    expect(screen.queryByText("Passkey 原会话正文")).toBeNull();
+  });
 	it("shows native execution options and disables only sending while saving", async () => {
 		const {socket,requests}=await openFixture();
 		await waitFor(()=>expect(requests("model.catalog.read")).toHaveLength(1));

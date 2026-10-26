@@ -32,8 +32,8 @@ export function base64URLToBuffer(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-async function requestJSON<T>(url: string, body?: unknown): Promise<T> {
-  const response = await fetch(url, body === undefined ? { credentials: "same-origin", cache: "no-store" } : {
+async function requestJSON<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, body === undefined ? { credentials: "same-origin", cache: "no-store", signal } : {
     method: "POST",
     credentials: "same-origin",
     cache: "no-store",
@@ -45,8 +45,11 @@ async function requestJSON<T>(url: string, body?: unknown): Promise<T> {
   return payload;
 }
 
-export function loadAuthStatus(): Promise<AuthStatus> {
-  return requestJSON<AuthStatus>("/api/auth/status");
+export async function loadAuthStatus(): Promise<AuthStatus> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try { return await requestJSON<AuthStatus>("/api/auth/status", undefined, controller.signal); }
+  finally { clearTimeout(timer); }
 }
 
 function creationOptions(payload: CreationJSON): PublicKeyCredentialCreationOptions {

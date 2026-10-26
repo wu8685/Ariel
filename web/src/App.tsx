@@ -282,6 +282,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [pairingSeconds, setPairingSeconds] = useState(0);
   const [token, setToken] = useState("");
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [authRecovery, setAuthRecovery] = useState(false);
+  const authGeneration = useRef(0);
+  const lastCookieRecovery = useRef(0);
   const savedSessionAttempt = useRef(false);
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [devices, setDevices] = useState<Device[]>([]);
@@ -957,12 +960,14 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }
 
   function disconnect() {
+    authGeneration.current++;
+    setAuthRecovery(false);
     closePairingInvite();
     connectionResume.current = false;
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
-    openFileGeneration.current++; setView(null); setThreadId(""); clearAllComposerDrafts(); setOpenFile(null); resetHistory();
+    openFileGeneration.current++; setView(null); setThreadId(""); setLocalThreadDraft(null); clearAllComposerDrafts(); setOpenFile(null); resetHistory();
     fileContentCache.current.clear(); workspaceDirectoryCache.current.clear(); fileContentCacheEpoch.current = ""; setShowWorkspaceBrowser(false);
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
@@ -977,21 +982,45 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   async function authenticateWithPasskey() {
     if (passkeyBusy) return;
+    const generation = ++authGeneration.current;
+    lastCookieRecovery.current = Date.now();
     setPasskeyBusy(true);
     setPasskeyAuth(current => ({ ...current, error: "" }));
     try {
       if (passkeyAuth.enrollmentRequired) await registerPasskey(setupToken);
       else await loginWithPasskey();
+      if (generation !== authGeneration.current) return;
       setSetupToken("");
       setPasskeyAuth({ loaded: true, enrollmentRequired: false, error: "" });
       client.connect("cookie");
     } catch (error) {
+      if (generation !== authGeneration.current) return;
       const message = error instanceof DOMException && error.name === "NotAllowedError"
         ? "Passkey 操作已取消；你可以重新尝试。"
         : error instanceof Error ? error.message : "Passkey 操作失败，请重试。";
       setPasskeyAuth(current => ({ ...current, error: message }));
     } finally {
-      setPasskeyBusy(false);
+      if (generation === authGeneration.current) setPasskeyBusy(false);
+    }
+  }
+
+  async function recoverCookieSession() {
+    // One silent check per 30s at most, even if HTTP says authenticated while
+    // the new WS still rejects it. Never automatically invoke WebAuthn.
+    if (Date.now() - lastCookieRecovery.current < 30_000) return;
+    lastCookieRecovery.current = Date.now();
+    const generation = ++authGeneration.current;
+    setPasskeyBusy(true);
+    try {
+      const auth = await loadAuthStatus();
+      if (generation !== authGeneration.current) return;
+      if (auth.mode !== "passkey") throw new Error("Relay 返回了不一致的认证模式。");
+      setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: auth.authenticated ? "" : "登录已失效，当前内容和草稿已保留。" });
+      if (auth.authenticated) client.connect("cookie");
+    } catch {
+      if (generation === authGeneration.current) setPasskeyAuth(current => ({ ...current, loaded: true, error: "无法刷新登录状态，请重新登录。" }));
+    } finally {
+      if (generation === authGeneration.current) setPasskeyBusy(false);
     }
   }
 
@@ -1607,9 +1636,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     client.onStatus = next => {
       setStatus(next);
       if (next === "invalid") {
-        durableRestoreAttempt.current = "";
+        setAuthRecovery(true);
         if (webAuthMode === "passkey") {
           setPasskeyAuth(current => ({ ...current, loaded: true, error: "登录会话已失效，请重新使用 Passkey。" }));
+          void recoverCookieSession();
         } else {
           webSession.rejected();
           if (pairingAttempt.current) {
@@ -1618,9 +1648,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         }
         pairingAttempt.current = false;
         savedSessionAttempt.current = false;
-        connectionResume.current = false;
-        rememberReadingPosition(); clearAgentOfflineTimer(); offlineDevice.current = ""; observedAgentEpochs.current.clear(); warmSubscriptions.current.clear(); setRecoveringDeviceId(""); historyCache.current.clear(); threadListCache.current.clear(); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; selection.current.view = null; setView(null); setLocalThreadDraft(null); setSyncingView(false); setReadOnlyHistory(false); setNewThreadOpen(false); setCreatingThread(false); resetHistory(); setPairingInvite(current => current?.status === "waiting" ? null : current);
-        return;
+        setToken("");
+        setReadOnlyHistory(false);
+        setNewThreadOpen(false);
+        setCreatingThread(false);
+        // Passive expiry is not logout. Use the ordinary stale-view path
+        // below to fence authority while retaining all local context.
       }
       if (next !== "ready") {
         rememberReadingPosition(); cacheCurrentHistory(); clearAgentOfflineTimer(); offlineDevice.current = ""; setRecoveringDeviceId(""); pendingSelect.current++; deviceListGeneration.current++; threadListGeneration.current++; threadCreateGeneration.current++; expectedSubscription.current = ""; warmSubscriptions.current.clear();
@@ -1635,6 +1668,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       }
     };
     client.onReady = (_epoch, sessionToken) => {
+      setAuthRecovery(false);
       warmSubscriptions.current.clear();
       if (webAuthMode === "pin" && sessionToken) webSession.accepted(sessionToken);
       if (pairingAttempt.current) setPhonePairing(null);
@@ -1803,19 +1837,20 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       const saved = webSession.saved();
       if (saved) { savedSessionAttempt.current = true; client.connect(saved); }
     }
-    return () => { clearAgentOfflineTimer(); client.disconnect(); };
+    return () => { authGeneration.current++; clearAgentOfflineTimer(); client.disconnect(); };
   }, [client, webAuthMode]);
 
   useEffect(() => {
     if (webAuthMode !== "passkey") return;
     let active = true;
+    const generation = authGeneration.current;
     void loadAuthStatus().then(auth => {
-      if (!active) return;
+      if (!active || generation !== authGeneration.current) return;
       if (auth.mode !== "passkey") throw new Error("Relay 返回了不一致的认证模式。");
       setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: "" });
       if (auth.authenticated) client.connect("cookie");
     }).catch(error => {
-      if (active) setPasskeyAuth({ loaded: true, enrollmentRequired: false, error: error instanceof Error ? error.message : "无法读取认证状态。" });
+      if (active && generation === authGeneration.current) setPasskeyAuth({ loaded: true, enrollmentRequired: false, error: error instanceof Error ? error.message : "无法读取认证状态。" });
     });
     return () => { active = false; };
   }, [client, webAuthMode]);
@@ -1856,10 +1891,6 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setUnreadThreadIDs(cachedThreads.length && deviceId ? unreadStore.observe(deviceId, cachedThreads) : new Set());
     threadCreateGeneration.current++; setNewThreadOpen(false); setCreatingThread(false); setLocalThreadDraft(null); setExpandedProjectKeys(new Set()); setThreadId(""); setView(null); setSyncingView(false); setReadOnlyHistory(false); setThreads(cachedThreads); setCursor(cachedList?.value.cursor || ""); setListError(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag(); resetHistory();
   }, [deviceId]);
-
-  useEffect(() => {
-    if (sessionExpired) clearAllComposerDrafts();
-  }, [sessionExpired]);
 
   useEffect(() => {
     const epoch = device?.agentEpoch || "";
@@ -1903,12 +1934,14 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (hiddenAt && Date.now() - hiddenAt >= 5000) {
           hiddenAt = 0;
           void (async () => {
+            const generation = authGeneration.current;
             if (webAuthMode === "passkey") {
               try {
                 const auth = await loadAuthStatus();
-                if (auth.mode === "passkey") setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: "" });
+                if (generation === authGeneration.current && auth.mode === "passkey") setPasskeyAuth(current => ({ ...current, loaded: true, enrollmentRequired: auth.enrollmentRequired }));
               } catch { /* WebSocket state remains authoritative. */ }
             }
+            if (generation !== authGeneration.current) return;
             client.wake();
             void refreshUnreadThreads();
           })();
@@ -2653,7 +2686,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   </section> : phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay">{accessHero}<form onSubmit={event => { event.preventDefault(); if (isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>;
   const incompatiblePanel = <section className="connect-panel" aria-label="版本不兼容"><div><span className="eyebrow">UPDATE REQUIRED</span><h1>页面版本不兼容</h1><p>当前页面无法识别 Relay 的通信协议。你的登录状态没有失效，请刷新页面加载最新版本。</p></div><div className="compatibility-actions"><button className="primary" type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button><small>刷新后仍然出现时，请检查 Web 与 Relay 是否来自同一版本。</small></div></section>;
 
-  return <div className={`app-shell ${status === "ready" ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
+  const hasConversationContext = Boolean(view || localThreadDraft || threadId);
+  const inlineAuthRecovery = authRecovery && hasConversationContext && status !== "incompatible";
+  return <div className={`app-shell ${status === "ready" || hasConversationContext ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
       <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span></div>
@@ -2686,7 +2721,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="thread-create-actions"><button className="secondary" type="button" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}>取消</button><button className="primary" type="button" aria-label="保存名称" onClick={() => void renameThread()} disabled={!!threadMetadataWorking || !validThreadName(renameThreadDialog.name)}>{threadMetadataWorking ? "正在保存…" : "保存"}</button></div>
       </section>
     </div>}
-    {status === "incompatible" && !view && !localThreadDraft ? incompatiblePanel : (status === "invalid" || (status !== "ready" && !view && !localThreadDraft)) && accessPanel}
+    {status === "incompatible" && !hasConversationContext ? incompatiblePanel : status !== "ready" && !hasConversationContext && accessPanel}
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
@@ -2715,8 +2750,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
-        {status === "incompatible" && view && <div className="readonly-banner protocol-incompatible" role="alert"><span>页面版本与 Relay 不兼容，操作已暂停。请刷新页面。</span><button type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button></div>}
-        {readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
+        {inlineAuthRecovery && <section className="reauth-banner" aria-label="恢复登录">
+          <div aria-live="polite"><strong>{passkeyBusy || status === "connecting" ? "正在恢复登录…" : "需要重新登录"}</strong><span>{webAuthMode === "passkey" && passkeyAuth.error ? passkeyAuth.error : "当前内容和草稿已保留，登录后继续同步。"}</span></div>
+          {webAuthMode === "passkey" ? <button type="button" onClick={() => void authenticateWithPasskey()} disabled={passkeyBusy || status === "connecting" || passkeyAuth.enrollmentRequired}>重新登录</button> : <form onSubmit={event => { event.preventDefault(); if (isWebPIN(token)) { authGeneration.current++; savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label className="sr-only" htmlFor="reauth-token">6 位连接码</label><input id="reauth-token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder="6 位连接码" required /><button type="submit" disabled={!isWebPIN(token) || status === "connecting"}>重新连接</button></form>}
+        </section>}
+        {status === "incompatible" && hasConversationContext && <div className="readonly-banner protocol-incompatible" role="alert"><span>页面版本与 Relay 不兼容，操作已暂停。请刷新页面。</span><button type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button></div>}
+        {!inlineAuthRecovery && readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
         {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}

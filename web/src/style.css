@@ -583,6 +583,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .readonly-banner button { flex: 0 0 auto; min-height: 28px; padding: 4px 10px; border: 1px solid var(--color-warning-border); border-radius: 999px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .readonly-banner button:disabled { cursor: default; opacity: .55; }
 .readonly-banner.protocol-incompatible { border-color: var(--color-danger-border); background: var(--color-danger-surface); color: var(--color-danger); }
+.reauth-banner { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--color-warning-border); background: var(--color-warning-surface); color: var(--color-warning); font-size: 12px; line-height: 1.5; }
+.reauth-banner > div { min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.reauth-banner strong { font-weight: 600; }
+.reauth-banner button { flex: none; min-height: 44px; padding: 6px 12px; border: 1px solid var(--color-warning-border); border-radius: 12px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.reauth-banner button:disabled { opacity: .55; cursor: default; }
+.reauth-banner form { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 55%; }
+.reauth-banner input { width: 108px; max-width: 100%; min-height: 44px; padding: 6px 8px; font-size: 16px; }
 .permission-note { color: var(--color-warning); }
 
 @media (max-width: 800px) {
