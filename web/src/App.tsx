@@ -358,6 +358,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
   const [historyChromeCollapsed, setHistoryChromeCollapsed] = useState(false);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
+  const [permissionInfoPosition, setPermissionInfoPosition] = useState({ left: 12, bottom: 12, width: 310, maxHeight: 300 });
   const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const selection = useRef({ deviceId: "", threadId: "", view: null as ThreadView | null });
@@ -2001,7 +2002,40 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     return () => { document.removeEventListener("mousedown", onPointerDown); window.removeEventListener("keydown", onKeyDown); };
   }, [permissionInfoOpen]);
 
-  useEffect(() => { setPermissionInfoOpen(false); }, [deviceId, threadId]);
+  useEffect(() => { setPermissionInfoOpen(false); }, [deviceId, threadId, historyChromeCollapsed]);
+
+  useLayoutEffect(() => {
+    if (!permissionInfoOpen || historyChromeCollapsed) return;
+    const viewport = window.visualViewport;
+    const place = () => {
+      const anchor = permissionInfoRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const viewportLeft = viewport?.offsetLeft || 0;
+      const viewportTop = viewport?.offsetTop || 0;
+      const width = Math.min(310, (viewport?.width || innerWidth) - 24);
+      setPermissionInfoPosition({
+        width,
+        left: Math.max(viewportLeft + 12, Math.min(anchor.left, viewportLeft + (viewport?.width || innerWidth) - width - 12)),
+        bottom: innerHeight - anchor.top + 8,
+        maxHeight: Math.max(0, Math.min(300, (viewport?.height || innerHeight) * .45, anchor.top - viewportTop - 20)),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    viewport?.addEventListener("resize", place);
+    viewport?.addEventListener("scroll", place);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    const composer = permissionInfoRef.current?.closest(".composer-wrap");
+    if (composer) observer?.observe(composer);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      viewport?.removeEventListener("resize", place);
+      viewport?.removeEventListener("scroll", place);
+      observer?.disconnect();
+    };
+  }, [permissionInfoOpen, historyChromeCollapsed]);
 
   useEffect(() => {
     setThreadMenu(null);
@@ -2748,7 +2782,6 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
           {workspaceBrowserEnabled&&<button className="workspace-open icon-control" type="button" aria-label="浏览工作区文件" data-tooltip="工作区文件" onClick={()=>setShowWorkspaceBrowser(true)}><FolderIcon/></button>}
-          {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {inlineAuthRecovery && <section className="reauth-banner" aria-label="恢复登录">
@@ -2806,6 +2839,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={(!view && !localThreadDraft) || readOnlyHistory || working} />
               <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
+              {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" style={permissionInfoPosition} role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
               {(view||localThreadDraft)&&<ExecutionSettingsControl key={executionTarget} client={client} store={executionStore.current} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} targetKey={executionTarget} threadId={view?.threadId} draft={!!localThreadDraft} connected={agentReady} ownerReady={!!localThreadDraft||ownerReady&&!readOnlyHistory} queued={queuedMessages.length>0} busy={working||!!queueWorking} hasImages={screenshots.length>0} onState={setExecutionGuard}/>}
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
               {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}

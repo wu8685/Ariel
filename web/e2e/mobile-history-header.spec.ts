@@ -159,7 +159,7 @@ test("scrolling into history fully collapses the chrome and gives its height to 
   await expect(head).toHaveCSS("height", "0px");
   await expect(head).toHaveCSS("visibility", "hidden");
   await expect(head.getByRole("button", { name: /打开会话列表/ })).toBeHidden();
-  await expect(head.locator(".permission-info-button")).toBeHidden();
+  await expect(page.locator(".permission-info-button")).toBeHidden();
   await expect(head.getByRole("heading", { name: fixtureThread.title })).toBeHidden();
   await expect(head.locator(".head-path")).toBeHidden();
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "true");
