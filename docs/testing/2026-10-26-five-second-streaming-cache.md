@@ -19,4 +19,11 @@
 - 全量 Chromium viewport／touch 回归：57 项通过（1 worker），既有截图基线不变。
 - 当前 native owner 仅使用隔离 fixture，不改变真实 Codex 业务会话；本次没有修改 native Adapter。
 - 物理 iPhone／Safari 未测试。5 秒是正常调度、网络畅通下的正文合并窗口，不是端到端延迟 SLA；首屏／结构变化／完成／交互仍走即时路径。
-- 本次仅提交代码，不在未获新部署请求时重启公网 Relay 或本机 Agent。
+- 开发验收阶段只提交代码；用户后续已明确要求部署，授权以 v0.9.1 更新公网 Relay／Web 与本机 Desktop Agent。
+
+## 发布检查
+
+- README 先更新，合并 PR #16 后核对 main 包含实现与测试，再创建 v0.9.1 tag。
+- 沿用现有密钥、Passkey 数据、设备身份、文件上下文开关与内存预算；任务保持关闭。
+- 部署先公网 Relay／Web，再本机 launchd Agent。保留旧容器、二进制和 plist 作为回滚入口。
+- 发布后核对 image revision、health、Web asset、本机新 PID／ready marker 及到公网 Relay 的握手；不向真实业务会话发送测试消息。

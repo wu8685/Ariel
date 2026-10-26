@@ -79,7 +79,7 @@
 - 首帧、runtime／turn 状态、item／交互结构变化继续立即推送；turn 完成不等 5 秒。mutation receipt、模型设置推送、heartbeat 与重连计时不调整。
 - TDD：先实际运行证明生产默认仍为 1 秒的失败测试，再调整默认值；回归同窗口 latest-only、尾部 flush、完成／交互立即发送，以及旧 stream／订阅 fencing。
 - 使用真实 Agent／Relay 的隔离 fixture 补 Chromium streaming 行为回归，不向真实业务会话发送内容；物理 Safari 不在本机验收结论内。
-- [本轮验收记录](../testing/2026-10-26-five-second-streaming-cache.md)：Go／vet／race、Web 286、Chromium 57 通过，5 秒专项连续 3 次通过；未部署。
+- [本轮验收记录](../testing/2026-10-26-five-second-streaming-cache.md)：Go／vet／race、Web 286、Chromium 57 通过，5 秒专项连续 3 次通过；用户已确认以 v0.9.1 双端发布。
 
 ## 5. Agent→Relay cache 协议
 
