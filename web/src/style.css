@@ -577,10 +577,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .send-loading-spinner { animation: send-loading-spin .8s linear infinite; }
 @keyframes send-loading-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .send-loading-spinner, .mermaid-loading span { animation: none; } }
-.stop-button { display: grid; place-items: center; min-width: 36px; min-height: 36px; padding: 0; background: var(--color-warning-surface); color: var(--color-warning); border: 1px solid var(--color-warning-border); border-radius: 50%; }
+.stop-button { display: grid; place-items: center; min-width: 36px; min-height: 36px; padding: 0; background: var(--color-primary); color: var(--color-on-primary); border: 1px solid var(--color-primary); border-radius: 50%; }
 .stop-button svg { width: 18px; height: 18px; }
 .send-label, .stop-label { display: none; }
-.stop-button:hover:not(:disabled) { border-color: var(--color-warning); }
+.stop-button:hover:not(:disabled) { background: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+.stop-button:disabled { background: var(--color-border); border-color: var(--color-border); color: var(--color-muted); opacity: 1; }
 
 .mobile-list { display: grid; place-items: center; position: relative; min-width: 44px; min-height: 44px; padding: 0; border: 1px solid var(--color-border-strong); border-radius: 50%; background: var(--color-panel); color: var(--color-text); flex: none; }
 .mobile-list > svg { width: 18px; height: 18px; }

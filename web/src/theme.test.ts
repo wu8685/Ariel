@@ -46,6 +46,13 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.primary:disabled\s*\{[^}]*background:\s*var\(--color-raised\);[^}]*color:\s*var\(--color-subtle\);[^}]*opacity:\s*1/s);
   });
 
+  it("uses primary blue for stop with a neutral disabled state", () => {
+    expect(style).toMatch(/\.stop-button\s*\{[^}]*background:\s*var\(--color-primary\);[^}]*color:\s*var\(--color-on-primary\);[^}]*border:\s*1px solid var\(--color-primary\)/s);
+    expect(style).toMatch(/\.stop-button:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--color-primary-hover\);[^}]*border-color:\s*var\(--color-primary-hover\)/s);
+    expect(style).toMatch(/\.stop-button:disabled\s*\{[^}]*background:\s*var\(--color-border\);[^}]*border-color:\s*var\(--color-border\);[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1/s);
+    expect(contrast(token("color-on-primary"), token("color-primary-hover"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("keeps connection, conversation, composer and question controls on dark surfaces", () => {
     for (const selector of [".connect-panel", ".sidebar", ".conversation", ".composer", ".interaction-card"]) {
       expect(style, selector).toMatch(new RegExp(`${selector.replace(".", "\\.")}\\s*\\{[^}]*background:\\s*var\\(--color-`, "s"));
