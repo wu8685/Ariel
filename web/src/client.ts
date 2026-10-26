@@ -99,10 +99,16 @@ export class ArielSocket {
     catch { this.scheduleReconnect(); return; }
     this.ws = ws;
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       ws.send(JSON.stringify({ type: "hello", v: 1, role: "web", token: this.token }));
-      this.helloTimer = setTimeout(() => ws.close(), 5000);
+      this.helloTimer = setTimeout(() => {
+        if (this.ws === ws && !this.ready) ws.close();
+      }, 5000);
     };
     ws.onmessage = event => {
+      // A callback can already be queued when wake/connect retires a socket.
+      // Fence before parsing or changing any shared handshake/request state.
+      if (this.ws !== ws) return;
       let value: unknown;
       try { value = JSON.parse(String(event.data)); } catch { this.stopForIncompatibleProtocol(ws); return; }
       if (!validateEnvelope(value)) { this.stopForIncompatibleProtocol(ws); return; }
