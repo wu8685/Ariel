@@ -6,6 +6,7 @@ import { answersForSubmission } from "./interaction";
 import { InteractionCard } from "./interaction-card";
 import { newRequestID } from "./ids";
 import { ExecutionSettingsControl } from "./execution-settings";
+import { nativeNoticeKind } from "./native-notice";
 import { ExecutionSettingsStore, type ExecutionGuard } from "./model-settings";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
@@ -2801,14 +2802,15 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           <FileQuoteChips quotes={fileQuotes} onRemove={index=>setFileQuotes(current=>current.filter((_,position)=>position!==index))}/>
           {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></button></div>)}</div>}
           <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={localThreadDraft ? "发送第一条消息，创建 Codex 会话…" : view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={(!view && !localThreadDraft) || readOnlyHistory} rows={1} />
+            {currentExecution?.imagesBlocked && <small className="execution-image-warning" role="status">当前模型不支持图片，请更换模型或移除截图。</small>}
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={(!view && !localThreadDraft) || readOnlyHistory || working} />
               <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
+              {(view||localThreadDraft)&&<ExecutionSettingsControl key={executionTarget} client={client} store={executionStore.current} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} targetKey={executionTarget} threadId={view?.threadId} draft={!!localThreadDraft} connected={agentReady} ownerReady={!!localThreadDraft||ownerReady&&!readOnlyHistory} queued={queuedMessages.length>0} busy={working||!!queueWorking} hasImages={screenshots.length>0} onState={setExecutionGuard}/>}
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
               {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
               <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={executionBlocked || ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
             </div></div>
-            {(view||localThreadDraft)&&<ExecutionSettingsControl key={executionTarget} client={client} store={executionStore.current} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} targetKey={executionTarget} threadId={view?.threadId} draft={!!localThreadDraft} connected={agentReady} ownerReady={!!localThreadDraft||ownerReady&&!readOnlyHistory} queued={queuedMessages.length>0} busy={working||!!queueWorking} hasImages={screenshots.length>0} onState={setExecutionGuard}/>}
             </div></div></div>
       </main>
     </div>
@@ -2879,6 +2881,7 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
   const [activityExpanded, setActivityExpanded] = useState(false);
   const [openActivityID, setOpenActivityID] = useState("");
   const parts = groupTurnItems(turn);
+  const retrying = turn.items.some(item => nativeNoticeKind(item) === "retry");
   const lastPart = parts.at(-1);
   const processing = active && lastPart?.kind === "activity";
   const activityParts = parts.filter(part => part.kind === "activity");
@@ -2896,10 +2899,11 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
     {parts.map(part => {
       if (part.kind === "message") {
         const item = part.item;
+		const notice = nativeNoticeKind(item);
 		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];
-        return <article className={`message ${item.role}`} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
+        return <article className={`message ${item.role}${notice ? ` native-notice ${notice}` : ""}`} role={notice ? notice === "failure" ? "alert" : "status" : undefined} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>
@@ -2908,6 +2912,6 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
       </section>;
     })}
 		{turn.status === "completed" && fileChanges && <TurnFileChanges changes={fileChanges} onOpen={onOpenFile}/>}
-    {active && <div className="agent-progress" role="status">{processing ? "处理中…" : "思考中…"}</div>}
+    {active && !retrying && <div className="agent-progress" role="status">{processing ? "处理中…" : "思考中…"}</div>}
   </section>;
 }

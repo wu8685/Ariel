@@ -5,9 +5,67 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 )
+
+func TestNormalizeNativeErrorNotices(t *testing.T) {
+	retry1 := json.RawMessage(`{"id":"retry-1","type":"error","message":"Reconnecting... 1/5","willRetry":true}`)
+	retry2 := json.RawMessage(`{"id":"retry-2","type":"error","message":"Reconnecting... waiting for network","willRetry":true}`)
+	fatal := json.RawMessage(`{"id":"fatal","type":"error","message":"Request failed\nTry again later","willRetry":false,"additionalDetails":"private-stack"}`)
+	for _, tc := range []struct {
+		name, status string
+		raw          []json.RawMessage
+		want         []string
+	}{
+		{"coalesce retry", "inProgress", []json.RawMessage{retry1, retry2}, []string{"Codex 正在重试：Reconnecting... waiting for network"}},
+		{"complete", "completed", []json.RawMessage{retry1, retry2}, nil},
+		{"interrupted", "interrupted", []json.RawMessage{retry1}, nil},
+		{"failed retry only", "failed", []json.RawMessage{retry1}, nil},
+		{"resumed", "inProgress", []json.RawMessage{retry1, json.RawMessage(`{"id":"a","type":"agentMessage","text":"resumed"}`)}, []string{"resumed"}},
+		{"reasoning placeholder is not recovery", "inProgress", []json.RawMessage{retry1, retry2, json.RawMessage(`{"id":"r","type":"reasoning"}`)}, []string{"Codex 正在重试：Reconnecting... waiting for network"}},
+		{"fatal", "failed", []json.RawMessage{retry1, fatal}, []string{"Codex 错误：Request failed\nTry again later"}},
+		{"do not erase fatal", "completed", []json.RawMessage{fatal}, []string{"Codex 错误：Request failed\nTry again later"}},
+		{"missing flag", "completed", []json.RawMessage{json.RawMessage(`{"id":"unknown","type":"error","message":"Unclassified native error"}`)}, []string{"Codex 状态未确认：Unclassified native error"}},
+		{"invalid flag", "inProgress", []json.RawMessage{json.RawMessage(`{"id":"unknown","type":"error","message":"unknown","willRetry":"true"}`)}, []string{"Codex 状态未确认：unknown"}},
+		{"no message", "failed", []json.RawMessage{json.RawMessage(`{"id":"empty","type":"error","willRetry":false}`)}, []string{"Codex 错误：原生未提供错误说明"}},
+		{"unknown type", "completed", []json.RawMessage{json.RawMessage(`{"id":"other","type":"futureTool"}`)}, []string{"[futureTool 项目]"}},
+		{"do not strip a literal plan", "completed", []json.RawMessage{json.RawMessage(`{"id":"plan","type":"plan","text":"Codex 正在重试：literal plan"}`)}, []string{"Codex 正在重试：literal plan"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			turn, err := normalizeTurn("fixture-turn", tc.status, tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := turn["items"].([]any)
+			if len(items) != len(tc.want) {
+				t.Fatalf("items count=%d, want=%d", len(items), len(tc.want))
+			}
+			for i, text := range tc.want {
+				item := items[i].(map[string]any)
+				if item["text"] != text {
+					t.Fatalf("text=%q, want=%q", item["text"], text)
+				}
+				if len(item) != 3 {
+					t.Fatalf("new unnegotiated wire fields: %v", item)
+				}
+			}
+		})
+	}
+}
+
+func TestNativeErrorNoticeTextIsBoundedAndImageFree(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"id": "error", "type": "error", "willRetry": false, "message": "data:image/png;base64,private-image\n" + strings.Repeat("界", 5000), "additionalDetails": "private-stack"})
+	turn, err := normalizeTurn("fixture-turn", "failed", []json.RawMessage{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := turn["items"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.HasPrefix(text, "Codex 错误：") || len(text) > 4096 || !utf8.ValidString(text) || strings.Contains(text, "private-") || strings.Contains(text, "data:image/") {
+		t.Fatalf("unsafe/broken notice: prefix=%t bytes=%d validUTF8=%t", strings.HasPrefix(text, "Codex 错误："), len(text), utf8.ValidString(text))
+	}
+}
 
 func TestNormalizeLiveKeepsOnlyLatestTwoNativeTurns(t *testing.T) {
 	turns := make([]map[string]any, 12)

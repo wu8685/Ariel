@@ -202,13 +202,18 @@ describe("Ariel app interactions", () => {
 	it("shows native execution options and disables only sending while saving", async () => {
 		const {socket,requests}=await openFixture();
 		await waitFor(()=>expect(requests("model.catalog.read")).toHaveLength(1));
-		await act(async()=>socket.message({type:"response",v:1,requestId:requests("model.catalog.read")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",settingsSupported:true,catalog:{models:[{id:"native-model",name:"Native Model",description:"",efforts:[{id:"low",description:""},{id:"high",description:""}],defaultEffort:"low",tiers:[],defaultTier:null,inputModalities:["text","image"],isDefault:true}]}}}));
+		await act(async()=>socket.message({type:"response",v:1,requestId:requests("model.catalog.read")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",settingsSupported:true,catalog:{models:[{id:"native-model",name:"Native Model",description:"",efforts:[{id:"low",description:""},{id:"high",description:""}],defaultEffort:"low",tiers:[],defaultTier:null,inputModalities:["text"],isDefault:true}]}}}));
 		await waitFor(()=>expect(requests("thread.settings.watch")).toHaveLength(1));
 		await act(async()=>socket.message({type:"response",v:1,requestId:requests("thread.settings.watch")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",subscriptionId:"settings-sub",streamId:"settings-stream",seq:1,settings:{revision:"r",freshness:"fresh",writable:true,values:{model:"native-model",effort:"low",speed:{mode:"inherit"}}}}}));
+		expect(screen.getByRole("button",{name:"模型与推理设置"}).closest(".composer-actions")).toBeTruthy();
 		fireEvent.change(screen.getByRole("textbox",{name:"发送消息"}),{target:{value:"keep draft"}});
 		fireEvent.click(screen.getByRole("button",{name:"模型与推理设置"}));fireEvent.change(screen.getByLabelText("推理强度"),{target:{value:"high"}});fireEvent.click(screen.getByRole("button",{name:"保存设置"}));
 		await waitFor(()=>expect((screen.getByRole("button",{name:"发送"}) as HTMLButtonElement).disabled).toBe(true));
 		expect((screen.getByRole("textbox",{name:"发送消息"}) as HTMLTextAreaElement).value).toBe("keep draft");expect(requests("thread.subscribe")).toHaveLength(1);expect(requests("turn.start")).toHaveLength(0);
+		const file = new File([Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), value => value.charCodeAt(0))], "shot.png", { type: "image/png" });
+		fireEvent.change(screen.getByLabelText("附加截图"),{target:{files:[file]}});
+		const warning=await screen.findByText("当前模型不支持图片，请更换模型或移除截图。");
+		expect(warning.closest(".composer-actions")).toBeNull();expect(warning.closest(".composer")).toBeTruthy();
 	});
 	it("shows the workspace browser only when Web flag and Agent capability are ready", async () => {
 		const meta=document.createElement("meta");meta.name="ariel-chilling-file-context";meta.content="true";document.head.append(meta);
@@ -1756,6 +1761,30 @@ describe("Ariel app interactions", () => {
     expect(system.textContent).toContain("compatibility notice");
     expect(document.querySelectorAll(".message .avatar, .message .message-role")).toHaveLength(0);
     expect(screen.getByText("Approve fixture only")).toBeTruthy();
+  });
+
+  it("renders native retry and final error notices without a duplicate thinking indicator", async () => {
+    const thread: Thread = { ...fixtureThread, runtime: "inProgress", turns: [{ turnId: "retry", status: "inProgress", items: [
+      { itemId: "retry-2", role: "system", text: "Codex 正在重试：Reconnecting... waiting for network" },
+      { itemId: "u", role: "user", text: "Codex 错误：this is user text" },
+    ] }] };
+    const { socket } = await openFixture(thread);
+    const retry = document.querySelector(".native-notice.retry");
+    expect(retry?.getAttribute("role")).toBe("status");
+    expect(retry?.textContent).toContain("Reconnecting... waiting for network");
+    expect(document.querySelector(".agent-progress")).toBeNull();
+    expect(document.querySelector(".message.user.native-notice")).toBeNull();
+    fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "保留这份草稿" } });
+    const failed: Thread = { ...thread, runtime: "idle", turns: [{ turnId: "retry", status: "failed", items: [
+      { itemId: "fatal", role: "system", text: "Codex 错误：Request failed <b>literal</b>" },
+      { itemId: "unknown", role: "system", text: "Codex 状态未确认：Unclassified error" },
+    ] }] };
+    await act(async () => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: thread.threadId, subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: failed }));
+    expect(document.querySelector(".native-notice.retry")).toBeNull();
+    expect(document.querySelector(".native-notice.failure")?.getAttribute("role")).toBe("alert");
+    expect(document.querySelector(".native-notice.failure b")).toBeNull();
+    expect(document.querySelector(".native-notice.unknown")?.textContent).toContain("Unclassified error");
+    expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).value).toBe("保留这份草稿");
   });
 
   it("formats only user and Codex bodies while keeping system, tool and approval text literal", async () => {

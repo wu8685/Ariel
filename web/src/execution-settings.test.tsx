@@ -15,6 +15,26 @@ function fixture(){
  return {client,request,listeners};
 }
 describe("conversation execution settings",()=>{
+ it("renders confirmed reasoning and speed as accessible icons instead of visible text",async()=>{
+  const f=fixture();render(<ExecutionSettingsControl client={f.client} store={new ExecutionSettingsStore()} deviceId="mac" agentEpoch="epoch" targetKey="mac:t" threadId="t" connected ownerReady queued={false} busy={false} hasImages={false} onState={()=>{}}/>);
+  const effort=await screen.findByLabelText("推理强度：高");
+  expect(effort.tagName.toLowerCase()).toBe("svg");
+  expect(screen.getByLabelText("速度：Fast").tagName.toLowerCase()).toBe("svg");
+  const trigger=screen.getByRole("button",{name:"模型与推理设置"});
+  expect(trigger.querySelector(".execution-model")?.textContent).toBe("Model");
+  expect(trigger.getAttribute("title")).toContain("推理强度：高");
+  expect(trigger.getAttribute("title")).toContain("速度：Fast");
+  expect(trigger.querySelector(".execution-separator")).toBeNull();
+ });
+ it.each(["standard","inherit","tier"] as const)("preserves %s speed semantics with a distinct icon, including unknown native values",async mode=>{
+  const f=fixture();render(<ExecutionSettingsControl client={f.client} store={new ExecutionSettingsStore()} deviceId="mac" agentEpoch="epoch" targetKey="mac:t" threadId="t" connected ownerReady queued={false} busy={false} hasImages={false} onState={()=>{}}/>);
+  await screen.findByLabelText("推理强度：高");
+  const speed=mode==="tier"?{mode,tierId:"native-custom"}:{mode};
+  await act(async()=>{for(const fn of f.listeners)fn({type:"event",event:"thread.settings.update",deviceId:"mac",agentEpoch:"epoch",threadId:"t",subscriptionId:"settings-1",streamId:"stream",seq:2,settings:{revision:"r2",values:{...values,effort:"native-effort",speed},freshness:"fresh",writable:true}})});
+  expect(screen.getByLabelText("推理强度：native-effort").getAttribute("data-icon-state")).toBe("unknown");
+  const label=mode==="standard"?"标准":mode==="inherit"?"继承 Codex":"native-custom";
+  expect(screen.getByLabelText(`速度：${label}`).getAttribute("data-icon-state")).toBe(mode==="tier"?"custom":mode);
+ });
 	it("keeps confirmed settings visible but read-only while disconnected",async()=>{
 		const f=fixture(),props={client:f.client,store:new ExecutionSettingsStore(),deviceId:"mac",agentEpoch:"epoch",targetKey:"mac:t",threadId:"t",ownerReady:true,queued:false,busy:false,hasImages:false,onState:()=>{}};
 		const result=render(<ExecutionSettingsControl {...props} connected/>);await waitFor(()=>expect(screen.getByRole("button",{name:"模型与推理设置"}).textContent).toContain("Model"));

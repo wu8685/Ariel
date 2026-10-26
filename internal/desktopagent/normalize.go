@@ -340,13 +340,19 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		return nil, ErrNativeShape
 	}
 	items := make([]any, 0, len(rawItems))
+	// Retry is transient presentation, not a turn failure. Keep at most the
+	// latest candidate until native progress or another error supersedes it.
+	retryIndex := -1
+	retryItems := make(map[int]bool)
 	for _, raw := range rawItems {
 		var item struct {
-			ID                  string `json:"id"`
-			Type                string `json:"type"`
-			Text                string `json:"text"`
-			ClientID            string `json:"clientId"`
-			ClientUserMessageID string `json:"clientUserMessageId"`
+			ID                  string          `json:"id"`
+			Type                string          `json:"type"`
+			Text                string          `json:"text"`
+			Message             json.RawMessage `json:"message"`
+			WillRetry           json.RawMessage `json:"willRetry"`
+			ClientID            string          `json:"clientId"`
+			ClientUserMessageID string          `json:"clientUserMessageId"`
 			Content             []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -383,7 +389,24 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		}
 		role, text := "system", ""
 		var activity map[string]any
+		isRetry := false
 		switch item.Type {
+		case "error":
+			retryIndex = -1
+			prefix := "Codex 状态未确认："
+			switch string(bytes.TrimSpace(item.WillRetry)) {
+			case "true":
+				prefix, isRetry = "Codex 正在重试：", true
+			case "false":
+				prefix = "Codex 错误："
+			}
+			var message string
+			_ = json.Unmarshal(item.Message, &message)
+			message = strings.TrimSpace(message)
+			if message == "" {
+				message = "原生未提供错误说明"
+			}
+			text, _ = boundedActivityText(4096, prefix, omitInlineImageData(message))
 		case "userMessage":
 			role = "user"
 			parts := make([]string, 0, len(item.Content))
@@ -514,6 +537,11 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		if activity != nil {
 			text, _ = boundedActivityText(512, text)
 		}
+		// Recovery must be evidenced by native work, not an empty reasoning
+		// placeholder, user input, a timer, or an inferred network condition.
+		if (role == "assistant" && text != "") || (activity != nil && item.Type != "sleep") {
+			retryIndex = -1
+		}
 		projected := map[string]any{"itemId": item.ID, "role": role, "text": text}
 		clientMessageID := item.ClientID
 		if item.Type == "steeringUserMessage" {
@@ -529,8 +557,22 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			projected["activity"] = activity
 		}
 		items = append(items, projected)
+		if isRetry {
+			retryIndex = len(items) - 1
+			retryItems[retryIndex] = true
+		}
 	}
-	return map[string]any{"turnId": id, "status": status, "items": items}, nil
+	// Strip only Adapter-owned retry projections. Other errors, unknown native
+	// types, and user/assistant text must remain intact, including in history.
+	visible := items[:0]
+	for index, value := range items {
+		item := value.(map[string]any)
+		if retryItems[index] && (status != "inProgress" || index != retryIndex) {
+			continue
+		}
+		visible = append(visible, item)
+	}
+	return map[string]any{"turnId": id, "status": status, "items": visible}, nil
 }
 
 func normalizeInteraction(threadID, cwd string, state, raw json.RawMessage) (map[string]any, error) {

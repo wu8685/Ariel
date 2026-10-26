@@ -499,6 +499,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .activity-detail-toggle:hover { color: var(--color-text); }
 .activity-details { margin: 9px 0 0; padding: 9px 10px; max-height: 320px; overflow: auto; border-radius: 7px; background: var(--color-page); color: var(--color-muted); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.55; }
 .agent-progress { color: var(--color-muted); font-size: 12px; padding: 6px 0; }
+.message.native-notice { color: var(--color-subtle); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.message.native-notice .message-body { color: inherit; }
+.message.native-notice.retry .message-body { border-left: 0; padding-left: 0; }
+.message.native-notice.failure { color: var(--color-danger); }
+.message.native-notice.failure .message-body { border-left-color: var(--color-danger-border); }
+.message.native-notice.unknown { color: var(--color-warning); }
+.message.native-notice.unknown .message-body { border-left-color: var(--color-warning-border); }
 .interaction-card {
   border: 1px solid var(--color-border-strong);
   border-left: 3px solid var(--color-border-strong);
