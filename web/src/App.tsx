@@ -5,6 +5,8 @@ import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, recoveryTar
 import { answersForSubmission } from "./interaction";
 import { InteractionCard } from "./interaction-card";
 import { newRequestID } from "./ids";
+import { ExecutionSettingsControl } from "./execution-settings";
+import { ExecutionSettingsStore, type ExecutionGuard } from "./model-settings";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
 import { BrowserHistoryCache, mergeCachedHistory, type HistoryCacheIdentity } from "./history-cache";
@@ -298,6 +300,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [newThreadError, setNewThreadError] = useState("");
   const [creatingThread, setCreatingThread] = useState(false);
   const [localThreadDraft, setLocalThreadDraft] = useState<LocalThreadDraft | null>(null);
+  const executionStore = useRef(new ExecutionSettingsStore());
+  const [executionGuard,setExecutionGuard]=useState<ExecutionGuard|null>(null);
   const searchInputRef = useRef("");
   const searchInputChanged = useRef(false);
   const [threadId, setThreadId] = useState("");
@@ -418,6 +422,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
+  const executionTarget = `${deviceId}\0${device?.agentEpoch || ""}\0${localThreadDraft?.draftId || threadId}`;
+  const currentExecution = executionGuard?.key === executionTarget ? executionGuard : null;
+  const executionBlocked = Boolean(currentExecution?.busy || currentExecution?.imagesBlocked);
   const composerReady = localThreadDraft ? agentReady : ownerReady;
   const ownerRecoveryLoading = Boolean(view && !readOnlyHistory && !ownerReady && (syncingView || recoveringDeviceId === deviceId));
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
@@ -1638,6 +1645,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     };
     client.onEvent = (event: ArielProtocolV1Envelope) => {
       if (event.type !== "event") return;
+      if (event.event === "thread.settings.update") return; // Dedicated opt-in listener; not a transcript event.
       if (event.event === "auth.pair.consumed") {
         setPairingInvite(current => current?.status === "waiting" ? { ...current, status: "consumed", credential: "", qr: "" } : current);
         return;
@@ -2204,6 +2212,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }
 
   async function send() {
+    if(executionBlocked)return;
 	if (localThreadDraft) {
 		if (!deviceId || working || readOnlyHistory || !composerReady || (!draft.trim() && screenshots.length === 0)) return;
 		const local = localThreadDraft;
@@ -2214,7 +2223,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		const clientMessageId = newRequestID();
 		setWorking(true);
 		setNotice("");
-		const response = await client.request("thread.bootstrap", local.deviceId, { cwd: local.cwd, clientMessageId, text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}) });
+		const response = await client.request("thread.bootstrap", local.deviceId, { cwd: local.cwd, clientMessageId, text, ...(images.length ? { images: images.map(image => image.dataUri) } : {}),...(currentExecution?.draftSettings?{settings:currentExecution.draftSettings}:{}) });
 		setWorking(false);
 		if (selection.current.deviceId !== local.deviceId || agentEpochFor(local.deviceId) !== local.agentEpoch) return;
 		const candidate = response.data?.thread as Partial<Thread> | undefined;
@@ -2758,8 +2767,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
               <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
               {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
               {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
-              <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
-            </div></div></div></div></div>
+              <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={executionBlocked || ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
+            </div></div>
+            {(view||localThreadDraft)&&<ExecutionSettingsControl key={executionTarget} client={client} store={executionStore.current} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} targetKey={executionTarget} threadId={view?.threadId} draft={!!localThreadDraft} connected={agentReady} ownerReady={!!localThreadDraft||ownerReady&&!readOnlyHistory} queued={queuedMessages.length>0} busy={working||!!queueWorking} hasImages={screenshots.length>0} onState={setExecutionGuard}/>}
+            </div></div></div>
       </main>
     </div>
     {threadMenu && (() => {

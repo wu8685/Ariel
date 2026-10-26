@@ -88,6 +88,17 @@ async function openFixture(thread: Thread = fixtureThread, queue = false, thread
 }
 
 describe("Ariel app interactions", () => {
+	it("shows native execution options and disables only sending while saving", async () => {
+		const {socket,requests}=await openFixture();
+		await waitFor(()=>expect(requests("model.catalog.read")).toHaveLength(1));
+		await act(async()=>socket.message({type:"response",v:1,requestId:requests("model.catalog.read")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",settingsSupported:true,catalog:{models:[{id:"native-model",name:"Native Model",description:"",efforts:[{id:"low",description:""},{id:"high",description:""}],defaultEffort:"low",tiers:[],defaultTier:null,inputModalities:["text","image"],isDefault:true}]}}}));
+		await waitFor(()=>expect(requests("thread.settings.watch")).toHaveLength(1));
+		await act(async()=>socket.message({type:"response",v:1,requestId:requests("thread.settings.watch")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",subscriptionId:"settings-sub",streamId:"settings-stream",seq:1,settings:{revision:"r",freshness:"fresh",writable:true,values:{model:"native-model",effort:"low",speed:{mode:"inherit"}}}}}));
+		fireEvent.change(screen.getByRole("textbox",{name:"发送消息"}),{target:{value:"keep draft"}});
+		fireEvent.click(screen.getByRole("button",{name:"模型与推理设置"}));fireEvent.change(screen.getByLabelText("推理强度"),{target:{value:"high"}});fireEvent.click(screen.getByRole("button",{name:"保存设置"}));
+		await waitFor(()=>expect((screen.getByRole("button",{name:"发送"}) as HTMLButtonElement).disabled).toBe(true));
+		expect((screen.getByRole("textbox",{name:"发送消息"}) as HTMLTextAreaElement).value).toBe("keep draft");expect(requests("thread.subscribe")).toHaveLength(1);expect(requests("turn.start")).toHaveLength(0);
+	});
 	it("shows the workspace browser only when Web flag and Agent capability are ready", async () => {
 		const meta=document.createElement("meta");meta.name="ariel-chilling-file-context";meta.content="true";document.head.append(meta);
 		const {socket,requests}=await openFixture(fixtureThread,false,false,[fixtureThread],false,false,true,true);
@@ -625,6 +636,16 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: request.requestId, outcome: "accepted", data: { thread: created, threadId: created.threadId, turnId: "turn-first", clientMessageId: request.params.clientMessageId } }));
     await waitFor(() => expect(requests("thread.subscribe")).toHaveLength(2));
     expect((screen.getByRole("textbox", { name: "发送消息" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("sends selected draft settings with the first bootstrap and never writes another thread",async()=>{
+    const {socket,requests}=await openFixture(fixtureThread,false,true);
+    await waitFor(()=>expect(requests("model.catalog.read")).toHaveLength(1));
+    await act(async()=>socket.message({type:"response",v:1,requestId:requests("model.catalog.read")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",settingsSupported:true,catalog:{models:[{id:"draft-model",name:"Draft Model",description:"",efforts:[{id:"low",description:""},{id:"high",description:""}],defaultEffort:"low",tiers:[],defaultTier:null,inputModalities:["text"],isDefault:true}]}}}));
+    fireEvent.click(screen.getByRole("button",{name:"新建会话"}));fireEvent.click(screen.getByRole("button",{name:"创建会话"}));
+    await waitFor(()=>expect(screen.getByRole("button",{name:"模型与推理设置"})).toBeTruthy());fireEvent.click(screen.getByRole("button",{name:"模型与推理设置"}));fireEvent.change(screen.getByLabelText("推理强度"),{target:{value:"high"}});fireEvent.change(screen.getByLabelText("速度"),{target:{value:"standard"}});fireEvent.click(screen.getByRole("button",{name:"保存设置"}));
+    fireEvent.change(screen.getByRole("textbox",{name:"发送消息"}),{target:{value:"first"}});fireEvent.click(screen.getByRole("button",{name:"发送"}));await waitFor(()=>expect(requests("thread.bootstrap")).toHaveLength(1));
+    expect(requests("thread.bootstrap")[0].params.settings).toEqual({model:"draft-model",effort:"high",speed:{mode:"standard"}});expect(requests("thread.settings.update")).toHaveLength(0);
   });
 
   it("keeps the local draft after an uncertain bootstrap and never retries automatically", async () => {

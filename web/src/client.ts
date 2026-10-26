@@ -5,14 +5,16 @@ import { isPairingCredential } from "./pairing";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "ready" | "invalid" | "incompatible";
 export function isWebPIN(value: string): boolean { return /^[0-9]{6}$/.test(value); }
-type Method = "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.activity.read" | "thread.subscribe" | "thread.unsubscribe" | "thread.cache.read" | "thread.cache.watch" | "thread.cache.unwatch" | "thread.cache.promote" | "file.context.changes" | "file.context.read" | "file.context.reference.read" | "workspace.files.list" | "workspace.file.read" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
+type Method = "model.catalog.read" | "thread.settings.read" | "thread.settings.update" | "thread.settings.watch" | "thread.settings.unwatch" | "auth.pair.create" | "auth.pair.cancel" | "device.list" | "thread.create" | "thread.bootstrap" | "thread.archive.update" | "thread.archive.undo" | "thread.name.update" | "thread.pin.update" | "thread.list" | "thread.read" | "thread.history" | "thread.history.items" | "thread.image" | "thread.activity.read" | "thread.subscribe" | "thread.unsubscribe" | "thread.cache.read" | "thread.cache.watch" | "thread.cache.unwatch" | "thread.cache.promote" | "file.context.changes" | "file.context.read" | "file.context.reference.read" | "workspace.files.list" | "workspace.file.read" | "turn.start" | "turn.interrupt" | "queue.add" | "queue.update" | "queue.delete" | "queue.reorder" | "queue.steer" | "interaction.respond";
 type Pending = { method: Method; finish: (response: Response) => void; timer: ReturnType<typeof setTimeout> };
 
 function retryableRead(method: Method): boolean {
+	if(method==="model.catalog.read"||method==="thread.settings.read"||method==="thread.settings.watch"||method==="thread.settings.unwatch")return true;
   return method === "thread.list" || method === "thread.read" || method === "thread.history" || method === "thread.history.items" || method === "thread.image" || method === "thread.activity.read" || method === "thread.cache.read" || method === "thread.cache.watch" || method === "file.context.changes" || method === "file.context.read" || method === "file.context.reference.read" || method === "workspace.files.list" || method === "workspace.file.read";
 }
 
 export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {
+	if(method==="thread.settings.update")return 50000;
   if (retryableRead(method)) return 40000;
   if (method === "thread.subscribe") return 60000;
   if (method === "thread.create" || method === "thread.bootstrap" || method.startsWith("thread.archive.") || method === "thread.name.update" || method === "thread.pin.update" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
@@ -20,6 +22,9 @@ export function timeoutFor(method: Method, _params: Record<string, unknown> = {}
 }
 
 export class ArielSocket {
+  sessionGeneration = 0;
+  private eventListeners = new Set<(event: ArielProtocolV1Envelope) => void>();
+  subscribeEvents(listener: (event: ArielProtocolV1Envelope) => void): () => void { this.eventListeners.add(listener); return () => { this.eventListeners.delete(listener); }; }
   onStatus: (status: ConnectionStatus) => void = () => {};
   onEvent: (event: ArielProtocolV1Envelope) => void = () => {};
   onReady: (relayEpoch: string, sessionToken?: string) => void = () => {};
@@ -110,6 +115,7 @@ export class ArielSocket {
         if (this.ready) { this.stopForIncompatibleProtocol(ws); return; }
         if (this.helloTimer) clearTimeout(this.helloTimer);
         this.ready = true;
+        this.sessionGeneration++;
         this.retry = 0;
         if (value.sessionToken) this.token = value.sessionToken;
         this.onStatus("ready");
@@ -120,7 +126,7 @@ export class ArielSocket {
       if (value.type === "response") {
         const pending = this.pending.get(value.requestId);
         if (pending) { clearTimeout(pending.timer); this.pending.delete(value.requestId); pending.finish(value); }
-      } else if (value.type === "event") this.onEvent(value);
+      } else if (value.type === "event") { this.onEvent(value); for (const listener of this.eventListeners) listener(value); }
       else this.stopForIncompatibleProtocol(ws);
     };
     ws.onclose = event => {
