@@ -534,7 +534,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queue-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--color-border); color: var(--color-muted); font-size: 11px; font-weight: 600; }
 .queue-head small { color: var(--color-subtle); font-size: 10px; font-weight: 400; }
 .queue-list { max-height: min(28dvh, 260px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
-.queue-item { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-width: 0; min-height: 49px; padding: 6px 8px; border-bottom: 1px solid var(--color-border); transition: background .12s, opacity .12s; }
+.queue-item { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-width: 0; min-height: 49px; padding: 6px 8px; border-bottom: 1px solid var(--color-border); transition: background .12s, opacity .12s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .queue-item:last-child { border-bottom: 0; }
 .queue-item.editing { background: #6fa9ff12; }
 .queue-item.dragging { background: var(--color-raised); opacity: .72; }

@@ -177,6 +177,18 @@ describe("fixed Night appearance", () => {
     expect(menuButton).toMatch(/font-size:\s*inherit/);
   });
 
+  it("prevents queue item selection without disabling composer or transcript selection", () => {
+    const item = style.match(/\.queue-item\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(item).toMatch(/(?:^|[;\s])user-select:\s*none/);
+    expect(item).toMatch(/-webkit-user-select:\s*none/);
+    expect(item).toMatch(/-webkit-touch-callout:\s*none/);
+    expect(item).not.toMatch(/touch-action:\s*none/);
+    for (const selector of ["body", ".composer", ".composer textarea", ".message-text", ".queue-panel"]) {
+      const rule = style.match(new RegExp(`(?:^|\\n)${selector.replaceAll(".", "\\.")}\\s*\\{([^}]*)\\}`, "s"))?.[1] || "";
+      expect(rule, selector).not.toMatch(/user-select:\s*none/);
+    }
+  });
+
   it("uses the compact menu type scale for thread context actions", () => {
     const menu = style.match(/\.thread-context-menu\s*\{([^}]*)\}/s)?.[1] || "";
     const menuButton = style.match(/\.thread-context-menu button\s*\{([^}]*)\}/s)?.[1] || "";
