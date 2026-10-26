@@ -41,7 +41,7 @@ test("device switching keeps a cold read pending beyond the old 12 second deadli
 
   await page.goto("/");
   await expect.poll(() => listRequests.has("mac-a")).toBe(true);
-  await page.getByLabel("设备").selectOption("mac-b");
+  await page.getByRole("combobox",{name:"设备"}).click(); await page.getByRole("option",{name:"Mac B"}).click();
   await expect.poll(() => listRequests.has("mac-b")).toBe(true);
 
   await page.clock.fastForward(13_000);

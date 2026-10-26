@@ -23,6 +23,10 @@ import { isPairingCredential, pairingQRCode, pairingURL, takePairingCredential }
 import { groupThreadsByProject, mergeThreadPages, partitionThreadsByPin, unreadProjectKeys } from "./projects";
 import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
+import { CircleButton } from "./circular-button";
+import { DevicePicker } from "./device-picker";
+import { editableMessage, parseEditTarget, historyRewritten, type MessageEdit } from "./message-edit";
+import {StreamFence} from "./stream-fence";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
 import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileView, type FileViewMode, type OpenFile } from "./file-context";
 import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
@@ -213,7 +217,7 @@ function MoreIcon() {
 }
 
 function StopIcon() {
-  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><rect x="8" y="8" width="8" height="8" rx="1"/></svg>;
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>;
 }
 
 function SendIcon() {
@@ -244,7 +248,7 @@ function PhonePairingPanel({ pairing, origin, onConfirm, onCancel }: { pairing: 
 function PairingDialog({ invite, seconds, onClose, onRegenerate }: { invite: PairingInvite; seconds: number; onClose: () => void; onRegenerate: () => void }) {
   return <div className="pairing-backdrop" role="presentation">
     <section className="pairing-dialog" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
-      <button className="pairing-close icon-button icon-control" type="button" aria-label="关闭扫码登录" data-tooltip="关闭" onClick={onClose}><CloseIcon /></button>
+      <CircleButton className="pairing-close icon-button icon-control" type="button" aria-label="关闭扫码登录" data-tooltip="关闭" onClick={onClose}><CloseIcon /></CircleButton>
       <span className="eyebrow">ONE-TIME PAIRING</span>
       <h2 id="pairing-title">手机扫码登录</h2>
       {invite.status === "loading" && <div className="pairing-state" role="status">正在生成一次性二维码…</div>}
@@ -325,6 +329,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
 	const [fileQuotes, setFileQuotes] = useState<FileQuote[]>([]);
 	const [editingQueueId, setEditingQueueId] = useState("");
+  const [messageEdit,setMessageEdit]=useState<MessageEdit|undefined>();
+  const historyGeneration=useRef(0);
+  const streamFence=useRef(new StreamFence());
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
 	const [openFile, setOpenFile] = useState<FileView | null>(null);
 	const [showWorkspaceBrowser,setShowWorkspaceBrowser]=useState(false);
@@ -433,7 +440,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const composerReady = localThreadDraft ? agentReady : ownerReady;
   const ownerRecoveryLoading = Boolean(view && !readOnlyHistory && !ownerReady && (syncingView || recoveringDeviceId === deviceId));
   const queuePaused = queuedMessages.length > 0 && view?.thread.runtime === "idle" && view.thread.turns.at(-1)?.status === "interrupted";
-  const sendAction = editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
+  const sendAction = messageEdit ? "重新发送" : editingQueueId ? "保存排队消息" : view?.thread.runtime === "inProgress" && queueEnabled ? "加入队列" : "发送";
   const displayedSendAction = ownerRecoveryLoading ? "正在同步会话，暂不可发送" : sendAction;
   const renderedQueuedMessages = dragQueueOrder.length === queuedMessages.length
     ? dragQueueOrder.map(id => queuedMessages.find(item => item.queueId === id)).filter((item): item is QueuedMessage => !!item)
@@ -460,11 +467,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   useEffect(() => {
     const previous = composerSnapshot.current;
-    if (previous.draft === draft && previous.screenshots === screenshots && previous.fileQuotes === fileQuotes && previous.editingQueueId === editingQueueId) return;
-    const next = { draft, screenshots, fileQuotes, editingQueueId, revision: previous.revision + 1 };
+    if (previous.draft === draft && previous.screenshots === screenshots && previous.fileQuotes === fileQuotes && previous.editingQueueId === editingQueueId && previous.messageEdit === messageEdit) return;
+    const next = { draft, screenshots, fileQuotes, editingQueueId, messageEdit, revision: previous.revision + 1 };
     composerSnapshot.current = next;
     if (activeComposerIdentity.current) composerDrafts.current.set(activeComposerIdentity.current, next);
-  }, [draft, screenshots, fileQuotes, editingQueueId]);
+  }, [draft, screenshots, fileQuotes, editingQueueId, messageEdit]);
 
 	useEffect(() => {
 		const epoch = deviceId ? `${deviceId}\u0000${device?.agentEpoch || ""}` : "";
@@ -610,8 +617,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   function captureComposerSnapshot(): ComposerDraftSnapshot {
     const previous = composerSnapshot.current;
-    if (previous.draft === draft && previous.screenshots === screenshots && previous.fileQuotes === fileQuotes && previous.editingQueueId === editingQueueId) return previous;
-    const next = { draft, screenshots, fileQuotes, editingQueueId, revision: previous.revision + 1 };
+    if (previous.draft === draft && previous.screenshots === screenshots && previous.fileQuotes === fileQuotes && previous.editingQueueId === editingQueueId && previous.messageEdit === messageEdit) return previous;
+    const next = { draft, screenshots, fileQuotes, editingQueueId, messageEdit, revision: previous.revision + 1 };
     composerSnapshot.current = next;
     return next;
   }
@@ -621,7 +628,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setDraft(snapshot.draft);
     setScreenshots(snapshot.screenshots);
     setFileQuotes(snapshot.fileQuotes);
-    setEditingQueueId(snapshot.editingQueueId);
+    setEditingQueueId(snapshot.editingQueueId);setMessageEdit(snapshot.messageEdit);
   }
 
   function activateComposer(identity: ComposerDraftIdentity) {
@@ -675,6 +682,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }
 
   function resetHistory() {
+    historyGeneration.current++;
     const empty = emptyHistoryState();
     historyRef.current = empty;
     historyLoadingRef.current = false;
@@ -759,14 +767,30 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const identity = historyCacheIdentity(next.deviceId, next.threadId);
     const cached = identity ? historyCache.current.get(identity) : null;
     if (!identity || !cached) return;
-    const value = { ...cached, thread: next.thread };
+    const value = cached.thread && historyRewritten(cached.thread.turns,next.thread.turns)?{history:emptyHistoryState(),itemOverrides:{},thread:next.thread}:{ ...cached, thread: next.thread };
     historyCache.current.set(identity, value);
     void durableCache.set(identity, value);
+  }
+
+  function acceptStream(next:ThreadView,source:ThreadView|null|undefined):boolean{
+    const key=`${client.sessionGeneration}\0${next.deviceId}\0${next.threadId}\0${next.subscriptionId}`;
+    if(source?.subscriptionId===next.subscriptionId&&source.streamId&&source.streamId!=="cache-pending"&&source.seq>0){
+      if(source.streamId===next.streamId&&next.seq<=source.seq)return false;
+      streamFence.current.accept(key,source.streamId,source.seq);
+    }
+    return streamFence.current.accept(key,next.streamId,next.seq);
   }
 
   function persistView(next: ThreadView) {
     const identity = historyCacheIdentity(next.deviceId, next.threadId);
     if (!identity) return;
+    const previous=historyCache.current.get(identity)?.thread;
+    if(previous&&historyRewritten(previous.turns,next.thread.turns)){
+      resetHistory();
+      setFileChanges(all=>Object.fromEntries(Object.entries(all).filter(([key])=>!key.startsWith(`${next.threadId}\u0000`))));
+      fileContentCache.current.clear();setOpenFile(null);
+      void durableCache.delete(identity);
+    }
     const value = { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: next.thread };
     historyCache.current.set(identity, value);
     void durableCache.set(identity, value);
@@ -788,6 +812,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const identity = historyCacheIdentity(targetDevice, targetThread);
     const cached = identity ? historyCache.current.get(identity) : null;
     if (!identity || !cached) return false;
+    if(cached.thread&&historyRewritten(cached.thread.turns,liveTurns)){historyCache.current.delete(identity);void durableCache.delete(identity);return false;}
     const restored = mergeCachedHistory(cached, liveTurns);
     if (restored.history.older.length === 0) return false;
     historyRef.current = restored.history;
@@ -798,6 +823,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }
 
   function demoteRotatedRecent(previous: Turn[], next: Turn[]): boolean {
+    if(historyRewritten(previous,next))return false;
     const nextIDs = new Set(next.map(turn => turn.turnId));
     const knownOlder = new Set(historyRef.current.older.map(turn => turn.turnId));
     const rotated = previous.filter(turn => turn.status === "completed" && !nextIDs.has(turn.turnId) && !knownOlder.has(turn.turnId));
@@ -1747,6 +1773,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           return;
         }
         const next: ThreadView = { deviceId: event.deviceId, threadId: event.threadId, subscriptionId: event.watchId, streamId: event.cacheStreamId, seq: event.seq, thread: event.thread };
+        if(!acceptStream(next,currentEvent?current.view:warm))return;
         terminalCacheFailure.current = null;
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);
@@ -1814,6 +1841,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (current.view && current.view.deviceId === event.deviceId && current.view.threadId === event.threadId && !resumeReadingAnchor.current) rememberReadingPosition();
         const next = applyThreadEvent(null, event);
         if (!next) return;
+        if(!acceptStream(next,currentEvent?current.view:warm))return;
         if (!restoreCachedHistory(event.deviceId, event.threadId, event.thread.turns)) resetHistory();
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);
@@ -2195,6 +2223,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   async function loadOlder(additionalTurns = historyTurnPageLimit, requestLimit = historyTurnPageLimit) {
     if (!view || !deviceId || historyLoadingRef.current || historyRef.current.exhausted) return;
     const epoch = pendingSelect.current;
+    const historyEpoch=historyGeneration.current;
     const targetThread = view.threadId;
     const targetCount = historyRef.current.older.length + additionalTurns;
     historyLoadingRef.current = true;
@@ -2203,7 +2232,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       for (let pageNumber = 0; pageNumber < 20; pageNumber++) {
         const current = historyRef.current;
         const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: requestLimit, ...(current.cursor ? { cursor: current.cursor } : {}) });
-        if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
+        if (epoch !== pendingSelect.current || historyEpoch!==historyGeneration.current || selection.current.threadId !== targetThread) return;
         if (response.outcome !== "accepted") {
           if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) continue;
           setNotice(errorText(response)); return;
@@ -2279,8 +2308,36 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     return true;
   }
 
+  async function beginMessageEdit(turn:Turn){
+    if(!currentExecution?.editSupported||!ownerReady||working||queueWorking||queuedMessages.length||view?.thread.runtime!=="idle"||turn.turnId!==view.thread.turns.at(-1)?.turnId)return;
+    if(draft.trim()||screenshots.length||fileQuotes.length||editingQueueId||messageEdit){setNotice("请先处理当前草稿，再编辑上一条消息。");return;}
+    const targetDevice=deviceId,targetThread=view.threadId,agentEpoch=agentEpochFor(deviceId);
+    setWorking(true);
+    const response=await client.request("turn.edit.read",targetDevice,{threadId:targetThread,agentEpoch});
+    setWorking(false);
+    if(selection.current.deviceId!==targetDevice||selection.current.threadId!==targetThread||agentEpochFor(targetDevice)!==agentEpoch)return;
+    const target=parseEditTarget(response.data?.target);
+    if(response.outcome!=="accepted"||response.data?.agentEpoch!==agentEpoch||!target||target.turnId!==turn.turnId){setNotice(response.outcome==="accepted"?"编辑目标已变化，请查看最新状态。":errorText(response));return;}
+    // Do not overwrite text typed while the read was in flight.
+    if(composerSnapshot.current.draft.trim()||composerSnapshot.current.screenshots.length||composerSnapshot.current.fileQuotes.length){setNotice("已有未发送草稿，未覆盖其内容。");return;}
+    setMessageEdit({...target,agentEpoch});setDraft(target.text);setNotice("");composerInputRef.current?.focus();
+  }
+  async function sendEditedMessage(){
+    const target=messageEdit;if(!target||target.uncertain||!view||working||queueWorking||!ownerReady||readOnlyHistory||!draft.trim()||screenshots.length||fileQuotes.length||queuedMessages.length||view.thread.runtime!=="idle"||view.thread.pendingInteractions.length||view.thread.turns.at(-1)?.turnId!==target.turnId||agentEpochFor(deviceId)!==target.agentEpoch)return;
+    const targetDevice=deviceId,targetThread=view.threadId,text=draft,operationId=newRequestID(),source=captureComposerSnapshot();
+    setWorking(true);setNotice("");
+    const response=await client.request("turn.edit",targetDevice,{threadId:targetThread,agentEpoch:target.agentEpoch,expectedTurnId:target.turnId,expectedItemId:target.itemId,fingerprint:target.fingerprint,operationId,text});
+    setWorking(false);
+    const accepted=response.outcome==="accepted"&&response.data?.operationId===operationId&&response.data?.replacedTurnId===target.turnId&&response.data?.agentEpoch===target.agentEpoch&&typeof response.data?.turnId==="string"&&response.data.turnId!==target.turnId;
+    const same=selection.current.deviceId===targetDevice&&selection.current.threadId===targetThread;
+    const current=same?composerSnapshot.current:composerDrafts.current.get({deviceId:targetDevice,threadId:targetThread});
+    if(current){const unchanged=current.revision===source.revision;const next=accepted?{...current,messageEdit:undefined,draft:unchanged?"":current.draft,revision:current.revision+1}:{...current,messageEdit:{...target,uncertain:response.outcome==="unknown"||response.outcome==="accepted"},revision:current.revision+1};composerDrafts.current.set({deviceId:targetDevice,threadId:targetThread},next);if(same)showComposerSnapshot(next);}
+    if(same)setNotice(accepted?"消息已替换；已发生的文件修改不会撤销。":response.outcome==="unknown"||response.outcome==="accepted"?"编辑结果不确定。草稿已保留，请核对最新会话；不会自动重发。":errorText(response));
+  }
+
   async function send() {
     if(executionBlocked)return;
+    if(messageEdit){await sendEditedMessage();return;}
 	if (localThreadDraft) {
 		if (!deviceId || working || readOnlyHistory || !composerReady || (!draft.trim() && screenshots.length === 0)) return;
 		const local = localThreadDraft;
@@ -2730,7 +2787,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     </header>
     {newThreadOpen && <div className="thread-create-backdrop" role="presentation">
       <section className="thread-create-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-create-title">
-        <button className="thread-create-close icon-button icon-control" type="button" aria-label="关闭新建会话" data-tooltip="关闭" onClick={closeNewThreadDialog} disabled={creatingThread}><CloseIcon /></button>
+        <CircleButton className="thread-create-close icon-button icon-control" type="button" aria-label="关闭新建会话" data-tooltip="关闭" onClick={closeNewThreadDialog} disabled={creatingThread}><CloseIcon /></CircleButton>
         <span className="eyebrow">NEW CODEX SESSION</span>
         <h2 id="thread-create-title">新建会话</h2>
         <p>选择一个已有项目，或输入这台电脑上的绝对目录。会先建立本地草稿，发送第一条消息后才创建 Codex 会话。</p>
@@ -2747,7 +2804,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     </div>}
     {renameThreadDialog && <div className="thread-create-backdrop thread-rename-backdrop" role="presentation">
       <section className="thread-create-dialog thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-rename-title">
-        <button className="thread-create-close icon-button icon-control" type="button" aria-label="关闭重命名" data-tooltip="关闭" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}><CloseIcon /></button>
+        <CircleButton className="thread-create-close icon-button icon-control" type="button" aria-label="关闭重命名" data-tooltip="关闭" onClick={() => setRenameThreadDialog(null)} disabled={!!threadMetadataWorking}><CloseIcon /></CircleButton>
         <span className="eyebrow">CODEX SESSION</span>
         <h2 id="thread-rename-title">修改会话名称</h2>
         <label htmlFor="thread-rename-name">会话名称</label>
@@ -2760,9 +2817,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     <div className="workspace">
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
-        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <button className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></button>}{webAuthMode === "pin" ? <button className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></button> : <button className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></button>}<button className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></button><button className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></button><button className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></button></div></div>
-        <div className="sidebar-device-row"><span className={`status-dot ${device?.agentOnline ? "online" : ""}`} aria-hidden="true" /><select id="device" aria-label="设备" aria-describedby="sidebar-device-status" value={deviceId} onChange={e => setDeviceId(e.target.value)} disabled={status !== "ready"}><option value="">{devices.length ? "选择设备" : "暂无在线设备"}</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.deviceName}</option>)}</select><span id="sidebar-device-status" className="sr-only">{device ? `${device.deviceName}，${device.agentOnline ? "Agent 在线" : "Agent 离线"}，${device.codexReady ? "Codex 就绪" : mock ? "Mock 演示" : "Codex 未就绪"}` : "未选择设备"}</span></div>
-        <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <button className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></button>}</div>
+        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <CircleButton className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></CircleButton>}{webAuthMode === "pin" ? <CircleButton className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></CircleButton> : <CircleButton className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></CircleButton>}<CircleButton className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></CircleButton><CircleButton className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></CircleButton><CircleButton className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></CircleButton></div></div>
+        <DevicePicker devices={devices} value={deviceId} disabled={status !== "ready"} visible={showList && !threadMenu} onOpen={()=>setThreadMenu(null)} onChange={setDeviceId}/>
+        <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <CircleButton className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></CircleButton>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
         <div className="thread-list" onScroll={cancelThreadLongPress}>{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(renderThreadRow)}</div></section>}{threadGroups.map((group, index) => {
           const expanded = expandedProjectKeys.has(group.key);
@@ -2778,10 +2835,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       </aside>
       <main className="conversation">
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
-          <button className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></button>
+          <CircleButton className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></CircleButton>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
-          {workspaceBrowserEnabled&&<button className="workspace-open icon-control" type="button" aria-label="浏览工作区文件" data-tooltip="工作区文件" onClick={()=>setShowWorkspaceBrowser(true)}><FolderIcon/></button>}
+          {workspaceBrowserEnabled&&<CircleButton className="workspace-open icon-control" type="button" aria-label="浏览工作区文件" data-tooltip="工作区文件" onClick={()=>setShowWorkspaceBrowser(true)}><FolderIcon/></CircleButton>}
         </div>
         {currentPermissions && <section className={`permission-strip ${currentPermissions.warning ? "danger" : ""}`} aria-label="当前 Desktop 权限" role={currentPermissions.warning ? "alert" : "status"}><span>{currentPermissions.label}</span>{currentPermissions.warning && <span className="permission-note">{currentPermissions.warning}</span>}</section>}
         {inlineAuthRecovery && <section className="reauth-banner" aria-label="恢复登录">
@@ -2794,9 +2851,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
-          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} onEdit={currentExecution?.editSupported && !messageEdit && ownerReady && !working && !queueWorking && !readOnlyHistory && view?.thread.runtime==="idle" && !view.thread.pendingInteractions.length && !queuedMessages.length && view.thread.turns.at(-1)?.turnId===turn.turnId && editableMessage(turn)?()=>void beginMessageEdit(turn):undefined} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
-          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
+          {displayedTurns.slice(history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} onEdit={currentExecution?.editSupported && !messageEdit && ownerReady && !working && !queueWorking && !readOnlyHistory && view?.thread.runtime==="idle" && !view.thread.pendingInteractions.length && !queuedMessages.length && view.thread.turns.at(-1)?.turnId===turn.turnId && editableMessage(turn)?()=>void beginMessageEdit(turn):undefined} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {[...pendingSubmissions.current.values()].filter(submission => submission.projectInTranscript && submission.deviceId === deviceId && submission.threadId === view?.threadId && submission.agentEpoch === agentEpochFor(deviceId)).map(submission => {
             const statusText = submission.status === "sending" ? "发送中" : submission.status === "accepted" ? "等待同步" : "结果待确认";
             return <article className={`message user pending-submission ${submission.status}`} aria-label={`你（${statusText}）`} key={submission.clientMessageId} data-client-message-id={submission.clientMessageId} data-pending-revision={pendingSubmissionRevision}>
@@ -2805,8 +2862,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           })}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} submitting={working} />)}
         </div>
-        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></button></div>}
-        <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<button className="icon-control" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setNotice("")}><CloseIcon /></button></div>}
+        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><CircleButton className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></CircleButton></div>}
+        <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<CircleButton className="icon-control" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setNotice("")}><CloseIcon /></CircleButton></div>}
           {recoveringDeviceId === deviceId && view && <div className="readonly-banner" role="status">Desktop Agent 正在重连 · 当前显示最后确认的会话内容，操作暂时禁用。</div>}
           {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">
             {queuePaused && <div className="queue-head"><span>后续输入已暂停</span><small>开始下一轮前可继续调整</small></div>}
@@ -2832,18 +2889,19 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
               </li>;
             })}</ol>
           </section>}
+          {messageEdit&&<div className="message-edit-banner" role="status"><span>正在编辑上一条消息 · 不撤销已发生的文件修改{messageEdit.uncertain?" · 结果待核对":view?.thread.turns.at(-1)?.turnId!==messageEdit.turnId||messageEdit.agentEpoch!==device?.agentEpoch?" · 目标已变化，草稿保留":""}</span><button type="button" onClick={()=>setMessageEdit(undefined)} disabled={working}>取消编辑</button></div>}
           <FileQuoteChips quotes={fileQuotes} onRemove={index=>setFileQuotes(current=>current.filter((_,position)=>position!==index))}/>
-          {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><button className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></button></div>)}</div>}
+          {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><CircleButton className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></CircleButton></div>)}</div>}
           <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={localThreadDraft ? "发送第一条消息，创建 Codex 会话…" : view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={(!view && !localThreadDraft) || readOnlyHistory} rows={1} />
             {currentExecution?.imagesBlocked && <small className="execution-image-warning" role="status">当前模型不支持图片，请更换模型或移除截图。</small>}
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={(!view && !localThreadDraft) || readOnlyHistory || working} />
-              <button className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working}><PlusIcon /></button>
-              {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><button className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></button>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" style={permissionInfoPosition} role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
-              {(view||localThreadDraft)&&<ExecutionSettingsControl key={executionTarget} client={client} store={executionStore.current} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} targetKey={executionTarget} threadId={view?.threadId} draft={!!localThreadDraft} connected={agentReady} ownerReady={!!localThreadDraft||ownerReady&&!readOnlyHistory} queued={queuedMessages.length>0} busy={working||!!queueWorking} hasImages={screenshots.length>0} onState={setExecutionGuard}/>}
-              {editingQueueId && <button className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></button>}
-              {activeTurn && <button className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></button>}
-              <button className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={executionBlocked || ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</button>
+              <CircleButton className="attach-button icon-control" type="button" aria-label="选择截图" data-tooltip="附加截图" onClick={() => screenshotInputRef.current?.click()} disabled={(!view && !localThreadDraft) || readOnlyHistory || working || !!messageEdit}><PlusIcon /></CircleButton>
+              {currentPermissions && <div className="permission-info" ref={permissionInfoRef}><CircleButton className={`permission-info-button icon-control ${permissionWarning ? "danger" : ""}`} type="button" aria-label={currentPermissions.label} data-tooltip="权限详情" aria-expanded={permissionInfoOpen} aria-controls="desktop-permission-details" onClick={() => setPermissionInfoOpen(open => !open)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5"/><path d="M12 7.5h.01"/></svg></CircleButton>{permissionInfoOpen && <div id="desktop-permission-details" className="permission-popover" style={permissionInfoPosition} role="dialog" aria-label="当前 Desktop 权限详情"><div className="permission-popover-title">当前 Desktop 权限</div><div>{currentPermissions.label}</div>{currentPermissions.warning && <p>{currentPermissions.warning}</p>}</div>}</div>}
+              {(view||localThreadDraft)&&<ExecutionSettingsControl key={executionTarget} client={client} store={executionStore.current} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} targetKey={executionTarget} threadId={view?.threadId} draft={!!localThreadDraft} connected={agentReady} ownerReady={!!localThreadDraft||ownerReady&&!readOnlyHistory} queued={queuedMessages.length>0} busy={working||!!queueWorking||!!messageEdit} hasImages={screenshots.length>0} onState={setExecutionGuard}/>}
+              {editingQueueId && <CircleButton className="queue-cancel-button icon-control" type="button" aria-label="取消编辑" data-tooltip="取消编辑" onClick={cancelQueueEdit} disabled={working}><CloseIcon /></CircleButton>}
+              {activeTurn && <CircleButton className="stop-button icon-control" type="button" aria-label="停止" data-tooltip="停止" onClick={() => void stop()} disabled={stopping || !ownerReady || readOnlyHistory}><StopIcon /></CircleButton>}
+              <CircleButton className={`primary send-button icon-control ${ownerRecoveryLoading ? "loading" : ""}`} type="button" aria-label={displayedSendAction} data-tooltip={displayedSendAction} onClick={() => void send()} disabled={!!messageEdit && (messageEdit.uncertain || messageEdit.agentEpoch!==device?.agentEpoch || view?.thread.turns.at(-1)?.turnId!==messageEdit.turnId || view.thread.runtime!=="idle" || queuedMessages.length>0 || view.thread.pendingInteractions.length>0) || executionBlocked || ownerRecoveryLoading || readOnlyHistory || (localThreadDraft ? !composerReady || working || (!draft.trim() && screenshots.length === 0) : !canSend(view?.thread || null, ownerReady, working || !!queueWorking, draft, screenshots.length + fileQuotes.length, queueEnabled))}>{ownerRecoveryLoading ? <SendLoadingIcon /> : <SendIcon />}</CircleButton>
             </div></div>
             </div></div></div>
       </main>
@@ -2911,7 +2969,7 @@ function ActivityDetail({ item, open, onToggle, onLoad }: { item: Item; open: bo
   </div>;
 }
 
-function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, loading, onLoadOlderItems, onLoadImage, onLoadActivity, active }: { turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; onOpenReference?: (itemId:string,reference:WorkspaceDocumentReference)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; onLoadActivity: (item: Item, cursor?: string, revision?: string) => Promise<ActivityPage>; active: boolean }) {
+function ConversationTurn({ onEdit, turn, fileChanges, onOpenFile, onOpenReference, loading, onLoadOlderItems, onLoadImage, onLoadActivity, active }: { onEdit?:()=>void; turn: Turn; fileChanges?: FileChange[]; onOpenFile: (change:FileChange,mode:FileViewMode)=>void; onOpenReference?: (itemId:string,reference:WorkspaceDocumentReference)=>void; loading: boolean; onLoadOlderItems: (turn: Turn) => void; onLoadImage: (itemId: string, index: number) => Promise<string>; onLoadActivity: (item: Item, cursor?: string, revision?: string) => Promise<ActivityPage>; active: boolean }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
   const [openActivityID, setOpenActivityID] = useState("");
   const parts = groupTurnItems(turn);
@@ -2937,7 +2995,7 @@ function ConversationTurn({ turn, fileChanges, onOpenFile, onOpenReference, load
 		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];
-        return <article className={`message ${item.role}${notice ? ` native-notice ${notice}` : ""}`} role={notice ? notice === "failure" ? "alert" : "status" : undefined} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div></article>;
+        return <article className={`message ${item.role}${notice ? ` native-notice ${notice}` : ""}`} role={notice ? notice === "failure" ? "alert" : "status" : undefined} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div>{item.role==="user"&&onEdit&&<CircleButton className="message-edit-button" aria-label="编辑并重新发送" data-tooltip="编辑并重新发送" onClick={onEdit}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 4 5 5M4 20l4-1L20 7a2 2 0 0 0-4-4L4 15z"/></svg></CircleButton>}</article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>

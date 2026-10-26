@@ -7,7 +7,10 @@ import (
 )
 
 func TestExecutionCapabilitiesNeverLeakIntoLegacyDeviceProjection(t *testing.T) {
-	p := &peer{capabilities: map[string]bool{"autoLoad": true, "codexReady": true, "executionSettings": true}}
+	p := &peer{capabilities: map[string]bool{"autoLoad": true, "codexReady": true, "executionSettings": true, "turnEditing": true}}
+	if _, ok := p.currentCapabilities()["turnEditing"]; ok {
+		t.Fatal("edit capability leaked to legacy Web")
+	}
 	if _, ok := p.currentCapabilities()["executionSettings"]; ok {
 		t.Fatal("new capability breaks strict legacy Web schema")
 	}

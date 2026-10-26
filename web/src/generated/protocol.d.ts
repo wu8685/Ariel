@@ -22,7 +22,8 @@ export type ArielProtocolV1Envelope =
   | InteractionResolved
   | AuthPairConsumed
   | HttpsGithubComWu8685ArielProtocolTasksSchemaJson
-  | HttpsGithubComWu8685ArielProtocolSettingsSchemaJson;
+  | HttpsGithubComWu8685ArielProtocolSettingsSchemaJson
+  | HttpsGithubComWu8685ArielProtocolEditSchemaJson;
 export type Id = string;
 export type Request = {
   type: "request";
@@ -197,6 +198,22 @@ export type Speed = {
   mode: "inherit" | "standard" | "tier";
   tierId?: string;
 };
+export type HttpsGithubComWu8685ArielProtocolEditSchemaJson = {
+  type: "request";
+  v: 1;
+  requestId: string;
+  deviceId: string;
+  method: "turn.edit.read" | "turn.edit";
+  params: {
+    threadId: string;
+    agentEpoch: string;
+    expectedTurnId?: string;
+    expectedItemId?: string;
+    fingerprint?: string;
+    operationId?: string;
+    text?: string;
+  };
+};
 
 export interface WebHello {
   type: "hello";
@@ -220,6 +237,7 @@ export interface Capabilities {
   autoLoad: boolean;
   codexReady: boolean;
   executionSettings?: boolean;
+  turnEditing?: boolean;
   history?: boolean;
   send?: boolean;
   interrupt?: boolean;

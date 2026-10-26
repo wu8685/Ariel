@@ -46,6 +46,13 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.primary:disabled\s*\{[^}]*background:\s*var\(--color-raised\);[^}]*color:\s*var\(--color-subtle\);[^}]*opacity:\s*1/s);
   });
 
+  it("uses primary blue for stop with a neutral disabled state", () => {
+    expect(style).toMatch(/\.stop-button\s*\{[^}]*background:\s*var\(--color-primary\);[^}]*color:\s*var\(--color-on-primary\);[^}]*border:\s*1px solid var\(--color-primary\)/s);
+    expect(style).toMatch(/\.stop-button:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--color-primary-hover\);[^}]*border-color:\s*var\(--color-primary-hover\)/s);
+    expect(style).toMatch(/\.stop-button:disabled\s*\{[^}]*background:\s*var\(--color-border\);[^}]*border-color:\s*var\(--color-border\);[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1/s);
+    expect(contrast(token("color-on-primary"), token("color-primary-hover"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("keeps connection, conversation, composer and question controls on dark surfaces", () => {
     for (const selector of [".connect-panel", ".sidebar", ".conversation", ".composer", ".interaction-card"]) {
       expect(style, selector).toMatch(new RegExp(`${selector.replace(".", "\\.")}\\s*\\{[^}]*background:\\s*var\\(--color-`, "s"));
@@ -135,7 +142,7 @@ describe("fixed Night appearance", () => {
 
   it("gives the conversation list most of the sidebar with a compact three-row header", () => {
     expect(style).toMatch(/\.sidebar-toolbar\s*\{[^}]*min-height:\s*52px;[^}]*padding:\s*6px\s+10px/s);
-    expect(style).toMatch(/\.sidebar-device-row\s*\{[^}]*height:\s*36px;[^}]*margin:\s*0\s+12px\s+6px/s);
+    expect(style).toMatch(/\.sidebar-device-row\s*\{[^}]*height:\s*40px;[^}]*margin:\s*10px\s+12px\s+6px/s);
     expect(style).toMatch(/\.sidebar-search\s*\{[^}]*height:\s*36px;[^}]*margin:\s*0\s+12px\s+6px/s);
     expect(style).toMatch(/\.list-caption\s*\{[^}]*padding:\s*5px\s+12px\s+6px/s);
   });
@@ -175,6 +182,18 @@ describe("fixed Night appearance", () => {
     expect(menuButton).toMatch(/background:\s*transparent/);
     expect(menuButton).toMatch(/color:\s*var\(--color-muted\)/);
     expect(menuButton).toMatch(/font-size:\s*inherit/);
+  });
+
+  it("prevents queue item selection without disabling composer or transcript selection", () => {
+    const item = style.match(/\.queue-item\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(item).toMatch(/(?:^|[;\s])user-select:\s*none/);
+    expect(item).toMatch(/-webkit-user-select:\s*none/);
+    expect(item).toMatch(/-webkit-touch-callout:\s*none/);
+    expect(item).not.toMatch(/touch-action:\s*none/);
+    for (const selector of ["body", ".composer", ".composer textarea", ".message-text", ".queue-panel"]) {
+      const rule = style.match(new RegExp(`(?:^|\\n)${selector.replaceAll(".", "\\.")}\\s*\\{([^}]*)\\}`, "s"))?.[1] || "";
+      expect(rule, selector).not.toMatch(/user-select:\s*none/);
+    }
   });
 
   it("uses the compact menu type scale for thread context actions", () => {

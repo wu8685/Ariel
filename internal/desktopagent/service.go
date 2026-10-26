@@ -144,6 +144,7 @@ type threadController struct {
 	bootstrapSettings  *modelsettings.Values
 }
 type Service struct {
+	editEnabled      bool
 	models           ModelReader
 	modelsMu         sync.Mutex
 	modelsLoading    chan struct{}

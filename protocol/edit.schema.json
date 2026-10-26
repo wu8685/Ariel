@@ -1,0 +1,19 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "$id":"https://github.com/wu8685/Ariel/protocol/edit.schema.json",
+ "type":"object","additionalProperties":false,
+ "required":["type","v","requestId","deviceId","method","params"],
+ "properties":{
+  "type":{"const":"request"},"v":{"const":1},
+  "requestId":{"$ref":"v1.schema.json#/$defs/requestId"},
+  "deviceId":{"$ref":"#/$defs/id"},"method":{"enum":["turn.edit.read","turn.edit"]},
+  "params":{"type":"object","additionalProperties":false,"required":["threadId","agentEpoch"],"properties":{
+   "threadId":{"$ref":"#/$defs/id"},"agentEpoch":{"$ref":"#/$defs/id"},
+   "expectedTurnId":{"$ref":"#/$defs/id"},"expectedItemId":{"$ref":"#/$defs/id"},
+   "fingerprint":{"type":"string","pattern":"^[a-f0-9]{64}$"},"operationId":{"$ref":"#/$defs/id"},
+   "text":{"type":"string","minLength":1,"maxLength":65536}
+  }}
+ },
+ "allOf":[{"if":{"properties":{"method":{"const":"turn.edit"}}},"then":{"properties":{"params":{"type":"object","required":["expectedTurnId","expectedItemId","fingerprint","operationId","text"]}}},"else":{"properties":{"params":{"type":"object","maxProperties":2}}}}],
+ "$defs":{"id":{"type":"string","minLength":1,"maxLength":128}}
+}

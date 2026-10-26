@@ -21,7 +21,7 @@ func (p *peer) currentTaskStoreID() string {
 func (p *peer) currentCapabilities() map[string]bool {
 	capabilities := make(map[string]bool, len(p.capabilities))
 	for k, v := range p.capabilities {
-		if k == "executionSettings" {
+		if k == "executionSettings" || k == "turnEditing" {
 			continue
 		} // Only the opt-in catalog response exposes this extension.
 		capabilities[k] = v

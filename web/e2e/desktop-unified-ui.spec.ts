@@ -16,7 +16,8 @@ const fixtureThread: Thread = {
   queuedMessages: [{ queueId: "queued", clientMessageId: "queued-message", text: "补充检查桌面端 icon", images: [], editable: true }],
 };
 
-async function openFixture(page: Page) {
+async function openFixture(page: Page, holdStop = false) {
+  const stopRequests: unknown[] = [];
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
   await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
     const message = JSON.parse(String(raw));
@@ -25,6 +26,10 @@ async function openFixture(page: Page) {
       return;
     }
     if (message.type !== "request") return;
+    if (message.method === "turn.interrupt") {
+      stopRequests.push(message);
+      if (holdStop) return;
+    }
     let data: Record<string, unknown> = {};
     if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "桌面视觉测试", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, queue: true, threadBootstrap: true } }] };
     if (message.method === "thread.list") data = { threads: [fixtureThread], nextCursor: "" };
@@ -37,6 +42,51 @@ async function openFixture(page: Page) {
   await page.getByRole("button", { name: "展开项目 desktop-unified，/tmp/desktop-unified" }).click();
   await page.getByText(fixtureThread.title).click();
   await expect(page.getByRole("heading", { name: fixtureThread.title })).toBeVisible();
+  return stopRequests;
+}
+
+for (const width of [320, 390, 1280]) {
+  test.describe(`blue stop control at ${width}px`, () => {
+    test.use({ viewport: { width, height: 844 }, isMobile: width < 800, hasTouch: width < 800 });
+
+    test("preserves size, focus and single-request disabled behavior", async ({ page }) => {
+      const stopRequests = await openFixture(page, true);
+      const stop = page.getByRole("button", { name: "停止", exact: true });
+      const textarea = page.getByRole("textbox", { name: "发送消息" });
+      await textarea.fill("保留尚未发送的草稿");
+      await expect(stop).toBeEnabled();
+      await expect(stop.locator(".circle-visual")).toHaveCSS("background-color", "rgb(29, 93, 198)");
+      await expect(stop.locator(".circle-visual")).toHaveCSS("border-top-color", "rgb(29, 93, 198)");
+      await expect(stop).toHaveCSS("color", "rgb(255, 255, 255)");
+      await expect(stop).toHaveCSS("border-radius", "50%");
+      const before = await stop.boundingBox();
+      expect(before?.width).toBe(44);
+      expect(before?.height).toBe(44);
+      await expect(stop.locator("svg[aria-hidden='true']")).toBeVisible();
+
+      if (width >= 800) {
+        await stop.hover();
+        await expect(stop.locator(".circle-visual")).toHaveCSS("background-color", "rgb(36, 92, 186)");
+        await expect(stop.locator(".circle-visual")).toHaveCSS("border-top-color", "rgb(36, 92, 186)");
+        await page.mouse.move(0, 0);
+      }
+      await stop.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await expect(stop).toBeFocused();
+      await expect(stop).toHaveCSS("outline-color", "rgb(111, 169, 255)");
+      await expect(stop).toHaveCSS("outline-width", "2px");
+
+      await stop.click();
+      await expect(stop).toBeDisabled();
+      await expect(stop.locator(".circle-visual")).toHaveCSS("background-color", "rgb(63, 63, 63)");
+      await expect(stop.locator(".circle-visual")).toHaveCSS("border-top-color", "rgb(63, 63, 63)");
+      await expect(stop).toHaveCSS("color", "rgb(224, 224, 224)");
+      expect(await stop.boundingBox()).toEqual(before);
+      expect(stopRequests).toHaveLength(1);
+      await expect(textarea).toHaveValue("保留尚未发送的草稿");
+    });
+  });
 }
 
 test("desktop reuses the compact mobile shell and icon controls", async ({ page }) => {

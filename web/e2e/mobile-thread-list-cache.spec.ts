@@ -37,11 +37,11 @@ test("switching back to a device restores its fresh thread list without another 
   await expect(page.getByRole("button", { name: "展开项目 device-a，/tmp/device-a" })).toBeVisible();
   expect(listRequests).toBe(1);
 
-  await page.getByLabel("设备").selectOption("mac-b");
+  await page.getByRole("combobox",{name:"设备"}).click(); await page.getByRole("option",{name:"Mac B"}).click();
   await expect(page.getByRole("button", { name: "展开项目 device-b，/tmp/device-b" })).toBeVisible();
   expect(listRequests).toBe(2);
 
-  await page.getByLabel("设备").selectOption("mac-a");
+  await page.getByRole("combobox",{name:"设备"}).click(); await page.getByRole("option",{name:"Mac A"}).click();
   const cachedProject = page.getByRole("button", { name: "展开项目 device-a，/tmp/device-a" });
   await expect(cachedProject).toBeVisible();
   await cachedProject.click();

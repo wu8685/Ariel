@@ -9,7 +9,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-//go:embed v1.schema.json tasks.schema.json settings.schema.json
+//go:embed v1.schema.json tasks.schema.json settings.schema.json edit.schema.json
 var schemaFS embed.FS
 
 var (
@@ -31,6 +31,20 @@ func schema() (*jsonschema.Schema, error) {
 			return
 		}
 		compiler := jsonschema.NewCompiler()
+		editRaw, err := schemaFS.ReadFile("edit.schema.json")
+		if err != nil {
+			compileErr = err
+			return
+		}
+		editDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(editRaw))
+		if err != nil {
+			compileErr = err
+			return
+		}
+		if err = compiler.AddResource("https://github.com/wu8685/Ariel/protocol/edit.schema.json", editDoc); err != nil {
+			compileErr = err
+			return
+		}
 		const uri = "https://github.com/wu8685/Ariel/protocol/v1.schema.json"
 		settingsRaw, err := schemaFS.ReadFile("settings.schema.json")
 		if err != nil {

@@ -49,19 +49,22 @@ async function openQueueFixture(page: Page): Promise<string[][]> {
   return reorderRequests;
 }
 
-async function dragTouch(context: BrowserContext, page: Page, from: Locator, to: Locator) {
+async function dragTouch(context: BrowserContext, page: Page, from: Locator, to: Locator, holdThenCrossText = false) {
   const start = await from.boundingBox();
   const end = await to.boundingBox();
   if (!start || !end) throw new Error("queue drag geometry unavailable");
   const x = start.x + start.width / 2;
   const startY = start.y + start.height / 2;
   const endY = end.y + end.height - 2;
+  const endX = holdThenCrossText ? end.x + end.width / 2 : x;
   const cdp = await context.newCDPSession(page);
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: startY, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+  if (holdThenCrossText) await page.waitForTimeout(650);
   for (let step = 1; step <= 8; step++) {
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: startY + (endY - startY) * step / 8, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + (endX - x) * step / 8, y: startY + (endY - startY) * step / 8, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
   }
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await cdp.detach();
 }
 
 test("mobile queue and overlay remain clear above the composer", async ({ page }) => {
@@ -102,8 +105,48 @@ test("mobile queue and overlay remain clear above the composer", async ({ page }
 
 test("touch drag moves the first queued item to the end", async ({ context, page }) => {
   const reorderRequests = await openQueueFixture(page);
-  await dragTouch(context, page, page.getByRole("button", { name: /拖拽排序：第一条/ }), page.locator('[data-queue-id="queue-three"]'));
+  await expect(page.locator(".queue-text").first()).toHaveCSS("user-select", "none");
+  await dragTouch(context, page, page.getByRole("button", { name: /拖拽排序：第一条/ }), page.locator('[data-queue-id="queue-three"]'), true);
   await expect.poll(() => reorderRequests).toEqual([["queue-two", "queue-three", "queue-one"]]);
   await expect.poll(() => page.locator("[data-queue-id]").evaluateAll(rows => rows.map(row => row.getAttribute("data-queue-id")))).toEqual(["queue-two", "queue-three", "queue-one"]);
+  expect(await page.evaluate(() => window.getSelection()?.toString() || "")).toBe("");
   await expect(page).toHaveScreenshot("mobile-queue-reordered.png", { animations: "disabled", caret: "hide" });
 });
+
+async function selectTextWithMouse(page: Page, locator: Locator) {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("text selection geometry unavailable");
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + Math.min(box.width - 2, 130), box.y + box.height / 2, { steps: 12 });
+  await page.mouse.up();
+}
+
+for (const width of [390, 1280]) {
+  test.describe(`queue selection at ${width}px`, () => {
+    test.use({ viewport: { width, height: 844 }, isMobile: false, hasTouch: false, deviceScaleFactor: 1 });
+
+    test("queue display text is not selectable while transcript and queue editing remain selectable", async ({ page }) => {
+      const reorderRequests = await openQueueFixture(page);
+      await selectTextWithMouse(page, page.locator(".queue-text").first());
+      expect(await page.evaluate(() => window.getSelection()?.toString() || "")).toBe("");
+      await expect(page.locator(".queue-text").first()).toHaveCSS("user-select", "none");
+      expect(reorderRequests).toHaveLength(0);
+
+      await selectTextWithMouse(page, page.locator(".message-text").first());
+      expect(await page.evaluate(() => window.getSelection()?.toString() || "")).not.toBe("");
+
+      await page.getByRole("button", { name: /更多选项：第一条/ }).click();
+      await page.getByRole("menuitem", { name: "编辑", exact: true }).click();
+      const input = page.getByRole("textbox", { name: "发送消息" });
+      await expect(input).toHaveValue(initialQueue[0].text);
+      await input.press("ControlOrMeta+a");
+      await input.press("ArrowLeft");
+      for (let i = 0; i < 3; i++) await input.press("Shift+ArrowRight");
+      expect(await input.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([0, 3]);
+      await input.pressSequentially("修改后");
+      await expect(input).toHaveValue(`修改后${initialQueue[0].text.slice(3)}`);
+      await expect(page.getByRole("button", { name: "保存排队消息", exact: true })).toBeEnabled();
+    });
+  });
+}
