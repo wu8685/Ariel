@@ -222,6 +222,23 @@ describe("fixed Night appearance", () => {
     expect(mobile).toMatch(/\.queue-item\s*\{[^}]*padding:\s*0(?:px)?\s+7px/s);
   });
 
+  it("bounds the complete queue viewport without clipping its paused header or scroll hint", () => {
+    const panel = style.match(/\.queue-panel\s*\{([^}]*)\}/s)?.[1] || "";
+    const list = style.match(/\.queue-list\s*\{([^}]*)\}/s)?.[1] || "";
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(panel).toMatch(/display:\s*flex/);
+    expect(panel).toMatch(/flex-direction:\s*column/);
+    expect(list).toMatch(/min-height:\s*0/);
+    expect(list).toMatch(/max-height:\s*min\(28dvh,\s*180px\)/);
+    expect(mobile).toMatch(/\.queue-list\s*\{[^}]*max-height:\s*min\(30dvh,\s*180px\)/s);
+    expect(list).toMatch(/overflow-y:\s*auto/);
+    expect(list).toMatch(/overscroll-behavior-y:\s*contain/);
+    expect(list).toMatch(/touch-action:\s*pan-y/);
+    expect(style).toMatch(/\.queue-head\s*\{[^}]*flex:\s*none/s);
+    expect(style).toMatch(/\.queue-scroll-hint\s*\{[^}]*flex:\s*none/s);
+    expect(style).toMatch(/\.queue-list:focus-visible\s*\{[^}]*outline:/s);
+  });
+
   it("uses the compact menu type scale for thread context actions", () => {
     const menu = style.match(/\.thread-context-menu\s*\{([^}]*)\}/s)?.[1] || "";
     const menuButton = style.match(/\.thread-context-menu button\s*\{([^}]*)\}/s)?.[1] || "";

@@ -552,10 +552,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .notice span { font-weight: 700; }
 .notice button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; background: none; margin-left: auto; color: inherit; }
 .notice button svg { width: 16px; height: 16px; }
-.queue-panel { max-height: min(34dvh, 320px); margin-bottom: 7px; border: 1px solid var(--color-border); border-radius: var(--radius-work-item); background: var(--color-panel); }
-.queue-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--color-border); color: var(--color-muted); font-size: 11px; font-weight: 600; }
+.queue-panel { display: flex; flex-direction: column; min-height: 0; max-height: min(34dvh, 320px); margin-bottom: 7px; border: 1px solid var(--color-border); border-radius: var(--radius-work-item); background: var(--color-panel); }
+.queue-head { display: flex; flex: none; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--color-border); color: var(--color-muted); font-size: 11px; font-weight: 600; }
 .queue-head small { color: var(--color-subtle); font-size: 10px; font-weight: 400; }
-.queue-list { max-height: min(28dvh, 260px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.queue-list { min-height: 0; max-height: min(28dvh, 180px); margin: 0; padding: 0; overflow-y: auto; overscroll-behavior-y: contain; touch-action: pan-y; list-style: none; scrollbar-width: thin; }
+.queue-list:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.queue-scroll-hint { flex: none; padding: 2px 10px; border-top: 1px solid var(--color-border); color: var(--color-subtle); font-size: 10px; line-height: 1.4; }
 .queue-item { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-width: 0; min-height: 44px; padding: 0 8px; border-bottom: 1px solid var(--color-border); transition: background .12s, opacity .12s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .queue-item:last-child { border-bottom: 0; }
 .queue-item.editing { background: #6fa9ff12; }
@@ -678,7 +680,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .composer-wrap { padding: 6px 10px max(12px, env(safe-area-inset-bottom)); background: var(--color-page); }
   .queue-panel { max-height: min(36dvh, 300px); margin-bottom: 6px; border-radius: var(--radius-work-item); }
   .queue-head { padding: 8px 11px; }
-  .queue-list { max-height: min(30dvh, 250px); }
+  .queue-list { max-height: min(30dvh, 180px); }
   .queue-item { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 4px; min-height: 44px; padding: 0 7px; }
   .queue-handle { width: 30px; height: 44px; }
   .queue-text { font-size: 12px; }

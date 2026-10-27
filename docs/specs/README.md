@@ -122,6 +122,7 @@
 | 0117 | [输入区排队项紧凑行高](0117-compact-composer-queue-rows.md) | Implemented（未部署；物理 Safari 待验） | 正常行 44–45px，保留实际操作高度、辅助说明和队列交互 |
 | 0118 | [文档原版／Markdown 阅读模式与图片](0118-document-source-and-reading-modes.md) | Implemented（未部署；物理 Safari 待验） | 三种文件入口、原文／阅读／Diff、精确引用和受控 lazy 图片 |
 | 0119 | [Desktop Agent 内置文件上下文](0119-self-contained-desktop-file-context.md) | Implemented（未部署；native gate 范围见测试记录） | Codex 会话与文件代理不再依赖 Chilling，独立任务业务不迁移 |
+| 0120 | [排队消息完整列表与内部滚动](0120-scrollable-full-queue.md) | Implemented（Web 318／Chromium 98；物理 Safari 待验） | 完整渲染全部排队项，超出约四行后内部滚动，暂停短屏不裁切 |
 
 ## 设计基线
 
