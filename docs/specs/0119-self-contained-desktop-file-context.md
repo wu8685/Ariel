@@ -105,6 +105,7 @@ Web ←→ Relay ←→ Ariel Desktop Agent
 8. Ariel Go 全量／race／vet、Web 全量／build／Chromium；task client 既有 fixture 保持通过。编译和 core E2E 不需要 Chilling 仓库、二进制或 socket。补充只读 probe 的结果、版本与未验项到仓库。
 9. 实现后同步更新 Ariel AGENTS／README／架构／配置与部署测试，历史规格留存并标注被 0119 替代的归属。Chilling 独立任务数据和未提交改动不迁移、不删除、不重启；旧文件模块可留历史兼容，但 Ariel 不再使用。
 10. 发布另按当次明确授权执行：更新 Agent 与 Relay/Web、保留回滚版本／身份／凭据／任务关闭状态；先在隔离环境验证不启动 Chilling，再做生产非变更 smoke。不能为验收直接停止现有 Chilling 或其任务进程，也不能把 Draft 文档当完成交付。
+11. Docker 的 Relay build stage 必须包含 `cmd/relay` 的全部本仓库 Go 依赖；以 `go list -deps` 对照该 stage 的路径保留式 COPY 做契约回归，并在真实 Linux Docker 构建中验收。文件开关解析不能导致本机 Go 测试通过而 Docker 缺包；runtime 仍只含 Relay／Web，不加入 Desktop Agent、Codex 或本机状态。2026-10-27 发布前修复属于既有构建与交付要求，不扩展能力或安全边界。
 
 ## 9. 非目标
 

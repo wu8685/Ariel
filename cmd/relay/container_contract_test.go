@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -67,6 +68,37 @@ func TestDockerBuildContextExcludesLocalAndSecretState(t *testing.T) {
 	} {
 		if !strings.Contains(ignored, required) {
 			t.Errorf(".dockerignore missing %q", required)
+		}
+	}
+}
+
+func TestRelayContainerCopiesEveryLocalDependency(t *testing.T) {
+	_, stage, ok := strings.Cut(repositoryFile(t, "Dockerfile"), " AS relay-build\n")
+	if !ok {
+		t.Fatal("Relay build stage missing")
+	}
+	stage, _, _ = strings.Cut(stage, "\nFROM ")
+	var copied []string
+	for line := range strings.SplitSeq(stage, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "COPY" && filepath.Clean(fields[1]) == filepath.Clean(fields[2]) {
+			copied = append(copied, filepath.ToSlash(filepath.Clean(fields[1])))
+		}
+	}
+	command := exec.Command("go", "list", "-deps", "-f", "{{if .Module}}{{if .Module.Main}}{{.ImportPath}}{{end}}{{end}}", "./cmd/relay")
+	command.Dir = repositoryRoot(t)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("list Relay dependencies: %v\n%s", err, output)
+	}
+	for dependency := range strings.FieldsSeq(string(output)) {
+		relative := strings.TrimPrefix(dependency, "github.com/wu8685/Ariel/")
+		included := false
+		for _, source := range copied {
+			included = included || relative == source || strings.HasPrefix(relative, source+"/")
+		}
+		if !included {
+			t.Errorf("Relay Docker build stage does not copy local dependency %s", relative)
 		}
 	}
 }
