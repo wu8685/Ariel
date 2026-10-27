@@ -546,7 +546,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-wrap { display: grid; grid-template-rows: minmax(0, 1fr); padding: 6px max(24px, calc((100% - 800px) / 2)) 14px; flex: none; background: var(--color-page); transition: grid-template-rows .18s ease, padding-top .18s ease, padding-bottom .18s ease, opacity .12s ease; }
 .composer-stack { min-height: 0; overflow: hidden; }
 .composer-wrap.history-collapsed { grid-template-rows: minmax(0, 0fr); padding-top: 0; padding-bottom: 0; opacity: 0; visibility: hidden; pointer-events: none; }
-.notice { display: flex; align-items: center; gap: 9px; background: var(--color-warning-surface); border: 1px solid var(--color-warning-border); border-radius: 4px; padding: 10px 13px; color: var(--color-warning); font-size: 12px; margin-bottom: 9px; }
+.notice { display: flex; align-items: center; gap: 9px; background: var(--color-warning-surface); border: 1px solid var(--color-warning-border); border-radius: 4px; padding: 2px 13px; color: var(--color-warning); font-size: 12px; margin-bottom: 9px; }
 .notice span { font-weight: 700; }
 .notice button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; background: none; margin-left: auto; color: inherit; }
 .notice button svg { width: 16px; height: 16px; }

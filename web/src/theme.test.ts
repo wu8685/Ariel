@@ -154,6 +154,13 @@ describe("fixed Night appearance", () => {
     expect(children).not.toMatch(/border(?:-left|-inline-start)?:/);
   });
 
+  it("reduces notice vertical padding without shrinking text or global touch targets", () => {
+    const notice = style.match(/\.notice\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(notice).toMatch(/padding:\s*2px\s+13px/);
+    expect(notice).toMatch(/font-size:\s*12px/);
+    expect(style).toMatch(/--circle-target-size:\s*44px/);
+  });
+
   it("keeps each conversation item dense on desktop and mobile", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(style).toMatch(/\.thread-row\s*\{[^}]*padding:\s*7px\s+12px;[^}]*margin:\s*1px\s+0/s);
