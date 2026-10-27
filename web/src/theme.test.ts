@@ -147,6 +147,13 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.list-caption\s*\{[^}]*padding:\s*5px\s+12px\s+6px/s);
   });
 
+  it("uses indentation and child background without a project-thread guide line", () => {
+    const children = style.match(/\.project-threads\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(children).toMatch(/margin-left:\s*20px/);
+    expect(children).toMatch(/background:\s*var\(--color-sidebar-child\)/);
+    expect(children).not.toMatch(/border(?:-left|-inline-start)?:/);
+  });
+
   it("keeps each conversation item dense on desktop and mobile", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
     expect(style).toMatch(/\.thread-row\s*\{[^}]*padding:\s*7px\s+12px;[^}]*margin:\s*1px\s+0/s);
