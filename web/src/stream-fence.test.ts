@@ -4,3 +4,12 @@ it("rejects late snapshots and retired streams without resync or resurrecting re
  const f=new StreamFence();expect(f.accept("watch","original",1)).toBe(true);expect(f.accept("watch","original",2)).toBe(true);expect(f.accept("watch","original",1)).toBe(false);
  expect(f.accept("watch","replacement",1)).toBe(true);expect(f.accept("watch","original",99)).toBe(false);expect(f.accept("new-watch","original",1)).toBe(true);
 });
+it("allows only the current seq for an explicit freshness recovery and keeps rollback fenced",()=>{
+ const f=new StreamFence();expect(f.accept("watch","original",2)).toBe(true);
+ expect(f.accept("watch","original",2)).toBe(false);
+ expect(f.accept("watch","original",2,true)).toBe(true);
+ expect(f.accept("watch","original",1,true)).toBe(false);
+ expect(f.accept("watch","replacement",1)).toBe(true);
+ expect(f.accept("watch","original",99,true)).toBe(false);
+ expect(f.accept("watch","cache-pending",1,true)).toBe(false);
+});

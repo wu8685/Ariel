@@ -125,6 +125,8 @@ func snapshot() json.RawMessage {
 			map[string]any{"type": "userMessage", "id": "native-user", "content": []any{map[string]any{"type": "text", "text": "隔离大帧回归"}, image}},
 			map[string]any{"type": "agentMessage", "id": "native-reply", "text": InitialText}, json.RawMessage(tool),
 		}}}}
+	// Retained JSON schema metadata is not a native discriminated union.
+	state["fixtureSchema"] = map[string]any{"type": []any{"string", "null"}}
 	return event(map[string]any{"type": "snapshot", "revision": 1, "conversationState": state})
 }
 

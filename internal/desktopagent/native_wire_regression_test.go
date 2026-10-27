@@ -32,7 +32,10 @@ func TestNativeLargeFrameOpensAndPatchesAtProductionLimits(t *testing.T) {
 		}
 		var got struct {
 			Unknown string `json:"fixtureUnknown"`
-			Turns   []struct {
+			Schema  struct {
+				Type []string `json:"type"`
+			} `json:"fixtureSchema"`
+			Turns []struct {
 				Items []struct {
 					Result  json.RawMessage `json:"result"`
 					Content []struct {
@@ -46,6 +49,9 @@ func TestNativeLargeFrameOpensAndPatchesAtProductionLimits(t *testing.T) {
 		}
 		if got.Unknown != testfixture.UnknownText() {
 			t.Fatal("projection modified unknown content")
+		}
+		if len(got.Schema.Type) != 2 || got.Schema.Type[0] != "string" || got.Schema.Type[1] != "null" {
+			t.Fatal("projection modified retained JSON schema type")
 		}
 		if len(state) >= 2<<20 {
 			t.Fatalf("lazy projection or literal encoding regressed: resident=%d, want <2 MiB", len(state))
