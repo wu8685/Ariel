@@ -813,13 +813,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     void durableCache.set(identity, value);
   }
 
-  function acceptStream(next:ThreadView,source:ThreadView|null|undefined):boolean{
+  function acceptStream(next:ThreadView,source:ThreadView|null|undefined,allowCurrent=false):boolean{
     const key=`${client.sessionGeneration}\0${next.deviceId}\0${next.threadId}\0${next.subscriptionId}`;
     if(source?.subscriptionId===next.subscriptionId&&source.streamId&&source.streamId!=="cache-pending"&&source.seq>0){
       if(source.streamId===next.streamId&&next.seq<=source.seq)return false;
       streamFence.current.accept(key,source.streamId,source.seq);
     }
-    return streamFence.current.accept(key,next.streamId,next.seq);
+    return streamFence.current.accept(key,next.streamId,next.seq,allowCurrent);
   }
 
   function persistView(next: ThreadView) {
@@ -1796,6 +1796,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (event.freshness !== "fresh" || !event.thread || !event.cacheStreamId || !event.seq) {
           const source = currentEvent ? current.view : warm;
           if (source) {
+            // Seed the lineage even if this view came from the initial watch
+            // response, before the first asynchronous content update.
+            acceptStream(source, null);
             const stale = { ...source, streamId: "cache-pending", thread: asReadOnlyThread(source.thread) };
             retainWarmSubscription(stale);
             if (currentEvent) {
@@ -1815,7 +1818,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           return;
         }
         const next: ThreadView = { deviceId: event.deviceId, threadId: event.threadId, subscriptionId: event.watchId, streamId: event.cacheStreamId, seq: event.seq, thread: event.thread };
-        if(!acceptStream(next,currentEvent?current.view:warm))return;
+        const source = currentEvent ? current.view : warm;
+        // Relay verifies freshness independently of content seq. A matching
+        // lease may recover stale display without producing a new snapshot;
+        // normal duplicates, older seq and retired streams remain fenced.
+        const freshnessRecovery = source?.streamId === "cache-pending" && source.seq === next.seq;
+        if(!acceptStream(next,source,freshnessRecovery))return;
         terminalCacheFailure.current = null;
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);

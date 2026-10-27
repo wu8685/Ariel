@@ -255,6 +255,17 @@ describe("Ariel app interactions", () => {
 		await waitFor(() => expect(screen.getByRole("heading", { name: fixtureThread.title })).toBeTruthy());
 		expect(requests("thread.read")).toHaveLength(0);
 		expect(requests("thread.subscribe")).toHaveLength(0);
+		fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "lease 恢复保留草稿" } });
+		for (const seq of [1, 2]) {
+			const update = { type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: fixtureThread.threadId, watchId: "watch-a", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache-a", seq, capturedAt: fixtureThread.updatedAt, thread: fixtureThread };
+			if (seq === 2) act(() => socket.message({ ...update, freshness: "fresh" }));
+			act(() => socket.message({ ...update, freshness: "stale", staleReason: "follower_lease_expired" }));
+			expect(screen.getByRole("button", { name: "正在同步会话，暂不可发送" })).toHaveProperty("disabled", true);
+			act(() => socket.message({ ...update, freshness: "fresh" }));
+			expect(screen.getByRole("button", { name: /^发送$/ })).toHaveProperty("disabled", false);
+		}
+		expect(screen.getByLabelText("发送消息")).toHaveProperty("value", "lease 恢复保留草稿");
+		expect(requests("turn.start")).toHaveLength(0);
 	});
 	it("re-establishes a Relay cache watcher after WebSocket reconnect and receives the terminal snapshot", async () => {
 		BrowserSocket.autoRejectCacheWatch = false;

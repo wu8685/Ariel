@@ -4,6 +4,8 @@
 
 证据：[测试记录](../testing/2026-10-27-0121-native-state-reconnect.md)，含实际 owner 只读复验、Red → Green 与未验边界。
 
+补充：[生产限额全链路回归](../testing/2026-10-27-0121-native-wire-regression.md)（Issue #41），含旧版本与独立回退复现。
+
 ## 问题与证据
 
 真实只读 owner 探测在 Reducer 返回 `normalized snapshot bytes 67940311 exceed 67108864`，Web 却显示“事件顺序发生变化”。该错误不是 Relay 重启或登录失败；需验证 JSON 的默认 HTML 转义是否将有效原生 JSON 在重新编码时无谓扩大。
@@ -27,3 +29,20 @@
 5. Go 全量／race／vet、Web 单测／build／真实浏览器及真实 Docker 构建通过后 push、tag 并部署本机 Agent 与公网 Relay/Web，保留身份、凭据、回滚与看板关闭状态。
 
 物理 iPhone／Safari 仍需用户复验；原生只读验证不冒充发送、停止或审批能力验收。
+
+## 回归细化（Issue #43，既有契约的缺陷修复）
+
+证据：[未知 JSON 与同序号 freshness 回归记录](../testing/2026-10-27-0121-json-type-and-cache-freshness.md)。
+
+- 0104／本 spec 要求保留的未知 JSON，不因任意嵌套字段恰好名为 `type` 而受 native enum 的字符串约束。数字、null、布尔、对象、数组和长字符串须保持合法 JSON 的原语义；真正 envelope 的字段类型仍由版本化消息解析校验，resident／wire 限额不变。
+- 0107 的 follower lease 可以在正文不变时恢复缓存 freshness。Web 对同一 watcher／stream／seq 的正文去重不能丢掉 `stale → fresh` 恢复；只有 Relay 已核验为 fresh 的事件可以恢复操作入口。正常 fresh 状态下重复事件仍去重，较旧 seq、退休 stream 与旧 watcher 仍拒绝。明确内容错误仍由 Relay 要求新合法 snapshot，不能靠 lease 清除。
+- 增补真实 8–64 MiB 帧未知 JSON 测试、生产 OpenFollower → Agent → Relay → Chromium 测试及真实 Relay 同 seq lease 恢复测试。先运行 Red，再最小修复与全量回归。不将合成用例的复现当作用户设备的已证实触发原因。
+
+## 补充回归契约（Approved，2026-10-27）
+
+用户要求补充能复现本次故障的回归测试，不改变运行时行为或安全边界：
+
+- 隔离 Unix socket 模拟 native owner，但通过生产 `OpenFollower`、framing、projection、Reducer、Agent、Relay 与真实 Chromium，不再只在假 Live 中缩小 Reducer 限额。
+- 合成大于 8 MiB、小于 64 MiB 的合法 JSON，包含已验证 tool／image lazy 字段及必须保留的未知 HTML 字符字段；旧编码与旧 projection 组合会越过真实 64 MiB resident cap。保留字段内容必须不变，lazy 字段必须剔除，不能以删除未知内容或调高限额通过测试。
+- 首次打开可见正文，连续 patch 可见增量和完成状态，草稿保留、发送恢复可用、无需刷新页面或额外 attach；native mutation 请求数必须为零。
+- 在隔离源码副本恢复旧行为，实际运行新增测试得到失败；当前源码通过。大帧在运行时生成，不提交正文大文件或真实快照。

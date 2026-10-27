@@ -142,7 +142,10 @@ test.afterAll(async () => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
-test("a completed conversation continues and reaches terminal through the real Relay without reload", async ({ page }) => {
+test("a completed conversation continues and reaches terminal through the real Relay without reload", async ({ page }, info) => {
+  const frames: string[] = [];
+  page.on("websocket", socket => socket.on("framereceived", event => frames.push(String(event.payload))));
+  try {
   await page.goto(relayOrigin);
   await page.getByLabel("6 位连接码").fill(webPIN);
   await page.getByRole("button", { name: "连接", exact: true }).click();
@@ -150,8 +153,19 @@ test("a completed conversation continues and reaches terminal through the real R
   await page.getByText(completed.title).click();
   await expect(page.getByText("上一轮已经完成")).toBeVisible();
 
-  sendAgent(cacheSnapshot(continuingThread(), 2));
+  // A valid lease can restore freshness without a new content snapshot. This
+  // goes through the real Relay, including its explicit-content-error fence.
+  sendAgent(cacheSnapshot(completed, 2));
+  await page.getByLabel("发送消息").fill("恢复期间保留的草稿");
+  sendAgent({ type: "event", v: 1, event: "thread.cache.status", deviceId: "mac", threadId: completed.threadId,
+    agentEpoch: "agent-live-cache", cacheStreamId: "stream-live-cache", freshness: "error", reason: "follower_lease_expired" });
+  await expect(page.getByRole("button", { name: "正在同步会话，暂不可发送" })).toBeDisabled();
+  sendAgent({ type: "event", v: 1, event: "thread.cache.status", deviceId: "mac", threadId: completed.threadId,
+    agentEpoch: "agent-live-cache", cacheStreamId: "stream-live-cache", freshness: "fresh" });
+  await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("发送消息")).toHaveValue("恢复期间保留的草稿");
 
+  sendAgent(cacheSnapshot(continuingThread(), 3));
   await expect(page.getByText("继续刚才完成的会话")).toBeVisible();
   await expect(page.getByText("仍在处理中")).toBeVisible();
   await expect(page.locator(".runtime")).toHaveText("运行中");
@@ -166,10 +180,32 @@ test("a completed conversation continues and reaches terminal through the real R
   });
   await expect(page.locator(".send-button")).toBeDisabled();
 
-  sendAgent(cacheSnapshot(terminalThread(), 3));
+  sendAgent({ type: "event", v: 1, event: "thread.cache.status", deviceId: "mac", threadId: completed.threadId,
+    agentEpoch: "agent-live-cache", cacheStreamId: "stream-live-cache", freshness: "fresh" });
+  // Check Relay's content-error fence as well as the disabled Web control.
+  const readOnly = await page.evaluate(async () => {
+    const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/ws`);
+    return await new Promise<boolean>((resolve, reject) => {
+      const timer = window.setTimeout(() => { socket.close(); reject(new Error("read barrier timed out")); }, 5000);
+      socket.onopen = () => socket.send(JSON.stringify({ type: "hello", v: 1, role: "web", token: "012345" }));
+      socket.onmessage = event => {
+        const value = JSON.parse(String(event.data));
+        if (value.type === "hello.ok") socket.send(JSON.stringify({ type: "request", v: 1, requestId: crypto.randomUUID(), method: "thread.cache.read", deviceId: "mac", params: { threadId: "live-cache-thread" } }));
+        if (value.type === "response") { window.clearTimeout(timer); socket.close(); resolve(value.data?.freshness === "stale" && value.data?.staleReason === "RESYNC_REQUIRED"); }
+      };
+      socket.onerror = () => { window.clearTimeout(timer); socket.close(); reject(new Error("read barrier failed")); };
+    });
+  });
+  expect(readOnly).toBe(true);
+  await expect(page.locator(".send-button")).toBeDisabled();
+
+  sendAgent(cacheSnapshot(terminalThread(), 4));
 
   await expect(page.getByText("无需刷新即可看到最终回复")).toBeVisible();
   await expect(page.locator(".runtime")).toHaveText("待命");
   await page.getByLabel("发送消息").fill("终态到达后恢复发送");
   await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
+  } finally {
+    if (info.status !== info.expectedStatus || test.info().errors.length) await info.attach("isolated-relay-frames", { body: frames.join("\n"), contentType: "application/x-ndjson" });
+  }
 });

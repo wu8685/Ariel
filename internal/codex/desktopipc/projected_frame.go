@@ -164,22 +164,17 @@ func (p *projectedParser) object(copy bool, inheritedType string) error {
 			return err
 		}
 		if key == "type" && copy {
-			if err := p.whitespace(copy); err != nil {
+			// Only recognized string discriminators influence lazy projection.
+			// Unknown metadata can also contain a field named "type" (e.g. a
+			// JSON schema union); preserve any valid value within the same cap.
+			start := p.out.Len()
+			if err := p.value(copy, key, ""); err != nil {
 				return err
 			}
-			quote, err := p.read()
-			if err != nil || quote != '"' {
-				return ErrInvalidFrame
-			}
-			rawType := []byte{'"'}
-			if err := p.stringTailTo(&rawType, 256); err != nil {
-				return err
-			}
-			if json.Unmarshal(rawType, &objectType) != nil {
-				return ErrInvalidFrame
-			}
-			if err := p.write(copy, rawType...); err != nil {
-				return err
+			objectType = ""
+			rawType := bytes.TrimSpace(p.out.Bytes()[start:])
+			if len(rawType) <= 256 && len(rawType) > 0 && rawType[0] == '"' {
+				_ = json.Unmarshal(rawType, &objectType)
 			}
 		} else if omit := (key == "arguments" && objectType == "mcpToolCall") || (key == "result" && objectType == "mcpToolCall") || (key == "output" && (objectType == "mcpToolCall" || objectType == "commandExecution")) || (key == "diff" && objectType == "fileChange"); omit {
 			if err := p.value(false, key, objectType); err != nil {

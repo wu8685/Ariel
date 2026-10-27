@@ -123,6 +123,23 @@ func TestReadProjectedFrameFailsClosedForUnknownOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestReadProjectedFramePreservesUnknownTypeValues(t *testing.T) {
+	for _, value := range []string{`42`, `null`, `false`, `{"name":"schema"}`, `["string","null"]`, `"` + strings.Repeat("unknown", 100) + `"`} {
+		t.Run(value[:min(len(value), 30)], func(t *testing.T) {
+			// The ordinary 8 MiB path accepted these values before projection
+			// started covering frames below the 64 MiB resident limit.
+			body := `{"type":"broadcast","params":{"metadata":{"type":` + value + `,"keep":"unchanged"},"unknown":"` + strings.Repeat("x", 9<<20) + `"}}`
+			projected, err := ReadProjectedFrame(bytes.NewReader(wireFrame(body)), 64<<20, 256<<20)
+			if err != nil {
+				t.Fatalf("valid unknown JSON type rejected: %v", err)
+			}
+			if !bytes.Equal(projected, []byte(body)) {
+				t.Fatal("unknown JSON changed during projection")
+			}
+		})
+	}
+}
+
 func TestReadProjectedFrameDoesNotAllocateProportionalToOmittedPayload(t *testing.T) {
 	body := `{"type":"broadcast","params":{"items":[{"type":"mcpToolCall","result":{"content":"` + strings.Repeat("x", 32<<20) + `"}}]}}`
 	wire := wireFrame(body)
