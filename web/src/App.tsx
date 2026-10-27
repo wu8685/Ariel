@@ -2910,7 +2910,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">
             {queuePaused && <div className="queue-head"><span>后续输入已暂停</span><small>开始下一轮前可继续调整</small></div>}
             <span className="sr-only">共 {queuedMessages.length} 条，最上方优先执行。</span>
-            <ol className="queue-list">{renderedQueuedMessages.map((item, index) => {
+            <ol className="queue-list" aria-label="排队消息列表" tabIndex={0}>{renderedQueuedMessages.map((item, index) => {
               const busy = !!queueWorking || working || !!draggingQueueId;
               const summary = item.text.trim() || (item.images.length ? `${item.images.length} 张截图` : "无法预览的输入");
               return <li className={`queue-item ${editingQueueId === item.queueId ? "editing" : ""} ${draggingQueueId === item.queueId ? "dragging" : ""}`} key={item.queueId} data-queue-id={item.queueId}>
@@ -2930,6 +2930,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
                 </div>
               </li>;
             })}</ol>
+            {queuedMessages.length > 4 && <div className="queue-scroll-hint">共 {queuedMessages.length} 条 · 可上下滚动</div>}
           </section>}
           {messageEdit&&<div className="message-edit-banner" role="status"><span>正在编辑上一条消息 · 不撤销已发生的文件修改{messageEdit.uncertain?" · 结果待核对":view?.thread.turns.at(-1)?.turnId!==messageEdit.turnId||messageEdit.agentEpoch!==device?.agentEpoch?" · 目标已变化，草稿保留":""}</span><button type="button" onClick={()=>setMessageEdit(undefined)} disabled={working}>取消编辑</button></div>}
           <FileQuoteChips quotes={fileQuotes} onRemove={index=>setFileQuotes(current=>current.filter((_,position)=>position!==index))}/>

@@ -17,7 +17,12 @@ const fixtureThread = {
   queuedMessages: initialQueue,
 };
 
-async function openQueueFixture(page: Page): Promise<string[][]> {
+async function openQueueFixture(page: Page, options: { queue?: typeof initialQueue; paused?: boolean } = {}): Promise<string[][]> {
+  const queue = options.queue || initialQueue;
+  const thread = { ...fixtureThread, queuedMessages: queue,
+    runtime: options.paused ? "idle" : "inProgress",
+    turns: fixtureThread.turns.map(turn => ({ ...turn, status: options.paused ? "interrupted" : turn.status })),
+  };
   const reorderRequests: string[][] = [];
   await page.addInitScript(token => sessionStorage.setItem("ariel.web-session.v1", token), sessionToken);
   await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
@@ -29,15 +34,15 @@ async function openQueueFixture(page: Page): Promise<string[][]> {
     if (message.type !== "request") return;
     let data: Record<string, unknown> = {};
     if (message.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "视觉测试 Mac", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, queue: true } }] };
-    if (message.method === "thread.list") data = { threads: [fixtureThread], nextCursor: "" };
+    if (message.method === "thread.list") data = { threads: [thread], nextCursor: "" };
     if (message.method === "thread.subscribe") data = { subscriptionId: "sub" };
     if (message.method === "queue.reorder") {
       reorderRequests.push(message.params.queueIds);
-      const byID = new Map(initialQueue.map(item => [item.queueId, item]));
+      const byID = new Map(queue.map(item => [item.queueId, item]));
       data = { queuedMessages: message.params.queueIds.map((id: string) => byID.get(id)) };
     }
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
-    if (message.method === "thread.subscribe") socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread: fixtureThread }));
+    if (message.method === "thread.subscribe") socket.send(JSON.stringify({ type: "event", v: 1, event: "thread.snapshot", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", seq: 1, thread }));
   }));
 
   await page.goto("/");
@@ -48,6 +53,116 @@ async function openQueueFixture(page: Page): Promise<string[][]> {
   await page.waitForTimeout(250);
   return reorderRequests;
 }
+
+function queueItems(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    queueId: `queue-${index + 1}`, clientMessageId: `message-${index + 1}`,
+    text: `第 ${index + 1} 条：完整队列滚动验收`, images: [] as string[], editable: true,
+  }));
+}
+
+async function expectQueueContained(page: Page) {
+  const boxes = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const box = document.querySelector(selector)!.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom };
+    };
+    return { panel: rect(".queue-panel"), list: rect(".queue-list"),
+      hint: rect(".queue-scroll-hint"), last: rect(".queue-item:last-child"),
+      composer: rect(".composer"), width: innerWidth, bodyWidth: document.body.scrollWidth, height: innerHeight };
+  });
+  expect(boxes.list.top).toBeGreaterThanOrEqual(boxes.panel.top);
+  expect(boxes.list.bottom).toBeLessThanOrEqual(boxes.panel.bottom);
+  expect(boxes.hint.bottom).toBeLessThanOrEqual(boxes.panel.bottom);
+  expect(boxes.last.top).toBeGreaterThanOrEqual(boxes.list.top - 1);
+  expect(boxes.last.bottom).toBeLessThanOrEqual(boxes.list.bottom + 1);
+  expect(boxes.panel.bottom).toBeLessThanOrEqual(boxes.composer.top);
+  expect(boxes.composer.bottom).toBeLessThanOrEqual(boxes.height);
+  expect(boxes.bodyWidth).toBeLessThanOrEqual(boxes.width);
+}
+
+for (const width of [320, 390, 1280]) {
+  test(`complete queue scrolls beyond four rows and last item remains editable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const reorderRequests = await openQueueFixture(page, { queue: queueItems(9) });
+    const list = page.locator(".queue-list");
+    await expect(page.locator(".queue-item")).toHaveCount(9);
+    expect((await list.boundingBox())!.height).toBeLessThanOrEqual(180);
+    await expect(page.locator(".queue-scroll-hint")).toHaveText("共 9 条 · 可上下滚动");
+    expect(await list.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+    await page.getByRole("textbox", { name: "发送消息" }).fill("保留当前草稿");
+    await page.getByRole("list", { name: "排队消息列表" }).focus();
+    await list.press("End");
+    await expect.poll(() => list.evaluate(node => Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop))).toBeLessThanOrEqual(1);
+    await expectQueueContained(page);
+    await expect(page.getByRole("textbox", { name: "发送消息" })).toHaveValue("保留当前草稿");
+    expect(reorderRequests).toHaveLength(0);
+    await expect(page).toHaveScreenshot(`scrollable-queue-${width}.png`, { animations: "disabled", caret: "hide" });
+    // Queue editing intentionally refuses to overwrite a separate composer draft.
+    await page.getByRole("textbox", { name: "发送消息" }).fill("");
+    await page.getByRole("button", { name: /更多选项：第 9 条/ }).click();
+    const menu = page.getByRole("menu", { name: /排队消息选项：第 9 条/ });
+    await expect(menu).toBeVisible();
+    const menuBox = (await menu.boundingBox())!;
+    expect(menuBox.y).toBeGreaterThanOrEqual(0);
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(844);
+    await menu.getByRole("menuitem", { name: "编辑", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "发送消息" })).toHaveValue(queueItems(9)[8].text);
+  });
+
+  test(`paused queue fits header, scroll area and hint on a short ${width}px viewport`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 390 });
+    await openQueueFixture(page, { queue: queueItems(9), paused: true });
+    await expect(page.locator(".queue-head")).toBeVisible();
+    const list = page.locator(".queue-list");
+    await list.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    // Check containment first: the old independent panel/list limits clip the last row.
+    const before = await page.evaluate(() => ({
+      panelBottom: document.querySelector(".queue-panel")!.getBoundingClientRect().bottom,
+      listBottom: document.querySelector(".queue-list")!.getBoundingClientRect().bottom,
+    }));
+    expect(before.listBottom).toBeLessThanOrEqual(before.panelBottom);
+    await expectQueueContained(page);
+    const head = (await page.locator(".queue-head").boundingBox())!;
+    expect(head.y + head.height).toBeLessThanOrEqual((await list.boundingBox())!.y);
+    await expect(page).toHaveScreenshot(`scrollable-paused-queue-${width}.png`, { animations: "disabled", caret: "hide" });
+  });
+}
+
+test("touch scrolling queue content reveals later rows without reordering or selecting text", async ({ context, page }) => {
+  const reorderRequests = await openQueueFixture(page, { queue: queueItems(9) });
+  const list = page.locator(".queue-list");
+  const box = (await list.boundingBox())!;
+  const x = box.x + 80;
+  const cdp = await context.newCDPSession(page);
+  try {
+    for (let swipe = 0; swipe < 4; swipe++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: box.y + box.height - 12, id: 1 }] });
+      for (let step = 1; step <= 12; step++) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: box.y + box.height - 12 - (box.height - 24) * step / 12, id: 1 }] });
+        await page.waitForTimeout(16);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    }
+  } finally { await cdp.detach(); }
+  await expect.poll(() => list.evaluate(node => Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop))).toBeLessThanOrEqual(1);
+  await expectQueueContained(page);
+  expect(reorderRequests).toHaveLength(0);
+  expect(await page.evaluate(() => window.getSelection()?.toString() || "")).toBe("");
+  await page.getByRole("button", { name: /更多选项：第 9 条/ }).click();
+  await expect(page.getByRole("menu", { name: /排队消息选项：第 9 条/ })).toBeVisible();
+});
+
+test("all 64 protocol-permitted queue items remain rendered and keyboard accessible", async ({ page }) => {
+  await openQueueFixture(page, { queue: queueItems(64) });
+  await expect(page.locator(".queue-item")).toHaveCount(64);
+  await expect(page.locator(".queue-scroll-hint")).toHaveText("共 64 条 · 可上下滚动");
+  const list = page.getByRole("list", { name: "排队消息列表" });
+  await list.focus();
+  await list.press("End");
+  await expect.poll(() => list.evaluate(node => Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop))).toBeLessThanOrEqual(1);
+  await expectQueueContained(page);
+});
 
 async function dragTouch(context: BrowserContext, page: Page, from: Locator, to: Locator, holdThenCrossText = false) {
   const start = await from.boundingBox();
@@ -126,6 +241,7 @@ for (const width of [320, 390, 1280]) {
   test(`compact queue keeps 44px operation boxes and non-overlapping rows at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await openQueueFixture(page);
+    await expect(page.locator(".queue-scroll-hint")).toHaveCount(0);
     const boxes = await page.locator(".queue-item").evaluateAll(rows => rows.map(row => {
       const rect = row.getBoundingClientRect();
       return { top: rect.top, bottom: rect.bottom, height: rect.height,
