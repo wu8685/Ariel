@@ -40,6 +40,8 @@
 
 ## 安全与数据边界
 
+- **扩展依赖方向（2026-10-27 用户明确要求）**：Chilling 仅是可选的看板／任务扩展，由 Chilling 依赖、复用 Ariel 的基础能力，不能让 Ariel 的基础能力反向依赖 Chilling。会话、Codex 代理、订阅、消息、模型设置、文件浏览／阅读／Diff／引用等通用能力均归 Ariel；新增通用能力也应先在 Ariel 实现，再供扩展使用。
+- **基础能力独立可用**：未安装、未启动、关闭或无法连接 Chilling 时，Ariel 仍须能够独立构建、启动并提供全部基础能力。不得将 Chilling 进程、socket、数据库或其专有类型作为基础能力的前置条件。Ariel 可在看板扩展显式开启时通过隔离、可选的接口接入 Chilling；这不代表核心依赖它，扩展故障也只能影响扩展自身。
 - 0119 已于 2026-10-27 获批：Codex 会话与文件代理链路由 Ariel 自包含；文件原文／Diff／目录／消息引用／选区校验及图片读取归 Desktop Agent 内置 `internal/filecontext`，经既有版本化 Codex Adapter 获取来源证明，复用现有只读 endpoint 与唯一 mutation owner。不得为文件能力重新依赖 Chilling socket／进程，或在 Relay/Web 读取本机路径。0089／0094／0105 中旧 Chilling 后端归属由 0119 取代，其用户行为与安全约束继续有效。
 - 文件、workspace browser、document assets 默认关闭，分别显式授权；旧 `chillingFileContext` 等 v1 capability 和旧文件开关仅作兼容别名，不能因改名破坏旧页面。独立任务后端不随文件迁移，不自动启用看板、不删除或重启 Chilling 及其数据。
 - 任务看板的 Web／云端代码统一归 Ariel，本地 chilling 承担 MySQL／scheduler／任务持久数据；管理与执行主机分开选择，负责人使用所选执行主机的本地 Codex。0091／chilling 0001 已于 2026-10-17 获准实现，严格按 TDD 与 compatibility gate 推进。
