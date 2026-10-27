@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleButton, BackGlyph, RefreshGlyph } from "./circular-button";
 import { FileContentCache, FileViewer, type FileQuote, type FileView, type OpenFile } from "./file-context";
+import type { AssetContext } from "./document-assets";
+import { resolveDocumentPath } from "./document-path";
 
 export type WorkspaceEntry={name:string;path:string;kind:"file"|"directory"|"symlink";sizeBytes:number;modifiedAtMs:number;readable:boolean};
 export type WorkspacePage={path:string;entries:WorkspaceEntry[];nextCursor?:string;revision:string};
@@ -25,36 +27,48 @@ function validPage(data:Record<string,unknown>|undefined):WorkspacePage|null{
 }
 function validFile(data:Record<string,unknown>|undefined,threadId:string):OpenFile|null{
   if(!data||typeof data.path!=="string"||typeof data.content!=="string"||typeof data.sha256!=="string"||typeof data.modifiedAtMs!=="number"||typeof data.lineCount!=="number"||typeof data.language!=="string"||data.version!=="current-workspace")return null;
-  return {source:"workspace_browser",threadId,path:data.path,content:data.content,sha256:data.sha256,modifiedAtMs:data.modifiedAtMs,lineCount:data.lineCount,language:data.language,version:"current-workspace"};
+  return {source:"workspace_browser",threadId,path:data.path,content:data.content,sha256:data.sha256,modifiedAtMs:data.modifiedAtMs,lineCount:data.lineCount,language:data.language,version:"current-workspace",documentAssets:data.documentAssets as OpenFile["documentAssets"]};
 }
 
-export function WorkspaceBrowser({deviceId,agentEpoch,threadId,cwd,request,cache,fileCache,onClose,onQuote}:{deviceId:string;agentEpoch:string;threadId:string;cwd:string;request:Request;cache:WorkspaceDirectoryCache;fileCache:FileContentCache;onClose:()=>void;onQuote:(quote:FileQuote)=>void}){
+export function WorkspaceBrowser({deviceId,agentEpoch,threadId,cwd,request,cache,fileCache,onClose,onQuote,assetContext}:{deviceId:string;agentEpoch:string;threadId:string;cwd:string;request:Request;cache:WorkspaceDirectoryCache;fileCache:FileContentCache;assetContext?:AssetContext;onClose:()=>void;onQuote:(quote:FileQuote)=>void}){
   const [path,setPath]=useState("");const [page,setPage]=useState<WorkspacePage|null>(null);const [loading,setLoading]=useState(false);const [error,setError]=useState("");const [file,setFile]=useState<FileView|null>(null);
-  const inFlight=useRef(new Set<string>());
+  const inFlight=useRef(new Map<string,Promise<Reply>>());
+  const alive=useRef(true),directoryGeneration=useRef(0),fileGeneration=useRef(0);
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;directoryGeneration.current++;fileGeneration.current++}},[]);
   const project=useMemo(()=>cwd.split("/").filter(Boolean).at(-1)||"工作区",[cwd]);
   const cacheKey=(value:string)=>`${deviceId}\0${agentEpoch}\0${threadId}\0${value}`;
   async function load(target:string,cursor="",append=false){
-    const requestKey=`${target}\0${cursor}`;if(inFlight.current.has(requestKey))return;inFlight.current.add(requestKey);
+    const requestKey=`${cacheKey(target)}\0${cursor}`;
+    const generation=++directoryGeneration.current;
+    const current=()=>alive.current&&generation===directoryGeneration.current;
     if(!append){const cached=cache.get(cacheKey(target));if(cached)setPage(cached)}
     setLoading(true);setError("");let reply:Reply;
-    try{reply=await request("workspace.files.list",deviceId,{threadId,path:target,limit:100,...(cursor?{cursor}:{})})}catch{setError("无法读取此目录。");return}finally{inFlight.current.delete(requestKey);setLoading(false)}
+    let pending=inFlight.current.get(requestKey);
+    if(!pending){pending=Promise.resolve().then(()=>request("workspace.files.list",deviceId,{threadId,path:target,limit:100,...(cursor?{cursor}:{})}));inFlight.current.set(requestKey,pending)}
+    try{reply=await pending}catch{if(current())setError("无法读取此目录。");return}finally{if(inFlight.current.get(requestKey)===pending)inFlight.current.delete(requestKey);if(current())setLoading(false)}
+    if(!current())return;
     if(reply.outcome!=="accepted"){setError(reply.error?.code==="DIRECTORY_CHANGED"?"目录已变化，请刷新。":"无法读取此目录。");return}
     const next=validPage(reply.data);if(!next||next.path!==target){setError("目录响应格式无法识别。");return}
     const merged=append&&page&&page.path===target&&page.revision===next.revision?{...next,entries:[...page.entries,...next.entries]}:next;setPage(merged);cache.set(cacheKey(target),merged);
   }
   useEffect(()=>{setPage(cache.get(cacheKey(path))||null);void load(path)},[deviceId,agentEpoch,threadId,path]);
-  async function open(entry:WorkspaceEntry){
-    if(!entry.readable)return;if(entry.kind==="directory"){setPath(entry.path);return}if(entry.kind!=="file")return;
+  async function open(entry:WorkspaceEntry,preserve=false){
+    if(!entry.readable)return;if(entry.kind==="directory"){fileGeneration.current++;setPath(entry.path);return}if(entry.kind!=="file")return;
+    const generation=++fileGeneration.current;
+    const current=()=>alive.current&&generation===fileGeneration.current;
     const key=cacheKey(`file\0${entry.path}`);const cached=fileCache.get(key);const base:FileView={threadId,turnId:"",change:{itemId:"",path:entry.path,kind:"update"},mode:"source"};
     if(cached){setFile({...base,file:cached});return}
-    setFile({...base,loading:true});let reply:Reply;
-    try{reply=await request("workspace.file.read",deviceId,{threadId,path:entry.path})}catch{setFile(null);setError("无法读取此文件。");return}
-    const opened=validFile(reply.data,threadId);if(reply.outcome!=="accepted"||!opened){setFile(null);setError("无法读取此文件。");return}fileCache.set(key,opened);setFile({...base,file:opened})
+    if(!preserve)setFile({...base,loading:true});let reply:Reply;
+    try{reply=await request("workspace.file.read",deviceId,{threadId,path:entry.path})}catch{if(!current())return;if(preserve)throw new Error("无法读取此文档");setFile(null);setError("无法读取此文件。");return}
+    if(!current())return;
+    const opened=validFile(reply.data,threadId);if(reply.outcome!=="accepted"||!opened||opened.path!==entry.path){if(preserve)throw new Error("无法读取此文档");setFile(null);setError("无法读取此文件。");return}fileCache.set(key,opened);setFile({...base,file:opened})
   }
-  if(file)return <div className="workspace-browser workspace-file-open"><FileViewer view={file} source="workspace_browser" showDiff={false} backLabel="返回文件列表" onClose={()=>setFile(null)} onModeChange={()=>{}} onQuote={quote=>{onQuote(quote);onClose()}}/></div>;
+  const closeFile=()=>{fileGeneration.current++;setFile(null)};
+  const closeBrowser=()=>{fileGeneration.current++;directoryGeneration.current++;alive.current=false;onClose()};
+  if(file)return <div className="workspace-browser workspace-file-open"><FileViewer view={file} assetContext={assetContext} onOpenDocument={async target=>{const resolved=resolveDocumentPath(file.change.path,target);if(!resolved)throw new Error("文档路径不允许读取");await open({name:resolved.path.split("/").at(-1)||resolved.path,path:resolved.path,kind:"file",sizeBytes:0,modifiedAtMs:0,readable:true},true)}} source="workspace_browser" showDiff={false} backLabel="返回文件列表" onClose={closeFile} onModeChange={()=>{}} onQuote={quote=>{onQuote(quote);closeBrowser()}}/></div>;
   const crumbs=path?path.split("/"):[];
   return <section className="workspace-browser" role="dialog" aria-modal="true" aria-label="工作区文件">
-    <header><CircleButton type="button" className="workspace-close" aria-label="返回会话" onClick={onClose}><BackGlyph/></CircleButton><div><strong>{project}</strong><small>工作区文件</small></div><CircleButton type="button" className="workspace-refresh" aria-label="刷新目录" onClick={()=>void load(path)}><RefreshGlyph/></CircleButton></header>
+    <header><CircleButton type="button" className="workspace-close" aria-label="返回会话" onClick={closeBrowser}><BackGlyph/></CircleButton><div><strong>{project}</strong><small>工作区文件</small></div><CircleButton type="button" className="workspace-refresh" aria-label="刷新目录" onClick={()=>void load(path)}><RefreshGlyph/></CircleButton></header>
     <nav className="workspace-breadcrumb" aria-label="文件路径"><button type="button" onClick={()=>setPath("")}>{project}</button>{crumbs.map((crumb,index)=><span key={`${crumb}:${index}`}>/ <button type="button" onClick={()=>setPath(crumbs.slice(0,index+1).join("/"))}>{crumb}</button></span>)}</nav>
     <div className="workspace-tree">{page?.entries.map(entry=><button type="button" key={entry.path} className={`workspace-entry ${entry.kind}`} aria-label={`${entry.kind==="directory"?"打开目录":entry.kind==="file"?"打开文件":"不可打开"} ${entry.name}`} disabled={!entry.readable} onClick={()=>void open(entry)}><span aria-hidden="true">{entry.kind==="directory"?"▸":entry.kind==="file"?"·":"↗"}</span><span>{entry.name}</span>{entry.kind==="file"&&<small>{entry.sizeBytes} B</small>}</button>)}{loading&&<p role="status">正在读取目录…</p>}{error&&<p role="alert">{error}</p>}{!loading&&!error&&page?.entries.length===0&&<p>此目录为空</p>}</div>
     {page?.nextCursor&&<button className="workspace-more" type="button" aria-label="加载更多" disabled={loading} onClick={()=>void load(path,page.nextCursor,true)}>加载更多</button>}

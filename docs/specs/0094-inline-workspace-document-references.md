@@ -1,5 +1,7 @@
 # 0094：会话内 Workspace 文档引用与 Codex 文件入口
 
+> 后端归属已由 [0119](0119-self-contained-desktop-file-context.md) 取代：文件引用验证与读取内置到 Ariel Desktop Agent。以下保留原设计与既有来源、安全和交互规则。
+
 - 状态：Implemented（2026-10-25；Markdown／裸路径文件入口、受控 Chilling 读取、行定位与选区引用已完成）
 - 日期：2026-10-17
 - 影响范围：Ariel Web、公共协议、Desktop Agent 的 Chilling gateway

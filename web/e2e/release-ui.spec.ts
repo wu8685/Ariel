@@ -11,7 +11,7 @@ async function fixture(page:Page,unknown=false){
  await page.routeWebSocket("**/ws",s=>{route=s;s.onMessage(raw=>{
   const m=JSON.parse(String(raw));if(m.type==="hello"){s.send(JSON.stringify({type:"hello.ok",v:1,connectionId:"c",relayEpoch:"r",sessionToken:token}));return;}if(m.type!=="request")return;
   let data:any={};if(m.method==="device.list")data={devices:[{deviceId:"mac",deviceName:"Fixture Mac",agentEpoch:"epoch",agentOnline:true,codexReady:true,capabilities:{autoLoad:true,threadBootstrap:true}},{deviceId:"other",deviceName:"Other Mac",agentEpoch:"epoch-other",agentOnline:true,codexReady:true,capabilities:{autoLoad:true,threadBootstrap:true}}]};
-  if(m.method==="thread.list")data={threads:[current,second],nextCursor:""};
+  if(m.method==="thread.list")data={threads:[current,second].map(thread=>({...thread,...(m.params.searchTerm?{searchSnippet:"这是隔离搜索摘要，用较长的内容确认紧凑列表仍然允许两行摘要自然增高，且不会裁掉标题或日期，保留完整的导航点击区域。"}:{})})),nextCursor:""};
   if(m.method==="thread.history")data={turns:[current.turns[0],{turnId:"paged-old",status:"completed",items:[{itemId:"paged-user",role:"user",text:"分页锚点旧内容"}]}],nextCursor:""};
   if(m.method==="thread.cache.watch")data={watchId:`watch-${m.params.threadId}`,freshness:"fresh",agentOnline:true,agentEpoch:"epoch",cacheStreamId:"cache-stream",seq,capturedAt:"2026-10-27T00:00:00Z",thread:m.params.threadId==="first"?current:second};
   if(m.method==="model.catalog.read")data={catalog:{models},settingsSupported:true,editSupported:true,agentEpoch:"epoch"};
@@ -36,10 +36,29 @@ for(const width of [320,390,1280]){
   const circles=await sidebar.locator("button.circle-control").evaluateAll(buttons=>buttons.map(b=>{const r=b.getBoundingClientRect(),v=b.querySelector(".circle-visual")!.getBoundingClientRect(),svg=b.querySelector("svg")!.getBoundingClientRect();return {x:r.x,right:r.right,y:r.y,width:r.width,height:r.height,visual:v.width,icon:svg.width};}));
   expect(circles.length).toBeGreaterThanOrEqual(5);for(const r of circles){expect(r.width).toBe(44);expect(r.height).toBe(44);expect(r.visual).toBe(28);expect(r.icon).toBe(14);expect(r.x).toBeGreaterThanOrEqual(0);expect(r.right).toBeLessThanOrEqual(width);}
   for(let i=1;i<5;i++)expect(circles[i].x).toBeGreaterThanOrEqual(circles[i-1].right);
-  const colors=await sidebar.evaluate(n=>({project:getComputedStyle(n.querySelector(".project-toggle")!).backgroundColor,children:getComputedStyle(n.querySelector(".project-threads")!).backgroundColor,selection:getComputedStyle(n.querySelector(".thread-row")!).userSelect}));expect(colors.project).not.toBe(colors.children);expect(colors.selection).toBe("none");
+  const colors=await sidebar.evaluate(n=>({project:getComputedStyle(n.querySelector(".project-toggle")!).backgroundColor,children:getComputedStyle(n.querySelector(".project-threads")!).backgroundColor,guideWidth:getComputedStyle(n.querySelector(".project-threads")!).borderLeftWidth,selection:getComputedStyle(n.querySelector(".thread-row")!).userSelect}));expect(colors.project).not.toBe(colors.children);expect(colors.guideWidth).toBe("0px");expect(colors.selection).toBe("none");
+  await expect(sidebar.locator(".project-toggle")).toHaveCSS("height","44px");
+  for(const row of await sidebar.locator(".thread-row").all()){
+   await expect(row).toHaveCSS("height","44px");
+   const [box,title,date]=await Promise.all([row.boundingBox(),row.locator(".thread-title").boundingBox(),row.locator(".thread-date").boundingBox()]);
+   expect(title!.y).toBeGreaterThanOrEqual(box!.y);expect(date!.y).toBeGreaterThanOrEqual(title!.y+title!.height);expect(date!.y+date!.height).toBeLessThanOrEqual(box!.y+box!.height);
+  }
   await expect(page).toHaveScreenshot(`compact-sidebar-${width}.png`);
   await page.getByText(first.title,{exact:true}).click();await expect(page.getByRole("button",{name:"编辑并重新发送"})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+ });
+ test(`compact sidebar search summaries keep natural height at ${width}`,async({page})=>{
+  await page.setViewportSize({width,height:844});await fixture(page);await page.getByRole("searchbox",{name:"搜索会话"}).fill("隔离");
+  await expect(page.locator(".thread-snippet")).toHaveCount(2);
+  for(const row of await page.locator(".thread-row").all()){
+   const [box,title,snippet,date]=await Promise.all([row.boundingBox(),row.locator(".thread-title").boundingBox(),row.locator(".thread-snippet").boundingBox(),row.locator(".thread-date").boundingBox()]);
+   // Two summary lines add their actual height, plus 6px padding, 2px border and two 2px gaps.
+   expect(box!.height).toBeGreaterThan(44);expect(box!.height).toBeCloseTo(title!.height+snippet!.height+date!.height+12,1);expect(snippet!.height).toBeLessThanOrEqual(29);expect(title!.y).toBeGreaterThanOrEqual(box!.y);expect(snippet!.y).toBeGreaterThanOrEqual(title!.y+title!.height);expect(date!.y).toBeGreaterThanOrEqual(snippet!.y+snippet!.height);expect(date!.y+date!.height).toBeLessThanOrEqual(box!.y+box!.height);expect(box!.x+box!.width).toBeLessThanOrEqual(width);
+   await expect(row.locator(".thread-title")).toHaveCSS("font-size","13px");
+  }
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+  await page.getByRole("button",{name:"清空搜索",exact:true}).click();await expect(page.locator(".thread-snippet")).toHaveCount(0);
+  await page.getByText(first.title,{exact:true}).click();await expect(page.getByText("前序内容保留",{exact:true})).toBeVisible();
  });
  test(`stopped edit replaces native-shaped history and preserves drafts at ${width}`,async({page})=>{
   await page.setViewportSize({width,height:844});const {edits}=await fixture(page);await page.getByText(first.title,{exact:true}).click();

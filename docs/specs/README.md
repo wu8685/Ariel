@@ -104,7 +104,7 @@
 | 0085 | [后台同步期间的发送按钮加载态](0085-background-sync-send-button-loading.md) | Implemented（Web 207／真实移动 Chromium 29／截图／build／公网 Docker 已验） | 展示本地缓存正文并恢复 owner 时，将发送按钮原位变为同尺寸 spinner，并保持发送禁用 |
 | 0086 | [大会话渐进打开、follower 大帧 hint 与 live controller 暖保留](0086-progressive-open-frame-hint-and-warm-controller.md) | Implemented（Go 全量／Web 210／真实移动 Chromium 31／build 已验） | thread.read 快路径先渲染只读历史，owner 就绪后无闪空接管；已知大帧跳过注定失败的小 follower；退订后 90 秒暖保留 |
 | 0088 | [可选任务看板、本机 Codex 负责人及双向反馈](0088-task-kanban-codex-owner.md) | Superseded（2026-10-17；未实现） | 云端任务数据库方案保留历史；新方案分为 Ariel 0091 接入与 chilling 0001 本地后端 |
-| 0089 | [Chilling 文件上下文前端与可选接入](0089-turn-file-links-and-selection-context.md) | Implemented（2026-10-17；实际使用验收通过） | Ariel 提供可选 Web UI 与受限 gateway；Codex 文件读取和选区校验由本机 Chilling 负责 |
+| 0089 | [Chilling 文件上下文前端与可选接入](0089-turn-file-links-and-selection-context.md) | Implemented（旧后端归属由 0119 取代） | 原文件 UI／来源与选区行为保留；后端已迁入 Desktop Agent |
 | 0091 | [Chilling 任务看板统一入口与后台路由](0091-chilling-task-board-and-background-routing.md) | Approved（2026-10-17；首版已实现，Web／跨仓 fixture 已验，真实 native 与后续事件能力仍待验，未部署） | Ariel 统一 Web／云端／通道，本地 chilling 持有 MySQL／调度；负责人是任务所选主机的 Codex |
 | 0093 | [Large follower 空闲抢占与只读会话恢复](0093-large-follower-idle-preemption-and-readonly-recovery.md) | Implemented（Go／race／Web／真实移动 Chromium／build 已验） | 空闲暖缓存可被当前大会话安全接管；活跃会话不抢占，Web 展示明确只读原因并支持重新连接 |
 | 0095 | [Obsidian Task Source、稳定主机路由与 Codex 领取 POC](0095-obsidian-task-source-and-codex-claim.md) | Implemented（2026-10-18；隔离 M=E 真实 native POC 已验，物理跨主机待验） | `agent_host` 使用 Ariel `deviceId`；本地 vault source 定时发现，复用跨主机 dispatch，经 claim-only gate 后进入同一 Codex thread |
@@ -119,8 +119,13 @@
 | 0111 | [紧凑会话顶部](0111-compact-conversation-header.md) | Implemented（权限入口移至输入框纳入 v0.9.3） | 顶部仅保留右对齐文件入口，权限紧邻附件加号；保留 44px 目标、向上弹层和历史折叠 |
 | 0112 | [原地恢复登录](0112-in-place-session-reauthentication.md) | Implemented（Web 286、Chromium 56、native gate 通过；v0.9.0） | 认证失效保留正文与草稿，原位刷新 Cookie／重新登录；模型设置、紧凑顶部、连接竞态修复合并发布 |
 | 0113 | [原生重试与错误提示](0113-native-retry-and-error-notices.md) | Implemented（Go／race／vet、Web 291、Chromium 58 已验） | 区分 retry 与最终错误，消除重复 error 项目，占位不再掩盖原文；沿用 v1 wire |
+| 0117 | [输入区排队项紧凑行高](0117-compact-composer-queue-rows.md) | Implemented（未部署；物理 Safari 待验） | 正常行 44–45px，保留实际操作高度、辅助说明和队列交互 |
+| 0118 | [文档原版／Markdown 阅读模式与图片](0118-document-source-and-reading-modes.md) | Implemented（未部署；物理 Safari 待验） | 三种文件入口、原文／阅读／Diff、精确引用和受控 lazy 图片 |
+| 0119 | [Desktop Agent 内置文件上下文](0119-self-contained-desktop-file-context.md) | Implemented（未部署；native gate 范围见测试记录） | Codex 会话与文件代理不再依赖 Chilling，独立任务业务不迁移 |
 
 ## 设计基线
+
+0117／0118／0119 已于 2026-10-27 联合批准并完成实现；验证范围、red → green 与未验项见[联合测试记录](../testing/2026-10-27-0117-0119-self-contained-files.md)。发布仍需单独执行，当前部署不因规格状态而自动升级。
 
 最新批准的联合发布规格：
 

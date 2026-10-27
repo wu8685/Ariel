@@ -1,5 +1,7 @@
 # 0089：Chilling 文件上下文前端与可选接入
 
+> 后端归属已由 [0119](0119-self-contained-desktop-file-context.md) 取代：文件能力内置到 Ariel Desktop Agent，不再连接 Chilling。以下保留最初设计，既有用户行为与安全约束继续有效。
+
 - 状态：Implemented（2026-10-17；用户已完成实际使用验收）
 - Ariel 范围：Web UI、feature flag、能力发现、协议与透明转发、既有 Codex owner 发送。
 - 后端归属：本机部署的 Chilling；详见 Chilling `docs/specs/0002-ariel-file-context-backend.md`。

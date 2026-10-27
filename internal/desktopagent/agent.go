@@ -17,44 +17,46 @@ import (
 	chillingclient "github.com/wu8685/Ariel/internal/chilling"
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
+	"github.com/wu8685/Ariel/internal/filecontext"
 	"github.com/wu8685/Ariel/internal/modelsettings"
 	"github.com/wu8685/Ariel/internal/wsheartbeat"
 	"github.com/wu8685/Ariel/protocol"
 )
 
 type Config struct {
-	DisableExecutionSettings                              bool
-	TasksEnabled                                          bool
-	TasksManagerOnly                                      bool
-	TaskEndpoint                                          string
-	TaskBackend                                           TaskBackend
-	TaskAllowedRoots, TaskAllowedManagers                 []string
-	TaskPollInterval                                      time.Duration
-	TaskExecutionCheck                                    func(context.Context, string, string) error
-	URL, Token, DeviceID, DeviceName, Binary, Socket, CWD string
-	AgentEpoch                                            string
-	ChillingEndpoint                                      string
-	ChillingEnabled                                       bool
-	HeartbeatInterval, HeartbeatTimeout                   time.Duration
-	CacheWarmGrace, CachePublishInterval                  time.Duration
-	CacheLeaseInterval                                    time.Duration
-	CacheRecoveryGuardDelay                               time.Duration
-	CacheEntryMaxBytes                                    int
-	CachePrewarmRecent                                    bool
-	FileContext                                           FileContext
-	OnReady                                               func() error
-	OnNotReady                                            func()
+	DisableExecutionSettings                                           bool
+	TasksEnabled                                                       bool
+	TasksManagerOnly                                                   bool
+	TaskEndpoint                                                       string
+	TaskBackend                                                        TaskBackend
+	TaskAllowedRoots, TaskAllowedManagers                              []string
+	TaskPollInterval                                                   time.Duration
+	TaskExecutionCheck                                                 func(context.Context, string, string) error
+	URL, Token, DeviceID, DeviceName, Binary, Socket, CWD              string
+	AgentEpoch                                                         string
+	ChillingEndpoint                                                   string
+	ChillingEnabled                                                    bool // deprecated config alias; never connects Chilling
+	FileContextEnabled, WorkspaceBrowserEnabled, DocumentAssetsEnabled bool
+	HeartbeatInterval, HeartbeatTimeout                                time.Duration
+	CacheWarmGrace, CachePublishInterval                               time.Duration
+	CacheLeaseInterval                                                 time.Duration
+	CacheRecoveryGuardDelay                                            time.Duration
+	CacheEntryMaxBytes                                                 int
+	CachePrewarmRecent                                                 bool
+	FileContext                                                        FileContext
+	OnReady                                                            func() error
+	OnNotReady                                                         func()
 }
 type FileContext interface {
 	Ready() bool
 	MessageReferences() bool
 	WorkspaceBrowser() bool
-	Changes(context.Context, chillingclient.ChangesRequest) (chillingclient.ChangesResponse, error)
-	Read(context.Context, chillingclient.ReadRequest) (chillingclient.ReadResponse, error)
-	ReferenceRead(context.Context, chillingclient.ReferenceReadRequest) (chillingclient.ReadResponse, error)
-	WorkspaceList(context.Context, chillingclient.WorkspaceListRequest) (chillingclient.WorkspaceListResponse, error)
-	WorkspaceRead(context.Context, chillingclient.WorkspaceReadRequest) (chillingclient.ReadResponse, error)
-	Prepare(context.Context, chillingclient.PrepareRequest) (chillingclient.PrepareResponse, error)
+	Changes(context.Context, filecontext.ChangesRequest) (filecontext.ChangesResponse, error)
+	Read(context.Context, filecontext.ReadRequest) (filecontext.ReadResponse, error)
+	ReferenceRead(context.Context, filecontext.ReferenceReadRequest) (filecontext.ReadResponse, error)
+	WorkspaceList(context.Context, filecontext.WorkspaceListRequest) (filecontext.WorkspaceListResponse, error)
+	WorkspaceRead(context.Context, filecontext.WorkspaceReadRequest) (filecontext.ReadResponse, error)
+	Prepare(context.Context, filecontext.PrepareRequest) (filecontext.PrepareResponse, error)
 }
 type agent struct {
 	tasks                   *taskRuntime
@@ -187,14 +189,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
 	service.SetThreadMetadataWriter(appserver.ThreadMetadataWriter{RPC: readOnlyRPC})
-	if cfg.FileContext == nil && cfg.ChillingEnabled {
-		client, clientErr := chillingclient.New(ctx, chillingclient.Config{Enabled: true, Endpoint: cfg.ChillingEndpoint})
-		if clientErr != nil {
-			log.Printf("Chilling file context unavailable: %s", chillingclient.CodeOf(clientErr))
-		} else {
-			cfg.FileContext = client
-		}
-	}
+	configureFileContext(&cfg, readOnlyRPC)
 	defer service.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -538,48 +533,69 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		return
 	}
 	var p struct {
-		ThreadID         string                     `json:"threadId"`
-		TurnID           string                     `json:"turnId"`
-		TurnIDs          []string                   `json:"turnIds"`
-		SubscriptionID   string                     `json:"subscriptionId"`
-		Cursor           string                     `json:"cursor"`
-		SearchTerm       string                     `json:"searchTerm"`
-		Limit            int                        `json:"limit"`
-		LimitBytes       int                        `json:"limitBytes"`
-		ExpectedRevision string                     `json:"expectedRevision"`
-		ClientMessageID  string                     `json:"clientMessageId"`
-		Text             string                     `json:"text"`
-		Images           []string                   `json:"images"`
-		ItemID           string                     `json:"itemId"`
-		Path             string                     `json:"path"`
-		ReferenceKind    string                     `json:"referenceKind"`
-		RawReference     string                     `json:"rawReference"`
-		StartLine        int                        `json:"startLine"`
-		EndLine          int                        `json:"endLine"`
-		ImageIndex       int                        `json:"imageIndex"`
-		ExpectedTurnID   string                     `json:"expectedTurnId"`
-		QueueID          string                     `json:"queueId"`
-		QueueIDs         []string                   `json:"queueIds"`
-		InteractionID    string                     `json:"interactionId"`
-		Decision         string                     `json:"decision"`
-		Answers          map[string][]string        `json:"answers"`
-		CWD              string                     `json:"cwd"`
-		Archived         bool                       `json:"archived"`
-		Name             string                     `json:"name"`
-		Pinned           *bool                      `json:"pinned"`
-		OperationID      string                     `json:"operationId"`
-		UpdateMode       string                     `json:"updateMode"`
-		Watching         *bool                      `json:"watching"`
-		FileContexts     []chillingclient.Selection `json:"fileContexts"`
-		Settings         *modelsettings.Values      `json:"settings"`
+		ThreadID         string                  `json:"threadId"`
+		AgentEpoch       string                  `json:"agentEpoch"`
+		TurnID           string                  `json:"turnId"`
+		TurnIDs          []string                `json:"turnIds"`
+		SubscriptionID   string                  `json:"subscriptionId"`
+		Cursor           string                  `json:"cursor"`
+		SearchTerm       string                  `json:"searchTerm"`
+		Limit            int                     `json:"limit"`
+		LimitBytes       int                     `json:"limitBytes"`
+		ExpectedRevision string                  `json:"expectedRevision"`
+		ClientMessageID  string                  `json:"clientMessageId"`
+		Text             string                  `json:"text"`
+		Images           []string                `json:"images"`
+		ItemID           string                  `json:"itemId"`
+		Path             string                  `json:"path"`
+		ReferenceKind    string                  `json:"referenceKind"`
+		RawReference     string                  `json:"rawReference"`
+		StartLine        int                     `json:"startLine"`
+		EndLine          int                     `json:"endLine"`
+		ImageIndex       int                     `json:"imageIndex"`
+		ExpectedTurnID   string                  `json:"expectedTurnId"`
+		QueueID          string                  `json:"queueId"`
+		QueueIDs         []string                `json:"queueIds"`
+		InteractionID    string                  `json:"interactionId"`
+		Decision         string                  `json:"decision"`
+		Answers          map[string][]string     `json:"answers"`
+		CWD              string                  `json:"cwd"`
+		Archived         bool                    `json:"archived"`
+		Name             string                  `json:"name"`
+		Pinned           *bool                   `json:"pinned"`
+		OperationID      string                  `json:"operationId"`
+		UpdateMode       string                  `json:"updateMode"`
+		Watching         *bool                   `json:"watching"`
+		FileContexts     []filecontext.Selection `json:"fileContexts"`
+		Settings         *modelsettings.Values   `json:"settings"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
+		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
+		return
+	}
+	if !fileSelectionsMatchThread(p.ThreadID, p.FileContexts) {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
 		return
 	}
 	var data map[string]any
 	var err error
 	switch method {
+	case "file.context.asset.read":
+		provider, ok := a.fileContext.(interface {
+			AssetRead(context.Context, filecontext.AssetReadRequest) (filecontext.AssetResponse, error)
+		})
+		if !ok || p.AgentEpoch != a.agentEpoch {
+			err = errors.New("FEATURE_DISABLED")
+			break
+		}
+		var request filecontext.AssetReadRequest
+		if json.Unmarshal(raw, &request) != nil {
+			err = errors.New("INVALID_ARGUMENT")
+			break
+		}
+		var response filecontext.AssetResponse
+		response, err = provider.AssetRead(ctx, request)
+		data, err = responseMap(response, err)
 	case "thread.create":
 		err = appserver.ErrMethodUnavailable
 	case "thread.bootstrap":
@@ -667,40 +683,40 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 			err = errors.New("FEATURE_DISABLED")
 			break
 		}
-		var response chillingclient.ChangesResponse
-		response, err = a.fileContext.Changes(ctx, chillingclient.ChangesRequest{ThreadID: p.ThreadID, TurnIDs: p.TurnIDs})
+		var response filecontext.ChangesResponse
+		response, err = a.fileContext.Changes(ctx, filecontext.ChangesRequest{ThreadID: p.ThreadID, TurnIDs: p.TurnIDs})
 		data, err = responseMap(response, err)
 	case "file.context.read":
 		if a.fileContext == nil || !a.fileContext.Ready() {
 			err = errors.New("FEATURE_DISABLED")
 			break
 		}
-		var response chillingclient.ReadResponse
-		response, err = a.fileContext.Read(ctx, chillingclient.ReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, Path: p.Path})
+		var response filecontext.ReadResponse
+		response, err = a.fileContext.Read(ctx, filecontext.ReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, Path: p.Path})
 		data, err = responseMap(response, err)
 	case "file.context.reference.read":
 		if a.fileContext == nil || !a.fileContext.Ready() || !a.fileContext.MessageReferences() {
 			err = errors.New("FEATURE_DISABLED")
 			break
 		}
-		var response chillingclient.ReadResponse
-		response, err = a.fileContext.ReferenceRead(ctx, chillingclient.ReferenceReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, ReferenceKind: p.ReferenceKind, RawReference: p.RawReference, StartLine: p.StartLine, EndLine: p.EndLine})
+		var response filecontext.ReadResponse
+		response, err = a.fileContext.ReferenceRead(ctx, filecontext.ReferenceReadRequest{ThreadID: p.ThreadID, TurnID: p.TurnID, ItemID: p.ItemID, ReferenceKind: filecontext.ReferenceKind(p.ReferenceKind), RawReference: p.RawReference, StartLine: p.StartLine, EndLine: p.EndLine})
 		data, err = responseMap(response, err)
 	case "workspace.files.list":
 		if a.fileContext == nil || !a.fileContext.Ready() || !a.fileContext.WorkspaceBrowser() {
 			err = errors.New("FEATURE_DISABLED")
 			break
 		}
-		var response chillingclient.WorkspaceListResponse
-		response, err = a.fileContext.WorkspaceList(ctx, chillingclient.WorkspaceListRequest{ThreadID: p.ThreadID, Path: p.Path, Cursor: p.Cursor, Limit: p.Limit})
+		var response filecontext.WorkspaceListResponse
+		response, err = a.fileContext.WorkspaceList(ctx, filecontext.WorkspaceListRequest{ThreadID: p.ThreadID, Path: p.Path, Cursor: p.Cursor, Limit: p.Limit})
 		data, err = responseMap(response, err)
 	case "workspace.file.read":
 		if a.fileContext == nil || !a.fileContext.Ready() || !a.fileContext.WorkspaceBrowser() {
 			err = errors.New("FEATURE_DISABLED")
 			break
 		}
-		var response chillingclient.ReadResponse
-		response, err = a.fileContext.WorkspaceRead(ctx, chillingclient.WorkspaceReadRequest{ThreadID: p.ThreadID, Path: p.Path})
+		var response filecontext.ReadResponse
+		response, err = a.fileContext.WorkspaceRead(ctx, filecontext.WorkspaceReadRequest{ThreadID: p.ThreadID, Path: p.Path})
 		data, err = responseMap(response, err)
 	case "thread.subscribe":
 		loadCtx, cancel := context.WithTimeout(ctx, threadSubscribeLoadTimeout)
@@ -1256,6 +1272,16 @@ func responseMap(value any, prior error) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	switch value.(type) {
+	case filecontext.ChangesResponse, filecontext.ReadResponse, filecontext.WorkspaceListResponse, filecontext.PrepareResponse:
+		if len(body) > filecontext.MaxResponseBytes {
+			return nil, errors.New("FILE_TOO_LARGE")
+		}
+	case filecontext.AssetResponse:
+		if len(body) > (384<<10)-1024 {
+			return nil, errors.New("FILE_TOO_LARGE")
+		}
+	}
 	var out map[string]any
 	if json.Unmarshal(body, &out) != nil {
 		return nil, errors.New("INVALID_ARGUMENT")
@@ -1263,14 +1289,14 @@ func responseMap(value any, prior error) (map[string]any, error) {
 	return out, nil
 }
 
-func (a *agent) prepareMessage(ctx context.Context, text string, selections []chillingclient.Selection) (string, error) {
+func (a *agent) prepareMessage(ctx context.Context, text string, selections []filecontext.Selection) (string, error) {
 	if len(selections) == 0 {
 		return text, nil
 	}
 	if a.fileContext == nil || !a.fileContext.Ready() {
 		return "", errors.New("FEATURE_DISABLED")
 	}
-	prepared, err := a.fileContext.Prepare(ctx, chillingclient.PrepareRequest{Selections: selections})
+	prepared, err := a.fileContext.Prepare(ctx, filecontext.PrepareRequest{Selections: selections})
 	if err != nil {
 		return "", err
 	}
@@ -1281,6 +1307,15 @@ func (a *agent) prepareMessage(ctx context.Context, text string, selections []ch
 		return prepared.Envelope, nil
 	}
 	return text + "\n\n" + prepared.Envelope, nil
+}
+
+func fileSelectionsMatchThread(threadID string, selections []filecontext.Selection) bool {
+	for _, selection := range selections {
+		if threadID == "" || selection.ThreadID != threadID {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *agent) reply(ctx context.Context, id, method string, data map[string]any, err error) {
@@ -1358,7 +1393,7 @@ func isReadRequest(method string) bool {
 	switch method {
 	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch":
 		return true
-	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
+	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
 		return true
 	default:
 		return false

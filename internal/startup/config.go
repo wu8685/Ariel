@@ -16,6 +16,8 @@ import (
 )
 
 type options struct {
+	fileContext                                           *bool
+	workspaceBrowser, documentAssets                      bool
 	command, mode, listen, relayURL, deviceID, deviceName string
 	tokenFile, pinFile, obsidianTaskVault                 string
 	taskAllowedRoots, taskAllowedManagers                 string
@@ -23,16 +25,19 @@ type options struct {
 }
 
 type config struct {
-	Mode                string `json:"mode"`
-	Listen              string `json:"listen,omitempty"`
-	RelayURL            string `json:"relayUrl"`
-	DeviceID            string `json:"deviceId"`
-	DeviceName          string `json:"deviceName"`
-	AllowInsecureWS     bool   `json:"allowInsecureWs,omitempty"`
-	TasksEnabled        bool   `json:"tasksEnabled,omitempty"`
-	ObsidianTaskVault   string `json:"obsidianTaskVault,omitempty"`
-	TaskAllowedRoots    string `json:"taskAllowedRoots,omitempty"`
-	TaskAllowedManagers string `json:"taskAllowedManagers,omitempty"`
+	FileContextEnabled      bool   `json:"fileContextEnabled,omitempty"`
+	WorkspaceBrowserEnabled bool   `json:"workspaceBrowserEnabled,omitempty"`
+	DocumentAssetsEnabled   bool   `json:"documentAssetsEnabled,omitempty"`
+	Mode                    string `json:"mode"`
+	Listen                  string `json:"listen,omitempty"`
+	RelayURL                string `json:"relayUrl"`
+	DeviceID                string `json:"deviceId"`
+	DeviceName              string `json:"deviceName"`
+	AllowInsecureWS         bool   `json:"allowInsecureWs,omitempty"`
+	TasksEnabled            bool   `json:"tasksEnabled,omitempty"`
+	ObsidianTaskVault       string `json:"obsidianTaskVault,omitempty"`
+	TaskAllowedRoots        string `json:"taskAllowedRoots,omitempty"`
+	TaskAllowedManagers     string `json:"taskAllowedManagers,omitempty"`
 }
 
 var deviceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
@@ -67,6 +72,22 @@ func parseArgs(args []string) (options, error) {
 			return options{}, fmt.Errorf("duplicate option %s", key)
 		}
 		seen[key] = true
+		if key == "--enable-file-context" || key == "--enable-chilling-file-context" || key == "--disable-file-context" || key == "--disable-chilling-file-context" {
+			value := strings.HasPrefix(key, "--enable-")
+			if opts.fileContext != nil && *opts.fileContext != value {
+				return options{}, errors.New("conflicting file-context flags")
+			}
+			opts.fileContext = &value
+			continue
+		}
+		if key == "--enable-workspace-browser" || key == "--enable-document-assets" {
+			if key == "--enable-workspace-browser" {
+				opts.workspaceBrowser = true
+			} else {
+				opts.documentAssets = true
+			}
+			continue
+		}
 		if key == "--allow-insecure-ws" || key == "--replace-config" {
 			if key == "--allow-insecure-ws" {
 				opts.allowInsecureWS = true
@@ -131,6 +152,9 @@ func validateRelayURL(value string, allowInsecure bool) error {
 }
 
 func validateConfig(cfg config) error {
+	if !cfg.FileContextEnabled && (cfg.WorkspaceBrowserEnabled || cfg.DocumentAssetsEnabled) {
+		return errors.New("workspace browser and document assets require --enable-file-context")
+	}
 	if !deviceIDPattern.MatchString(cfg.DeviceID) || strings.TrimSpace(cfg.DeviceName) == "" || strings.ContainsAny(cfg.DeviceName, "\r\n\x00") {
 		return errors.New("device ID/name is missing or invalid")
 	}
@@ -234,6 +258,10 @@ func configForOptions(opts options) (config, error) {
 		return config{}, errors.New("--device-id and --device-name are required")
 	}
 	cfg := config{Mode: opts.mode, Listen: opts.listen, RelayURL: opts.relayURL, DeviceID: opts.deviceID, DeviceName: opts.deviceName, AllowInsecureWS: opts.allowInsecureWS}
+	if opts.fileContext != nil {
+		cfg.FileContextEnabled = *opts.fileContext
+	}
+	cfg.WorkspaceBrowserEnabled, cfg.DocumentAssetsEnabled = opts.workspaceBrowser, opts.documentAssets
 	if opts.obsidianTaskVault != "" {
 		if !filepath.IsAbs(opts.obsidianTaskVault) {
 			return config{}, errors.New("--obsidian-task-vault must be absolute")

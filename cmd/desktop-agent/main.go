@@ -17,6 +17,7 @@ import (
 
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/desktopagent"
+	"github.com/wu8685/Ariel/internal/filecontext"
 	"github.com/wu8685/Ariel/internal/obsidiantasks"
 	"github.com/wu8685/Ariel/internal/probe"
 )
@@ -126,7 +127,9 @@ func taskExecutionCheckForProfile(enabled, managerOnly bool, profile probe.IPCPr
 
 func main() {
 	disableExecutionSettings := flag.Bool("disable-execution-settings", os.Getenv("ARIEL_DISABLE_EXECUTION_SETTINGS") == "true", "disable per-conversation model/effort/speed extension (for rollback or unverified Codex versions)")
-	enableChilling := flag.Bool("enable-chilling-file-context", os.Getenv("ARIEL_ENABLE_CHILLING_FILE_CONTEXT") == "true", "enable the local Chilling file-context gateway")
+	fileFlags := filecontext.RegisterFlags(flag.CommandLine, os.LookupEnv)
+	workspaceBrowser := flag.Bool("enable-workspace-browser", os.Getenv("ARIEL_ENABLE_WORKSPACE_BROWSER") == "true", "enable read-only workspace browsing")
+	documentAssets := flag.Bool("enable-document-assets", os.Getenv("ARIEL_ENABLE_DOCUMENT_ASSETS") == "true", "enable Markdown document image reads")
 	chillingEndpoint := flag.String("chilling-endpoint", os.Getenv("ARIEL_CHILLING_ENDPOINT"), "Chilling unix:// endpoint")
 	enableTasks := flag.Bool("enable-tasks", os.Getenv("ARIEL_ENABLE_TASKS") == "true", "enable task gateway / explicitly authorized task execution")
 	managerOnly := flag.Bool("tasks-manager-only", os.Getenv("ARIEL_TASKS_MANAGER_ONLY") == "true", "run task management without a local Codex")
@@ -135,12 +138,19 @@ func main() {
 	taskRoots := flag.String("task-allowed-roots", os.Getenv("ARIEL_TASK_ALLOWED_ROOTS"), "comma-separated absolute task execution roots")
 	taskManagers := flag.String("task-allowed-managers", os.Getenv("ARIEL_TASK_ALLOWED_MANAGERS"), "comma-separated authorized manager device IDs")
 	flag.Parse()
+	fileEnabled, fileFlagErr := fileFlags.Enabled()
+	if fileFlagErr != nil {
+		log.Fatal(fileFlagErr)
+	}
 	defaults, err := probe.Defaults()
 	if err != nil {
 		log.Fatal(err)
 	}
-	if *enableChilling && *chillingEndpoint == "" {
-		log.Fatal("--chilling-endpoint is required when Chilling file context is enabled")
+	if *chillingEndpoint != "" {
+		log.Print("--chilling-endpoint is deprecated and ignored for built-in file context")
+	}
+	if !fileEnabled && (*workspaceBrowser || *documentAssets) {
+		log.Fatal("workspace browser and document assets require --enable-file-context")
 	}
 	appPath := os.Getenv("ARIEL_APP_PATH")
 	if appPath == "" {
@@ -154,7 +164,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	cfg.chillingEnabled, cfg.chillingEndpoint = *enableChilling, *chillingEndpoint
+	cfg.chillingEnabled, cfg.chillingEndpoint = fileEnabled, *chillingEndpoint
 	cfg, err = configureTasks(cfg, *enableTasks, *managerOnly, *taskEndpoint, *obsidianTaskVault, *taskRoots, *taskManagers)
 	if err != nil {
 		log.Fatal(err)
@@ -224,7 +234,7 @@ func main() {
 			backoff.connected()
 			return nil
 		}
-		err := desktopagent.Run(ctx, desktopagent.Config{DisableExecutionSettings: *disableExecutionSettings, URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, ChillingEnabled: cfg.chillingEnabled, ChillingEndpoint: cfg.chillingEndpoint, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady})
+		err := desktopagent.Run(ctx, desktopagent.Config{DisableExecutionSettings: *disableExecutionSettings, URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, FileContextEnabled: cfg.chillingEnabled, WorkspaceBrowserEnabled: *workspaceBrowser, DocumentAssetsEnabled: *documentAssets, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady})
 		if ctx.Err() != nil {
 			break
 		}

@@ -147,12 +147,27 @@ describe("fixed Night appearance", () => {
     expect(style).toMatch(/\.list-caption\s*\{[^}]*padding:\s*5px\s+12px\s+6px/s);
   });
 
+  it("uses indentation and child background without a project-thread guide line", () => {
+    const children = style.match(/\.project-threads\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(children).toMatch(/margin-left:\s*20px/);
+    expect(children).toMatch(/background:\s*var\(--color-sidebar-child\)/);
+    expect(children).not.toMatch(/border(?:-left|-inline-start)?:/);
+  });
+
+  it("reduces notice vertical padding without shrinking text or global touch targets", () => {
+    const notice = style.match(/\.notice\s*\{([^}]*)\}/s)?.[1] || "";
+    expect(notice).toMatch(/padding:\s*2px\s+13px/);
+    expect(notice).toMatch(/font-size:\s*12px/);
+    expect(style).toMatch(/--circle-target-size:\s*44px/);
+  });
+
   it("keeps each conversation item dense on desktop and mobile", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
-    expect(style).toMatch(/\.thread-row\s*\{[^}]*padding:\s*7px\s+12px;[^}]*margin:\s*1px\s+0/s);
+    expect(style).toMatch(/\.thread-row\s*\{[^}]*justify-content:\s*center;[^}]*min-height:\s*44px;[^}]*padding:\s*3px\s+12px;[^}]*margin:\s*1px\s+0/s);
+    expect(style).toMatch(/\.project-toggle\s*\{[^}]*min-height:\s*44px;[^}]*padding:\s*5px\s+12px/s);
     expect(style).toMatch(/\.thread-title\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*1\.3/s);
-    expect(style).toMatch(/\.thread-snippet\s*\{[^}]*margin-top:\s*3px;[^}]*line-height:\s*1\.3/s);
-    expect(style).toMatch(/\.thread-date\s*\{[^}]*font-size:\s*9px;[^}]*margin-top:\s*3px;[^}]*line-height:\s*1\.3/s);
+    expect(style).toMatch(/\.thread-snippet\s*\{[^}]*margin-top:\s*2px;[^}]*line-height:\s*1\.3/s);
+    expect(style).toMatch(/\.thread-date\s*\{[^}]*font-size:\s*9px;[^}]*margin-top:\s*2px;[^}]*line-height:\s*1\.3/s);
     expect(mobile).not.toMatch(/\.thread-row\s*\{[^}]*padding:\s*15px/s);
   });
 
@@ -194,6 +209,17 @@ describe("fixed Night appearance", () => {
       const rule = style.match(new RegExp(`(?:^|\\n)${selector.replaceAll(".", "\\.")}\\s*\\{([^}]*)\\}`, "s"))?.[1] || "";
       expect(rule, selector).not.toMatch(/user-select:\s*none/);
     }
+  });
+
+  it("removes vertical queue padding while retaining real 44px operation boxes", () => {
+    const item = style.match(/\.queue-item\s*\{([^}]*)\}/s)?.[1] || "";
+    const handle = style.match(/\.queue-handle\s*\{([^}]*)\}/s)?.[1] || "";
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(item).toMatch(/min-height:\s*44px/);
+    expect(item).toMatch(/padding:\s*0(?:px)?\s+8px/);
+    expect(handle).toMatch(/height:\s*44px/);
+    expect(style).toMatch(/\.queue-actions button, \.queue-cancel-button\s*\{[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.queue-item\s*\{[^}]*padding:\s*0(?:px)?\s+7px/s);
   });
 
   it("uses the compact menu type scale for thread context actions", () => {
