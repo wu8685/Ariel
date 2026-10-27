@@ -125,8 +125,8 @@
 | 0120 | [排队消息完整列表与内部滚动](0120-scrollable-full-queue.md) | Implemented（Web 318／Chromium 98；物理 Safari 待验） | 完整渲染全部排队项，超出约四行后内部滚动，暂停短屏不裁切 |
 | 0121 | [原生状态编码膨胀与重连误报](0121-native-state-encoding-reconnect.md) | Implemented（Web 318／Chromium 99／实际 owner 只读已验） | 避免 JSON 转义膨胀，补齐大帧 lazy 过滤，保留容量分类与原位重连 |
 
-| 0122 | [多文件 Tab 与全屏／最小化阅读](0122-minimizable-file-viewer.md) | Implemented（基础体验 v0.12.1；后续文件菜单／引用栏未部署） | 无固定 Tab 上限、来源绑定、单正文挂载与共享有界 LRU；模式收进菜单、引用栏按需显示 |
-| 0123 | [刷新恢复文件阅读现场](0123-file-reading-refresh-restore.md) | Implemented（Web 349／Chromium 125；未部署） | 当前标签页仅保存有界元信息；核验认证／设备／版本后按需恢复 Tab、模式、位置与最小化 |
+| 0122 | [多文件 Tab 与全屏／最小化阅读](0122-minimizable-file-viewer.md) | Implemented（基础体验 v0.12.1；文件菜单／引用栏纳入 v0.12.2） | 无固定 Tab 上限、来源绑定、单正文挂载与共享有界 LRU；模式收进菜单、引用栏按需显示 |
+| 0123 | [刷新恢复文件阅读现场](0123-file-reading-refresh-restore.md) | Implemented（Web 349／Chromium 125；纳入 v0.12.2） | 当前标签页仅保存有界元信息；核验认证／设备／版本后按需恢复 Tab、模式、位置与最小化 |
 
 ## 设计基线
 
