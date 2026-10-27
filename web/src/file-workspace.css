@@ -99,6 +99,15 @@
   min-width: 0;
   overflow: hidden;
 }
+.file-session-warning {
+  flex: none;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--color-warning, #e2aa75);
+  background: var(--color-panel);
+  overflow-wrap: anywhere;
+}
 .file-workspace .file-viewer-backdrop.embedded {
   position: static;
   inset: auto;

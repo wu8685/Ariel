@@ -124,6 +124,23 @@ it("keeps 150 logical file tabs without retaining every body or subscribing", as
   ).toBe(true);
 });
 
+it("does not invalidate a fresh restore/read with a historical change query that began before it", async()=>{
+  const model=new FileWorkspaceModel(), fence=model.captureResources();
+  const id=model.open(target("a.md"));await model.load(id,request);
+  model.invalidate("mac","t","a.md",fence);
+  expect(model.view(id)?.file?.content).toBe("# a.md");
+  const old=model.captureResources();model.invalidate("mac","t","a.md",old);
+  expect(model.view(id)?.file).toBeUndefined();await model.load(id,request);
+  model.invalidate("mac","t","a.md",old);expect(model.view(id)?.file?.content).toBe("# a.md");
+});
+
+it("does not invalidate current-workspace content with its own already completed source change",async()=>{
+  const model=new FileWorkspaceModel();
+  const id=model.open({...target("a.md"),source:"turn_change",turnId:"turn",itemId:"change"});await model.load(id,request);
+  model.invalidate("mac","t","a.md",model.captureResources(),{turnId:"turn",itemId:"change"});
+  expect(model.view(id)?.file?.content).toBe("# a.md");
+});
+
 it("restores per-tab reading mode, scroll and selected offsets after switch or collapse", async () => {
   const model = new FileWorkspaceModel();
   const a = model.open(target("a.md"));

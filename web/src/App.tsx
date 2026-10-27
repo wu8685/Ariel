@@ -30,6 +30,7 @@ import {StreamFence} from "./stream-fence";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
 import { FileContentCache, FileQuoteChips, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileViewMode } from "./file-context";
 import { FileWorkspace, FileWorkspaceModel, useFileWorkspace } from "./file-workspace";
+import { FileWorkspaceSession } from "./file-workspace-session";
 import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
@@ -337,6 +338,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
 	const fileWorkspace=useRef(new FileWorkspaceModel()).current;
 	useFileWorkspace(fileWorkspace);
+	const fileWorkspaceSession=useMemo(()=>new FileWorkspaceSession(fileWorkspace,()=>window.sessionStorage),[fileWorkspace]);
+	const [filePersistenceWarning,setFilePersistenceWarning]=useState("");
 	const [showWorkspaceBrowser,setShowWorkspaceBrowser]=useState(false);
 	const workspaceDirectoryCache=useRef(new WorkspaceDirectoryCache());
 	const fileChangeRequests = useRef(new Set<string>());
@@ -502,16 +505,22 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (activeComposerIdentity.current) composerDrafts.current.set(activeComposerIdentity.current, next);
   }, [draft, screenshots, fileQuotes, editingQueueId, messageEdit]);
 
+	useEffect(()=>fileWorkspaceSession.start(setFilePersistenceWarning),[fileWorkspaceSession]);
 	useEffect(() => {
-		const epoch = deviceId ? `${deviceId}\u0000${device?.agentEpoch || ""}` : "";
+		// Unknown epoch during startup/reconnect is not evidence of an identity change.
+		if(!deviceId||!device?.agentEpoch)return;
+		const epoch = `${deviceId}\u0000${device.agentEpoch}`;
 		if (fileContentCacheEpoch.current && fileContentCacheEpoch.current !== epoch) {
 			fileContentCache.current.clear();
 			workspaceDirectoryCache.current.clear();
-			fileWorkspace.clear();
+			fileWorkspaceSession.clear();
 			setShowWorkspaceBrowser(false);
 		}
 		fileContentCacheEpoch.current = epoch;
 	}, [device?.agentEpoch, deviceId]);
+	useEffect(()=>{
+		fileWorkspaceSession.restoreWhenReady(status==="ready",deviceId,devices,webFileContextEnabled());
+	},[status,deviceId,devices,fileWorkspaceSession]);
 
 	useEffect(() => {
 		if (!fileContextEnabled || !view || !deviceId) return;
@@ -524,6 +533,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		const requestKey = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${pending.map(turn => turn.turnId).join(",")}`;
 		fileChangeRequests.current.add(requestKey);
 		for (const turn of pending) fileChangeRequests.current.add(`${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turn.turnId}`);
+		const fileResourceFence=fileWorkspace.captureResources();
 		void client.request("file.context.changes", deviceId, { threadId:view.threadId, turnIds:pending.map(turn=>turn.turnId) }).then(response => {
 			if (selection.current.deviceId !== deviceId || selection.current.threadId !== view.threadId) return;
 			if (response.outcome !== "accepted" || !Array.isArray(response.data?.turns)) {
@@ -541,7 +551,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 					const identity=`${deviceId}\u0000${device?.agentEpoch||""}\u0000${view.threadId}\u0000`;
 					const parts=change.path.split("/");parts.pop();workspaceDirectoryCache.current.delete(`${identity}${parts.join("/")}`);
 					fileContentCache.current.delete(`${identity}file\u0000${change.path}`);
-					fileWorkspace.invalidate(deviceId,view.threadId,change.path);
+					fileWorkspace.invalidate(deviceId,view.threadId,change.path,fileResourceFence,{turnId:value.turnId,itemId:change.itemId});
 				}
 			}
 			setFileChanges(current=>({...current,...next}));
@@ -989,7 +999,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
-    fileWorkspace.clear(); setView(null); setThreadId(""); setLocalThreadDraft(null); clearAllComposerDrafts(); resetHistory();
+    fileWorkspaceSession.clear(); setView(null); setThreadId(""); setLocalThreadDraft(null); clearAllComposerDrafts(); resetHistory();
     fileContentCache.current.clear(); workspaceDirectoryCache.current.clear(); fileContentCacheEpoch.current = ""; setShowWorkspaceBrowser(false);
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
@@ -1120,6 +1130,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (generation !== deviceListGeneration.current) return [];
     if (response.outcome !== "accepted") { setNotice(errorText(response)); return []; }
     const found = (response.data?.devices as Device[] | undefined) || [];
+    const restoredDevice = fileWorkspaceSession.acceptDevices(found,webFileContextEnabled());
     setRelayAssetVersion(response.data?.documentAssetsVersion===1?1:0);
     const foundIDs = new Set(found.map(candidate => candidate.deviceId));
     for (const previous of devicesRef.current) {
@@ -1141,7 +1152,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const next = keepOfflineDevice(found, devicesRef.current, selection.current.deviceId);
     devicesRef.current = next;
     setDevices(next);
-    setDeviceId(current => current || found[0]?.deviceId || "");
+    setDeviceId(current => current || restoredDevice || found[0]?.deviceId || "");
     return found;
   }
 
@@ -2822,7 +2833,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
         <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <CircleButton className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></CircleButton>}{webAuthMode === "pin" ? <CircleButton className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></CircleButton> : <CircleButton className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></CircleButton>}<CircleButton className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></CircleButton><CircleButton className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></CircleButton><CircleButton className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></CircleButton></div></div>
-        <DevicePicker devices={devices} value={deviceId} disabled={status !== "ready"} visible={showList && !threadMenu} onOpen={()=>setThreadMenu(null)} onChange={setDeviceId}/>
+        <DevicePicker devices={devices} value={deviceId} disabled={status !== "ready"} visible={showList && !threadMenu} onOpen={()=>setThreadMenu(null)} onChange={id=>{if(id!==deviceId)fileWorkspaceSession.clear();setDeviceId(id)}}/>
         <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <CircleButton className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></CircleButton>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
         <div className="thread-list" onScroll={cancelThreadLongPress}>{pinnedThreads.length > 0 && <section className="pinned-group" aria-label="置顶会话"><header className="pinned-heading"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7" /></svg><span>置顶</span><span className="project-count" aria-hidden="true">{pinnedThreads.length}</span></header><div className="pinned-threads">{pinnedThreads.map(renderThreadRow)}</div></section>}{threadGroups.map((group, index) => {
@@ -2911,7 +2922,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             </div></div>
             </div></div></div>
       </main>
-      <FileWorkspace model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} onReturnFocus={()=>{if(historyChromeCollapsed)transcriptRef.current?.focus({preventScroll:true});else composerInputRef.current?.focus({preventScroll:true})}} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quote=>{if(quote.threadId!==view?.threadId)return;if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}setFileQuotes(current=>[...current,quote]);fileWorkspace.collapse();window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>
+      <FileWorkspace model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} canLoad={status==="ready"&&fileContextEnabled&&!!device?.agentOnline&&device.codexReady} persistenceWarning={filePersistenceWarning} onReturnFocus={()=>{if(historyChromeCollapsed)transcriptRef.current?.focus({preventScroll:true});else composerInputRef.current?.focus({preventScroll:true})}} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quote=>{if(quote.threadId!==view?.threadId)return;if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}setFileQuotes(current=>[...current,quote]);fileWorkspace.collapse();window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>
       </div>
     </div>
     {threadMenu && (() => {

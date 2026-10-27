@@ -60,7 +60,11 @@ for(const width of [320,390,1280]){
   const reading=page.getByTestId("file-reading");await reading.evaluate(el=>el.scrollTop=450);
   const position=await reading.evaluate(el=>el.scrollTop);
   await chooseFileView(page,"原版模式");await expect(page.getByTestId("file-source")).toBeVisible();
-  await chooseFileView(page,"阅读模式");expect(await reading.evaluate(el=>el.scrollTop)).toBe(position);
+  await chooseFileView(page,"阅读模式");
+  const restored=await reading.evaluate(el=>({position:el.scrollTop,max:el.scrollHeight-el.clientHeight}));
+  // Same position while valid; lazy-image layout changes may require clamping
+  // an old bottom offset, as specified. An arbitrary scroll drift still fails.
+  expect(restored.position).toBe(Math.min(position,restored.max));
   await chooseFileView(page,"查看 Diff");await expect(page.getByTestId("file-diff")).toBeVisible();
   await chooseFileView(page,"阅读模式");await expect(reading).toBeVisible();
   await reading.evaluate(el=>el.scrollTop=0);await expect(page.getByRole("img",{name:"本地图片",exact:true})).toBeVisible();
