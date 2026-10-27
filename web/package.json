@@ -12,7 +12,9 @@
     "generate:protocol": "json2ts -i ../protocol/v1.schema.json -o src/generated/protocol.d.ts"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "ajv": "8.20.0",
+    "katex": "0.18.10",
     "mermaid": "12.2.0",
     "qrcode": "1.5.4",
     "react": "19.3.0",
@@ -23,6 +25,8 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@testing-library/react": "^16.3.3",
+    "@types/katex": "0.16.8",
+    "@types/mdast": "4.0.4",
     "@types/node": "^24.19.1",
     "@types/qrcode": "1.5.6",
     "@types/react": "19.3.0",
@@ -30,7 +34,10 @@
     "@vitejs/plugin-react": "6.1.1",
     "jsdom": "^30.1.1",
     "json-schema-to-typescript": "16.0.0",
+    "mdast-util-from-markdown": "2.1.0",
+    "micromark-util-types": "2.0.3",
     "typescript": "7.0.2",
+    "unified": "11.0.5",
     "vite": "8.3.2",
     "vitest": "5.0.3"
   }

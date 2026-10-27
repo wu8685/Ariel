@@ -68,6 +68,13 @@ export class DocumentImageSession{
   constructor(private file:OpenFile,private context?:AssetContext){}
   private pump(){while(this.active<2&&this.pending.length)this.pending.shift()!()}
   private reference(entry:Entry):LoadedImage{entry.refs++;let released=false;return {...entry,release:()=>{if(!released){released=true;entry.refs--}}}}
+  isCached(source:string):boolean{return !this.disposed&&this.cache.has(source)}
+  // Only evict after the failed image has left the DOM and released its lease.
+  // A second view of the same image must never lose its live Blob URL.
+  invalidate(source:string):boolean{
+    const entry=this.cache.get(source);if(!entry||entry.refs!==0)return false;
+    this.cache.delete(source);this.bytes-=entry.bytes;URL.revokeObjectURL(entry.url);return true;
+  }
   async acquire(source:string,signal:AbortSignal):Promise<LoadedImage>{
     if(this.disposed)throw abortError();stopped(signal);
     const found=this.cache.get(source);if(found){this.cache.delete(source);this.cache.set(source,found);return this.reference(found)}
@@ -113,7 +120,10 @@ export class DocumentImageSession{
       chunks.push(part);offset+=part.length;cursor=typeof data.nextCursor==="string"?data.nextCursor:"";
       if(!cursor){
         if(offset!==total)throw new Error("图片分块不完整");const body=new Uint8Array(total);let position=0;for(const chunk of chunks){body.set(chunk,position);position+=chunk.length}
-        const actual=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",body))).map(n=>n.toString(16).padStart(2,"0")).join("");stopped(signal);
+        let hash:Uint8Array;
+        if(globalThis.crypto?.subtle)hash=new Uint8Array(await crypto.subtle.digest("SHA-256",body));
+        else{const {sha256}=await import("@noble/hashes/sha2.js");stopped(signal);hash=sha256(body)}
+        const actual=Array.from(hash).map(n=>n.toString(16).padStart(2,"0")).join("");stopped(signal);
         const dimensions=rasterInfo(body,mime);if(actual!==digest||dimensions.width!==width||dimensions.height!==height)throw new Error("图片内容校验失败");
         return {body,mime};
       }

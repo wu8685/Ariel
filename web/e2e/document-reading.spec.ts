@@ -57,10 +57,15 @@ for(const width of [320,390,1280]){
  test(`document reading fits ${width}px and preserves independent source / reading / diff state`,async({page})=>{
   await page.setViewportSize({width,height:844});await fixture(page);
   await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await chooseFileView(page,"阅读模式");
-  const reading=page.getByTestId("file-reading");await reading.evaluate(el=>el.scrollTop=450);
+  const reading=page.getByTestId("file-reading");
+  const localImage=page.getByRole("img",{name:"本地图片",exact:true});
+  // Measure a decoded layout, not the temporary lazy placeholder's height.
+  await expect.poll(()=>localImage.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
+  await reading.evaluate(el=>el.scrollTop=450);
   const position=await reading.evaluate(el=>el.scrollTop);
   await chooseFileView(page,"原版模式");await expect(page.getByTestId("file-source")).toBeVisible();
   await chooseFileView(page,"阅读模式");
+  await expect.poll(()=>localImage.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
   const restored=await reading.evaluate(el=>({position:el.scrollTop,max:el.scrollHeight-el.clientHeight}));
   // Same position while valid; lazy-image layout changes may require clamping
   // an old bottom offset, as specified. An arbitrary scroll drift still fails.

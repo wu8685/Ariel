@@ -112,6 +112,11 @@ function sourceOffset(root: HTMLElement, node: Node, offset: number): number | n
 export function selectionFromDOM(content:string, root:HTMLElement, selection:Selection | null):ReturnType<typeof selectionLines>{
   if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null;
   const range = selection.getRangeAt(0);
+  // Generated math / images have no exact rendered-text -> source mapping.
+  // Reject crossing them too, not just selections whose endpoints are inside.
+  for (const node of root.querySelectorAll("[data-source-unmapped]")) {
+    if (range.intersectsNode(node)) return null;
+  }
   const start = sourceOffset(root, range.startContainer, range.startOffset);
   const end = sourceOffset(root, range.endContainer, range.endOffset);
   if (start === null || end === null) return null;
@@ -187,6 +192,30 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="è¿
   },[file?.sha256,view.threadId,view.turnId,view.change.itemId,view.change.path]);
   useEffect(()=>{if(embedded)return;const key=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose()};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key)},[onClose,embedded]);
   useLayoutEffect(()=>{if(sourceRoot.current&&(!reading||session))sourceRoot.current.scrollTop=positions.current[reading?"reading":"source"];if(diffRoot.current)diffRoot.current.scrollTop=positions.current.diff},[view.mode,reading,file?.sha256,session]);
+  useLayoutEffect(()=>{
+    const root=sourceRoot.current;
+    if(view.mode!=="source"||!reading||!session||!root)return;
+    const target=positions.current.reading;
+    let active=true,queued=false;
+    const cancel=()=>{active=false;observer.disconnect()};
+    const restore=async()=>{
+      if(!active||queued||root.querySelector('[data-math-pending="true"]'))return;
+      queued=true;
+      // Flush formula styles before asking for fonts.ready. Do not clamp the
+      // saved anchor against the much shorter, temporary TeX placeholders.
+      root.getBoundingClientRect();
+      await root.ownerDocument.fonts?.ready;
+      queued=false;
+      if(!active||root.querySelector('[data-math-pending="true"]'))return;
+      root.scrollTop=target;positions.current.reading=root.scrollTop;changedReader();cancel();
+    };
+    const observer=new MutationObserver(()=>{void restore()});
+    observer.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:["data-math-pending"]});
+    const events=["wheel","touchstart","pointerdown","keydown"];
+    for(const event of events)root.addEventListener(event,cancel,{passive:true});
+    void restore();
+    return()=>{cancel();for(const event of events)root.removeEventListener(event,cancel)};
+  },[view.mode,reading,file?.sha256,session]);
   useLayoutEffect(()=>{const element=view.mode==="diff"?diffRoot.current:sourceRoot.current,key=view.mode==="diff"?"diff":reading?"reading":"source";return()=>{if(element&&element.scrollHeight>element.clientHeight){positions.current[key]=element.scrollTop;changedReader()}}},[view.mode,reading]);
 
   function quote(value:{startLine:number;endLine:number;text:string}){
