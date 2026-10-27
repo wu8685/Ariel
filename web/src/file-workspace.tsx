@@ -434,9 +434,10 @@ export function FileWorkspace({
     if (active && !model.collapsed) void model.load(active.id, request);
   }, [revision, request]);
   useEffect(() => {
-    tabRefs.current
-      .get(model.activeId)
-      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (model.collapsed) return;
+    const tab = tabRefs.current.get(model.activeId);
+    tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    tab?.focus({ preventScroll: true });
   }, [model.activeId, model.collapsed]);
   useEffect(() => {
     if (model.collapsed) setAll(false);

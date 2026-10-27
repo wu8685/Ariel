@@ -26,6 +26,7 @@ const thread: Thread = {
 async function setup(page: Page, many = false) {
   const methods: string[] = [];
   const reads: string[] = [];
+  let publish = (_text: string) => { throw new Error("fixture socket not ready"); };
   const current = many
     ? {
         ...thread,
@@ -58,6 +59,15 @@ async function setup(page: Page, many = false) {
   );
   await page.routeWebSocket("**/ws", (socket) =>
     socket.onMessage((raw) => {
+      publish = (text) => socket.send(JSON.stringify({
+        type: "event", v: 1, event: "thread.cache.update", deviceId: "mac",
+        threadId: "tabs", watchId: "w", cacheStreamId: "s", seq: 2,
+        agentEpoch: "e", agentOnline: true, freshness: "fresh",
+        capturedAt: "2026-10-27T00:00:01Z",
+        thread: { ...current, turns: [...current.turns, {
+          turnId: "next", status: "completed", items: [{ itemId: "next-answer", role: "assistant", text }],
+        }] },
+      }));
       const m = JSON.parse(String(raw));
       if (m.type === "hello") {
         socket.send(
@@ -178,28 +188,36 @@ async function setup(page: Page, many = false) {
   await page.goto("/");
   await page.getByRole("button", { name: "展开项目 tabs，/work/tabs" }).click();
   await page.getByText(thread.title).click();
-  return { methods, reads };
+  return { methods, reads, publish: (text: string) => publish(text) };
 }
 
 for (const width of [320, 390, 1280])
-  test(`file tabs coexist with the composer and restore reading at ${width}px`, async ({
+  test(`file tabs fill the content area exclusively and restore the conversation at ${width}px`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 844 });
     const { methods, reads } = await setup(page);
-    const composer = page.getByRole("textbox", { name: "发送消息" });
+    const composer = page.getByRole("textbox", { name: "发送消息", includeHidden: true });
     await composer.fill("保留主会话草稿");
     await page.getByRole("button", { name: "查看原文：a.md" }).click();
     await expect(page.getByRole("tablist", { name: "文件标签" })).toBeVisible();
     await expect(page.getByTestId("file-source")).toContainText("# a.md");
+    await expect(composer).toBeHidden();
+    await expect(page.locator(".conversation")).toHaveAttribute("inert", "");
+    await expect(page.getByRole("tab", { name: "a.md", exact: true })).toBeFocused();
     const panel = page.getByRole("region", { name: "文件工作区" });
     const p = await panel.boundingBox();
-    const c = await composer.boundingBox();
+    expect(p!.x).toBe(0);
+    expect(p!.y).toBe(0);
+    expect(p!.width).toBe(width);
+    expect(p!.height).toBe(844);
     expect(p!.x + p!.width).toBeLessThanOrEqual(width + 1);
-    if (width > 800) expect(p!.x).toBeGreaterThanOrEqual(c!.x + c!.width);
-    else expect(p!.y + p!.height).toBeLessThanOrEqual(c!.y);
-    await composer.fill("文件仍打开时可以编辑");
     await page.getByRole("button", { name: "收起文件工作区" }).click();
+    await expect(panel).toHaveCount(0);
+    await expect(composer).toBeVisible();
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue("保留主会话草稿");
+    await composer.fill("最小化后继续编辑");
     await page.getByRole("button", { name: "打开文档：第二个文件" }).click();
     await expect(
       page.getByRole("tab", { name: "a.md", exact: true }),
@@ -223,7 +241,7 @@ for (const width of [320, 390, 1280])
     await page.getByRole("button", { name: /展开文件工作区/ }).click();
     await expect.poll(() => reading.evaluate((el) => el.scrollTop)).toBe(170);
     expect(reads).toEqual(["a.md", "b.md"]);
-    await expect(composer).toHaveValue("文件仍打开时可以编辑");
+    await expect(composer).toHaveValue("最小化后继续编辑");
     expect(
       methods.filter((m) =>
         ["thread.subscribe", "thread.bootstrap", "turn.start"].includes(m),
@@ -281,10 +299,12 @@ test("150 file tabs keep one body and one socket, searchable without losing meta
   ).toBeFocused();
 });
 
-test("file selection survives switching and shrinking the viewport keeps the composer usable", async ({
+test("file selection survives switching and short screens keep the quote footer usable", async ({
   page,
 }) => {
   const { reads } = await setup(page);
+  const composer = page.getByRole("textbox", { name: "发送消息", includeHidden: true });
+  await composer.fill("短屏草稿");
   await page.getByRole("button", { name: "查看原文：a.md" }).click();
   await page.getByTestId("file-source").evaluate((root) => {
     const node = root.querySelectorAll("code")[2].firstChild!;
@@ -301,13 +321,57 @@ test("file selection survives switching and shrinking the viewport keeps the com
   await page.getByRole("tab", { name: "a.md", exact: true }).click();
   await expect(page.getByRole("button", { name: "引用到会话" })).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 420 });
-  const composer = page.getByRole("textbox", { name: "发送消息" });
-  await composer.fill("短屏草稿");
-  const box = await composer.boundingBox();
+  await expect(composer).toBeHidden();
+  const quote = page.getByRole("button", { name: "引用到会话" });
+  const box = await quote.boundingBox();
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(420);
   await page.getByRole("button", { name: "引用到会话" }).click();
   await expect(page.getByText("a.md · L3")).toBeVisible();
   await expect(composer).toHaveValue("短屏草稿");
   expect(reads).toEqual(["a.md", "b.md"]);
+});
+
+test("minimizing preserves transcript position and receives background updates without a new watch", async ({ page }) => {
+  const { publish, methods } = await setup(page, true);
+  const transcript = page.locator(".transcript");
+  const composer = page.getByRole("textbox", { name: "发送消息", includeHidden: true });
+  await composer.fill("后台同步不丢草稿");
+  await transcript.hover();
+  await page.mouse.wheel(0, -500);
+  await expect.poll(() => transcript.evaluate(el => el.scrollTop < el.scrollHeight - el.clientHeight - 100)).toBe(true);
+  await expect.poll(() => page.locator(".composer-wrap").evaluate(el => el.getBoundingClientRect().height)).toBe(0);
+  const position = await transcript.evaluate(el => el.scrollTop);
+  // Dispatch without scrolling the transcript to a particular file reference.
+  await page.getByRole("button", { name: "打开文档：文件 0", exact: true }).evaluate(el => (el as HTMLButtonElement).click());
+  await expect(composer).toBeHidden();
+  publish("隐藏期间收到的最新回复");
+  await expect(page.locator(".conversation")).toContainText("隐藏期间收到的最新回复");
+  await page.getByRole("button", { name: "收起文件工作区" }).click();
+  await expect(transcript).toBeFocused();
+  await expect(composer).toHaveValue("后台同步不丢草稿");
+  await expect.poll(() => transcript.evaluate(el => el.scrollTop)).toBe(position);
+  expect(methods.filter(m => m === "thread.cache.watch")).toHaveLength(1);
+  expect(methods.filter(m => ["thread.subscribe", "thread.bootstrap", "turn.start", "thread.history"].includes(m))).toEqual([]);
+});
+
+test("Escape and closing the last tab restore the conversation and isolate keyboard focus", async ({ page }) => {
+  await setup(page);
+  const composer = page.getByRole("textbox", { name: "发送消息", includeHidden: true });
+  await composer.fill("关闭文件不丢草稿");
+  await page.getByRole("button", { name: "查看原文：a.md" }).click();
+  const tab = page.getByRole("tab", { name: "a.md", exact: true });
+  await expect(tab).toBeFocused();
+  await composer.evaluate(el => (el as HTMLTextAreaElement).focus());
+  await expect(composer).not.toBeFocused();
+  await tab.press("Escape");
+  await expect(composer).toBeVisible();
+  await expect(composer).toBeFocused();
+  await page.getByRole("button", { name: /展开文件工作区/ }).click();
+  await expect(tab).toBeFocused();
+  await page.getByRole("button", { name: "关闭标签 a.md" }).click();
+  await expect(page.getByRole("region", { name: "文件工作区" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /展开文件工作区/ })).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue("关闭文件不丢草稿");
 });
