@@ -165,6 +165,14 @@ func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-f.c.Done():
+			// consume records a reducer failure before closing IPC. Keep that
+			// classified cause instead of racing it into a generic ErrClosed.
+			f.stateMu.Lock()
+			stateErr := f.err
+			f.stateMu.Unlock()
+			if stateErr != nil {
+				return nil, stateErr
+			}
 			return nil, f.c.Err()
 		}
 	}

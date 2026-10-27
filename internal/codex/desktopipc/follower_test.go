@@ -1,12 +1,100 @@
 package desktopipc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestFollowerKeepsLiteralHTMLSnapshotAndPatchesWithinNativeLimit(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	const limit = 4096
+	client := NewClient(local, Options{ThreadID: "thread", MaxFrameBytes: limit, RequestTimeout: time.Second})
+	defer client.Close()
+	patchReady := make(chan struct{})
+	defer close(patchReady)
+	done := make(chan error, 1)
+	sendEvent := func(change any) error {
+		var body bytes.Buffer
+		encoder := json.NewEncoder(&body)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": map[string]any{"conversationId": "thread", "hostId": "local", "change": change}}); err != nil {
+			return err
+		}
+		return WriteFrame(peer, body.Bytes(), limit)
+	}
+	go func() {
+		readMessage(t, peer)
+		request := readMessage(t, peer)
+		sendReply(t, peer, stringField(request, "requestId"), "success", map[string]any{})
+		state := map[string]any{"cwd": "/fixture", "requests": []any{}, "turns": []any{map[string]any{"turnId": "turn", "status": "completed", "items": []any{}}}, "text": strings.Repeat("<>&", 350)}
+		if err := sendEvent(map[string]any{"type": "snapshot", "revision": 1, "conversationState": state}); err != nil {
+			done <- err
+			return
+		}
+		<-patchReady
+		done <- sendEvent(map[string]any{"type": "patches", "baseRevision": 1, "revision": 2, "patches": []any{map[string]any{"op": "replace", "path": []any{"text"}, "value": strings.Repeat("<>&", 400)}}})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	f, err := Follow(ctx, client, "thread", "owner", "/fixture")
+	if err != nil {
+		t.Fatalf("literal JSON failed native follower attachment: %v", err)
+	}
+	defer f.Close()
+	patchReady <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for {
+		state, err := f.Current()
+		if err != nil {
+			t.Fatalf("literal JSON patch invalidated follower: %v", err)
+		}
+		var value struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(state, &value) == nil && value.Text == strings.Repeat("<>&", 400) {
+			if len(state) > limit {
+				t.Fatal("resident owner state exceeded limit")
+			}
+			break
+		}
+		select {
+		case <-f.Updates():
+		case <-ctx.Done():
+			t.Fatal("native patch never arrived")
+		}
+	}
+}
+
+func TestFollowerPreservesReducerOverflowCauseWhenIPCCloses(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	client := NewClient(local, Options{ThreadID: "thread", MaxFrameBytes: 2048, RequestTimeout: time.Second})
+	defer client.Close()
+	go func() {
+		readMessage(t, peer)
+		request := readMessage(t, peer)
+		sendReply(t, peer, stringField(request, "requestId"), "success", map[string]any{})
+		// U+2028 remains escaped by the standard JSON encoder even when HTML
+		// escaping is off. Genuine normalized overflow must retain its cause.
+		body := `{"type":"broadcast","method":"thread-stream-state-changed","version":11,"sourceClientId":"owner","params":{"conversationId":"thread","hostId":"local","change":{"type":"snapshot","revision":1,"conversationState":{"cwd":"/fixture","turns":[{"turnId":"turn","items":[]}],"text":"` + strings.Repeat("\u2028", 400) + `"}}}}`
+		_ = WriteFrame(peer, json.RawMessage(body), 2048)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := Follow(ctx, client, "thread", "owner", "/fixture")
+	if !errors.Is(err, ErrFrameTooLarge) || !errors.Is(err, ErrResyncRequired) {
+		t.Fatalf("native overflow cause was hidden by IPC close: %v", err)
+	}
+}
 
 func TestFollowerReceivesSnapshotAndRejectsBusyStart(t *testing.T) {
 	local, peer := net.Pipe()

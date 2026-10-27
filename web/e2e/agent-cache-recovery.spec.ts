@@ -62,6 +62,7 @@ test("real Agent keeps a terminal snapshot after late refresh failure and recove
   await expect(page.getByText("原生会话仍在处理")).toBeVisible();
   await action("disconnect");
   await expect(page.locator(".readonly-banner")).toBeVisible();
+  await expect(page.getByText("实时连接暂时失效，请重新连接；历史内容已保留。")).toBeVisible();
   await expect(page.locator(".send-button")).toBeDisabled();
   await action("complete");
   await page.getByRole("button", { name: "重新连接" }).click();
@@ -71,6 +72,29 @@ test("real Agent keeps a terminal snapshot after late refresh failure and recove
   await expect(page.getByLabel("发送消息")).toHaveValue("恢复期间必须保留的草稿");
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
   expect((await (await request.get(`${origin}/fixture/state`)).json()).attaches).toBe(2);
+});
+
+test("native HTML characters do not force a reconnect through the real Agent and Relay", async ({ page, request }) => {
+  const action = async (name: string) => expect((await request.post(`${origin}/fixture/action?action=${name}`)).ok()).toBe(true);
+  await action("continue");
+  await action("complete");
+  await page.goto(origin);
+  await page.getByLabel("6 位连接码").fill("012345");
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await page.getByRole("button", { name: "展开项目 native-cache-recovery，/tmp/native-cache-recovery" }).click();
+  await page.getByText("真实 Agent 恢复验收").click();
+  await expect(page.getByText("原生会话最终回复自动到达")).toBeVisible();
+  const before = await (await request.get(`${origin}/fixture/state`)).json();
+  await page.getByLabel("发送消息").fill("编码修复不能丢失的草稿");
+  await action("special-json");
+  const reply = page.locator(".message-text").filter({ hasText: "HTML 字符状态正常" });
+  await expect(reply).toBeVisible();
+  await expect(reply).toContainText("<>&");
+  await expect(page.locator(".readonly-banner")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "重新连接" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("发送消息")).toHaveValue("编码修复不能丢失的草稿");
+  expect((await (await request.get(`${origin}/fixture/state`)).json()).attaches).toBe(before.attaches);
 });
 
 test("production streaming cadence coalesces text for 5s but completes immediately", async ({ page, request }) => {

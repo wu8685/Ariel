@@ -47,7 +47,7 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 		}
 	}()
 	if len(body) > r.limit+64*1024 {
-		return fmt.Errorf("%w: projected change envelope exceeds limit", ErrResyncRequired)
+		return fmt.Errorf("%w: projected change envelope exceeds limit: %w", ErrResyncRequired, ErrFrameTooLarge)
 	}
 	var change struct {
 		Type         string          `json:"type"`
@@ -69,7 +69,7 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 			return fmt.Errorf("%w: projected snapshot is not an object", ErrResyncRequired)
 		}
 		if len(change.State) > r.limit {
-			return fmt.Errorf("%w: projected snapshot bytes %d exceed %d", ErrResyncRequired, len(change.State), r.limit)
+			return fmt.Errorf("%w: projected snapshot bytes %d exceed %d: %w", ErrResyncRequired, len(change.State), r.limit, ErrFrameTooLarge)
 		}
 		if r.state != nil && *change.Revision < r.revision {
 			return fmt.Errorf("%w: snapshot revision regressed", ErrResyncRequired)
@@ -123,12 +123,18 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 	if _, ok := state.(map[string]any); !ok {
 		return fmt.Errorf("%w: projected snapshot root is not an object", ErrResyncRequired)
 	}
-	encoded, err := json.Marshal(state)
-	if err != nil {
+	// This state travels as JSON, never as an inline HTML script. Escaping
+	// <, > and & can multiply code/tool text and reject a valid native frame
+	// solely because normalization made it larger than the resident limit.
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(state); err != nil {
 		return fmt.Errorf("%w: projected snapshot cannot be encoded", ErrResyncRequired)
 	}
+	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
 	if len(encoded) > r.limit {
-		return fmt.Errorf("%w: normalized snapshot bytes %d exceed %d", ErrResyncRequired, len(encoded), r.limit)
+		return fmt.Errorf("%w: normalized snapshot bytes %d exceed %d: %w", ErrResyncRequired, len(encoded), r.limit, ErrFrameTooLarge)
 	}
 	r.state = encoded
 	r.executionMetadata = projectExecutionMetadata(state.(map[string]any))

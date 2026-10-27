@@ -2,6 +2,8 @@ package desktopagent
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
@@ -21,6 +23,17 @@ func TestLargeSessionErrorsAreScopedAndClassified(t *testing.T) {
 		if got := requestErrorCode("thread.read", tc.err); got != tc.code {
 			t.Fatalf("%v classified as %s, want %s", tc.err, got, tc.code)
 		}
+	}
+}
+
+func TestNormalizedStateOverflowIsNotReportedAsAnOrderingFailure(t *testing.T) {
+	r := desktopipc.NewReducer(64)
+	err := r.Apply(json.RawMessage(`{"type":"snapshot","revision":1,"conversationState":{"text":"` + strings.Repeat("x", 80) + `"}}`))
+	if err == nil {
+		t.Fatal("fixture must exceed the resident state limit")
+	}
+	if got := requestErrorCode("thread.subscribe", err); got != "HISTORY_TOO_LARGE" {
+		t.Fatalf("state overflow was disguised as %s", got)
 	}
 }
 

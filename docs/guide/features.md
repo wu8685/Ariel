@@ -49,6 +49,8 @@ https://github.com/user-attachments/assets/0f0abfb1-7ee0-4bbe-a6ee-a5a9d36728ee
 
 灰色重试提示表示 Codex 正在恢复网络；黄色表示需要关注，红色表示失败。协议不兼容时应刷新到匹配版本，不应反复登录或重发已经提交的操作。
 
+“实时连接暂时失效”表示尚未确认 Desktop 当前状态，不等于登录失效，也不一定是事件乱序；已有内容和草稿会保留，可原位重新连接。若明确提示原生状态超过安全上限，重复刷新不会提高容量；升级时应同时更新相关设备的 Desktop Agent，而不只更新 Relay/Web。
+
 ## 文件与文档
 
 文件功能默认关闭，需先按[文件配置指南](../operations/file-context.md)启用。

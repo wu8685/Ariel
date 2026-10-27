@@ -12,10 +12,10 @@ import (
 
 const lazyOmittedJSON = `"__ARIEL_LAZY_OMITTED__"`
 
-// ReadProjectedFrame applies the versioned compatibility projection only when
-// a native frame exceeds the normal in-memory limit. The wire frame remains
-// bounded, while omitted string/value bodies are consumed without allocating
-// memory proportional to their size.
+// ReadProjectedFrame applies the versioned compatibility projection above the
+// ordinary frame fast path, even when a large follower's resident limit would
+// fit the unfiltered payload. The wire frame remains bounded, while omitted
+// bodies are consumed without allocating memory proportional to their size.
 func ReadProjectedFrame(r io.Reader, limit, wireLimit uint32) (json.RawMessage, error) {
 	if limit == 0 || wireLimit < limit {
 		return nil, ErrInvalidLimit
@@ -28,7 +28,7 @@ func ReadProjectedFrame(r io.Reader, limit, wireLimit uint32) (json.RawMessage, 
 	if size == 0 {
 		return nil, ErrInvalidFrame
 	}
-	if size <= limit {
+	if size <= limit && size <= DefaultMaxFrameBytes {
 		return readFrameBody(r, size)
 	}
 	if size > wireLimit {
@@ -163,7 +163,7 @@ func (p *projectedParser) object(copy bool, inheritedType string) error {
 		if err := p.write(copy, colon); err != nil {
 			return err
 		}
-		if key == "type" {
+		if key == "type" && copy {
 			if err := p.whitespace(copy); err != nil {
 				return err
 			}

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,12 +14,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
+	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/desktopagent"
 	"github.com/wu8685/Ariel/internal/relay"
 )
@@ -47,6 +50,9 @@ func (o *owner) Current() (json.RawMessage, error) {
 	} else if o.history.continued {
 		text = "原生会话最终回复自动到达"
 	}
+	if o.history.specialJSON {
+		text = "HTML 字符状态正常\n\n```text\n" + strings.Repeat("<>&", 200) + "\n```"
+	}
 	items := []any{
 		map[string]any{"type": "userMessage", "id": "native-user", "content": []any{map[string]any{"type": "text", "text": "从 Codex App 继续会话"}}},
 		map[string]any{"type": "agentMessage", "id": "native-reply", "text": text},
@@ -66,11 +72,30 @@ func (o *owner) Current() (json.RawMessage, error) {
 			items = append(items, map[string]any{"id": "unclassified", "type": "error", "message": "Unclassified native error"})
 		}
 	}
-	return json.Marshal(map[string]any{
+	state := map[string]any{
 		"cwd": fixtureCWD, "threadRuntimeStatus": map[string]any{"type": runtime}, "requests": []any{},
 		"latestThreadSettings": map[string]any{"approvalPolicy": "on-request", "sandboxPolicy": map[string]any{"type": "dangerFullAccess"}},
 		"turns":                []any{map[string]any{"turnId": "native-turn", "status": status, "items": items}},
-	})
+	}
+	if !o.history.specialJSON {
+		return json.Marshal(state)
+	}
+	// Model a native transport frame that fits its limit before Reducer
+	// normalization. HTML escaping alone used to invalidate this state.
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(state); err != nil {
+		return nil, err
+	}
+	change := append([]byte(`{"type":"snapshot","revision":1,"conversationState":`), body.Bytes()...)
+	change = append(change, '}')
+	reducer := desktopipc.NewReducer(2048)
+	if err := reducer.Apply(change); err != nil {
+		return nil, err
+	}
+	projected, _, _ := reducer.Snapshot()
+	return projected, nil
 }
 
 func (o *owner) Refresh(ctx context.Context) (json.RawMessage, error) {
@@ -107,6 +132,7 @@ type history struct {
 	processing, continued                  bool
 	streamRevision, observedStreamRevision int
 	noticeStage                            int
+	specialJSON                            bool
 	current                                *owner
 	blocked                                chan struct{}
 	attaches, refreshes, finished          atomic.Int32
@@ -139,12 +165,15 @@ func (h *history) action(w http.ResponseWriter, r *http.Request) {
 		h.blocked = make(chan struct{})
 	case "continue":
 		h.processing, h.continued = true, true
+		h.specialJSON = false
 		h.noticeStage = 0
 		h.streamRevision, h.observedStreamRevision = 0, 0
 	case "stream":
 		h.streamRevision++
 	case "complete":
 		h.processing = false
+	case "special-json":
+		h.processing, h.continued, h.specialJSON = false, true, true
 	case "retry", "retry-again", "retry-resume", "retry-fail", "retry-unknown":
 		h.noticeStage = map[string]int{"retry": 1, "retry-again": 2, "retry-resume": 3, "retry-fail": 4, "retry-unknown": 5}[r.URL.Query().Get("action")]
 		h.processing = h.noticeStage != 4

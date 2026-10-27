@@ -87,6 +87,35 @@ func TestReadProjectedFrameStreamsOversizedToolAndImagePayloads(t *testing.T) {
 	}
 }
 
+func TestReadProjectedFrameProjectsLargeKnownPayloadBeforeResidentLimit(t *testing.T) {
+	const payloadBytes = 9 << 20
+	for _, kind := range []string{"tool", "image", "ordinary"} {
+		t.Run(kind, func(t *testing.T) {
+			payload := strings.Repeat("x", payloadBytes)
+			var body string
+			switch kind {
+			case "tool":
+				body = `{"type":"broadcast","params":{"items":[{"id":"tool","type":"mcpToolCall","result":{"type":42,"content":"` + payload + `"}}],"cwd":"/fixture","text":"keep me"}}`
+			case "image":
+				body = `{"type":"broadcast","params":{"items":[{"type":"image","url":"data:image/png;base64,` + payload + `"}],"text":"keep me"}}`
+			default:
+				body = `{"type":"broadcast","params":{"unknown":"` + payload + `","text":"keep me"}}`
+			}
+			projected, err := ReadProjectedFrame(bytes.NewReader(wireFrame(body)), 64<<20, 256<<20)
+			if err != nil {
+				t.Fatalf("valid compatible frame rejected: %v", err)
+			}
+			if kind == "ordinary" {
+				if !bytes.Equal(projected, []byte(body)) {
+					t.Fatal("unknown content was silently removed")
+				}
+			} else if len(projected) > 4096 || !bytes.Contains(projected, []byte(lazyOmittedJSON)) || !bytes.Contains(projected, []byte("keep me")) {
+				t.Fatalf("known lazy payload bypassed projection below resident cap: bytes=%d", len(projected))
+			}
+		})
+	}
+}
+
 func TestReadProjectedFrameFailsClosedForUnknownOversizedPayload(t *testing.T) {
 	body := `{"type":"broadcast","params":{"conversationId":"thread","unknown":"` + strings.Repeat("x", 32<<10) + `"}}`
 	if _, err := ReadProjectedFrame(bytes.NewReader(wireFrame(body)), 8<<10, 64<<10); !errors.Is(err, ErrFrameTooLarge) {
