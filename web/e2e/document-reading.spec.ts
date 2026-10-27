@@ -88,7 +88,7 @@ test("reopening a cached document recreates its image session without rereading 
   const image=page.getByRole("img",{name:"本地图片",exact:true});
   await expect(image).toBeVisible();
   await expect.poll(()=>image.evaluate((element:HTMLImageElement)=>element.naturalWidth)).toBe(1);
-  await page.getByRole("button",{name:"返回会话",exact:true}).click();
+  await page.getByRole("button",{name:"收起文件工作区",exact:true}).click();
  }
  expect(requests.filter(r=>r.method==="file.context.read")).toHaveLength(1);
  expect(requests.filter(r=>r.method==="file.context.asset.read")).toHaveLength(2);

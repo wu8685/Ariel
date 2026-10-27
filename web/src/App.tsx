@@ -28,12 +28,11 @@ import { DevicePicker } from "./device-picker";
 import { editableMessage, parseEditTarget, historyRewritten, type MessageEdit } from "./message-edit";
 import {StreamFence} from "./stream-fence";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
-import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileView, type FileViewMode, type OpenFile } from "./file-context";
+import { FileContentCache, FileQuoteChips, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileViewMode } from "./file-context";
+import { FileWorkspace, FileWorkspaceModel, useFileWorkspace } from "./file-workspace";
 import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
-import { resolveDocumentPath } from "./document-path";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
-
 export { InteractionCard } from "./interaction-card";
 
 type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; chillingWorkspaceBrowser?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
@@ -336,10 +335,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const historyGeneration=useRef(0);
   const streamFence=useRef(new StreamFence());
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
-	const [openFile, setOpenFile] = useState<FileView | null>(null);
+	const fileWorkspace=useRef(new FileWorkspaceModel()).current;
+	useFileWorkspace(fileWorkspace);
 	const [showWorkspaceBrowser,setShowWorkspaceBrowser]=useState(false);
 	const workspaceDirectoryCache=useRef(new WorkspaceDirectoryCache());
-	const openFileGeneration = useRef(0);
 	const fileChangeRequests = useRef(new Set<string>());
 	const fileContentCache = useRef(new FileContentCache());
 	const fileContentCacheEpoch = useRef("");
@@ -508,8 +507,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		if (fileContentCacheEpoch.current && fileContentCacheEpoch.current !== epoch) {
 			fileContentCache.current.clear();
 			workspaceDirectoryCache.current.clear();
-			openFileGeneration.current++;
-			setOpenFile(null);
+			fileWorkspace.clear();
 			setShowWorkspaceBrowser(false);
 		}
 		fileContentCacheEpoch.current = epoch;
@@ -543,68 +541,23 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 					const identity=`${deviceId}\u0000${device?.agentEpoch||""}\u0000${view.threadId}\u0000`;
 					const parts=change.path.split("/");parts.pop();workspaceDirectoryCache.current.delete(`${identity}${parts.join("/")}`);
 					fileContentCache.current.delete(`${identity}file\u0000${change.path}`);
+					fileWorkspace.invalidate(deviceId,view.threadId,change.path);
 				}
 			}
 			setFileChanges(current=>({...current,...next}));
 		});
 	}, [client, device?.agentEpoch, deviceId, fileChanges, fileContextEnabled, view?.threadId, displayedTurns.map(turn=>`${turn.turnId}:${turn.status}`).join("|")]);
 
-	async function openChangedFile(turnId: string, change: FileChange, mode:FileViewMode) {
-		if (!fileContextEnabled || !view || !deviceId || (mode === "source" && change.kind === "delete") || (mode === "diff" && !change.diff)) return;
-		const generation=++openFileGeneration.current;
-		const base:FileView={threadId:view.threadId,turnId,change,mode};
-		if(mode==="diff"){
-			setOpenFile(current=>current?.threadId===base.threadId&&current.turnId===base.turnId&&current.change.itemId===change.itemId&&current.change.path===change.path?{...base,file:current.file}:base);
-			return;
-		}
-		const cacheKey = `${deviceId}\u0000${device?.agentEpoch || ""}\u0000${view.threadId}\u0000${turnId}\u0000${change.itemId}\u0000${change.path}`;
-		const cached = fileContentCache.current.get(cacheKey);
-		if (cached) { setOpenFile({...base,file:cached}); return; }
-		setOpenFile(current=>current?.threadId===base.threadId&&current.turnId===base.turnId&&current.change.itemId===change.itemId&&current.change.path===change.path?{...base,file:current.file,loading:true}:{...base,loading:true});
-		const response = await client.request("file.context.read",deviceId,{threadId:view.threadId,turnId,itemId:change.itemId,path:change.path});
-		if(generation!==openFileGeneration.current)return;
-		if (response.outcome !== "accepted") { setOpenFile(null);setNotice(errorText(response)); return; }
-		const value=response.data as Partial<OpenFile> | undefined;
-		if (!value || typeof value.content!=="string" || typeof value.sha256!=="string" || typeof value.modifiedAtMs!=="number" || typeof value.lineCount!=="number" || typeof value.language!=="string" || value.version!=="current-workspace") { setOpenFile(null);setNotice("文件响应格式无法识别。"); return; }
-		const file:OpenFile={threadId:view.threadId,turnId,itemId:change.itemId,path:change.path,content:value.content,documentAssets:value.documentAssets,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace"};
-		fileContentCache.current.set(cacheKey,file);
-		setOpenFile({...base,file});
+	function openChangedFile(turnId:string,change:FileChange,mode:FileViewMode){
+		if(!fileContextEnabled||!view||!deviceId||mode==="source"&&change.kind==="delete"||mode==="diff"&&!change.diff)return;
+		fileWorkspace.open({deviceId,agentEpoch:device?.agentEpoch||"",threadId:view.threadId,turnId,itemId:change.itemId,path:change.path,kind:change.kind,source:"turn_change"},mode,change.diff?{diff:change.diff,diffTruncated:change.diffTruncated}:undefined);
 	}
-
-	async function openDocumentReference(turnId:string,itemId:string,reference:WorkspaceDocumentReference){
+	function openDocumentReference(turnId:string,itemId:string,reference:WorkspaceDocumentReference){
 		if(!view||!deviceId)return;
-		if(!fileContextEnabled||device?.capabilities.chillingMessageReferences!==true){setNotice("当前 Desktop 尚不支持打开该文档引用。");return;}
-		const generation=++openFileGeneration.current;
-		const change:FileChange={itemId,path:reference.label,kind:"update"};
-		const base:FileView={threadId:view.threadId,turnId,change,mode:"source",loading:true,focusStartLine:reference.startLine,focusEndLine:reference.endLine};
-		const cacheKey=`${deviceId}\u0000${device?.agentEpoch||""}\u0000${view.threadId}\u0000${turnId}\u0000${itemId}\u0000ref\u0000${reference.kind}\u0000${reference.rawReference}`;
-		const cached=fileContentCache.current.get(cacheKey);
-		if(cached){setOpenFile({...base,change:{...change,path:cached.path},file:cached,loading:false});return;}
-		setOpenFile(base);
-		const response=await client.request("file.context.reference.read",deviceId,{threadId:view.threadId,turnId,itemId,referenceKind:reference.kind,rawReference:reference.rawReference,...(reference.startLine?{startLine:reference.startLine,endLine:reference.endLine||reference.startLine}:{})});
-		if(generation!==openFileGeneration.current)return;
-		if(response.outcome!=="accepted"){setOpenFile(null);setNotice(errorText(response));return;}
-		const value=response.data as Partial<OpenFile>|undefined;
-		if(!value||typeof value.path!=="string"||typeof value.content!=="string"||typeof value.sha256!=="string"||typeof value.modifiedAtMs!=="number"||typeof value.lineCount!=="number"||typeof value.language!=="string"||value.version!=="current-workspace"){setOpenFile(null);setNotice("文件响应格式无法识别。");return;}
-		const file:OpenFile={threadId:view.threadId,turnId,itemId,path:value.path,content:value.content,documentAssets:value.documentAssets,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace",referenceKind:reference.kind,rawReference:reference.rawReference};
-		fileContentCache.current.set(cacheKey,file);
-		setOpenFile({...base,change:{...change,path:file.path},file,loading:false});
+		if(!fileContextEnabled||device?.capabilities.chillingMessageReferences!==true){setNotice("当前 Desktop 尚不支持打开该文档引用。");return}
+		const path=reference.rawReference.replace(/(?::[1-9][0-9]*(?::[1-9][0-9]*)?|#L[1-9][0-9]*(?:-L[1-9][0-9]*)?)$/u,"");
+		fileWorkspace.open({deviceId,agentEpoch:device?.agentEpoch||"",threadId:view.threadId,turnId,itemId,path,source:"message_reference",referenceKind:reference.kind,rawReference:reference.rawReference,focusStartLine:reference.startLine,focusEndLine:reference.endLine});
 	}
-
-	function closeFile(){openFileGeneration.current++;setOpenFile(null);}
-	async function openRelativeDocument(target:string){
-		if(!workspaceBrowserEnabled||!openFile?.file||!view)throw new Error("当前设备未启用工作区文件读取");
-		const resolved=resolveDocumentPath(openFile.file.path,target);if(!resolved)throw new Error("文档路径不允许读取");
-		const generation=++openFileGeneration.current;
-		const response=await client.request("workspace.file.read",deviceId,{threadId:view.threadId,path:resolved.path});
-		if(generation!==openFileGeneration.current)return;
-		const value=response.data as Partial<OpenFile>|undefined;
-		if(response.outcome!=="accepted"||!value||value.path!==resolved.path||typeof value.content!=="string"||typeof value.sha256!=="string"||typeof value.modifiedAtMs!=="number"||typeof value.lineCount!=="number"||typeof value.language!=="string"||value.version!=="current-workspace")throw new Error("无法读取此文档");
-		const file:OpenFile={source:"workspace_browser",threadId:view.threadId,path:resolved.path,content:value.content,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace",documentAssets:value.documentAssets};
-		setOpenFile({threadId:view.threadId,turnId:"",change:{itemId:"",path:resolved.path,kind:"update"},mode:"source",file,focusStartLine:resolved.startLine});
-	}
-	function changeFileMode(mode:FileViewMode){if(!openFile||mode===openFile.mode)return;void openChangedFile(openFile.turnId,openFile.change,mode);}
-
   function agentEpochFor(id: string): string {
     return devicesRef.current.find(candidate => candidate.deviceId === id)?.agentEpoch || "";
   }
@@ -829,7 +782,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if(previous&&historyRewritten(previous.turns,next.thread.turns)){
       resetHistory();
       setFileChanges(all=>Object.fromEntries(Object.entries(all).filter(([key])=>!key.startsWith(`${next.threadId}\u0000`))));
-      fileContentCache.current.clear();setOpenFile(null);
+      fileContentCache.current.clear();fileWorkspace.removeThread(next.deviceId,next.threadId);
       void durableCache.delete(identity);
     }
     const value = { history: historyRef.current, itemOverrides: itemOverridesRef.current, thread: next.thread };
@@ -1036,7 +989,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
-    openFileGeneration.current++; setView(null); setThreadId(""); setLocalThreadDraft(null); clearAllComposerDrafts(); setOpenFile(null); resetHistory();
+    fileWorkspace.clear(); setView(null); setThreadId(""); setLocalThreadDraft(null); clearAllComposerDrafts(); resetHistory();
     fileContentCache.current.clear(); workspaceDirectoryCache.current.clear(); fileContentCacheEpoch.current = ""; setShowWorkspaceBrowser(false);
     void durableCache.clear();
     webSession.disconnect(); savedSessionAttempt.current = false; pairingAttempt.current = false; setSessionExpired(false); setToken(""); client.disconnect();
@@ -2883,6 +2836,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
+      <div className={`conversation-layout ${fileWorkspace.tabs.length&&!fileWorkspace.collapsed?"files-expanded":""}`}>
       <main className="conversation">
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
           <CircleButton className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></CircleButton>
@@ -2956,6 +2910,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             </div></div>
             </div></div></div>
       </main>
+      <FileWorkspace model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} onReturnFocus={()=>composerInputRef.current?.focus()} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quote=>{if(quote.threadId!==view?.threadId)return;if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}setFileQuotes(current=>[...current,quote]);fileWorkspace.collapse();window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>
+      </div>
     </div>
     {threadMenu && (() => {
       const target = threads.find(candidate => candidate.threadId === threadMenu.threadId);
@@ -2971,8 +2927,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     })()}
     {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
-		{showWorkspaceBrowser&&workspaceBrowserEnabled&&view&&<WorkspaceBrowser key={`${deviceId}:${device?.agentEpoch||""}:${view.threadId}`} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} threadId={view.threadId} cwd={view.thread.cwd} request={(method,target,params)=>client.request(method,target,params)} assetContext={fileAssetContext} cache={workspaceDirectoryCache.current} fileCache={fileContentCache.current} onClose={()=>setShowWorkspaceBrowser(false)} onQuote={quote=>{setFileQuotes(current=>{if(current.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return current}return [...current,quote]});window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>}
-		{openFile && <FileViewer view={openFile} assetContext={fileAssetContext} onOpenDocument={workspaceBrowserEnabled?openRelativeDocument:undefined} showDiff={openFile.file?.source!=="workspace_browser"} source={openFile.file?.source|| (openFile.file?.referenceKind?"message_reference":"turn_change")} onClose={closeFile} onModeChange={changeFileMode} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);closeFile();window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
+		{showWorkspaceBrowser&&workspaceBrowserEnabled&&view&&<WorkspaceBrowser key={`${deviceId}:${device?.agentEpoch||""}:${view.threadId}`} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} threadId={view.threadId} cwd={view.thread.cwd} request={(method,target,params)=>client.request(method,target,params)} assetContext={fileAssetContext} cache={workspaceDirectoryCache.current} fileCache={fileContentCache.current} onClose={()=>setShowWorkspaceBrowser(false)} onOpenFile={path=>{fileWorkspace.open({deviceId,agentEpoch:device?.agentEpoch||"",threadId:view.threadId,path,source:"workspace_browser"});setShowWorkspaceBrowser(false)}} onQuote={()=>{}}/>}
   </div>;
 }
 

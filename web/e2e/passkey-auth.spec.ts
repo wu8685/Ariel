@@ -71,10 +71,13 @@ function startTLSProxy(keyPath: string, certPath: string): Server {
 test.beforeAll(async () => {
   scratch = mkdtempSync(join(tmpdir(), "ariel-passkey-e2e-"));
   const relayBinary = join(scratch, "ariel-relay");
+  const builtDist = join(scratch, "web-dist");
   const keyPath = join(scratch, "localhost.key");
   const certPath = join(scratch, "localhost.crt");
   for (const result of [
-    spawnSync("npm", ["run", "build"], { cwd: webRoot, stdio: "pipe" }),
+    // A parallel native-wire fixture serves web/dist. Never empty its assets
+    // while building this isolated Passkey instance.
+    spawnSync("npm", ["run", "build", "--", "--outDir", builtDist], { cwd: webRoot, stdio: "pipe" }),
     spawnSync("go", ["build", "-o", relayBinary, "./cmd/relay"], { cwd: repoRoot, stdio: "pipe", env: { ...process.env, GO111MODULE: "on", GOTOOLCHAIN: "auto" } }),
     spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", keyPath, "-out", certPath, "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"], { stdio: "pipe" }),
   ]) {
@@ -93,7 +96,7 @@ test.beforeAll(async () => {
       ARIEL_WEBAUTHN_CREDENTIALS_FILE: join(scratch, "auth.json"),
       ARIEL_SESSION_KEY: "00".repeat(32),
       ARIEL_PASSKEY_SETUP_TOKEN: setupToken,
-      ARIEL_WEB_DIST: join(webRoot, "dist"),
+      ARIEL_WEB_DIST: builtDist,
       ARIEL_LISTEN: `127.0.0.1:${relayPort}`,
     },
   });
