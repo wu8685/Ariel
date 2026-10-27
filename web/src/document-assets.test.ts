@@ -27,3 +27,26 @@ it("validates chunk offset/digest and disposes Blob URLs without backend fallbac
  const unavailable=new DocumentImageSession(file,{agentEpoch:"epoch",relayVersion:0,request});
  await expect(unavailable.acquire("../a.png",controller.signal)).rejects.toThrow();expect(request).toHaveBeenCalledTimes(1);
 });
+
+it("invalidates a released image for decode retry without revoking resources still in use",async()=>{
+ URL.createObjectURL=vi.fn().mockReturnValueOnce("blob:first").mockReturnValueOnce("blob:retry");
+ URL.revokeObjectURL=vi.fn();
+ const session=new DocumentImageSession(file),source=`data:image/png;base64,${btoa(String.fromCharCode(...png))}`;
+ const first=await session.acquire(source,new AbortController().signal);
+ expect(session).toHaveProperty("invalidate");
+ const invalidate=(session as DocumentImageSession&{invalidate:(source:string)=>boolean}).invalidate.bind(session);
+ expect(invalidate(source)).toBe(false);expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+ first.release();expect(invalidate(source)).toBe(true);expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:first");
+ const second=await session.acquire(source,new AbortController().signal);expect(second.url).toBe("blob:retry");
+ second.release();session.dispose();
+});
+
+it("still verifies local image digests when a LAN browser has no Web Crypto subtle API",async()=>{
+ const digest=Array.from(new Uint8Array(await webcrypto.subtle.digest("SHA-256",png))).map(n=>n.toString(16).padStart(2,"0")).join("");
+ vi.stubGlobal("crypto",{});URL.createObjectURL=vi.fn(()=>"blob:lan");URL.revokeObjectURL=vi.fn();
+ const request=vi.fn(async()=>({mime:"image/png",assetSha256:digest,width:1,height:1,totalBytes:png.length,offset:0,dataBase64:btoa(String.fromCharCode(...png))}));
+ const session=new DocumentImageSession(file,{agentEpoch:"epoch",relayVersion:1,request});
+ const result=await session.acquire("../a.png",new AbortController().signal);expect(result.url).toBe("blob:lan");result.release();session.dispose();
+ const corrupted=new DocumentImageSession(file,{agentEpoch:"epoch",relayVersion:1,request:async()=>({...await request(),assetSha256:"0".repeat(64)})});
+ await expect(corrupted.acquire("../a.png",new AbortController().signal)).rejects.toThrow("图片内容校验失败");corrupted.dispose();
+});

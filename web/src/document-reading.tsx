@@ -1,7 +1,9 @@
-import { Component,memo,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
-import Markdown from "react-markdown";
+import { Component,createContext,memo,useContext,useMemo,type ReactNode } from "react";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { classifyImageSource,type DocumentImageSession,type LoadedImage } from "./document-assets";
+import { type DocumentImageSession } from "./document-assets";
+import { DocumentImage } from "./markdown-images";
+import { remarkMath, mathSpan } from "./markdown-math";
 
 type HastNode={type:string;tagName?:string;value?:string;properties?:Record<string,unknown>;children?:HastNode[];position?:{start:{offset?:number};end:{offset?:number}}};
 
@@ -38,39 +40,18 @@ function sourcePositions(source:string){
   };
 }
 
-function DocumentImage({source,alt,session,allowed,onAllow}:{source:string;alt:string;session:DocumentImageSession;allowed:ReadonlySet<string>;onAllow:(domain:string)=>void}){
-  const holder=useRef<HTMLSpanElement>(null),policy=useMemo(()=>classifyImageSource(source),[source]);
-  const [near,setNear]=useState(false),[loaded,setLoaded]=useState<LoadedImage|null>(null),[error,setError]=useState("");
-  useEffect(()=>{
-    const element=holder.current;if(!element||typeof IntersectionObserver==="undefined")return;
-    const observer=new IntersectionObserver(entries=>setNear(entries.some(entry=>entry.isIntersecting)),{rootMargin:"240px"});observer.observe(element);return()=>observer.disconnect();
-  },[]);
-  useEffect(()=>{
-    if(!near||policy.kind!=="local"&&policy.kind!=="data")return;
-    const controller=new AbortController();let resource:LoadedImage|undefined;
-    setError("");void session.acquire(source,controller.signal).then(value=>{if(controller.signal.aborted){value.release();return}resource=value;setLoaded(value)},reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"无法读取图片")});
-    return()=>{controller.abort();resource?.release();setLoaded(null)};
-  },[near,session,source,policy.kind]);
-  const name=alt||"文档图片";
-  return <span className="document-image" ref={holder}>
-    {policy.kind==="blocked"?<span role="status">{name}：{policy.reason}</span>:policy.kind==="external"?
-      allowed.has(policy.domain)&&near?<img src={policy.url} alt={name} loading="lazy" referrerPolicy="no-referrer" onError={()=>setError("外部图片加载失败")}/>:<span className="document-image-placeholder"><span>{name} · {policy.domain}</span><button type="button" onClick={()=>{onAllow(policy.domain);setNear(true)}}>允许加载外部图片</button></span>:
-      loaded?<img src={loaded.url} alt={name} width={loaded.width} height={loaded.height}/>:<span className="document-image-placeholder" role="status">{name} · {error|| (near?"正在加载图片…":"图片按需加载")} {!near&&<button type="button" onClick={()=>setNear(true)}>加载图片</button>}</span>}
-    {error&&policy.kind==="external"&&<span role="status">{error}</span>}
-  </span>;
-}
-
 class ReadingErrorBoundary extends Component<{children:ReactNode},{failed:boolean}>{
   state={failed:false};static getDerivedStateFromError(){return {failed:true}}
   render(){return this.state.failed?<p role="status">Markdown 无法解析，请切换到原版查看。</p>:this.props.children}
 }
 
-export const DocumentReading=memo(function DocumentReading({content,session,allowed,onAllow,onOpenDocument}:{content:string;session:DocumentImageSession;allowed:ReadonlySet<string>;onAllow:(domain:string)=>void;onOpenDocument?:(path:string)=>void}){
-  const positions=useMemo(()=>sourcePositions(content),[content]);
-  if(content.length>256*1024)return <p role="status">文档超过阅读渲染预算，请切换到原版查看完整内容。</p>;
-  return <ReadingErrorBoundary key={content}><Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[positions]} skipHtml urlTransform={value=>value} components={{
-    img({src,alt}){return <DocumentImage source={src||""} alt={alt||""} session={session} allowed={allowed} onAllow={onAllow}/>},
+type ReadingContextValue={session:DocumentImageSession;allowed:ReadonlySet<string>;onAllow:(domain:string)=>void;onOpenDocument?:(path:string)=>void};
+const ReadingContext=createContext<ReadingContextValue|null>(null);
+const components:Components={
+    span:mathSpan,
+    img({src,alt}){const context=useContext(ReadingContext)!;return <DocumentImage source={src||""} alt={alt||""} {...context}/>},
     a({href,children}){
+      const {onOpenDocument}=useContext(ReadingContext)!;
       if(!href||/[\u0000-\u001f\u007f\\]/u.test(href))return <span>{children}</span>;
       if(/^#[a-z\d_:-]+$/iu.test(href))return <a href={href}>{children}</a>;
       if(/^(?:https?:\/\/|mailto:)/iu.test(href)){try{const url=new URL(href);if(!url.username&&!url.password)return <a href={url.href} target="_blank" rel="noopener noreferrer">{children}</a>}catch{/* invalid URL stays text */}}
@@ -78,5 +59,10 @@ export const DocumentReading=memo(function DocumentReading({content,session,allo
       return <span>{children}</span>;
     },
     table({children}){return <div className="markdown-table-scroll" role="region" aria-label="表格，可横向滚动" tabIndex={0}><table>{children}</table></div>}
-  }}>{content}</Markdown></ReadingErrorBoundary>;
+};
+const plugins=[remarkGfm,remarkMath];
+export const DocumentReading=memo(function DocumentReading({content,...context}:{content:string}&ReadingContextValue){
+  const positions=useMemo(()=>sourcePositions(content),[content]);
+  if(content.length>256*1024)return <p role="status">文档超过阅读渲染预算，请切换到原版查看完整内容。</p>;
+  return <ReadingErrorBoundary key={content}><ReadingContext.Provider value={context}><Markdown remarkPlugins={plugins} rehypePlugins={[positions]} skipHtml urlTransform={value=>value} components={components}>{content}</Markdown></ReadingContext.Provider></ReadingErrorBoundary>;
 });

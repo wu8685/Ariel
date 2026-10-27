@@ -3,6 +3,8 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { projectBareMermaidBlocks } from "./mermaid-blocks";
+import { remarkMath, mathSpan } from "./markdown-math";
+import { ConversationImageContext, ConversationMarkdownImage } from "./markdown-images";
 
 const maxMarkdownCodeUnits = 256 * 1024;
 const maxDocumentReferences = 24;
@@ -101,8 +103,9 @@ function remarkWorkspaceDocumentCandidates() {
   };
 }
 
-const conversationMarkdownPlugins = [remarkGfm, remarkWorkspaceDocumentCandidates];
-const standardMarkdownPlugins = [remarkGfm];
+const conversationMarkdownPlugins = [remarkGfm, remarkMath, remarkWorkspaceDocumentCandidates];
+const standardMarkdownPlugins = [remarkGfm, remarkMath];
+const imageComponent: Components["img"] = function MarkdownImage({ src, alt }) { return <ConversationMarkdownImage source={src || ""} alt={alt || ""} />; };
 
 function safeHref(value?: string): string | null {
   if (!value || value !== value.trim() || /[\u0000-\u001f\u007f]/u.test(value)) return null;
@@ -129,10 +132,8 @@ function componentsFor(onOpenDocument?: (reference: WorkspaceDocumentReference) 
     const safe = safeHref(href);
     return safe ? <a {...props} href={safe} target={safe.startsWith("#") ? undefined : "_blank"} rel={safe.startsWith("#") ? undefined : "noopener noreferrer"}>{children}</a> : <span className="markdown-unsafe-link">{children}</span>;
   },
-  img({ alt }) {
-    const label = alt ? `图片：${alt}` : "图片";
-    return <span className="markdown-image-placeholder" role="img" aria-label={label}>{label}</span>;
-  },
+  img: imageComponent,
+  span: mathSpan,
   table({ children }) {
     return <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="表格，可横向滚动"><table>{children}</table></div>;
   },
@@ -167,12 +168,11 @@ export function ConversationMarkdown({ text, renderImage, onOpenDocument }: { te
   const messageID = useId().replace(/[^a-z\d_-]/giu, "");
   if (text.length > maxMarkdownCodeUnits) return <PlainFallback text={text} notice="内容过长，暂以纯文本显示。" />;
   const baseComponents = componentsFor(onOpenDocument);
-  const imageComponents: Components = renderImage ? { ...baseComponents, img({ src, alt }) { return renderImage(src || "", alt || "") || <span className="markdown-image-placeholder" role="img" aria-label={alt ? `图片：${alt}` : "图片"}>{alt ? `图片：${alt}` : "图片"}</span>; } } : baseComponents;
-  return <MarkdownErrorBoundary text={text}>
+  return <MarkdownErrorBoundary text={text}><ConversationImageContext.Provider value={{ version: text, renderImage }}>
     <div className="markdown-body"><Markdown remarkPlugins={onOpenDocument ? conversationMarkdownPlugins : standardMarkdownPlugins} remarkRehypeOptions={{ clobberPrefix: `ariel-${messageID}-` }} skipHtml urlTransform={(url, key, node) => {
       if (node.tagName === "img" && key === "src") return url;
       if (url.startsWith(documentURLPrefix)) return url;
       return safeHref(url) || "";
-    }} components={imageComponents}>{projectBareMermaidBlocks(text)}</Markdown></div>
-  </MarkdownErrorBoundary>;
+    }} components={baseComponents}>{projectBareMermaidBlocks(text)}</Markdown></div>
+  </ConversationImageContext.Provider></MarkdownErrorBoundary>;
 }

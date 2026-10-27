@@ -68,7 +68,6 @@
 .file-reading-modes button { min-height:44px; padding:0 10px; }
 .file-reading { min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden; overflow-anchor:none; padding:16px 20px 40px; font-size:14px; line-height:1.85; color:var(--color-text); user-select:text; overflow-wrap:anywhere; }
 .file-reading > :first-child { margin-top:0; }
-.file-reading pre { max-width:100%; overflow-x:auto; padding:12px; background:var(--color-panel); border:1px solid var(--color-border); border-radius:6px; }
 .file-reading h1,.file-reading h2,.file-reading h3 { line-height:1.4; margin:1.4em 0 .55em; }
 .file-reading h1 { font-size:1.5em; }.file-reading h2 { font-size:1.3em; }.file-reading h3 { font-size:1.15em; }
 .file-reading a { color:var(--color-accent); }.file-reading ::selection { background:#285f9f; color:#fff; }
@@ -78,6 +77,10 @@
 .document-image img { display:block; max-width:100%; height:auto; border-radius:4px; }
 .document-image-placeholder { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-panel); }
 .document-image button { min-height:36px; padding:5px 10px; border:1px solid var(--color-border-strong); border-radius:5px; background:transparent; color:var(--color-text); font:inherit; }
+.document-image-status { display:block; margin-top:4px; color:var(--color-subtle); font-size:11px; }
+.document-image-placeholder > span { min-width:0; overflow-wrap:anywhere; }
+.document-image button { cursor:pointer; user-select:none; }
+.document-image button:hover,.document-image button:focus-visible { color:var(--color-accent); border-color:var(--color-accent); }
 .file-line { width:100%; max-width:100%; min-width:0; display:grid; grid-template-columns:54px minmax(0,1fr); align-items:start; }.file-line:hover { background:#151515; }.file-line code { width:100%; max-width:100%; min-width:0; padding:0 20px 0 8px; color:#d4d4d4; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
 .file-line.reference-focus { background: color-mix(in srgb, var(--color-accent) 14%, transparent); }
 .file-line-number { color:#606060; text-align:right; padding:0 12px 0 4px; font:inherit; user-select:none; }
@@ -483,8 +486,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .markdown-body a:hover { color: var(--color-text); }
 .message.user .markdown-body a { color: var(--color-on-primary); }
 .markdown-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; background: #00000055; border-radius: 4px; padding: .08em .3em; overflow-wrap: anywhere; }
-.markdown-body pre { max-width: 100%; overflow-x: auto; margin: .65em 0; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-page); white-space: pre; line-height: 1.5; }
-.markdown-body pre code { display: block; padding: 0; background: none; white-space: inherit; overflow-wrap: normal; }
+.file-reading pre,.markdown-body pre { min-width:0; max-width:100%; overflow-x:auto; overscroll-behavior-x:contain; margin:.75em 0; padding:10px 12px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-panel); color:var(--color-text); font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre; tab-size:4; text-align:left; }
+.markdown-body pre code,.file-reading pre code { display:block; padding:0; background:none; border-radius:0; font:inherit; white-space:inherit; overflow-wrap:normal; word-break:normal; tab-size:inherit; }
+.markdown-math { display:inline-block; max-width:100%; overflow-x:auto; vertical-align:middle; white-space:normal; }
+.markdown-math-display { display:block; width:100%; min-width:0; overflow-x:auto; overflow-y:hidden; margin:.7em 0; padding:3px 0; overscroll-behavior-x:contain; }
+.markdown-math-display .katex-display { margin:.25em 0; text-align:left; }
+.markdown-math-display .katex { text-align:left; }
+.markdown-math-note { display:block; margin-bottom:3px; color:var(--color-warning); font-size:11px; line-height:1.5; }
+.markdown-math-note + code { white-space:pre-wrap; overflow-wrap:anywhere; }
 .markdown-table-scroll { max-width: 100%; overflow-x: auto; font-size: 13px; line-height: 1.55; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; margin: .7em 0; border: 1px solid var(--color-border-strong); border-radius: 8px; }
 .markdown-table-scroll table { border-collapse: collapse; width: max-content; min-width: 100%; font: inherit; }
 .markdown-table-scroll th, .markdown-table-scroll td { border-bottom: 1px solid var(--color-border); border-right: 1px solid var(--color-border); padding: 6px 9px; font: inherit; text-align: left; vertical-align: top; }
