@@ -4,8 +4,74 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
+
+func TestReducerDoesNotExpandHTMLCharactersInTransportJSON(t *testing.T) {
+	const limit = 2048
+	text := strings.Repeat("<>&", 300) + "\"\\\n你好"
+	quoted, _ := json.Marshal(text)
+	// Match the native transport: literal HTML characters are valid JSON.
+	quoted = bytes.ReplaceAll(quoted, []byte(`\u003c`), []byte("<"))
+	quoted = bytes.ReplaceAll(quoted, []byte(`\u003e`), []byte(">"))
+	quoted = bytes.ReplaceAll(quoted, []byte(`\u0026`), []byte("&"))
+	for _, mode := range []string{"snapshot", "patch"} {
+		t.Run(mode, func(t *testing.T) {
+			r := NewReducer(limit)
+			body := append([]byte(`{"type":"snapshot","revision":1,"conversationState":{"text":`), quoted...)
+			body = append(body, []byte(`,"large":9007199254740993}}`)...)
+			if mode == "patch" {
+				if err := r.Apply(json.RawMessage(`{"type":"snapshot","revision":0,"conversationState":{"text":"","large":9007199254740993}}`)); err != nil {
+					t.Fatal(err)
+				}
+				body = append([]byte(`{"type":"patches","baseRevision":0,"revision":1,"patches":[{"op":"replace","path":["text"],"value":`), quoted...)
+				body = append(body, []byte(`}]}`)...)
+			}
+			if len(body) >= limit {
+				t.Fatal("fixture does not fit native input limit")
+			}
+			if err := r.Apply(body); err != nil {
+				t.Fatalf("valid transport JSON was expanded beyond its limit: %v", err)
+			}
+			state, revision, ok := r.Snapshot()
+			var got struct {
+				Text  string      `json:"text"`
+				Large json.Number `json:"large"`
+			}
+			if !ok || revision != 1 || len(state) > limit || json.Unmarshal(state, &got) != nil || got.Text != text || got.Large.String() != "9007199254740993" {
+				t.Fatalf("transport semantics changed: bytes=%d revision=%d valid=%v", len(state), revision, ok)
+			}
+		})
+	}
+}
+
+func TestReducerSizeErrorsRemainInvalidAndAreClassifiedAsFrameTooLarge(t *testing.T) {
+	for _, mode := range []string{"envelope", "snapshot", "patch"} {
+		t.Run(mode, func(t *testing.T) {
+			r := NewReducer(64)
+			if err := r.Apply(json.RawMessage(`{"type":"snapshot","revision":1,"conversationState":{"text":"old"}}`)); err != nil {
+				t.Fatal(err)
+			}
+			var body string
+			switch mode {
+			case "envelope":
+				body = `{"type":"snapshot","revision":2,"conversationState":{"text":"` + strings.Repeat("x", 66<<10) + `"}}`
+			case "snapshot":
+				body = `{"type":"snapshot","revision":2,"conversationState":{"text":"` + strings.Repeat("x", 65) + `"}}`
+			case "patch":
+				body = `{"type":"patches","baseRevision":1,"revision":2,"patches":[{"op":"replace","path":["text"],"value":"` + strings.Repeat("x", 65) + `"}]}`
+			}
+			err := r.Apply(json.RawMessage(body))
+			if !errors.Is(err, ErrResyncRequired) || !errors.Is(err, ErrFrameTooLarge) {
+				t.Fatalf("oversize lost its capacity classification: %v", err)
+			}
+			if _, _, ok := r.Snapshot(); ok {
+				t.Fatal("oversize state remains usable")
+			}
+		})
+	}
+}
 
 func TestReducerSnapshotAndTransactionalPatches(t *testing.T) {
 	r := NewReducer(4096)

@@ -338,6 +338,8 @@ describe("Ariel app interactions", () => {
 		expect(await screen.findByText("失败期间仍可阅读")).toBeTruthy();
 		fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "恢复期间保留的草稿" } });
 		act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: thread.threadId, watchId: "watch-retry", freshness: "stale", staleReason: "RESYNC_REQUIRED", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache", seq: 1, capturedAt: thread.updatedAt, thread }));
+		expect(await screen.findByText("实时连接暂时失效，请重新连接；历史内容已保留。")).toBeTruthy();
+		expect(screen.queryByText("事件顺序发生变化，正在重新同步。")).toBeNull();
 		fireEvent.click(await screen.findByRole("button", { name: "重新连接" }));
 		await waitFor(() => expect(requests("thread.cache.promote")).toHaveLength(1));
 		expect(requests("thread.subscribe")).toHaveLength(0);
