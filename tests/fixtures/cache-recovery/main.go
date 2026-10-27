@@ -22,6 +22,7 @@ import (
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
+	"github.com/wu8685/Ariel/internal/codex/desktopipc/testfixture"
 	"github.com/wu8685/Ariel/internal/desktopagent"
 	"github.com/wu8685/Ariel/internal/relay"
 )
@@ -136,16 +137,30 @@ type history struct {
 	current                                *owner
 	blocked                                chan struct{}
 	attaches, refreshes, finished          atomic.Int32
+	wire                                   *testfixture.LargeOwner
+	residentBytes                          atomic.Int64
 }
 
-func (*history) Read(context.Context, string) (appserver.Thread, error) {
+func (h *history) Read(context.Context, string) (appserver.Thread, error) {
+	if h.wire != nil {
+		return appserver.Thread{ID: testfixture.ThreadID, Name: "原生大帧回归", CWD: testfixture.CWD, Status: json.RawMessage(`{"type":"idle"}`)}, nil
+	}
 	return appserver.Thread{ID: fixtureThread, Name: "真实 Agent 恢复验收", CWD: fixtureCWD, Status: json.RawMessage(`{"type":"idle"}`)}, nil
 }
 func (h *history) List(ctx context.Context, _ string, _ int) (appserver.Page, error) {
 	thread, err := h.Read(ctx, fixtureThread)
 	return appserver.Page{Data: []appserver.Thread{thread}}, err
 }
-func (h *history) attach(context.Context, string, string) (desktopagent.Live, error) {
+func (h *history) attach(ctx context.Context, id, cwd string) (desktopagent.Live, error) {
+	if h.wire != nil {
+		h.attaches.Add(1)
+		live, err := desktopagent.OpenFollower(ctx, h.wire.Path, id, cwd)
+		if err == nil {
+			state, _ := live.Current()
+			h.residentBytes.Store(int64(len(state)))
+		}
+		return live, err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.attaches.Add(1)
@@ -155,6 +170,19 @@ func (h *history) attach(context.Context, string, string) (desktopagent.Live, er
 func (h *history) action(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if h.wire != nil {
+		action := r.URL.Query().Get("action")
+		if action != "stream" && action != "complete" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := h.wire.Advance(action == "complete"); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	h.mu.Lock()
@@ -203,6 +231,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:4182", "loopback fixture listen address")
 	dist := flag.String("dist", "web/dist", "built Web assets")
 	streamInterval := flag.Duration("stream-interval", 20*time.Millisecond, "snapshot cadence; 0 tests the production default")
+	nativeWire := flag.Bool("native-wire", false, "use an isolated large-frame native Unix peer and the production follower")
 	flag.Parse()
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
@@ -213,6 +242,15 @@ func main() {
 		log.Fatal(err)
 	}
 	h := &history{}
+	guard := 100 * time.Millisecond
+	if *nativeWire {
+		h.wire, err = testfixture.NewLargeOwner()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer h.wire.Close()
+		guard = 30 * time.Second // verify pushed patches, not recovery polling
+	}
 	service := desktopagent.NewService(h, h.attach)
 	defer service.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -221,6 +259,10 @@ func main() {
 	mux.Handle("/ws", r.Handler())
 	mux.HandleFunc("/fixture/action", h.action)
 	mux.HandleFunc("/fixture/state", func(w http.ResponseWriter, _ *http.Request) {
+		if h.wire != nil {
+			_ = json.NewEncoder(w).Encode(map[string]any{"attaches": h.attaches.Load(), "residentBytes": h.residentBytes.Load(), "native": h.wire.Stats()})
+			return
+		}
 		h.mu.Lock()
 		observed := h.observedStreamRevision
 		h.mu.Unlock()
@@ -236,7 +278,7 @@ func main() {
 	go func() {
 		if err := desktopagent.RunWithService(ctx, desktopagent.Config{
 			URL: "ws://" + *listen + "/ws", Token: "isolated-cache-agent-token", DeviceID: "fixture-mac", DeviceName: "隔离 Native Fixture",
-			CachePublishInterval: *streamInterval, CacheRecoveryGuardDelay: 100 * time.Millisecond, CacheLeaseInterval: 50 * time.Millisecond,
+			CachePublishInterval: *streamInterval, CacheRecoveryGuardDelay: guard, CacheLeaseInterval: 50 * time.Millisecond,
 		}, service); err != nil && ctx.Err() == nil {
 			log.Printf("fixture agent stopped: %v", err)
 			cancel()
