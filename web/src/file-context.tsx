@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CircleButton, CloseGlyph } from "./circular-button";
 import { DocumentReading } from "./document-reading";
 import { DocumentImageSession, type AssetContext } from "./document-assets";
@@ -139,7 +140,7 @@ function diffClass(line:string):string{
   return "diff-context";
 }
 
-export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="返回会话", source="turn_change", showDiff=true, assetContext, onOpenDocument, embedded=false, readerState, quoteDisabled=false, diffAvailable=!!view.change.diff }: { view: FileView; onClose: () => void; onModeChange:(mode:FileViewMode)=>void; onQuote: (quote: FileQuote) => void; backLabel?:string; source?:"turn_change"|"message_reference"|"workspace_browser"; showDiff?:boolean; assetContext?:AssetContext; onOpenDocument?:(path:string)=>void|Promise<void>;embedded?:boolean;readerState?:FileReaderState;quoteDisabled?:boolean;diffAvailable?:boolean }) {
+export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="返回会话", source="turn_change", showDiff=true, assetContext, onOpenDocument, embedded=false, readerState, quoteDisabled=false, diffAvailable=!!view.change.diff, controlsHost, onViewControl }: { view: FileView; onClose: () => void; onModeChange:(mode:FileViewMode)=>void; onQuote: (quote: FileQuote) => void; backLabel?:string; source?:"turn_change"|"message_reference"|"workspace_browser"; showDiff?:boolean; assetContext?:AssetContext; onOpenDocument?:(path:string)=>void|Promise<void>;embedded?:boolean;readerState?:FileReaderState;quoteDisabled?:boolean;diffAvailable?:boolean;controlsHost?:HTMLElement|null;onViewControl?:()=>void }) {
   const internalState=useRef(emptyFileReaderState());
   const saved=readerState||internalState.current;
   const [selected,setSelected]=useState<{startLine:number;endLine:number;text:string}|null>(()=>saved.selection&&view.file&&saved.sha256===view.file.sha256?selectionLines(view.file.content,saved.selection.start,saved.selection.end):null);
@@ -219,10 +220,17 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="�
     saved.focusApplied=true;
   },[view.mode,reading,file?.sha256,view.focusStartLine]);
   function changeReading(value:boolean){ownsDOMSelection.current=false;saved.selection=undefined;saved.reading=value;setSelected(null);setSelectionError(false);setReading(value)}
+  const externalControls=controlsHost!==undefined;
+  function chooseReading(value:boolean){changeReading(value);onModeChange("source");onViewControl?.()}
+  const menuControls=<nav className="file-menu-view-options" aria-label="文件视图">
+    <button type="button" aria-label="原版模式" aria-pressed={view.mode==="source"&&!reading} disabled={view.change.kind==="delete"} onClick={()=>chooseReading(false)}>原版</button>
+    {markdown&&<button type="button" aria-label="阅读模式" aria-pressed={view.mode==="source"&&reading} disabled={!file||view.loading||view.change.kind==="delete"} onClick={()=>chooseReading(true)}>阅读</button>}
+    {showDiff&&<button type="button" aria-label="查看 Diff" aria-pressed={view.mode==="diff"} disabled={!diffAvailable} onClick={()=>{onModeChange("diff");onViewControl?.()}}>Diff</button>}
+  </nav>;
   return <div className={"file-viewer-backdrop"+(embedded?" embedded":"")} role="presentation">
-    <section className={"file-viewer"+(!showDiff&&!markdown?" source-only":"")} role="dialog" aria-modal={embedded?undefined:true} aria-label={"文件 "+view.change.path}>
+    <section className={"file-viewer"+(externalControls||!showDiff&&!markdown?" source-only":"")} role="dialog" aria-modal={embedded?undefined:true} aria-label={"文件 "+view.change.path}>
       <header className="file-viewer-header"><button className="file-back" type="button" onClick={onClose} aria-label={backLabel}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg><span>返回</span></button><div className="file-heading"><strong>{view.change.path}</strong><small>{view.mode==="source"?"当前工作区版本"+(file?.language?" · "+file.language:""):"本次修改 · "+view.change.kind}</small></div><CircleButton className="file-close" type="button" onClick={onClose} aria-label="关闭文件"><CloseGlyph/></CircleButton></header>
-      {(showDiff||markdown)&&<nav className="file-view-tabs" aria-label="文件视图">
+      {externalControls?(controlsHost?createPortal(menuControls,controlsHost):null):(showDiff||markdown)&&<nav className="file-view-tabs" aria-label="文件视图">
         {showDiff&&<><button type="button" className={view.mode==="source"?"active":""} aria-pressed={view.mode==="source"} onClick={()=>onModeChange("source")} disabled={view.change.kind==="delete"}>查看原文</button><button type="button" className={view.mode==="diff"?"active":""} aria-pressed={view.mode==="diff"} onClick={()=>onModeChange("diff")} disabled={!diffAvailable}>查看 Diff</button></>}
         {markdown&&view.mode==="source"&&<div className="file-reading-modes" role="group" aria-label="内容展示模式"><button type="button" className={!reading?"active":""} aria-label="原版模式" aria-pressed={!reading} onClick={()=>changeReading(false)}>原版</button><button type="button" className={reading?"active":""} aria-label="阅读模式" aria-pressed={reading} onClick={()=>changeReading(true)} disabled={!file}>阅读</button></div>}
       </nav>}

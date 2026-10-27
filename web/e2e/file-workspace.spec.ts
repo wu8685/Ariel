@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Thread } from "../src/generated/protocol";
+import { chooseFileView } from "./file-view-menu";
 
 const token = `s_${"b".repeat(64)}`;
 const thread: Thread = {
@@ -226,7 +227,7 @@ for (const width of [320, 390, 1280])
       page.getByRole("tab", { name: "b.md", exact: true }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "a.md", exact: true }).click();
-    await page.getByRole("button", { name: "阅读模式" }).click();
+    await chooseFileView(page, "阅读模式");
     const reading = page.getByTestId("file-reading");
     await expect(reading.getByRole("heading", { name: "a.md" })).toBeVisible();
     await reading.evaluate((el) => {
@@ -287,7 +288,7 @@ test("150 file tabs keep one body and one socket, searchable without losing meta
     methods.filter((m) => m === "file.context.reference.read"),
   ).toHaveLength(1);
   expect(methods.filter((m) => m === "thread.cache.watch")).toHaveLength(1);
-  await page.getByRole("button", { name: "全部文件标签" }).click();
+  await page.getByRole("button", { name: "文件菜单" }).click();
   await expect(page.getByRole("option")).toHaveCount(40);
   await page.getByRole("searchbox", { name: "搜索文件标签" }).fill("file-0.md");
   await page.getByRole("option", { name: "file-0.md", exact: true }).click();
@@ -417,7 +418,7 @@ for (const width of [320, 390, 1280]) {
       document.dispatchEvent(new Event("selectionchange"));
     });
     await expect(bar).toHaveCount(0);
-    await page.getByRole("button", { name: "阅读模式" }).click();
+    await chooseFileView(page, "阅读模式");
     const reading = page.getByTestId("file-reading");
     await expect(reading.getByRole("heading", { name: "a.md" })).toBeVisible();
     await expect(bar).toHaveCount(0);
@@ -428,7 +429,7 @@ for (const width of [320, 390, 1280]) {
       root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     });
     await expect(quote).toBeEnabled();
-    await page.getByRole("button", { name: "原版模式" }).click();
+    await chooseFileView(page, "原版模式");
     await expect(bar).toHaveCount(0);
     await selectSource();
     if (width === 1280) {
@@ -445,5 +446,51 @@ for (const width of [320, 390, 1280]) {
     await expect(page.getByText("a.md · L3")).toBeVisible();
     expect(reads).toEqual(["a.md"]);
     expect(methods.filter(method => method === "turn.start")).toEqual([]);
+  });
+}
+
+for (const width of [320, 390, 1280]) {
+  test(`file menu reclaims a full view row and restores modes at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 420 });
+    const { reads } = await setup(page);
+    await page.getByRole("button", { name: "查看原文：a.md" }).click();
+    const source = page.getByTestId("file-source");
+    await expect(source).toBeVisible();
+    await expect(page.getByRole("button", { name: "阅读模式" })).toHaveCount(0);
+    await expect(page.locator(".file-workspace-body nav")).toHaveCount(0);
+    expect((await source.boundingBox())!.y).toBe(45);
+    const trigger = page.getByRole("button", { name: "文件菜单", exact: true });
+    await trigger.click();
+    const menu = page.locator(".file-workspace-all");
+    const box = (await menu.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(420);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    await expect(page.getByRole("button", { name: "原版模式" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "查看 Diff", exact: true })).toBeEnabled();
+    await expect(page).toHaveScreenshot(`file-view-menu-${width}.png`, { animations: "disabled", caret: "hide" });
+    await page.getByRole("button", { name: "阅读模式" }).click();
+    const reading = page.getByTestId("file-reading");
+    await expect(reading.getByRole("heading", { name: "a.md" })).toBeVisible();
+    await expect(menu).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await reading.evaluate(el => { el.scrollTop = 120; });
+    await trigger.click();
+    await expect(page.getByRole("button", { name: "阅读模式" })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "阅读模式" }).press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(reading).toBeVisible();
+    await expect(trigger).toBeFocused();
+    await chooseFileView(page, "查看 Diff");
+    await expect(page.getByTestId("file-diff")).toBeVisible();
+    await chooseFileView(page, "阅读模式");
+    await expect.poll(() => reading.evaluate(el => el.scrollTop)).toBe(120);
+    await trigger.click();
+    await page.getByRole("tab", { name: "a.md", exact: true }).click();
+    await expect(menu).toHaveCount(0);
+    await chooseFileView(page, "原版模式");
+    await expect(source).toBeVisible();
+    expect((await source.boundingBox())!.y).toBe(45);
+    expect(reads).toEqual(["a.md"]);
   });
 }

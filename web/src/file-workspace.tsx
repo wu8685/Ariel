@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { CircleButton, CloseGlyph } from "./circular-button";
 import {
   FileViewer,
@@ -409,6 +409,14 @@ export function FileWorkspace({
   const [all, setAll] = useState(false),
     [search, setSearch] = useState(""),
     [page, setPage] = useState(0);
+  const [controlsHost, setControlsHost] = useState<HTMLDivElement|null>(null);
+  const menuId = useId();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTrigger = useRef<HTMLButtonElement|null>(null);
+  function closeMenu(restoreFocus=false) {
+    setAll(false);
+    if (restoreFocus) menuTrigger.current?.focus({preventScroll:true});
+  }
   const active = model.tabs.find((tab) => tab.id === model.activeId),
     view = active ? model.view(active.id) : undefined;
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -442,6 +450,15 @@ export function FileWorkspace({
   useEffect(() => {
     if (model.collapsed) setAll(false);
   }, [model.collapsed]);
+  useEffect(() => { setAll(false); }, [model.activeId]);
+  useEffect(() => {
+    if (!all) return;
+    const outside = (event:PointerEvent) => {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target) && !menuTrigger.current?.contains(event.target)) closeMenu();
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [all]);
   if (!active || !view) return null;
   if (model.collapsed)
     return (
@@ -469,9 +486,10 @@ export function FileWorkspace({
       aria-label="文件工作区"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
+          event.preventDefault();
           event.stopPropagation();
-          setAll(false);
-          collapse();
+          if (all) closeMenu(true);
+          else collapse();
         }
       }}
     >
@@ -537,9 +555,11 @@ export function FileWorkspace({
         </div>
         <CircleButton
           type="button"
-          aria-label="全部文件标签"
+          aria-label="文件菜单"
           aria-expanded={all}
-          onClick={() => {
+          aria-controls={menuId}
+          onClick={(event) => {
+            menuTrigger.current = event.currentTarget;
             setAll((value) => !value);
             setPage(0);
           }}
@@ -564,7 +584,12 @@ export function FileWorkspace({
         </CircleButton>
       </div>
       {all && (
-        <div className="file-workspace-all">
+        <div className="file-workspace-all" id={menuId} ref={menuRef}>
+          {!active.error && <>
+            <span className="file-menu-heading">当前文件视图</span>
+            <div className="file-menu-controls" ref={setControlsHost}/>
+          </>}
+          <span className="file-menu-heading">已打开的文件</span>
           <input
             type="search"
             aria-label="搜索文件标签"
@@ -635,6 +660,8 @@ export function FileWorkspace({
             key={active.id}
             view={view}
             readerState={active.reader}
+            controlsHost={controlsHost}
+            onViewControl={() => closeMenu(true)}
             embedded
             assetContext={assetContext}
             source={active.target.source}
