@@ -2783,6 +2783,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   const hasConversationContext = Boolean(view || localThreadDraft || threadId);
   const inlineAuthRecovery = authRecovery && hasConversationContext && status !== "incompatible";
+  const filesExpanded = fileWorkspace.tabs.length > 0 && !fileWorkspace.collapsed;
   return <div className={`app-shell ${status === "ready" || hasConversationContext ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
@@ -2836,8 +2837,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
-      <div className={`conversation-layout ${fileWorkspace.tabs.length&&!fileWorkspace.collapsed?"files-expanded":""}`}>
-      <main className="conversation">
+      <div className={`conversation-layout ${filesExpanded?"files-expanded":""}`}>
+      <main className="conversation" aria-hidden={filesExpanded || undefined} inert={filesExpanded}>
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
           <CircleButton className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></CircleButton>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
@@ -2852,7 +2853,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         {status === "incompatible" && hasConversationContext && <div className="readonly-banner protocol-incompatible" role="alert"><span>页面版本与 Relay 不兼容，操作已暂停。请刷新页面。</span><button type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button></div>}
         {!inlineAuthRecovery && readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
         {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
-        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
+        <div className="transcript" ref={transcriptRef} tabIndex={-1} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
           {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} onEdit={currentExecution?.editSupported && !messageEdit && ownerReady && !working && !queueWorking && !readOnlyHistory && view?.thread.runtime==="idle" && !view.thread.pendingInteractions.length && !queuedMessages.length && view.thread.turns.at(-1)?.turnId===turn.turnId && editableMessage(turn)?()=>void beginMessageEdit(turn):undefined} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
@@ -2910,7 +2911,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             </div></div>
             </div></div></div>
       </main>
-      <FileWorkspace model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} onReturnFocus={()=>composerInputRef.current?.focus()} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quote=>{if(quote.threadId!==view?.threadId)return;if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}setFileQuotes(current=>[...current,quote]);fileWorkspace.collapse();window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>
+      <FileWorkspace model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} onReturnFocus={()=>{if(historyChromeCollapsed)transcriptRef.current?.focus({preventScroll:true});else composerInputRef.current?.focus({preventScroll:true})}} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quote=>{if(quote.threadId!==view?.threadId)return;if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}setFileQuotes(current=>[...current,quote]);fileWorkspace.collapse();window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>
       </div>
     </div>
     {threadMenu && (() => {
