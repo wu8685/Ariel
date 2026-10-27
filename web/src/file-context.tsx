@@ -153,6 +153,8 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="�
   const allowExternal=useCallback((domain:string)=>setAllowed(current=>new Set([...current,domain])),[]);
   const sourceRoot=useRef<HTMLDivElement>(null);
   const diffRoot=useRef<HTMLDivElement>(null);
+  const quoteBar=useRef<HTMLElement>(null);
+  const ownsDOMSelection=useRef(false);
   const positions=useRef(saved.positions);
   const file=view.file;
   const markdown=/\.(?:md|markdown)$/iu.test(view.change.path);
@@ -174,6 +176,8 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="�
     if(changed||saved.identity&&saved.identity!==identity){saved.reading=false;saved.selection=undefined;saved.focusApplied=false;saved.positions.source=0;saved.positions.reading=0;saved.positions.diff=0;setReading(false);setVersionChanged(!!changed);setAllowed(new Set());}
     saved.identity=identity;
     saved.sha256=file.sha256;
+    ownsDOMSelection.current=false;
+    setSelectionError(false);
     setSelected(saved.selection?selectionLines(file.content,saved.selection.start,saved.selection.end):null);
   },[file?.sha256,view.threadId,view.turnId,view.change.itemId,view.change.path]);
   useEffect(()=>{if(embedded)return;const key=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose()};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key)},[onClose,embedded]);
@@ -183,10 +187,22 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="�
   function quote(value:{startLine:number;endLine:number;text:string}){
     if(file)onQuote({source,threadId:file.threadId,...(file.turnId?{turnId:file.turnId}:{}),...(file.itemId?{itemId:file.itemId}:{}),path:file.path,sha256:file.sha256,modifiedAtMs:file.modifiedAtMs,...value,...(file.referenceKind&&file.rawReference?{referenceKind:file.referenceKind,rawReference:file.rawReference}:{})});
   }
-  function captureSelection(root:HTMLElement|null){
-    if(!file||!root)return;const selection=window.getSelection();if(!selection||selection.isCollapsed||!selection.rangeCount)return;
+  function captureSelection(root:HTMLElement|null, clearEmpty=false){
+    if(!file||!root)return;
+    const selection=window.getSelection();
+    if(!selection||selection.isCollapsed||!selection.rangeCount){
+      // A content gesture/caret cancels the captured quote. Empty selection
+      // events outside the content must not discard a restored Tab selection.
+      const quoteFocused=quoteBar.current?.contains(document.activeElement);
+      const caretInside=selection?.anchorNode&&root.contains(selection.anchorNode);
+      if(clearEmpty||!quoteFocused&&(caretInside||ownsDOMSelection.current&&!selection?.rangeCount)){
+        ownsDOMSelection.current=false;saved.selection=undefined;setSelected(null);setSelectionError(false);
+      }
+      return;
+    }
     const currentRange=selection.getRangeAt(0);
-    if(!root.contains(currentRange.startContainer)&&!root.contains(currentRange.endContainer))return;
+    if(!root.contains(currentRange.startContainer)&&!root.contains(currentRange.endContainer)){ownsDOMSelection.current=false;return;}
+    ownsDOMSelection.current=true;
     const value=selectionFromDOM(file.content,root,selection);
     if(!value){setSelected(null);saved.selection=undefined;setSelectionError(true);return}
     const range=selection.getRangeAt(0),start=sourceOffset(root,range.startContainer,range.startOffset),end=sourceOffset(root,range.endContainer,range.endOffset);
@@ -202,7 +218,7 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="�
     sourceRoot.current?.querySelector<HTMLElement>("[data-line-number=\""+view.focusStartLine+"\"]")?.scrollIntoView({block:"center"});
     saved.focusApplied=true;
   },[view.mode,reading,file?.sha256,view.focusStartLine]);
-  function changeReading(value:boolean){saved.selection=undefined;saved.reading=value;setSelected(null);setSelectionError(false);setReading(value)}
+  function changeReading(value:boolean){ownsDOMSelection.current=false;saved.selection=undefined;saved.reading=value;setSelected(null);setSelectionError(false);setReading(value)}
   return <div className={"file-viewer-backdrop"+(embedded?" embedded":"")} role="presentation">
     <section className={"file-viewer"+(!showDiff&&!markdown?" source-only":"")} role="dialog" aria-modal={embedded?undefined:true} aria-label={"文件 "+view.change.path}>
       <header className="file-viewer-header"><button className="file-back" type="button" onClick={onClose} aria-label={backLabel}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg><span>返回</span></button><div className="file-heading"><strong>{view.change.path}</strong><small>{view.mode==="source"?"当前工作区版本"+(file?.language?" · "+file.language:""):"本次修改 · "+view.change.kind}</small></div><CircleButton className="file-close" type="button" onClick={onClose} aria-label="关闭文件"><CloseGlyph/></CircleButton></header>
@@ -211,13 +227,13 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="�
         {markdown&&view.mode==="source"&&<div className="file-reading-modes" role="group" aria-label="内容展示模式"><button type="button" className={!reading?"active":""} aria-label="原版模式" aria-pressed={!reading} onClick={()=>changeReading(false)}>原版</button><button type="button" className={reading?"active":""} aria-label="阅读模式" aria-pressed={reading} onClick={()=>changeReading(true)} disabled={!file}>阅读</button></div>}
       </nav>}
       {view.mode==="source"?view.loading||!file?<div className="file-view-state" role="status">正在读取文件…</div>:
-        <div ref={sourceRoot} className={reading?"file-reading markdown-body":"file-code"} data-testid={reading?"file-reading":"file-source"} onScroll={event=>{positions.current[reading?"reading":"source"]=event.currentTarget.scrollTop}} onMouseUp={event=>captureSelection(event.currentTarget)} onTouchEnd={event=>{const root=event.currentTarget;window.setTimeout(()=>captureSelection(root),0)}}>
+        <div ref={sourceRoot} className={reading?"file-reading markdown-body":"file-code"} data-testid={reading?"file-reading":"file-source"} onScroll={event=>{positions.current[reading?"reading":"source"]=event.currentTarget.scrollTop}} onMouseUp={event=>captureSelection(event.currentTarget,true)} onTouchEnd={event=>{const root=event.currentTarget;window.setTimeout(()=>captureSelection(root,true),0)}}>
           {linkError&&<p role="alert">{linkError}</p>}{versionChanged&&<p role="status">文件已变化，旧选区已清除。</p>}
           {reading?session?<DocumentReading content={file.content} session={session} allowed={allowed} onAllow={allowExternal} onOpenDocument={onOpenDocument?openRelative:undefined}/>:<p role="status">正在准备阅读模式…</p>:
           lines.map((line,index)=>{const number=index+1;const focused=!!view.focusStartLine&&number>=view.focusStartLine&&number<=(view.focusEndLine||view.focusStartLine);return <div className={"file-line"+(focused?" reference-focus":"")} data-line-number={number} data-testid="file-source-line" key={index}><span className="file-line-number" aria-hidden="true">{number}</span><code data-source-start={starts[index]} data-source-length={line.length}>{line||"\u200b"}</code></div>})}
         </div>:
         <div className="file-diff-wrap">{view.change.diffTruncated&&<div className="file-diff-warning" role="status">Diff 已截断</div>}<div ref={diffRoot} className="file-diff" data-testid="file-diff" onScroll={event=>{positions.current.diff=event.currentTarget.scrollTop}}>{(view.change.diff||"").split("\n").map((line,index)=><code className={diffClass(line)} key={index}>{line||" "}</code>)}</div></div>}
-      {view.mode==="source"&&<footer><span aria-live="polite">{quoteDisabled?"切回来源会话后可引用":selectionError?(reading?"无法映射原文，请切换到原版精确选择":"无法识别该选区，请重新选择"):selected?"已选择 L"+selected.startLine+(selected.endLine!==selected.startLine?"–L"+selected.endLine:"")+(reading?" · 引用对应原文片段":""):"选择要引用的"+(reading?"原文片段":"代码片段")}</span><button type="button" className="primary" disabled={quoteDisabled||!selected||!file} onClick={()=>!quoteDisabled&&selected&&quote(selected)}>引用到会话</button></footer>}
+      {view.mode==="source"&&file&&!view.loading&&(selected||selectionError)&&<footer ref={quoteBar} role="region" aria-label="文件引用"><span aria-live="polite">{quoteDisabled?"切回来源会话后可引用":selectionError?(reading?"无法映射原文，请切换到原版精确选择":"无法识别该选区，请重新选择"):selected?"已选择 L"+selected.startLine+(selected.endLine!==selected.startLine?"–L"+selected.endLine:"")+(reading?" · 引用对应原文片段":""):""}</span><button type="button" className="primary" disabled={quoteDisabled||!selected} onClick={()=>!quoteDisabled&&selected&&quote(selected)}>引用到会话</button></footer>}
     </section>
   </div>;
 }

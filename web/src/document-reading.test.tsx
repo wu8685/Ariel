@@ -34,7 +34,7 @@ it("maps repeated formatted text by source position and quotes only after explic
  expect(quote).not.toHaveBeenCalled();fireEvent.click(screen.getByRole("button",{name:"引用到会话"}));
  expect(quote).toHaveBeenCalledWith(expect.objectContaining({startLine:5,endLine:5,text:"内容"}));
  fireEvent.click(screen.getByRole("button",{name:"原版模式"}));
- expect((screen.getByRole("button",{name:"引用到会话"}) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.queryByRole("button",{name:"引用到会话"})).toBeNull();
 });
 
 it("does not offer Markdown rendering for other file types",()=>{

@@ -375,3 +375,75 @@ test("Escape and closing the last tab restore the conversation and isolate keybo
   await expect(composer).toBeFocused();
   await expect(composer).toHaveValue("关闭文件不丢草稿");
 });
+
+for (const width of [320, 390, 1280]) {
+  test(`quote bar only occupies space after selection and quotes on click at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const { methods, reads } = await setup(page);
+    const composer = page.getByRole("textbox", { name: "发送消息", includeHidden: true });
+    await composer.fill("选区引用保留草稿");
+    await page.getByRole("button", { name: "查看原文：a.md" }).click();
+    const source = page.getByTestId("file-source");
+    await expect(source).toBeVisible();
+    const bar = page.locator(".file-viewer footer");
+    await expect(bar).toHaveCount(0);
+    const full = (await source.boundingBox())!;
+    expect(full.y + full.height).toBe(844);
+    await expect(page).toHaveScreenshot(`file-quote-collapsed-${width}.png`, { animations: "disabled", caret: "hide" });
+    const selectSource = () => source.evaluate(root => {
+      const node = root.querySelectorAll("code")[2].firstChild!;
+      const range = document.createRange();
+      range.setStart(node, 0); range.setEnd(node, 4);
+      getSelection()!.removeAllRanges(); getSelection()!.addRange(range);
+      root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await selectSource();
+    const quote = page.getByRole("button", { name: "引用到会话" });
+    await expect(quote).toBeEnabled();
+    const shown = (await source.boundingBox())!, footer = (await bar.boundingBox())!;
+    expect(footer.y + footer.height).toBe(844);
+    expect(footer.height).toBeGreaterThanOrEqual(44);
+    expect(shown.y + shown.height).toBe(footer.y);
+    expect(full.height - shown.height).toBe(footer.height);
+    await expect(page).toHaveScreenshot(`file-quote-selected-${width}.png`, { animations: "disabled", caret: "hide" });
+    // A real pointer click in the text explicitly cancels the selection.
+    await source.tap({ position: { x: 160, y: 40 } });
+    await expect(bar).toHaveCount(0);
+    expect((await source.boundingBox())!.height).toBe(full.height);
+    // selectionchange also handles keyboard-style collapsed ranges.
+    await selectSource();
+    await source.evaluate(root => {
+      getSelection()!.collapse(root.querySelectorAll("code")[2].firstChild!, 0);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await expect(bar).toHaveCount(0);
+    await page.getByRole("button", { name: "阅读模式" }).click();
+    const reading = page.getByTestId("file-reading");
+    await expect(reading.getByRole("heading", { name: "a.md" })).toBeVisible();
+    await expect(bar).toHaveCount(0);
+    await reading.evaluate(root => {
+      const span = root.querySelector("[data-source-start]")!;
+      const range = document.createRange(); range.selectNodeContents(span);
+      getSelection()!.removeAllRanges(); getSelection()!.addRange(range);
+      root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await expect(quote).toBeEnabled();
+    await page.getByRole("button", { name: "原版模式" }).click();
+    await expect(bar).toHaveCount(0);
+    await selectSource();
+    if (width === 1280) {
+      await quote.focus();
+      await page.evaluate(() => {
+        getSelection()!.removeAllRanges();
+        document.dispatchEvent(new Event("selectionchange"));
+      });
+      await expect(quote).toBeEnabled();
+      await quote.press("Enter");
+    } else await quote.click();
+    await expect(composer).toBeVisible();
+    await expect(composer).toHaveValue("选区引用保留草稿");
+    await expect(page.getByText("a.md · L3")).toBeVisible();
+    expect(reads).toEqual(["a.md"]);
+    expect(methods.filter(method => method === "turn.start")).toEqual([]);
+  });
+}

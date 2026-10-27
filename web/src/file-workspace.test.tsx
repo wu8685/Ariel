@@ -206,7 +206,14 @@ it("retains original proof and refuses quoting into another conversation", async
     />,
   );
   await screen.findByText("two");
+  expect(screen.queryByRole("button", { name: "引用到会话" })).toBeNull();
+  const blockedRange = document.createRange();
+  blockedRange.selectNodeContents(screen.getByTestId("file-source").querySelectorAll("code")[1]);
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(blockedRange);
+  fireEvent.mouseUp(screen.getByTestId("file-source"));
   expect(screen.getByText(/切回来源会话/)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "引用到会话" }) as HTMLButtonElement).disabled).toBe(true);
   rendered.rerender(
     <FileWorkspace
       model={model}
