@@ -74,8 +74,10 @@ Ariel ECS 单机部署器
   --image IMAGE         Relay 镜像；默认 ariel-relay:ecs
   --build               从当前仓库构建 --image；否则显式镜像会从 Registry 拉取
   --caddy-image IMAGE   Caddy 镜像，默认 caddy:2-alpine
-  --enable-chilling-file-context   在 Relay/Web 启用 Chilling 文件入口
-  --disable-chilling-file-context  在 Relay/Web 关闭 Chilling 文件入口（默认）
+  --enable-file-context           在 Relay/Web 启用 Desktop Agent 文件入口
+  --disable-file-context          关闭文件入口（默认）
+  --enable-chilling-file-context   兼容旧名，等同 --enable-file-context
+  --disable-chilling-file-context  兼容旧名，等同 --disable-file-context
   --install-docker      Docker 缺失时用系统包管理器安装（需要 root）
   --service NAME        logs 的目标：relay 或 proxy
   --follow              持续跟随日志
@@ -173,12 +175,12 @@ while [[ $# -gt 0 ]]; do
       caddy_image_explicit="1"
       shift 2
       ;;
-    --enable-chilling-file-context)
+    --enable-file-context|--enable-chilling-file-context)
       file_context="1"
       file_context_explicit="1"
       shift
       ;;
-    --disable-chilling-file-context)
+    --disable-file-context|--disable-chilling-file-context)
       file_context="0"
       file_context_explicit="1"
       shift
@@ -506,6 +508,7 @@ write_runtime_env() {
     fi
   fi
   if [[ "$file_context" == "1" ]]; then
+    env_body+=$'\n'"ARIEL_ENABLE_FILE_CONTEXT=true"
     env_body+=$'\n'"ARIEL_ENABLE_CHILLING_FILE_CONTEXT=true"
   fi
   atomic_write "$runtime_env_file" "$env_body"$'\n'

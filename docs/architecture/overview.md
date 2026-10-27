@@ -12,13 +12,15 @@ flowchart LR
   Relay <-->|主动 WebSocket| Agent["Desktop Agent"]
   Agent <-->|统一会话操作| Adapter["Agent App Adapter"]
   Adapter <-->|本机 API / IPC / SDK| App["Desktop Agent App"]
+  Agent --> Files["内置只读 FileContext"]
 ```
 
 | 组件 | 职责 | 不负责 |
 | --- | --- | --- |
 | Browser | 展示会话、收集用户的显式操作 | 持有桌面凭据、直接调用 Agent App |
 | Relay | 鉴别、连接路由、消息转发和容量限制 | 保存第二份会话正文、代替 Agent App 执行 |
-| Desktop Agent | 从桌面设备主动连接 Relay，执行通用请求 | 成为新的会话 SSOT |
+| Desktop Agent | 从桌面设备主动连接 Relay，执行通用请求，提供受限文件上下文 | 成为新的会话 SSOT、通用 filesystem／URL 代理 |
+| 内置 FileContext | 校验 workspace 与原生来源，按需读取文件／目录／图片并复验选区 | 编辑文件、建立 native mutation owner、连接 Chilling |
 | Agent App Adapter | 将通用会话语义映射为具体产品能力 | 把未验证能力伪装成已支持 |
 | Agent App | 持有原会话、执行状态、权限和工作环境 | 保存 Ariel 的浏览器连接状态 |
 
@@ -29,6 +31,10 @@ flowchart LR
 3. 发送、停止、审批、补充回答和队列修改都必须由用户显式触发。
 4. 写操作结果不确定时不自动重放；Ariel 重新读取 Agent App 的权威状态。
 5. Web 与 Relay 使用 Ariel 自有协议，不接触某个 Agent App 的私有方法名。
+
+Codex 会话与文件代理不依赖 Chilling。文件来源证明经已有只读 App Server endpoint 获取：thread metadata 不包含历史，items 只按指定 turn 分页；当前文件通过受控根目录下的 no-follow 文件句柄有界读取。所有发送仍由既有 owner 受理。任务库／MySQL／scheduler 属于独立可选任务业务，不因文件迁移进入 Ariel；完整范围和兼容细节见 [0119](../specs/0119-self-contained-desktop-file-context.md)。
+
+本地 Markdown 图片与正文分离，按需分块流经既有 WebSocket；Relay 不将图片、目录或文件正文放入会话 hot cache。原版／阅读切换在 Web 本地完成，不重新订阅会话；图片资源 lease、浏览器 Blob 和缓存均有大小与生命周期限制。新图片方法通过 response.data 可选扩展协商，不向旧严格 hello／device 结构无条件添加字段。
 
 ## 认证边界
 

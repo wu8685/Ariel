@@ -106,6 +106,7 @@ type subscription struct {
 }
 
 type peer struct {
+	documentAssets bool // current connection only, protected by Server.mu
 	settingsOptIn  bool // protected by Server.mu
 	taskState      atomic.Pointer[taskPeerState]
 	taskStoreID    string
@@ -774,7 +775,7 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		devices = append(devices, device)
 	}
 	s.mu.Unlock()
-	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices}})
+	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices, "documentAssetsVersion": 1}})
 	return true
 }
 
@@ -794,6 +795,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		SubscriptionID string          `json:"subscriptionId"`
 		SearchTerm     string          `json:"searchTerm"`
 		Settings       json.RawMessage `json:"settings"`
+		AgentEpoch     string          `json:"agentEpoch"`
 	}
 	json.Unmarshal(params, &reference)
 	s.mu.Lock()
@@ -804,6 +806,11 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		return true
 	}
 	settingsMethod := method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.")
+	if method == "file.context.asset.read" && (!agent.documentAssets || reference.AgentEpoch != agent.agentEpoch) {
+		s.mu.Unlock()
+		web.send(ctx, responseError(webID, "rejected", "PROTOCOL_UNSUPPORTED", "document assets unavailable or stale Agent"))
+		return true
+	}
 	if (method == "turn.edit" || method == "turn.edit.read") && (!agent.capabilities["turnEditing"] || !web.settingsOptIn) {
 		s.mu.Unlock()
 		web.send(ctx, responseError(webID, "rejected", "PROTOCOL_UNSUPPORTED", "turn editing unavailable"))
@@ -901,7 +908,7 @@ func isLongRead(method string) bool {
 		return true
 	}
 	switch method {
-	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
+	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":
 		return true
 	default:
 		return false
@@ -949,6 +956,16 @@ func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []by
 		return
 	}
 	reply["requestId"] = entry.webID
+	if s.agents[agent.deviceID] == agent && reply["outcome"] == "accepted" && (entry.method == "file.context.read" || entry.method == "file.context.reference.read" || entry.method == "workspace.file.read") {
+		data, _ := reply["data"].(map[string]any)
+		capability, _ := data["documentAssets"].(map[string]any)
+		if capability["version"] == float64(1) && capability["maxBytes"] == float64(4<<20) && capability["chunkBytes"] == float64(256<<10) {
+			agent.documentAssets = true
+		}
+	}
+	if entry.method == "file.context.asset.read" && reply["outcome"] == "accepted" && !validAssetReply(body, reply["data"]) {
+		reply = responseError(entry.webID, "rejected", "FILE_TOO_LARGE", "invalid or oversized document resource")
+	}
 	s.mu.Unlock()
 	s.finishRoute(relayID, agent, reply)
 }

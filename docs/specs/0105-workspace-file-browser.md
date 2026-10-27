@@ -1,5 +1,7 @@
 # 0105：当前工作区文件浏览器
 
+> 后端归属已由 [0119](0119-self-contained-desktop-file-context.md) 取代：目录与文件读取内置到 Ariel Desktop Agent，不再依赖 Chilling。以下保留原设计，显式 workspace 授权和分页限制继续有效。
+
 - 状态：Implemented（用户于 2026-10-25 确认；自动化验收已通过，物理 iPhone／Safari 待用户复验）
 - 日期：2026-10-25
 - 关联：[0089 文件上下文前端与可选接入](0089-turn-file-links-and-selection-context.md)、[0090 文件查看器导航与片段引用](0090-file-viewer-wrap-and-text-selection.md)、Chilling `0004-workspace-file-browser-backend.md`

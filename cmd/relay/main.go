@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"flag"
+	"github.com/wu8685/Ariel/internal/filecontext"
 	"log"
 	"net"
 	"net/http"
@@ -178,6 +179,7 @@ func buildHandler(cfg config) (http.Handler, error) {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			html := strings.ReplaceAll(string(indexHTML), "__ARIEL_WEB_AUTH__", cfg.webAuth)
+			html = strings.ReplaceAll(html, "__ARIEL_FILE_CONTEXT__", map[bool]string{true: "true", false: "false"}[cfg.enableChillingFileContext])
 			html = strings.ReplaceAll(html, "__ARIEL_CHILLING_FILE_CONTEXT__", map[bool]string{true: "true", false: "false"}[cfg.enableChillingFileContext])
 			_, _ = w.Write([]byte(html))
 			return
@@ -193,14 +195,18 @@ func buildHandler(cfg config) (http.Handler, error) {
 }
 
 func main() {
-	enableChilling := flag.Bool("enable-chilling-file-context", os.Getenv("ARIEL_ENABLE_CHILLING_FILE_CONTEXT") == "true", "enable Chilling file-context UI")
+	fileFlags := filecontext.RegisterFlags(flag.CommandLine, os.LookupEnv)
 	enableTasks := flag.Bool("enable-tasks", os.Getenv("ARIEL_ENABLE_TASKS") == "true", "enable the local Chilling task gateway")
 	taskCredentials := flag.String("task-agent-credentials", os.Getenv("ARIEL_TASK_AGENT_CREDENTIALS_FILE"), "private per-device task credential file")
 	flag.Parse()
+	fileEnabled, fileFlagErr := fileFlags.Enabled()
+	if fileFlagErr != nil {
+		log.Fatal(fileFlagErr)
+	}
 	cfg, err := configFromInput(configInput{
 		token: os.Getenv("ARIEL_TOKEN"), webPIN: os.Getenv("ARIEL_WEB_PIN"), webAuth: os.Getenv("ARIEL_WEB_AUTH"), origins: os.Getenv("ARIEL_ORIGINS"),
 		publicOrigin: os.Getenv("ARIEL_PUBLIC_ORIGIN"), rpID: os.Getenv("ARIEL_WEBAUTHN_RP_ID"), credentialsFile: os.Getenv("ARIEL_WEBAUTHN_CREDENTIALS_FILE"),
-		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: *enableChilling, enableTasks: *enableTasks, taskCredentialsFile: *taskCredentials,
+		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: fileEnabled, enableTasks: *enableTasks, taskCredentialsFile: *taskCredentials,
 		cacheMaxBytes: os.Getenv("ARIEL_CACHE_MAX_BYTES"), cacheEntryMaxBytes: os.Getenv("ARIEL_CACHE_ENTRY_MAX_BYTES"),
 	})
 	if err != nil {

@@ -40,6 +40,8 @@
 
 ## 安全与数据边界
 
+- 0119 已于 2026-10-27 获批：Codex 会话与文件代理链路由 Ariel 自包含；文件原文／Diff／目录／消息引用／选区校验及图片读取归 Desktop Agent 内置 `internal/filecontext`，经既有版本化 Codex Adapter 获取来源证明，复用现有只读 endpoint 与唯一 mutation owner。不得为文件能力重新依赖 Chilling socket／进程，或在 Relay/Web 读取本机路径。0089／0094／0105 中旧 Chilling 后端归属由 0119 取代，其用户行为与安全约束继续有效。
+- 文件、workspace browser、document assets 默认关闭，分别显式授权；旧 `chillingFileContext` 等 v1 capability 和旧文件开关仅作兼容别名，不能因改名破坏旧页面。独立任务后端不随文件迁移，不自动启用看板、不删除或重启 Chilling 及其数据。
 - 任务看板的 Web／云端代码统一归 Ariel，本地 chilling 承担 MySQL／scheduler／任务持久数据；管理与执行主机分开选择，负责人使用所选执行主机的本地 Codex。0091／chilling 0001 已于 2026-10-17 获准实现，严格按 TDD 与 compatibility gate 推进。
 - chilling 是看板任务的唯一 SSOT，不仅是数据库插件；Ariel 只连接／呈现任务和绑定主机 Agent，不复制任务状态机、调度或验收规则。native 事实回流 chilling 后更新任务，native turn 成功不等于任务完成；后端离线不接管任务写入。
 - Relay 的主机接入对象是 Ariel Desktop Agent，不是 Codex Agent；本机 Ariel Desktop Agent 再经 Codex Adapter 转发给 Codex。`role=agent`、`Agent(M/E)` 和 `agentEpoch` 均属 Ariel Desktop Agent，不得与任务负责人 Codex 或 ahsir Agent 混用。

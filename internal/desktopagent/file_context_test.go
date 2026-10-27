@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	chillingclient "github.com/wu8685/Ariel/internal/chilling"
+	chillingclient "github.com/wu8685/Ariel/internal/filecontext"
 )
 
 type fakeFileContext struct {

@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CircleButton, CloseGlyph } from "./circular-button";
+import { DocumentReading } from "./document-reading";
+import { DocumentImageSession, type AssetContext } from "./document-assets";
 
 export type FileChange = { itemId: string; path: string; kind: "add" | "update" | "delete"; diff?: string; diffTruncated?: boolean };
 export type FileQuote = { source?: "turn_change" | "message_reference" | "workspace_browser"; threadId: string; turnId?: string; itemId?: string; path: string; sha256: string; modifiedAtMs: number; startLine: number; endLine: number; text: string; referenceKind?: "markdown_link" | "plain_path"; rawReference?: string };
-export type OpenFile = { source?: "turn_change" | "message_reference" | "workspace_browser"; threadId: string; turnId?: string; itemId?: string; path: string; content: string; sha256: string; modifiedAtMs: number; lineCount: number; language: string; diff?: string; diffTruncated?: boolean; version: "current-workspace"; referenceKind?: "markdown_link" | "plain_path"; rawReference?: string };
+export type OpenFile = { documentAssets?: {version:number;maxBytes:number;chunkBytes:number}; source?: "turn_change" | "message_reference" | "workspace_browser"; threadId: string; turnId?: string; itemId?: string; path: string; content: string; sha256: string; modifiedAtMs: number; lineCount: number; language: string; diff?: string; diffTruncated?: boolean; version: "current-workspace"; referenceKind?: "markdown_link" | "plain_path"; rawReference?: string };
 export type FileViewMode = "source" | "diff";
 export type FileView = { threadId:string;turnId:string;change:FileChange;mode:FileViewMode;file?:OpenFile;loading?:boolean;focusStartLine?:number;focusEndLine?:number };
 export type HistoricalFileQuote = Pick<FileQuote,"path"|"sha256"|"startLine"|"endLine"|"text">;
@@ -71,7 +73,8 @@ export function HistoricalFileQuotes({quotes}:{quotes:HistoricalFileQuote[]}){
 }
 
 export function webFileContextEnabled(): boolean {
-  return document.querySelector<HTMLMetaElement>('meta[name="ariel-chilling-file-context"]')?.content === "true";
+  const current=document.querySelector<HTMLMetaElement>('meta[name="ariel-file-context"]')?.content;
+  return (current && !current.startsWith("__") ? current : document.querySelector<HTMLMetaElement>('meta[name="ariel-chilling-file-context"]')?.content) === "true";
 }
 
 export function selectionLines(content: string, startOffset: number, endOffset: number): { startLine: number; endLine: number; text: string } | null {
@@ -86,7 +89,7 @@ export function selectionLines(content: string, startOffset: number, endOffset: 
 
 function sourceOffset(root: HTMLElement, node: Node, offset: number): number | null {
   const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
-  const code = element?.closest<HTMLElement>("code[data-source-start]");
+  const code = element?.closest<HTMLElement>("[data-source-start]");
   if (!code || !root.contains(code)) return null;
   const base = Number(code.dataset.sourceStart);
   const lineLength = Number(code.dataset.sourceLength);
@@ -95,7 +98,9 @@ function sourceOffset(root: HTMLElement, node: Node, offset: number): number | n
     const prefix = document.createRange();
     prefix.selectNodeContents(code);
     prefix.setEnd(node, offset);
-    return base + Math.min(prefix.toString().length, lineLength);
+    const length=Math.min(prefix.toString().length,lineLength);
+    const boundaries=code.dataset.sourceBoundaries?JSON.parse(code.dataset.sourceBoundaries) as number[]:null;
+    return base + (boundaries?boundaries[length]:length);
   } catch {
     return null;
   }
@@ -132,40 +137,67 @@ function diffClass(line:string):string{
   return "diff-context";
 }
 
-export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="返回会话", source="turn_change", showDiff=true }: { view: FileView; onClose: () => void; onModeChange:(mode:FileViewMode)=>void; onQuote: (quote: FileQuote) => void; backLabel?:string; source?:"turn_change"|"message_reference"|"workspace_browser"; showDiff?:boolean }) {
-  const [selected, setSelected] = useState<{ startLine:number;endLine:number;text:string } | null>(null);
+export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="返回会话", source="turn_change", showDiff=true, assetContext, onOpenDocument }: { view: FileView; onClose: () => void; onModeChange:(mode:FileViewMode)=>void; onQuote: (quote: FileQuote) => void; backLabel?:string; source?:"turn_change"|"message_reference"|"workspace_browser"; showDiff?:boolean; assetContext?:AssetContext; onOpenDocument?:(path:string)=>void|Promise<void> }) {
+  const [selected,setSelected]=useState<{startLine:number;endLine:number;text:string}|null>(null);
   const [selectionError,setSelectionError]=useState(false);
+  const [linkError,setLinkError]=useState("");
+  const relativeHandler=useRef(onOpenDocument);relativeHandler.current=onOpenDocument;
+  const openRelative=useCallback((path:string)=>{setLinkError("");const open=relativeHandler.current;if(open)void Promise.resolve(open(path)).catch(error=>setLinkError(error instanceof Error?error.message:"无法读取文档"));},[]);
+  const [reading,setReading]=useState(false);
+  const [allowed,setAllowed]=useState<ReadonlySet<string>>(new Set());
+  const allowExternal=useCallback((domain:string)=>setAllowed(current=>new Set([...current,domain])),[]);
   const sourceRoot=useRef<HTMLDivElement>(null);
-  const file = view.file;
-  const lines = file?.content.split("\n") || [];
-  const starts:number[]=[]; let nextStart=0; for(const line of lines){starts.push(nextStart);nextStart+=line.length+1;}
-  useEffect(()=>{setSelected(null);setSelectionError(false);},[view.change.itemId,view.change.path,view.mode,file?.sha256]);
-  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose();};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[onClose]);
-  function quote(value: { startLine:number;endLine:number;text:string }) { if(file) onQuote({ source,threadId:file.threadId,...(file.turnId?{turnId:file.turnId}:{}),...(file.itemId?{itemId:file.itemId}:{}),path:file.path,sha256:file.sha256,modifiedAtMs:file.modifiedAtMs,...value,...(file.referenceKind&&file.rawReference?{referenceKind:file.referenceKind,rawReference:file.rawReference}:{}) }); }
-  function captureSelection(root:HTMLElement|null) {
-    if(!file||!root)return;
-    const selection=window.getSelection();
-    if(!selection||selection.isCollapsed)return;
+  const positions=useRef({source:0,reading:0});
+  const file=view.file;
+  const markdown=/\.(?:md|markdown)$/iu.test(view.change.path);
+  const imageIdentity=useMemo(()=>({}),[file,source,assetContext?.agentEpoch,assetContext?.relayVersion,assetContext?.request]);
+  const [imageState,setImageState]=useState<{identity:object;session:DocumentImageSession}|null>(null);
+  const session=imageState?.identity===imageIdentity?imageState.session:null;
+  useEffect(()=>{
+    if(!file){setImageState(null);return}
+    const current=new DocumentImageSession({...file,source},assetContext);
+    setImageState({identity:imageIdentity,session:current});
+    return()=>current.dispose();
+  },[imageIdentity]);
+  const lines=file?.content.split("\n")||[];
+  const starts:number[]=[];let start=0;for(const line of lines){starts.push(start);start+=line.length+1;}
+  useEffect(()=>{setReading(false);setAllowed(new Set());positions.current={source:0,reading:0};},[view.threadId,view.change.itemId,view.change.path,file?.sha256]);
+  useEffect(()=>{setSelected(null);setSelectionError(false);window.getSelection()?.removeAllRanges();},[view.change.itemId,view.change.path,view.mode,reading,file?.sha256]);
+  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose()};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key)},[onClose]);
+  useLayoutEffect(()=>{if(sourceRoot.current)sourceRoot.current.scrollTop=positions.current[reading?"reading":"source"]},[view.mode,reading,file?.sha256]);
+
+  function quote(value:{startLine:number;endLine:number;text:string}){
+    if(file)onQuote({source,threadId:file.threadId,...(file.turnId?{turnId:file.turnId}:{}),...(file.itemId?{itemId:file.itemId}:{}),path:file.path,sha256:file.sha256,modifiedAtMs:file.modifiedAtMs,...value,...(file.referenceKind&&file.rawReference?{referenceKind:file.referenceKind,rawReference:file.rawReference}:{})});
+  }
+  function captureSelection(root:HTMLElement|null){
+    if(!file||!root)return;const selection=window.getSelection();if(!selection||selection.isCollapsed)return;
     const value=selectionFromDOM(file.content,root,selection);
-    if(!value){setSelectionError(true);return;}
-    setSelectionError(false);setSelected(value);
+    if(!value){setSelected(null);setSelectionError(true);return}setSelectionError(false);setSelected(value);
   }
   useEffect(()=>{
-    if(view.mode!=="source"||!file)return;
-    const update=()=>captureSelection(sourceRoot.current);
-    document.addEventListener("selectionchange",update);
-    return()=>document.removeEventListener("selectionchange",update);
-  },[view.mode,file?.sha256]);
+    if(view.mode!=="source"||!file)return;const update=()=>captureSelection(sourceRoot.current);
+    document.addEventListener("selectionchange",update);return()=>document.removeEventListener("selectionchange",update);
+  },[view.mode,reading,file?.sha256]);
   useEffect(()=>{
-    if(view.mode!=="source"||!file||!view.focusStartLine)return;
-    sourceRoot.current?.querySelector<HTMLElement>(`[data-line-number="${view.focusStartLine}"]`)?.scrollIntoView({block:"center"});
-  },[view.mode,file?.sha256,view.focusStartLine]);
+    if(view.mode!=="source"||!file||!view.focusStartLine||reading)return;
+    sourceRoot.current?.querySelector<HTMLElement>("[data-line-number=\""+view.focusStartLine+"\"]")?.scrollIntoView({block:"center"});
+  },[view.mode,reading,file?.sha256,view.focusStartLine]);
+  function changeReading(value:boolean){setSelected(null);setSelectionError(false);setReading(value)}
   return <div className="file-viewer-backdrop" role="presentation">
-    <section className={`file-viewer${showDiff?"":" source-only"}`} role="dialog" aria-modal="true" aria-label={`文件 ${view.change.path}`}>
-      <header className="file-viewer-header"><button className="file-back" type="button" onClick={onClose} aria-label={backLabel}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg><span>返回</span></button><div className="file-heading"><strong>{view.change.path}</strong><small>{view.mode==="source"?`当前工作区版本${file?.language?` · ${file.language}`:""}`:`本次修改 · ${view.change.kind}`}</small></div><CircleButton className="file-close" type="button" onClick={onClose} aria-label="关闭文件"><CloseGlyph/></CircleButton></header>
-      {showDiff&&<nav className="file-view-tabs" aria-label="文件视图"><button type="button" className={view.mode==="source"?"active":""} aria-pressed={view.mode==="source"} onClick={()=>onModeChange("source")} disabled={view.change.kind==="delete"}>查看原文</button><button type="button" className={view.mode==="diff"?"active":""} aria-pressed={view.mode==="diff"} onClick={()=>onModeChange("diff")} disabled={!view.change.diff}>查看 Diff</button></nav>}
-      {view.mode==="source" ? view.loading||!file ? <div className="file-view-state" role="status">正在读取文件…</div> : <div ref={sourceRoot} className="file-code" data-testid="file-source" onMouseUp={event=>captureSelection(event.currentTarget)} onTouchEnd={event=>{const root=event.currentTarget;window.setTimeout(()=>captureSelection(root),0);}}>{lines.map((line,index)=>{const number=index+1;const focused=!!view.focusStartLine&&number>=view.focusStartLine&&number<=(view.focusEndLine||view.focusStartLine);return <div className={`file-line${focused?" reference-focus":""}`} data-line-number={number} data-testid="file-source-line" key={index}><span className="file-line-number" aria-hidden="true">{number}</span><code data-source-start={starts[index]} data-source-length={line.length}>{line || "\u200b"}</code></div>;})}</div> : <div className="file-diff-wrap">{view.change.diffTruncated&&<div className="file-diff-warning" role="status">Diff 已截断</div>}<div className="file-diff" data-testid="file-diff">{(view.change.diff||"").split("\n").map((line,index)=><code className={diffClass(line)} key={index}>{line||" "}</code>)}</div></div>}
-      {view.mode==="source"&&<footer><span aria-live="polite">{selectionError?"无法识别该选区，请重新选择":selected ? `已选择 L${selected.startLine}${selected.endLine!==selected.startLine?`–L${selected.endLine}`:""}` : "选择要引用的代码片段"}</span><button type="button" className="primary" disabled={!selected||!file} onClick={()=>selected && quote(selected)}>引用到会话</button></footer>}
+    <section className={"file-viewer"+(!showDiff&&!markdown?" source-only":"")} role="dialog" aria-modal="true" aria-label={"文件 "+view.change.path}>
+      <header className="file-viewer-header"><button className="file-back" type="button" onClick={onClose} aria-label={backLabel}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg><span>返回</span></button><div className="file-heading"><strong>{view.change.path}</strong><small>{view.mode==="source"?"当前工作区版本"+(file?.language?" · "+file.language:""):"本次修改 · "+view.change.kind}</small></div><CircleButton className="file-close" type="button" onClick={onClose} aria-label="关闭文件"><CloseGlyph/></CircleButton></header>
+      {(showDiff||markdown)&&<nav className="file-view-tabs" aria-label="文件视图">
+        {showDiff&&<><button type="button" className={view.mode==="source"?"active":""} aria-pressed={view.mode==="source"} onClick={()=>onModeChange("source")} disabled={view.change.kind==="delete"}>查看原文</button><button type="button" className={view.mode==="diff"?"active":""} aria-pressed={view.mode==="diff"} onClick={()=>onModeChange("diff")} disabled={!view.change.diff}>查看 Diff</button></>}
+        {markdown&&view.mode==="source"&&<div className="file-reading-modes" role="group" aria-label="内容展示模式"><button type="button" className={!reading?"active":""} aria-label="原版模式" aria-pressed={!reading} onClick={()=>changeReading(false)}>原版</button><button type="button" className={reading?"active":""} aria-label="阅读模式" aria-pressed={reading} onClick={()=>changeReading(true)} disabled={!file}>阅读</button></div>}
+      </nav>}
+      {view.mode==="source"?view.loading||!file?<div className="file-view-state" role="status">正在读取文件…</div>:
+        <div ref={sourceRoot} className={reading?"file-reading markdown-body":"file-code"} data-testid={reading?"file-reading":"file-source"} onScroll={event=>{positions.current[reading?"reading":"source"]=event.currentTarget.scrollTop}} onMouseUp={event=>captureSelection(event.currentTarget)} onTouchEnd={event=>{const root=event.currentTarget;window.setTimeout(()=>captureSelection(root),0)}}>
+          {linkError&&<p role="alert">{linkError}</p>}
+          {reading?session?<DocumentReading content={file.content} session={session} allowed={allowed} onAllow={allowExternal} onOpenDocument={onOpenDocument?openRelative:undefined}/>:<p role="status">正在准备阅读模式…</p>:
+          lines.map((line,index)=>{const number=index+1;const focused=!!view.focusStartLine&&number>=view.focusStartLine&&number<=(view.focusEndLine||view.focusStartLine);return <div className={"file-line"+(focused?" reference-focus":"")} data-line-number={number} data-testid="file-source-line" key={index}><span className="file-line-number" aria-hidden="true">{number}</span><code data-source-start={starts[index]} data-source-length={line.length}>{line||"\u200b"}</code></div>})}
+        </div>:
+        <div className="file-diff-wrap">{view.change.diffTruncated&&<div className="file-diff-warning" role="status">Diff 已截断</div>}<div className="file-diff" data-testid="file-diff">{(view.change.diff||"").split("\n").map((line,index)=><code className={diffClass(line)} key={index}>{line||" "}</code>)}</div></div>}
+      {view.mode==="source"&&<footer><span aria-live="polite">{selectionError?(reading?"无法映射原文，请切换到原版精确选择":"无法识别该选区，请重新选择"):selected?"已选择 L"+selected.startLine+(selected.endLine!==selected.startLine?"–L"+selected.endLine:"")+(reading?" · 引用对应原文片段":""):"选择要引用的"+(reading?"原文片段":"代码片段")}</span><button type="button" className="primary" disabled={!selected||!file} onClick={()=>selected&&quote(selected)}>引用到会话</button></footer>}
     </section>
   </div>;
 }

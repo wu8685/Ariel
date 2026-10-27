@@ -88,7 +88,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -112,6 +112,7 @@
         { "if": { "properties": { "method": { "enum": ["thread.cache.read", "thread.cache.watch", "thread.cache.promote"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/threadParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.cache.touch" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/cacheTouchParams" } } } },
         { "if": { "properties": { "method": { "const": "thread.cache.unwatch" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/cacheUnwatchParams" } } } },
+        { "if": { "properties": { "method": { "const": "file.context.asset.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/documentAssetParams" } } } },
         { "if": { "properties": { "method": { "const": "file.context.changes" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/fileContextChangesParams" } } } },
         { "if": { "properties": { "method": { "const": "file.context.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/fileContextReadParams" } } } },
         { "if": { "properties": { "method": { "const": "file.context.reference.read" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/fileContextReferenceReadParams" } } } },
@@ -221,6 +222,160 @@
     "workspaceDirectoryPath": {
       "type": "string", "maxLength": 4096, "pattern": "^[^/\\\\].*$|^$",
       "not": { "pattern": "(^|/)\\.\\.(/|$)|\\\\" }
+    },
+    "documentAssetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "threadId",
+        "agentEpoch",
+        "documentSha256",
+        "imageReference"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "turn_change",
+            "message_reference",
+            "workspace_browser"
+          ]
+        },
+        "threadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "agentEpoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "itemId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "path": {
+          "$ref": "#/$defs/relativeFilePath"
+        },
+        "referenceKind": {
+          "enum": [
+            "markdown_link",
+            "plain_path"
+          ]
+        },
+        "rawReference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "documentSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "imageReference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "cursor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "workspace_browser"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "path"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "turnId"
+                  ]
+                },
+                {
+                  "required": [
+                    "itemId"
+                  ]
+                },
+                {
+                  "required": [
+                    "rawReference"
+                  ]
+                },
+                {
+                  "required": [
+                    "referenceKind"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "turn_change"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "path",
+              "turnId",
+              "itemId"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "rawReference"
+                  ]
+                },
+                {
+                  "required": [
+                    "referenceKind"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "message_reference"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "turnId",
+              "itemId",
+              "referenceKind",
+              "rawReference"
+            ]
+          }
+        }
+      ]
     },
     "fileContextChangesParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "turnIds"],

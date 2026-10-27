@@ -196,6 +196,17 @@ describe("fixed Night appearance", () => {
     }
   });
 
+  it("removes vertical queue padding while retaining real 44px operation boxes", () => {
+    const item = style.match(/\.queue-item\s*\{([^}]*)\}/s)?.[1] || "";
+    const handle = style.match(/\.queue-handle\s*\{([^}]*)\}/s)?.[1] || "";
+    const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
+    expect(item).toMatch(/min-height:\s*44px/);
+    expect(item).toMatch(/padding:\s*0(?:px)?\s+8px/);
+    expect(handle).toMatch(/height:\s*44px/);
+    expect(style).toMatch(/\.queue-actions button, \.queue-cancel-button\s*\{[^}]*min-height:\s*44px/s);
+    expect(mobile).toMatch(/\.queue-item\s*\{[^}]*padding:\s*0(?:px)?\s+7px/s);
+  });
+
   it("uses the compact menu type scale for thread context actions", () => {
     const menu = style.match(/\.thread-context-menu\s*\{([^}]*)\}/s)?.[1] || "";
     const menuButton = style.match(/\.thread-context-menu button\s*\{([^}]*)\}/s)?.[1] || "";

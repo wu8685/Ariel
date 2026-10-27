@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
@@ -30,6 +30,7 @@ import {StreamFence} from "./stream-fence";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
 import { FileContentCache, FileQuoteChips, FileViewer, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileView, type FileViewMode, type OpenFile } from "./file-context";
 import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
+import { resolveDocumentPath } from "./document-path";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 
@@ -293,6 +294,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const savedSessionAttempt = useRef(false);
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [devices, setDevices] = useState<Device[]>([]);
+  const [relayAssetVersion,setRelayAssetVersion]=useState(0);
+  const fileCapabilityRefresh=useRef(new Map<string,Promise<void>>());
   const [deviceId, setDeviceId] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
   const [unreadThreadIDs, setUnreadThreadIDs] = useState<Set<string>>(() => new Set());
@@ -431,6 +434,33 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 	const fileContextEnabled = webFileContextEnabled() && device?.capabilities.chillingFileContext === true;
 	const workspaceBrowserEnabled=fileContextEnabled&&device?.capabilities.chillingWorkspaceBrowser===true&&!!view;
 	const documentReferencesVisible = webFileContextEnabled();
+	const requestDocumentAsset=useCallback(async(params:Record<string,unknown>,signal:AbortSignal)=>{
+		if(signal.aborted)throw new DOMException("读取已取消","AbortError");
+		let response=await client.request("file.context.asset.read",deviceId,params);
+		if(response.error?.code==="PROTOCOL_UNSUPPORTED"&&!signal.aborted&&agentEpochFor(deviceId)===params.agentEpoch){
+			const key=JSON.stringify([deviceId,params.agentEpoch,params.source,params.threadId,params.turnId,params.itemId,params.path,params.documentSha256]);
+			let pending=fileCapabilityRefresh.current.get(key);
+			if(!pending){
+				pending=(async()=>{
+					const parent={threadId:params.threadId,...(params.source==="workspace_browser"?{path:params.path}:params.source==="message_reference"?{turnId:params.turnId,itemId:params.itemId,referenceKind:params.referenceKind,rawReference:params.rawReference}:{turnId:params.turnId,itemId:params.itemId,path:params.path})};
+					const method=params.source==="workspace_browser"?"workspace.file.read":params.source==="message_reference"?"file.context.reference.read":"file.context.read";
+					const verified=await client.request(method,deviceId,parent);
+					const assets=verified.data?.documentAssets as {version?:number}|undefined;
+					if(verified.outcome!=="accepted"||assets?.version!==1)throw new Error("当前设备尚未启用文档图片读取");
+					if(verified.data?.sha256!==params.documentSha256)throw new Error("文档已经变化，请重新打开");
+				})();
+				fileCapabilityRefresh.current.set(key,pending);
+				void pending.finally(()=>{if(fileCapabilityRefresh.current.get(key)===pending)fileCapabilityRefresh.current.delete(key)}).catch(()=>{});
+			}
+			await pending;
+			if(signal.aborted||agentEpochFor(deviceId)!==params.agentEpoch)throw new DOMException("读取已取消","AbortError");
+			response=await client.request("file.context.asset.read",deviceId,params);
+		}
+		if(signal.aborted)throw new DOMException("读取已取消","AbortError");
+		if(response.outcome!=="accepted"||!response.data)throw new Error(response.error?.code==="FILE_TOO_LARGE"?"图片超过大小或尺寸限制":errorText(response));
+		return response.data;
+	},[client,deviceId]);
+	const fileAssetContext=useMemo(()=>({agentEpoch:device?.agentEpoch||"",relayVersion:relayAssetVersion,request:requestDocumentAsset}),[device?.agentEpoch,relayAssetVersion,requestDocumentAsset]);
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
@@ -536,7 +566,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		if (response.outcome !== "accepted") { setOpenFile(null);setNotice(errorText(response)); return; }
 		const value=response.data as Partial<OpenFile> | undefined;
 		if (!value || typeof value.content!=="string" || typeof value.sha256!=="string" || typeof value.modifiedAtMs!=="number" || typeof value.lineCount!=="number" || typeof value.language!=="string" || value.version!=="current-workspace") { setOpenFile(null);setNotice("文件响应格式无法识别。"); return; }
-		const file:OpenFile={threadId:view.threadId,turnId,itemId:change.itemId,path:change.path,content:value.content,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace"};
+		const file:OpenFile={threadId:view.threadId,turnId,itemId:change.itemId,path:change.path,content:value.content,documentAssets:value.documentAssets,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace"};
 		fileContentCache.current.set(cacheKey,file);
 		setOpenFile({...base,file});
 	}
@@ -556,12 +586,23 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 		if(response.outcome!=="accepted"){setOpenFile(null);setNotice(errorText(response));return;}
 		const value=response.data as Partial<OpenFile>|undefined;
 		if(!value||typeof value.path!=="string"||typeof value.content!=="string"||typeof value.sha256!=="string"||typeof value.modifiedAtMs!=="number"||typeof value.lineCount!=="number"||typeof value.language!=="string"||value.version!=="current-workspace"){setOpenFile(null);setNotice("文件响应格式无法识别。");return;}
-		const file:OpenFile={threadId:view.threadId,turnId,itemId,path:value.path,content:value.content,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace",referenceKind:reference.kind,rawReference:reference.rawReference};
+		const file:OpenFile={threadId:view.threadId,turnId,itemId,path:value.path,content:value.content,documentAssets:value.documentAssets,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace",referenceKind:reference.kind,rawReference:reference.rawReference};
 		fileContentCache.current.set(cacheKey,file);
 		setOpenFile({...base,change:{...change,path:file.path},file,loading:false});
 	}
 
 	function closeFile(){openFileGeneration.current++;setOpenFile(null);}
+	async function openRelativeDocument(target:string){
+		if(!workspaceBrowserEnabled||!openFile?.file||!view)throw new Error("当前设备未启用工作区文件读取");
+		const resolved=resolveDocumentPath(openFile.file.path,target);if(!resolved)throw new Error("文档路径不允许读取");
+		const generation=++openFileGeneration.current;
+		const response=await client.request("workspace.file.read",deviceId,{threadId:view.threadId,path:resolved.path});
+		if(generation!==openFileGeneration.current)return;
+		const value=response.data as Partial<OpenFile>|undefined;
+		if(response.outcome!=="accepted"||!value||value.path!==resolved.path||typeof value.content!=="string"||typeof value.sha256!=="string"||typeof value.modifiedAtMs!=="number"||typeof value.lineCount!=="number"||typeof value.language!=="string"||value.version!=="current-workspace")throw new Error("无法读取此文档");
+		const file:OpenFile={source:"workspace_browser",threadId:view.threadId,path:resolved.path,content:value.content,sha256:value.sha256,modifiedAtMs:value.modifiedAtMs,lineCount:value.lineCount,language:value.language,version:"current-workspace",documentAssets:value.documentAssets};
+		setOpenFile({threadId:view.threadId,turnId:"",change:{itemId:"",path:resolved.path,kind:"update"},mode:"source",file,focusStartLine:resolved.startLine});
+	}
 	function changeFileMode(mode:FileViewMode){if(!openFile||mode===openFile.mode)return;void openChangedFile(openFile.turnId,openFile.change,mode);}
 
   function agentEpochFor(id: string): string {
@@ -1126,6 +1167,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (generation !== deviceListGeneration.current) return [];
     if (response.outcome !== "accepted") { setNotice(errorText(response)); return []; }
     const found = (response.data?.devices as Device[] | undefined) || [];
+    setRelayAssetVersion(response.data?.documentAssetsVersion===1?1:0);
     const foundIDs = new Set(found.map(candidate => candidate.deviceId));
     for (const previous of devicesRef.current) {
       if (!foundIDs.has(previous.deviceId)) {
@@ -2920,8 +2962,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     })()}
     {archiveUndoToast && <div className="archive-toast" role="status"><span>已归档「{archiveUndoToast.title}」；派生会话也可能一并归档。</span><button type="button" aria-label="撤销归档" onClick={() => void undoArchive()} disabled={!!threadArchiveWorking}>撤销</button></div>}
     {pairingInvite && <PairingDialog invite={pairingInvite} seconds={pairingSeconds} onClose={closePairingInvite} onRegenerate={() => void openPairingInvite()} />}
-		{showWorkspaceBrowser&&workspaceBrowserEnabled&&view&&<WorkspaceBrowser key={`${deviceId}:${device?.agentEpoch||""}:${view.threadId}`} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} threadId={view.threadId} cwd={view.thread.cwd} request={(method,target,params)=>client.request(method,target,params)} cache={workspaceDirectoryCache.current} fileCache={fileContentCache.current} onClose={()=>setShowWorkspaceBrowser(false)} onQuote={quote=>{setFileQuotes(current=>{if(current.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return current}return [...current,quote]});window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>}
-		{openFile && <FileViewer view={openFile} source={openFile.file?.referenceKind?"message_reference":"turn_change"} onClose={closeFile} onModeChange={changeFileMode} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);closeFile();window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
+		{showWorkspaceBrowser&&workspaceBrowserEnabled&&view&&<WorkspaceBrowser key={`${deviceId}:${device?.agentEpoch||""}:${view.threadId}`} deviceId={deviceId} agentEpoch={device?.agentEpoch||""} threadId={view.threadId} cwd={view.thread.cwd} request={(method,target,params)=>client.request(method,target,params)} assetContext={fileAssetContext} cache={workspaceDirectoryCache.current} fileCache={fileContentCache.current} onClose={()=>setShowWorkspaceBrowser(false)} onQuote={quote=>{setFileQuotes(current=>{if(current.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return current}return [...current,quote]});window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>}
+		{openFile && <FileViewer view={openFile} assetContext={fileAssetContext} onOpenDocument={workspaceBrowserEnabled?openRelativeDocument:undefined} showDiff={openFile.file?.source!=="workspace_browser"} source={openFile.file?.source|| (openFile.file?.referenceKind?"message_reference":"turn_change")} onClose={closeFile} onModeChange={changeFileMode} onQuote={quote=>{setFileQuotes(current=>current.length>=5?current:[...current,quote]);closeFile();window.setTimeout(()=>composerInputRef.current?.focus(),0);}}/>}
   </div>;
 }
 

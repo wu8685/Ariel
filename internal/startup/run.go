@@ -30,6 +30,7 @@ const helpText = `Ariel one-command setup (macOS)
   scripts/ariel.sh show-pin            # local mode only
 
 To change saved settings, stop first and add --replace-config to a complete up local/agent command.
+Optional file features: --enable-file-context [--enable-workspace-browser] [--enable-document-assets]. No Chilling service is needed.
 Credentials are imported from files, never command-line values.
 `
 
@@ -406,7 +407,7 @@ func startConfigured(root string, cfg config, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		relayPID, err := startManaged(root, "relay", envWith(cleanArielEnvironment(os.Environ()), "ARIEL_TOKEN="+token, "ARIEL_WEB_PIN="+pin, "ARIEL_LISTEN="+cfg.Listen, "ARIEL_ORIGINS=http://"+cfg.Listen, "ARIEL_WEB_DIST="+filepath.Join(root, "web", "dist")))
+		relayPID, err := startManaged(root, "relay", envWith(cleanArielEnvironment(os.Environ()), "ARIEL_TOKEN="+token, "ARIEL_WEB_PIN="+pin, "ARIEL_LISTEN="+cfg.Listen, "ARIEL_ORIGINS=http://"+cfg.Listen, "ARIEL_WEB_DIST="+filepath.Join(root, "web", "dist"), "ARIEL_ENABLE_FILE_CONTEXT="+strconv.FormatBool(cfg.FileContextEnabled)))
 		if err != nil {
 			return err
 		}
@@ -438,6 +439,7 @@ func startConfigured(root string, cfg config, output io.Writer) error {
 
 func agentEnvironment(base []string, root string, cfg config, token string) []string {
 	env := envWith(base, "ARIEL_TOKEN="+token, "ARIEL_RELAY_URL="+cfg.RelayURL, "ARIEL_DEVICE_ID="+cfg.DeviceID, "ARIEL_DEVICE_NAME="+cfg.DeviceName, "ARIEL_READY_FILE="+readyPath(root))
+	env = envWith(env, "ARIEL_ENABLE_FILE_CONTEXT="+strconv.FormatBool(cfg.FileContextEnabled), "ARIEL_ENABLE_WORKSPACE_BROWSER="+strconv.FormatBool(cfg.WorkspaceBrowserEnabled), "ARIEL_ENABLE_DOCUMENT_ASSETS="+strconv.FormatBool(cfg.DocumentAssetsEnabled))
 	if cfg.TasksEnabled {
 		env = envWith(env, "ARIEL_ENABLE_TASKS=true", "ARIEL_OBSIDIAN_TASK_VAULT="+cfg.ObsidianTaskVault, "ARIEL_TASK_ALLOWED_ROOTS="+cfg.TaskAllowedRoots, "ARIEL_TASK_ALLOWED_MANAGERS="+cfg.TaskAllowedManagers)
 	}

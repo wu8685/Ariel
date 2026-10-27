@@ -44,6 +44,28 @@
 
 ## 后续操作与核验
 
+### 内置文件上下文与文档阅读
+
+Codex 文件能力现已内置于 Ariel Desktop Agent，不需要安装或运行 Chilling，也不要求 MySQL 或任务看板。
+
+首次 `up local`／`up agent` 完整命令可追加：
+
+```sh
+--enable-file-context --enable-workspace-browser --enable-document-assets
+```
+
+这些开关会保存到脚本的私有配置；后续 `up`、`restart-local` 复用原状态，不依赖继承 shell 环境变量。默认均为关闭；workspace browser 和 document assets 要求 file-context 同时开启。更新已有配置需先停止脚本托管的进程，再给完整命令加 `--replace-config`，保留原凭据文件和设备身份。
+
+手工或 launchd 托管的 Desktop Agent 使用同名参数，也可显式设置 `ARIEL_ENABLE_FILE_CONTEXT`、`ARIEL_ENABLE_WORKSPACE_BROWSER`、`ARIEL_ENABLE_DOCUMENT_ASSETS`。Relay/Web 只需启用 `--enable-file-context`／`ARIEL_ENABLE_FILE_CONTEXT=true`；公网脚本支持 `deploy-ecs.sh ... --enable-file-context`。这不是启动或重启现有生产服务的授权。
+
+旧 `--enable-chilling-file-context`／`ARIEL_ENABLE_CHILLING_FILE_CONTEXT` 兼容为内置文件开关；旧 `--chilling-endpoint` 被忽略，不探测任何 socket，也不作为 task endpoint。显式冲突的新旧文件参数会拒绝启动。文件开关不能自动扩大为目录浏览权限；升级既有部署时先核对原目录能力，再显式迁移其开关。
+
+文件页默认原版；`.md`／`.markdown` 可切换阅读模式，保留原文／Diff 和精确引用。图片不随会话缓存全量同步：本地 PNG／JPEG／GIF／WebP lazy 加载并分块传输；外链 HTTPS 图需用户允许，SVG／HTML 不执行。旧 Relay／Agent 不支持图片时只提示资源能力不足，不影响文本阅读或登录。
+
+首次验收只使用隔离 workspace／会话，确认原文、Diff、目录、消息引用和片段准备不连接 Chilling；手机布局使用真实浏览器 viewport／touch 验收，物理 iPhone／Safari 另行复验。不要为验证“不依赖”而停止可能承担独立任务业务的 Chilling 进程。
+
+### 运行与状态
+
 ```sh
 ./scripts/ariel.sh status   # Relay HTTP 可达性、Agent 握手／Codex 就绪
 ./scripts/ariel.sh up       # 沿用原配置和口令；已运行时不重复启动

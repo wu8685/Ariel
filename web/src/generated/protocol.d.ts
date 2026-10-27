@@ -53,6 +53,7 @@ export type Request = {
     | "thread.cache.unwatch"
     | "thread.cache.promote"
     | "thread.cache.touch"
+    | "file.context.asset.read"
     | "file.context.changes"
     | "file.context.read"
     | "file.context.reference.read"

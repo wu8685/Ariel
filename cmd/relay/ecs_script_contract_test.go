@@ -25,8 +25,11 @@ func TestECSScriptExposesSafeSingleNodeLifecycle(t *testing.T) {
 		"ARIEL_WEBAUTHN_CREDENTIALS_FILE=/data/auth.json",
 		"--enable-chilling-file-context",
 		"--disable-chilling-file-context",
+		"--enable-file-context",
+		"--disable-file-context",
 		"FILE_CONTEXT=$file_context",
 		"ARIEL_ENABLE_CHILLING_FILE_CONTEXT=true",
+		"ARIEL_ENABLE_FILE_CONTEXT=true",
 		"docker image inspect \"$caddy_image\"",
 	} {
 		if !strings.Contains(script, required) {

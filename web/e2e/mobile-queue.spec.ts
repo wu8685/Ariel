@@ -122,6 +122,33 @@ async function selectTextWithMouse(page: Page, locator: Locator) {
   await page.mouse.up();
 }
 
+for (const width of [320, 390, 1280]) {
+  test(`compact queue keeps 44px operation boxes and non-overlapping rows at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await openQueueFixture(page);
+    const boxes = await page.locator(".queue-item").evaluateAll(rows => rows.map(row => {
+      const rect = row.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, height: rect.height,
+        controls: Array.from(row.querySelectorAll<HTMLButtonElement>(".queue-handle, .queue-actions button")).map(button => {
+          const box = button.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, height: box.height };
+        }) };
+    }));
+    expect(boxes).toHaveLength(3);
+    boxes.forEach((row, index) => {
+      expect(row.height).toBeGreaterThanOrEqual(44);
+      expect(row.height).toBeLessThanOrEqual(45);
+      row.controls.forEach(control => {
+        expect(control.height).toBeGreaterThanOrEqual(44);
+        expect(control.top).toBeGreaterThanOrEqual(row.top);
+        expect(control.bottom).toBeLessThanOrEqual(row.bottom);
+      });
+      if (index) expect(row.top).toBeGreaterThanOrEqual(boxes[index - 1].bottom);
+    });
+    expect(await page.evaluate(() => document.body.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page).toHaveScreenshot(`compact-queue-${width}.png`, { animations: "disabled", caret: "hide" });
+  });
+}
+
 for (const width of [390, 1280]) {
   test.describe(`queue selection at ${width}px`, () => {
     test.use({ viewport: { width, height: 844 }, isMobile: false, hasTouch: false, deviceScaleFactor: 1 });
