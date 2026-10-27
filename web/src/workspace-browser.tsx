@@ -30,7 +30,7 @@ function validFile(data:Record<string,unknown>|undefined,threadId:string):OpenFi
   return {source:"workspace_browser",threadId,path:data.path,content:data.content,sha256:data.sha256,modifiedAtMs:data.modifiedAtMs,lineCount:data.lineCount,language:data.language,version:"current-workspace",documentAssets:data.documentAssets as OpenFile["documentAssets"]};
 }
 
-export function WorkspaceBrowser({deviceId,agentEpoch,threadId,cwd,request,cache,fileCache,onClose,onQuote,assetContext}:{deviceId:string;agentEpoch:string;threadId:string;cwd:string;request:Request;cache:WorkspaceDirectoryCache;fileCache:FileContentCache;assetContext?:AssetContext;onClose:()=>void;onQuote:(quote:FileQuote)=>void}){
+export function WorkspaceBrowser({deviceId,agentEpoch,threadId,cwd,request,cache,fileCache,onClose,onQuote,assetContext,onOpenFile}:{deviceId:string;agentEpoch:string;threadId:string;cwd:string;request:Request;cache:WorkspaceDirectoryCache;fileCache:FileContentCache;assetContext?:AssetContext;onClose:()=>void;onQuote:(quote:FileQuote)=>void;onOpenFile?:(path:string)=>void}){
   const [path,setPath]=useState("");const [page,setPage]=useState<WorkspacePage|null>(null);const [loading,setLoading]=useState(false);const [error,setError]=useState("");const [file,setFile]=useState<FileView|null>(null);
   const inFlight=useRef(new Map<string,Promise<Reply>>());
   const alive=useRef(true),directoryGeneration=useRef(0),fileGeneration=useRef(0);
@@ -54,6 +54,7 @@ export function WorkspaceBrowser({deviceId,agentEpoch,threadId,cwd,request,cache
   useEffect(()=>{setPage(cache.get(cacheKey(path))||null);void load(path)},[deviceId,agentEpoch,threadId,path]);
   async function open(entry:WorkspaceEntry,preserve=false){
     if(!entry.readable)return;if(entry.kind==="directory"){fileGeneration.current++;setPath(entry.path);return}if(entry.kind!=="file")return;
+    if(onOpenFile){onOpenFile(entry.path);return}
     const generation=++fileGeneration.current;
     const current=()=>alive.current&&generation===fileGeneration.current;
     const key=cacheKey(`file\0${entry.path}`);const cached=fileCache.get(key);const base:FileView={threadId,turnId:"",change:{itemId:"",path:entry.path,kind:"update"},mode:"source"};

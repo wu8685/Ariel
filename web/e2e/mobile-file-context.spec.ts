@@ -45,7 +45,7 @@ test("mobile opens a changed file and adds an exact quote to the next message", 
   const diffViewport=page.getByTestId("file-diff");
   await expect.poll(async()=>diffViewport.evaluate(element=>element.scrollWidth<=element.clientWidth+1)).toBe(true);
   await expect(page).toHaveScreenshot("mobile-file-diff.png",{animations:"disabled",caret:"hide"});
-  await page.getByRole("button",{name:"返回会话"}).click();
+  await page.getByRole("button",{name:"收起文件工作区"}).click();
   await expect(page.getByRole("dialog",{name:`文件 ${filePath}`})).toHaveCount(0);
   await expect(page.getByRole("textbox",{name:"发送消息"})).toHaveValue("打开文件前的草稿");
 
@@ -68,7 +68,7 @@ test("mobile opens a changed file and adds an exact quote to the next message", 
     element.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}));
   });
   await expect(page.getByText("已选择 L3")).toBeVisible();
-  await expect.poll(async()=>page.getByRole("button",{name:"返回会话"}).evaluate(element=>element.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0);
+  await expect.poll(async()=>page.getByRole("button",{name:"收起文件工作区"}).evaluate(element=>element.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0);
   await expect(page).toHaveScreenshot("mobile-file-source-selection.png",{animations:"disabled",caret:"hide"});
   await page.getByRole("button",{name:"引用到会话"}).click();
   await expect(page.getByText(`${filePath} · L3`)).toBeVisible();

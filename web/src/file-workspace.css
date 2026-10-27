@@ -1,0 +1,281 @@
+.conversation-layout {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.conversation-layout.files-expanded {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 46%);
+}
+.file-workspace {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border-strong);
+}
+.file-workspace-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 45px;
+  min-width: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.file-workspace-tabs {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  height: 44px;
+  overflow: auto hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.file-workspace-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  min-width: 100px;
+  max-width: 205px;
+  border-right: 1px solid var(--color-border);
+  color: var(--color-muted);
+}
+.file-workspace-tab.active {
+  color: var(--color-text);
+  background: var(--color-panel);
+  box-shadow: inset 0 -2px var(--color-accent);
+}
+.file-workspace-tab > [role="tab"] {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 2px 0 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 11px;
+  text-align: left;
+}
+.file-workspace-tab > [role="tab"] > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-workspace-tab .file-tab-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+}
+.file-tab-close svg {
+  width: 12px;
+  height: 12px;
+}
+.file-workspace-tab .file-tab-close:hover {
+  color: var(--color-text);
+  background: var(--color-raised);
+}
+.file-workspace-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.file-workspace .file-viewer-backdrop.embedded {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  height: 100%;
+  background: none;
+  backdrop-filter: none;
+}
+.file-workspace .file-viewer {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  border: 0;
+  box-shadow: none;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.file-workspace .file-viewer.source-only {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.file-workspace .file-viewer-header {
+  display: none;
+}
+.file-workspace .file-view-tabs {
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0 6px;
+}
+.file-workspace .file-view-tabs button {
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.file-workspace .file-viewer footer {
+  min-height: 44px;
+  gap: 6px;
+  padding: 0 8px;
+}
+.file-workspace .file-viewer footer span {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.file-workspace .file-viewer footer button {
+  flex: none;
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+.file-workspace .file-line {
+  grid-template-columns: 38px minmax(0, 1fr);
+}
+.file-workspace .file-line-number {
+  padding-right: 6px;
+}
+.file-workspace .file-line code {
+  padding-right: 10px;
+}
+.file-workspace-restore {
+  position: absolute;
+  top: 56px;
+  right: 10px;
+  z-index: 3;
+  max-width: calc(100% - 20px);
+}
+.file-workspace-restore button {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 11px;
+  box-shadow: 0 2px 8px #0004;
+}
+.file-workspace-restore span {
+  color: var(--color-muted);
+}
+.file-workspace-all {
+  position: absolute;
+  z-index: 4;
+  top: 44px;
+  right: 4px;
+  width: min(360px, calc(100% - 8px));
+  max-height: calc(100% - 48px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-raised);
+  box-shadow: 0 8px 24px #0008;
+}
+.file-workspace-all input {
+  flex: none;
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: 16px;
+}
+.file-workspace-all [role="listbox"] {
+  min-height: 0;
+  overflow: auto;
+}
+.file-workspace-all [role="option"] {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text);
+  text-align: left;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.file-workspace-all [role="option"][aria-selected="true"],
+.file-workspace-all [role="option"]:hover {
+  background: var(--color-panel);
+}
+.file-tab-pages {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--color-muted);
+}
+.file-tab-pages button,
+.file-workspace-error button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: 11px;
+}
+.file-workspace-error {
+  padding: 14px;
+  color: var(--color-danger);
+  font-size: 12px;
+}
+@media (max-width: 800px) {
+  .conversation-layout.files-expanded {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 0.42fr) minmax(0, 0.58fr);
+  }
+  .conversation-layout.files-expanded > .conversation {
+    grid-row: 2;
+  }
+  .conversation-layout.files-expanded > .file-workspace {
+    grid-row: 1;
+    border-left: 0;
+    border-bottom: 1px solid var(--color-border-strong);
+  }
+  .file-workspace .file-reading {
+    padding: 10px 12px 24px;
+    font-size: 12px;
+  }
+  .file-workspace .file-code,
+  .file-workspace .file-diff {
+    font-size: 11.5px;
+  }
+  .file-workspace .file-reading-modes {
+    margin-left: auto;
+  }
+  .file-workspace .file-tab-close {
+    width: 44px;
+  }
+}

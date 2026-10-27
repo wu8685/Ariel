@@ -91,4 +91,13 @@ describe("Chilling file context UI", () => {
     cache.clear();
     expect(cache.get("a")).toBeUndefined();
   });
+
+  it("does not discard a captured file selection when selecting main-conversation text",()=>{
+    const file:OpenFile={threadId:"t",path:"a.md",content:"one two",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:1,language:"md",version:"current-workspace"};
+    render(<><p data-testid="outside">主会话文字</p><FileViewer embedded view={{threadId:"t",turnId:"",change:{itemId:"",path:"a.md",kind:"update"},mode:"source",file}} onClose={()=>{}} onModeChange={()=>{}} onQuote={()=>{}}/></>);
+    const selection=window.getSelection()!;selection.removeAllRanges();let range=document.createRange();range.selectNodeContents(screen.getByTestId("file-source").querySelector("code")!);selection.addRange(range);fireEvent.mouseUp(screen.getByTestId("file-source"));
+    expect((screen.getByRole("button",{name:"引用到会话"}) as HTMLButtonElement).disabled).toBe(false);
+    range=document.createRange();range.selectNodeContents(screen.getByTestId("outside"));selection.removeAllRanges();selection.addRange(range);fireEvent(document,new Event("selectionchange"));
+    expect((screen.getByRole("button",{name:"引用到会话"}) as HTMLButtonElement).disabled).toBe(false);
+  });
 });
