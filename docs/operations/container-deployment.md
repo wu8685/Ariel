@@ -1,5 +1,7 @@
 # 用 Docker 部署 Relay + Web
 
+[文档导航](../README.md) · [架构与缓存](../architecture/overview.md) · [文件能力配置](file-context.md)
+
 部署到单台 Linux ECS 时，优先使用[ECS 单机一键部署指南](ecs-single-node-deployment.md)；需要集群化交付时，使用[Kubernetes 部署指南](kubernetes-deployment.md)及仓库中的 Kustomize overlays。
 
 Ariel 的镜像只包含 **Relay + Web**。Desktop Agent 仍要运行在能访问目标 Agent App 的桌面宿主机上，再主动连接容器里的 Relay；当前 Codex Adapter 依赖 macOS 本机能力，不能放进 Linux 容器。
@@ -14,7 +16,7 @@ Ariel 的镜像只包含 **Relay + Web**。Desktop Agent 仍要运行在能访�
 桌面宿主机: Desktop Agent ── 本机 Adapter ──> Agent App
 ```
 
-Relay 不保存第二份会话正文。重启容器会断开当前浏览器 session 和 Desktop Agent 连接，客户端按现有协议重新连接并从 Agent App 恢复当前视图。
+Relay 只在进程内存中缓存 hot 会话最近两个 turn，不持久化会话正文。重启容器会丢失该 cache 并断开 WebSocket，客户端重新连接后由 Agent 重建视图；保留 Passkey 凭据与 session key 时，不应仅因容器重启强制重新登记或更换登录身份。缓存不能授权任何写操作。
 
 ## 构建镜像
 
@@ -25,6 +27,8 @@ docker build -t ariel-relay:local .
 ```
 
 镜像构建分为 Web、Relay 和最小 runtime 三个 stage。最终镜像不包含 Node.js、Go toolchain、Desktop Agent、Codex Adapter、本机 `.local` 数据或开发依赖。
+
+需要文件功能时，Relay 使用 `ARIEL_ENABLE_FILE_CONTEXT=true`，桌面 Agent 还须分别开启文件、目录或图片权限。完整配置见[文件能力配置](file-context.md)，不需要另启 Chilling 容器。
 
 ## 在可信局域网启动 Relay（PIN）
 

@@ -1,13 +1,15 @@
 # Ariel 当前 Codex Adapter 的安装与本地配置
 
+[文档导航](../README.md) · [功能使用](../guide/features.md) · [文件能力配置](file-context.md)
+
 本指南只覆盖当前已经实现的 **macOS + Codex Desktop Adapter**，不是 Ariel 的长期平台或 Agent App 边界。未来 Adapter 应提供各自的安装前提与兼容性文档，不能直接套用本指南中的私有 IPC、版本或启动步骤。
 
-以下步骤用于让自动化 Agent 在一台 Mac 上安装当前 Ariel 实现并完成配置。先向用户确认模式和必要地址；不要索取 Codex 登录信息，也不要让用户把 Relay token 或六位连接码贴进聊天。所有写测试只允许使用隔离会话；安装验收只做只读状态检查。
+以下步骤用于在 Mac 安装当前 Ariel 实现。先确定是本机局域网模式，还是连接已有远程 Relay；不要向他人提供 Codex 登录信息，也不要把 Relay token 或六位连接码写入公开文档或日志。安装验收只做只读状态检查，写测试只作用于隔离 fixture。
 
 ## 共同前提与行为
 
 1. 在目标 Mac 上取得可信的 Ariel 仓库（例如 `git clone https://github.com/wu8685/Ariel.git`），进入仓库根目录。不要使用 `curl | sh`，也不要自动 `git pull` 覆盖用户工作区。
-2. 确认 Go 1.26+ 与兼容的 Codex Desktop 已安装且 Desktop 正在运行。本机 Relay 模式还需要 Node.js/npm；入口会执行 `npm ci`。脚本不安装系统软件、不调用 `sudo`、不修改防火墙或 Codex 配置。缺少前提时先报告，再让用户决定安装方法。
+2. 确认 Go 1.26+ 与兼容的 Codex Desktop 已安装且 Desktop 正在运行。本机 Relay 模式还需要 Node.js／npm；当前 Web 构建依赖要求 Node.js `^20.19.0 || >=22.12.0`，新安装建议 22.12+。入口会执行 `npm ci`，但不安装系统软件、不调用 `sudo`、不修改防火墙或 Codex 配置。
 3. 选定稳定且唯一的 `device-id`（字母、数字、点、下划线或连字符；最多 64 字符）和用户看得懂的 `device-name`。后续重启复用同一 ID，避免浏览器中的设备选择失效。
 4. 只通过本机私有文件传入 Agent 长口令，绝不放在命令参数、聊天文本、提交或日志中。脚本将凭据复制到 Git 忽略的 `.local/runtime/`（目录 `0700`，文件 `0600`）。现有 Go 服务仍通过进程环境变量读取口令，同一系统用户可能读取自己的进程环境；请保护 Mac 用户会话。
 
@@ -40,13 +42,15 @@
 ./scripts/ariel.sh status
 ```
 
-只有用户明确需要读码时，才在其可信本机终端执行 `./scripts/ariel.sh show-pin`；不要把输出转发到聊天或日志。手机打开脚本报告的 `http://<Mac-LAN-IP>:<port>/`，输入原码或新生成的六位码。刷新同一标签页会尽量复用 Relay session；Relay 重启、新标签页或 session 过期可能要求重输。HTTP/WS 为明文，六位码不能抵御同网段窃听；不要在访客 Wi‑Fi、不可信网络或公网直接使用。
+在可信本机终端执行 `./scripts/ariel.sh show-pin` 查看连接码；不要将输出写入公开文档或日志。手机打开脚本报告的 `http://<Mac-LAN-IP>:<port>/`，输入连接码后选择会话。`show-pin` 仅适用于 `local`，外部 `agent` 模式没有本机 LAN 入口和六位码。HTTP／WS 为明文，六位码不能抵御同网段窃听；不要在访客 Wi‑Fi、不可信网络或公网直接使用。
 
 ## 后续操作与核验
 
 ### 内置文件上下文与文档阅读
 
 Codex 文件能力现已内置于 Ariel Desktop Agent，不需要安装或运行 Chilling，也不要求 MySQL 或任务看板。
+
+开关依赖、已有配置迁移、旧名兼容、资源限制与核验步骤统一见[内置文件能力配置](file-context.md)。
 
 首次 `up local`／`up agent` 完整命令可追加：
 
@@ -89,4 +93,4 @@ Codex 文件能力现已内置于 Ariel Desktop Agent，不需要安装或运行
 | 切换局域网后旧地址失效 | 运行 `./scripts/ariel.sh restart-local`；它只接受默认网卡上的 RFC1918 IPv4。新 Origin 需重新输入原 PIN。 |
 | 页面打开但没有设备 | 先看 `status` 是否显示 Agent 握手；若已握手，刷新页面并检查是否选择了正确的稳定设备 ID。 |
 
-本工具不是 launchd 服务；Mac 重启后需再次执行 `up`。它也不自动部署公网 TLS 或外部 Relay。
+`ariel.sh` 本身不安装 launchd 服务；仅用脚本启动时，Mac 重启后需再次执行 `up`。已由 launchd 托管的 Agent 应通过对应服务更新，不能混用脚本接管。脚本也不自动部署公网 TLS 或外部 Relay。

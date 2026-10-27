@@ -143,13 +143,13 @@ describe("formal Ariel wind-messenger brand assets", () => {
     expect(readme.match(/ariel-logo-wind-messenger-color\.png/g)).toHaveLength(1);
     expect(readme).not.toMatch(/background(?:-color)?\s*[:=]/i);
     expect(readme).not.toMatch(/正式品牌标识|品牌使用规范|工程化品牌规范|风之信使/);
-    for (const heading of ["## Ariel 是什么", "## 架构", "## 快速开始", "## 基本使用", "## 安全边界", "## 深入阅读"]) {
+    for (const heading of ["## 解决什么问题", "## 功能", "## 架构", "## 安装"]) {
       expect(readme).toContain(heading);
     }
     for (const component of ["Browser", "Ariel Relay", "Desktop Agent", "Agent App Adapter", "Desktop Agent App"]) {
       expect(readme).toContain(component);
     }
-    expect(readme.split("\n").length).toBeLessThanOrEqual(100);
+    expect(readme.split("\n").length).toBeLessThanOrEqual(70);
 
     const guideline = readFileSync(resolve(root, "docs/brand/logo-guideline.html"), "utf8");
     const spec = readFileSync(resolve(root, "docs/brand/brand-spec.md"), "utf8");
