@@ -163,10 +163,11 @@ describe("fixed Night appearance", () => {
 
   it("keeps each conversation item dense on desktop and mobile", () => {
     const mobile = style.split(/@media\s*\(max-width:\s*800px\)/)[1];
-    expect(style).toMatch(/\.thread-row\s*\{[^}]*padding:\s*7px\s+12px;[^}]*margin:\s*1px\s+0/s);
+    expect(style).toMatch(/\.thread-row\s*\{[^}]*justify-content:\s*center;[^}]*min-height:\s*44px;[^}]*padding:\s*3px\s+12px;[^}]*margin:\s*1px\s+0/s);
+    expect(style).toMatch(/\.project-toggle\s*\{[^}]*min-height:\s*44px;[^}]*padding:\s*5px\s+12px/s);
     expect(style).toMatch(/\.thread-title\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*1\.3/s);
-    expect(style).toMatch(/\.thread-snippet\s*\{[^}]*margin-top:\s*3px;[^}]*line-height:\s*1\.3/s);
-    expect(style).toMatch(/\.thread-date\s*\{[^}]*font-size:\s*9px;[^}]*margin-top:\s*3px;[^}]*line-height:\s*1\.3/s);
+    expect(style).toMatch(/\.thread-snippet\s*\{[^}]*margin-top:\s*2px;[^}]*line-height:\s*1\.3/s);
+    expect(style).toMatch(/\.thread-date\s*\{[^}]*font-size:\s*9px;[^}]*margin-top:\s*2px;[^}]*line-height:\s*1\.3/s);
     expect(mobile).not.toMatch(/\.thread-row\s*\{[^}]*padding:\s*15px/s);
   });
 
