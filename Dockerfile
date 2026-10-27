@@ -19,6 +19,7 @@ COPY cmd/relay/ ./cmd/relay/
 COPY internal/relay/ ./internal/relay/
 COPY internal/webauth/ ./internal/webauth/
 COPY internal/wsheartbeat/ ./internal/wsheartbeat/
+COPY internal/filecontext/ ./internal/filecontext/
 COPY protocol/ ./protocol/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ariel-relay ./cmd/relay
 
