@@ -38,7 +38,11 @@ const request = vi.fn(
     params: Record<string, unknown>,
   ) => ({ outcome: "accepted", data: file(String(params.path)) }),
 );
-function mount(model: FileWorkspaceModel, send = request) {
+function chooseView(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: "文件菜单" }));
+  fireEvent.click(screen.getByRole("button", { name }));
+}
+function mount(model: FileWorkspaceModel, send: Parameters<FileWorkspaceModel["load"]>[1] = request) {
   return render(
     <>
       <textarea aria-label="主会话" />
@@ -52,6 +56,53 @@ function mount(model: FileWorkspaceModel, send = request) {
   );
 }
 
+it("keeps file views only in the existing dropdown and closes the menu without collapsing the file", async () => {
+  const model = new FileWorkspaceModel();
+  model.open(target("a.md"));
+  mount(model);
+  await screen.findByText("# a.md");
+  expect(screen.queryByRole("button", { name: "阅读模式" })).toBeNull();
+  expect(document.querySelector(".file-workspace-body nav")).toBeNull();
+  chooseView("阅读模式");
+  await screen.findByRole("heading", { name: "a.md" });
+  expect(screen.queryByRole("button", { name: "阅读模式" })).toBeNull();
+  const trigger = screen.getByRole("button", { name: "文件菜单" });
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);
+  expect(screen.getByRole("button", { name: "阅读模式" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.keyDown(screen.getByRole("button", { name: "阅读模式" }), { key: "Escape" });
+  expect(screen.queryByRole("button", { name: "阅读模式" })).toBeNull();
+  expect(screen.getByTestId("file-reading")).toBeTruthy();
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);
+  fireEvent.pointerDown(screen.getByRole("heading", { name: "a.md" }));
+  expect(screen.queryByRole("button", { name: "阅读模式" })).toBeNull();
+  chooseView("原版模式");
+  expect(screen.getByTestId("file-source")).toBeTruthy();
+});
+
+it("does not offer reading for non-Markdown or a Diff without change provenance", async () => {
+  const model = new FileWorkspaceModel();
+  model.open(target("a.go"));
+  mount(model);
+  await screen.findByText("# a.go");
+  fireEvent.click(screen.getByRole("button", { name: "文件菜单" }));
+  expect(screen.getByRole("button", { name: "原版模式" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "阅读模式" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "查看 Diff" })).toBeNull();
+});
+
+it("disables reading until the current document finishes loading", async () => {
+  const model = new FileWorkspaceModel();
+  model.open(target("a.md"));
+  let finish!: (value: {outcome:string;data:ReturnType<typeof file>}) => void;
+  mount(model, () => new Promise<{outcome:string;data:ReturnType<typeof file>}>(resolve => { finish = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "文件菜单" }));
+  expect((screen.getByRole("button", { name: "阅读模式" }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => finish({ outcome: "accepted", data: file("a.md") }));
+  expect((screen.getByRole("button", { name: "阅读模式" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 it("keeps 150 logical file tabs without retaining every body or subscribing", async () => {
   const model = new FileWorkspaceModel();
   for (let i = 0; i < 150; i++) model.open(target(`file-${i}.md`));
@@ -59,7 +110,7 @@ it("keeps 150 logical file tabs without retaining every body or subscribing", as
   await screen.findByText("# file-149.md");
   expect(model.tabs).toHaveLength(150);
   expect(document.querySelectorAll(".file-viewer")).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "全部文件标签" }));
+  fireEvent.click(screen.getByRole("button", { name: "文件菜单" }));
   fireEvent.change(screen.getByRole("searchbox", { name: "搜索文件标签" }), {
     target: { value: "file-0.md" },
   });
@@ -71,6 +122,23 @@ it("keeps 150 logical file tabs without retaining every body or subscribing", as
   expect(
     request.mock.calls.every(([method]) => method === "workspace.file.read"),
   ).toBe(true);
+});
+
+it("does not invalidate a fresh restore/read with a historical change query that began before it", async()=>{
+  const model=new FileWorkspaceModel(), fence=model.captureResources();
+  const id=model.open(target("a.md"));await model.load(id,request);
+  model.invalidate("mac","t","a.md",fence);
+  expect(model.view(id)?.file?.content).toBe("# a.md");
+  const old=model.captureResources();model.invalidate("mac","t","a.md",old);
+  expect(model.view(id)?.file).toBeUndefined();await model.load(id,request);
+  model.invalidate("mac","t","a.md",old);expect(model.view(id)?.file?.content).toBe("# a.md");
+});
+
+it("does not invalidate current-workspace content with its own already completed source change",async()=>{
+  const model=new FileWorkspaceModel();
+  const id=model.open({...target("a.md"),source:"turn_change",turnId:"turn",itemId:"change"});await model.load(id,request);
+  model.invalidate("mac","t","a.md",model.captureResources(),{turnId:"turn",itemId:"change"});
+  expect(model.view(id)?.file?.content).toBe("# a.md");
 });
 
 it("restores per-tab reading mode, scroll and selected offsets after switch or collapse", async () => {
@@ -103,6 +171,7 @@ it("restores per-tab reading mode, scroll and selected offsets after switch or c
     (screen.getByRole("button", { name: "引用到会话" }) as HTMLButtonElement)
       .disabled,
   ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "文件菜单" }));
   fireEvent.click(screen.getByRole("button", { name: "阅读模式" }));
   await screen.findByRole("heading", { name: "a.md" });
   fireEvent.change(screen.getByRole("textbox", { name: "主会话" }), {
@@ -206,7 +275,14 @@ it("retains original proof and refuses quoting into another conversation", async
     />,
   );
   await screen.findByText("two");
+  expect(screen.queryByRole("button", { name: "引用到会话" })).toBeNull();
+  const blockedRange = document.createRange();
+  blockedRange.selectNodeContents(screen.getByTestId("file-source").querySelectorAll("code")[1]);
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(blockedRange);
+  fireEvent.mouseUp(screen.getByTestId("file-source"));
   expect(screen.getByText(/切回来源会话/)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "引用到会话" }) as HTMLButtonElement).disabled).toBe(true);
   rendered.rerender(
     <FileWorkspace
       model={model}
@@ -279,6 +355,7 @@ it("can reload a Diff after its cached body was evicted", async () => {
   await screen.findByText("# b.md");
   act(() => model.activate(a));
   await screen.findByText("# a.md");
+  fireEvent.click(screen.getByRole("button", { name: "文件菜单" }));
   expect(
     (screen.getByRole("button", { name: "查看 Diff" }) as HTMLButtonElement)
       .disabled,

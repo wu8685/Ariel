@@ -1,5 +1,6 @@
 import {createHash} from "node:crypto";
 import {expect,test,type Page} from "@playwright/test";
+import {chooseFileView} from "./file-view-menu";
 
 const token=`s_${"b".repeat(64)}`;
 const image=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==","base64");
@@ -39,7 +40,7 @@ for(const entry of ["turn","reference","workspace"]){
   else{await page.getByRole("button",{name:"浏览工作区文件"}).click();await page.getByRole("button",{name:"打开目录 docs"}).click();await page.getByRole("button",{name:"打开文件 read.md"}).click()}
   await expect(page.getByTestId("file-source")).toBeVisible();expect(requests.filter(r=>r.method==="file.context.asset.read")).toHaveLength(0);
   const reads=requests.filter(r=>r.method.endsWith(".read")).length;
-  await page.getByRole("button",{name:"阅读模式",exact:true}).click();await expect(page.getByRole("heading",{name:"文档标题"})).toBeVisible();
+  await chooseFileView(page,"阅读模式");await expect(page.getByRole("heading",{name:"文档标题"})).toBeVisible();
   await expect.poll(()=>requests.filter(r=>r.method==="file.context.asset.read").length).toBe(1);
   const image=page.getByRole("img",{name:"本地图片",exact:true});await expect(image).toBeVisible();await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
   expect(external).toHaveLength(0);expect(requests.some(r=>r.params.imageReference==="../images/b.png")).toBe(false);
@@ -55,13 +56,17 @@ for(const entry of ["turn","reference","workspace"]){
 for(const width of [320,390,1280]){
  test(`document reading fits ${width}px and preserves independent source / reading / diff state`,async({page})=>{
   await page.setViewportSize({width,height:844});await fixture(page);
-  await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await page.getByRole("button",{name:"阅读模式",exact:true}).click();
+  await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await chooseFileView(page,"阅读模式");
   const reading=page.getByTestId("file-reading");await reading.evaluate(el=>el.scrollTop=450);
   const position=await reading.evaluate(el=>el.scrollTop);
-  await page.getByRole("button",{name:"原版模式"}).click();await expect(page.getByTestId("file-source")).toBeVisible();
-  await page.getByRole("button",{name:"阅读模式",exact:true}).click();expect(await reading.evaluate(el=>el.scrollTop)).toBe(position);
-  await page.getByRole("button",{name:"查看 Diff",exact:true}).click();await expect(page.getByTestId("file-diff")).toBeVisible();
-  await page.getByRole("button",{name:"查看原文",exact:true}).click();await expect(reading).toBeVisible();
+  await chooseFileView(page,"原版模式");await expect(page.getByTestId("file-source")).toBeVisible();
+  await chooseFileView(page,"阅读模式");
+  const restored=await reading.evaluate(el=>({position:el.scrollTop,max:el.scrollHeight-el.clientHeight}));
+  // Same position while valid; lazy-image layout changes may require clamping
+  // an old bottom offset, as specified. An arbitrary scroll drift still fails.
+  expect(restored.position).toBe(Math.min(position,restored.max));
+  await chooseFileView(page,"查看 Diff");await expect(page.getByTestId("file-diff")).toBeVisible();
+  await chooseFileView(page,"阅读模式");await expect(reading).toBeVisible();
   await reading.evaluate(el=>el.scrollTop=0);await expect(page.getByRole("img",{name:"本地图片",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.body.scrollWidth<=innerWidth)).toBe(true);
   await expect(page).toHaveScreenshot(`document-reading-${width}.png`,{animations:"disabled",caret:"hide"});
@@ -69,11 +74,11 @@ for(const width of [320,390,1280]){
 }
 
 test("legacy endpoints still render Markdown text without sending unknown image requests",async({page})=>{
- const {requests}=await fixture(page,{legacy:true});await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await page.getByRole("button",{name:"阅读模式",exact:true}).click();await expect(page.getByRole("heading",{name:"文档标题"})).toBeVisible();await expect(page.getByText(/尚未启用文档图片读取/)).toBeVisible();expect(requests.some(r=>r.method==="file.context.asset.read")).toBe(false);
+ const {requests}=await fixture(page,{legacy:true});await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await chooseFileView(page,"阅读模式");await expect(page.getByRole("heading",{name:"文档标题"})).toBeVisible();await expect(page.getByText(/尚未启用文档图片读取/)).toBeVisible();expect(requests.some(r=>r.method==="file.context.asset.read")).toBe(false);
 });
 
 test("Agent reconnect re-confirms image capability without refreshing the conversation",async({page})=>{
- const {requests}=await fixture(page,{lostCapability:true});await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await page.getByRole("button",{name:"阅读模式",exact:true}).click();
+ const {requests}=await fixture(page,{lostCapability:true});await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await chooseFileView(page,"阅读模式");
  await expect(page.getByRole("img",{name:"本地图片",exact:true})).toBeVisible();
  expect(requests.filter(r=>r.method==="file.context.read")).toHaveLength(2);
  expect(requests.filter(r=>r.method==="file.context.asset.read")).toHaveLength(2);
@@ -84,7 +89,7 @@ test("reopening a cached document recreates its image session without rereading 
  const {requests}=await fixture(page);
  for(let attempt=0;attempt<2;attempt++){
   await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();
-  await page.getByRole("button",{name:"阅读模式",exact:true}).click();
+  await chooseFileView(page,"阅读模式");
   const image=page.getByRole("img",{name:"本地图片",exact:true});
   await expect(image).toBeVisible();
   await expect.poll(()=>image.evaluate((element:HTMLImageElement)=>element.naturalWidth)).toBe(1);

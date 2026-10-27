@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { CircleButton, CloseGlyph } from "./circular-button";
 import {
   FileViewer,
@@ -38,7 +38,9 @@ type FileTab = {
   loading: boolean;
   error: string;
   generation: number;
+  diffChanged?: boolean;
 };
+export type FileWorkspaceState = {tabs:Pick<FileTab,"id"|"target"|"mode"|"hasDiff"|"reader">[];activeId:string;collapsed:boolean};
 type Reply = {
   outcome: string;
   data?: Record<string, unknown>;
@@ -54,7 +56,7 @@ type FileRequest = (
   params: Record<string, unknown>,
 ) => Promise<Reply>;
 const encoder = new TextEncoder();
-const targetKey = (t: FileTarget) =>
+export const fileTargetKey = (t: FileTarget) =>
   JSON.stringify([
     t.deviceId,
     t.agentEpoch,
@@ -66,6 +68,13 @@ const targetKey = (t: FileTarget) =>
     t.rawReference || t.path,
   ]);
 
+// A local UX fingerprint, never an authorization receipt. No Diff text is persisted.
+function diffFingerprint(text:string,truncated=false) {
+  const lanes=[0x811c9dc5,0x9e3779b9,0x85ebca6b,0xc2b2ae35];
+  for(let i=0;i<text.length;i++)for(let j=0;j<lanes.length;j++)lanes[j]=Math.imul(lanes[j]^text.charCodeAt(i),0x01000193+j*2);
+  return lanes.map(n=>((n^(truncated?1:0))>>>0).toString(16).padStart(8,"0")).join("");
+}
+
 /** Logical tabs contain descriptors and reading anchors only; bodies share one LRU. */
 export class FileWorkspaceModel {
   tabs: FileTab[] = [];
@@ -74,7 +83,9 @@ export class FileWorkspaceModel {
   private serial = 0;
   private revision = 0;
   private listeners = new Set<() => void>();
-  private resources = new Map<string, { value: FileResource; bytes: number }>();
+  private readerListeners = new Set<() => void>();
+  private resources = new Map<string, { value: FileResource; bytes: number; version:number }>();
+  private cacheSerial=0;
   bytes = 0;
   constructor(
     private maxEntries = 10,
@@ -90,9 +101,18 @@ export class FileWorkspaceModel {
     };
   };
   snapshot = () => this.revision;
-  private emit() {
+  subscribeReader = (listener:()=>void) => {this.readerListeners.add(listener);return ()=>{this.readerListeners.delete(listener)}};
+  readerChanged = (id:string) => {if(this.tabs.some(tab=>tab.id===id))for(const listener of this.readerListeners)listener()};
+  private emit(persist=true) {
     this.revision++;
     for (const listener of this.listeners) listener();
+    if(persist)for(const listener of this.readerListeners)listener();
+  }
+  restore(state:FileWorkspaceState) {
+    this.clear();
+    this.tabs=state.tabs.map(tab=>({...tab,target:{...tab.target},reader:{...tab.reader,positions:{...tab.reader.positions}},key:fileTargetKey(tab.target),loading:false,error:"",generation:0}));
+    this.serial=Math.max(this.serial,...this.tabs.map(tab=>Number(tab.id.slice("file-tab-".length))));
+    this.activeId=state.activeId;this.collapsed=state.collapsed;this.emit();
   }
   private resource(id: string) {
     const entry = this.resources.get(id);
@@ -116,7 +136,7 @@ export class FileWorkspaceModel {
     if (bytes > this.maxBytes)
       throw new Error("文件超过阅读缓存容量，请关闭部分内容后重试。");
     this.drop(id);
-    this.resources.set(id, { value, bytes });
+    this.resources.set(id, { value, bytes, version:++this.cacheSerial });
     this.bytes += bytes;
     while (
       this.resources.size > this.maxEntries ||
@@ -135,7 +155,7 @@ export class FileWorkspaceModel {
     mode: FileViewMode = "source",
     initial?: FileResource,
   ) {
-    const key = targetKey(target);
+    const key = fileTargetKey(target);
     let tab = this.tabs.find((t) => t.key === key);
     if (!tab) {
       tab = {
@@ -156,6 +176,7 @@ export class FileWorkspaceModel {
       try {
         this.cache(tab.id, { ...this.resource(tab.id), ...initial });
         tab.hasDiff = !!initial.diff || tab.hasDiff;
+        if(initial.diff!==undefined)this.verifyDiff(tab,initial.diff,!!initial.diffTruncated);
       } catch {
         tab.error = "文件超过阅读缓存容量。";
       }
@@ -213,13 +234,18 @@ export class FileWorkspaceModel {
       this.activeId = this.tabs[0]?.id || "";
     this.emit();
   }
-  invalidate(deviceId: string, threadId: string, path: string) {
+  captureResources(){return new Map([...this.resources].map(([id,entry])=>[id,entry.version]))}
+  invalidate(deviceId: string, threadId: string, path: string, fence?:ReadonlyMap<string,number>, completedSource?:{turnId:string;itemId:string}) {
     for (const tab of this.tabs) {
       if (
         tab.target.deviceId === deviceId &&
         tab.target.threadId === threadId &&
         tab.target.path === path
       ) {
+        // Listing old completed-turn changes is not a new change notification.
+        // Do not evict a current-workspace read obtained after that listing began.
+        if(fence&&(!fence.has(tab.id)||fence.get(tab.id)!==this.resources.get(tab.id)?.version))continue;
+        if(completedSource&&tab.target.source==="turn_change"&&tab.target.turnId===completedSource.turnId&&tab.target.itemId===completedSource.itemId)continue;
         tab.generation++;
         tab.loading = false;
         tab.error = "";
@@ -254,9 +280,18 @@ export class FileWorkspaceModel {
       mode: tab.mode,
       file: r?.file,
       loading: tab.loading,
+      diffChanged: tab.diffChanged,
       focusStartLine: t.focusStartLine,
       focusEndLine: t.focusEndLine,
     };
+  }
+  private verifyDiff(tab:FileTab,diff:string,truncated:boolean) {
+    const fingerprint=diffFingerprint(diff,truncated);
+    if(tab.reader.diffFingerprint!==fingerprint){
+      tab.diffChanged=!!tab.reader.diffFingerprint;
+      tab.reader.positions.diff=0;
+    }
+    tab.reader.diffFingerprint=fingerprint;
   }
   async load(id: string, request: FileRequest, retry = false) {
     const tab = this.tabs.find((t) => t.id === id);
@@ -274,7 +309,7 @@ export class FileWorkspaceModel {
     const current = () =>
       this.tabs.includes(tab) && tab.generation === generation;
     tab.loading = true;
-    this.emit();
+    this.emit(false);
     try {
       let next: FileResource = { ...existing };
       if (mode === "diff") {
@@ -368,6 +403,7 @@ export class FileWorkspaceModel {
         next = { ...next, file };
       }
       if (!current()) return;
+      if(next.diff!==undefined)this.verifyDiff(tab,next.diff,!!next.diffTruncated);
       this.cache(id, next);
       if (next.file) tab.target.path = next.file.path;
     } catch (error) {
@@ -394,6 +430,8 @@ export function FileWorkspace({
   assetContext,
   onBrowse,
   canReadWorkspace = true,
+  canLoad = true,
+  persistenceWarning = "",
   onReturnFocus,
 }: {
   model: FileWorkspaceModel;
@@ -403,12 +441,22 @@ export function FileWorkspace({
   assetContext?: AssetContext;
   onBrowse?: () => void;
   canReadWorkspace?: boolean;
+  canLoad?: boolean;
+  persistenceWarning?: string;
   onReturnFocus?: () => void;
 }) {
   const revision = useFileWorkspace(model);
   const [all, setAll] = useState(false),
     [search, setSearch] = useState(""),
     [page, setPage] = useState(0);
+  const [controlsHost, setControlsHost] = useState<HTMLDivElement|null>(null);
+  const menuId = useId();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTrigger = useRef<HTMLButtonElement|null>(null);
+  function closeMenu(restoreFocus=false) {
+    setAll(false);
+    if (restoreFocus) menuTrigger.current?.focus({preventScroll:true});
+  }
   const active = model.tabs.find((tab) => tab.id === model.activeId),
     view = active ? model.view(active.id) : undefined;
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -431,8 +479,8 @@ export function FileWorkspace({
     } else tabRefs.current.get(model.activeId)?.focus();
   }, [revision, onReturnFocus]);
   useEffect(() => {
-    if (active && !model.collapsed) void model.load(active.id, request);
-  }, [revision, request]);
+    if (active && !model.collapsed && canLoad) void model.load(active.id, request);
+  }, [revision, request, canLoad]);
   useEffect(() => {
     if (model.collapsed) return;
     const tab = tabRefs.current.get(model.activeId);
@@ -442,10 +490,20 @@ export function FileWorkspace({
   useEffect(() => {
     if (model.collapsed) setAll(false);
   }, [model.collapsed]);
+  useEffect(() => { setAll(false); }, [model.activeId]);
+  useEffect(() => {
+    if (!all) return;
+    const outside = (event:PointerEvent) => {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target) && !menuTrigger.current?.contains(event.target)) closeMenu();
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [all]);
   if (!active || !view) return null;
   if (model.collapsed)
     return (
       <div className="file-workspace-restore">
+        {persistenceWarning&&<p className="file-session-warning" role="status">{persistenceWarning}</p>}
         <button
           ref={restoreButton}
           type="button"
@@ -469,9 +527,10 @@ export function FileWorkspace({
       aria-label="文件工作区"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
+          event.preventDefault();
           event.stopPropagation();
-          setAll(false);
-          collapse();
+          if (all) closeMenu(true);
+          else collapse();
         }
       }}
     >
@@ -537,9 +596,11 @@ export function FileWorkspace({
         </div>
         <CircleButton
           type="button"
-          aria-label="全部文件标签"
+          aria-label="文件菜单"
           aria-expanded={all}
-          onClick={() => {
+          aria-controls={menuId}
+          onClick={(event) => {
+            menuTrigger.current = event.currentTarget;
             setAll((value) => !value);
             setPage(0);
           }}
@@ -564,7 +625,12 @@ export function FileWorkspace({
         </CircleButton>
       </div>
       {all && (
-        <div className="file-workspace-all">
+        <div className="file-workspace-all" id={menuId} ref={menuRef}>
+          {!active.error && <>
+            <span className="file-menu-heading">当前文件视图</span>
+            <div className="file-menu-controls" ref={setControlsHost}/>
+          </>}
+          <span className="file-menu-heading">已打开的文件</span>
           <input
             type="search"
             aria-label="搜索文件标签"
@@ -611,13 +677,14 @@ export function FileWorkspace({
           </div>
         </div>
       )}
+      {persistenceWarning&&<p className="file-session-warning" role="status">{persistenceWarning}</p>}
       <div
         className="file-workspace-body"
         id="file-workspace-body"
         role="tabpanel"
         aria-labelledby={active.id}
       >
-        {active.error ? (
+        {!canLoad ? <div className="file-workspace-error" role="status">正在等待连接或设备就绪；可先收起文件，恢复连接后重试。</div> : active.error ? (
           <div className="file-workspace-error">
             <p role="alert">{active.error}</p>
             <button
@@ -635,6 +702,9 @@ export function FileWorkspace({
             key={active.id}
             view={view}
             readerState={active.reader}
+            onReaderChange={() => model.readerChanged(active.id)}
+            controlsHost={controlsHost}
+            onViewControl={() => closeMenu(true)}
             embedded
             assetContext={assetContext}
             source={active.target.source}

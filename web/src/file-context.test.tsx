@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FileContentCache, FileViewer, TurnFileChanges, projectCanonicalFileContexts, selectionLines, webFileContextEnabled, type FileView, type OpenFile } from "./file-context";
+import { FileContentCache, FileViewer, TurnFileChanges, emptyFileReaderState, projectCanonicalFileContexts, selectionLines, webFileContextEnabled, type FileView, type OpenFile } from "./file-context";
 
 afterEach(cleanup);
 
@@ -54,6 +54,72 @@ describe("Chilling file context UI", () => {
     expect(screen.queryByRole("button", { name:/引用第/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name:"引用到会话" }));
     expect(quote).toHaveBeenCalledWith(expect.objectContaining({ path:"a.go",startLine:2,endLine:2,text:"repeat" }));
+  });
+
+  it("only shows the quote bar after selecting and clears it on an explicit in-file deselection", () => {
+    const saved = emptyFileReaderState();
+    const file: OpenFile = { threadId:"t",path:"a.go",content:"one two",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:1,language:"go",version:"current-workspace" };
+    render(<FileViewer readerState={saved} showDiff={false} view={{threadId:"t",turnId:"",change:{itemId:"",path:"a.go",kind:"update"},mode:"source",file}} onClose={()=>{}} onModeChange={()=>{}} onQuote={()=>{}}/>);
+    expect(document.querySelector(".file-viewer footer")).toBeNull();
+    expect(screen.queryByRole("button", { name:"引用到会话" })).toBeNull();
+    const root = screen.getByTestId("file-source"), node = root.querySelector("code")!.firstChild!;
+    const range = document.createRange(), selection = window.getSelection()!;
+    range.setStart(node, 0); range.setEnd(node, 3);
+    selection.removeAllRanges(); selection.addRange(range);
+    fireEvent(document, new Event("selectionchange"));
+    expect(screen.getByText("已选择 L1")).toBeTruthy();
+    expect(saved.selection).toEqual({start:0,end:3});
+    range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
+    fireEvent(document, new Event("selectionchange"));
+    expect(document.querySelector(".file-viewer footer")).toBeNull();
+    expect(saved.selection).toBeUndefined();
+    range.selectNodeContents(node); selection.removeAllRanges(); selection.addRange(range);
+    fireEvent.mouseUp(root);
+    expect(screen.getByRole("button", { name:"引用到会话" })).toBeTruthy();
+    selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
+    expect(document.querySelector(".file-viewer footer")).toBeNull();
+    expect(saved.selection).toBeUndefined();
+  });
+
+  it("keeps the captured quote while its button receives keyboard focus even if native ranges clear", () => {
+    const quote = vi.fn();
+    const file: OpenFile = { threadId:"t",path:"a.go",content:"one",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:1,language:"go",version:"current-workspace" };
+    render(<FileViewer view={{threadId:"t",turnId:"",change:{itemId:"",path:"a.go",kind:"update"},mode:"source",file}} onClose={()=>{}} onModeChange={()=>{}} onQuote={quote}/>);
+    const root = screen.getByTestId("file-source"), selection = window.getSelection()!;
+    const range = document.createRange(); range.selectNodeContents(root.querySelector("code")!);
+    selection.removeAllRanges(); selection.addRange(range); fireEvent.mouseUp(root);
+    const button = screen.getByRole("button", { name:"引用到会话" });
+    button.focus(); selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
+    fireEvent.click(button);
+    expect(quote).toHaveBeenCalledWith(expect.objectContaining({text:"one",path:"a.go"}));
+  });
+
+  it("does not show quote hints until selection and retains disabled source checks afterwards", () => {
+    const quote = vi.fn();
+    const file: OpenFile = { threadId:"source",path:"a.go",content:"one",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:1,language:"go",version:"current-workspace" };
+    render(<FileViewer quoteDisabled view={{threadId:"source",turnId:"",change:{itemId:"",path:"a.go",kind:"update"},mode:"source",file}} onClose={()=>{}} onModeChange={()=>{}} onQuote={quote}/>);
+    expect(screen.queryByText(/切回来源会话/)).toBeNull();
+    const root = screen.getByTestId("file-source"), selection = window.getSelection()!;
+    const range = document.createRange(); range.selectNodeContents(root.querySelector("code")!);
+    selection.removeAllRanges(); selection.addRange(range); fireEvent.mouseUp(root);
+    expect(screen.getByText(/切回来源会话/)).toBeTruthy();
+    const button = screen.getByRole("button", { name:"引用到会话" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button); expect(quote).not.toHaveBeenCalled();
+  });
+
+  it("explains an unmappable selection but hides the bar again on file version change", () => {
+    const file: OpenFile = { threadId:"t",path:"a.go",content:"one",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:1,language:"go",version:"current-workspace" };
+    const view: FileView = {threadId:"t",turnId:"",change:{itemId:"",path:"a.go",kind:"update"},mode:"source",file};
+    const props = { onClose:vi.fn(), onModeChange:vi.fn(), onQuote:vi.fn() };
+    const mounted = render(<FileViewer view={view} {...props}/>);
+    const root = screen.getByTestId("file-source"), selection = window.getSelection()!;
+    const range = document.createRange(); range.selectNodeContents(root.querySelector(".file-line-number")!);
+    selection.removeAllRanges(); selection.addRange(range); fireEvent.mouseUp(root);
+    expect(screen.getByText("无法识别该选区，请重新选择")).toBeTruthy();
+    expect((screen.getByRole("button", { name:"引用到会话" }) as HTMLButtonElement).disabled).toBe(true);
+    mounted.rerender(<FileViewer view={{...view,file:{...file,sha256:"b".repeat(64)}}} {...props}/>);
+    expect(document.querySelector(".file-viewer footer")).toBeNull();
   });
 
   it("renders a read-only truncated diff and returns without quoting", () => {

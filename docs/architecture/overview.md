@@ -59,6 +59,8 @@ Agent transport 断线后独立重连，保留可继续使用的 Codex Service �
 
 Relay 默认 cache soft budget 512 MiB，`GOMEMLIMIT=768MiB`，容器 hard limit 1 GiB；不设置固定会话数上限。压力下先淘汰无 watcher 的 LRU 或返回 capacity error，不能把 OOM 当作正常淘汰机制。文件正文、Diff、目录和 Markdown 图片不进入双 turn hot cache；具体文件与资源限额见[文件配置](../operations/file-context.md)。
 
+文件 Tab 的刷新恢复使用当前浏览器标签页的 `sessionStorage`，仅存来源 descriptor、模式、滚动、版本指纹和选区 offsets，1 MiB／7 天有界；不保存文件原文、Diff、引用片段、图片或凭据。恢复先核对认证、设备 epoch 和 capability，再沿既有 Agent 只读链路按需读取激活文件；正文与 Diff 仍共用 8 MiB／10 项内存 LRU。该记录不是来源授权或 mutation receipt，不新增连接、后台轮询或 Chilling 依赖，详见 [0123](../specs/0123-file-reading-refresh-restore.md)。
+
 ## 认证边界
 
 - Browser → Relay：可信局域网可选择 6 位 PIN；公网使用原生 Passkey 和加密 `HttpOnly` Cookie。两种模式互斥，Passkey 模式不接受 PIN、旧 Web Session 或二维码配对凭据降级。

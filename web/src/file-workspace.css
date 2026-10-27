@@ -99,6 +99,15 @@
   min-width: 0;
   overflow: hidden;
 }
+.file-session-warning {
+  flex: none;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--color-warning, #e2aa75);
+  background: var(--color-panel);
+  overflow-wrap: anywhere;
+}
 .file-workspace .file-viewer-backdrop.embedded {
   position: static;
   inset: auto;
@@ -208,6 +217,38 @@
   background: var(--color-panel);
   color: var(--color-text);
   font-size: 16px;
+}
+.file-menu-heading {
+  flex: none;
+  padding: 4px 2px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+.file-menu-controls {
+  flex: none;
+}
+.file-menu-view-options {
+  display: flex;
+  gap: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+}
+.file-menu-view-options button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.file-menu-view-options button[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.file-menu-view-options button:disabled {
+  opacity: .4;
 }
 .file-workspace-all [role="listbox"] {
   min-height: 0;
