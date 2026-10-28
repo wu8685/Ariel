@@ -79,6 +79,7 @@ type agent struct {
 	cacheSendMu             sync.Mutex
 	cachePending            map[string]cacheOutbound
 	cacheWake               chan struct{}
+	questionsEnabled        bool // negotiated for this Relay transport, cacheMu
 }
 
 type cacheOutbound struct {
@@ -102,6 +103,7 @@ type cacheSubscription struct {
 	pendingSeq      int64
 	pendingThread   map[string]any
 	latestSeq       int64
+	latestThread    map[string]any
 	lastSentSeq     int64
 	lastSentRuntime string
 	recoveryFailed  bool
@@ -500,6 +502,28 @@ func (a *agent) send(ctx context.Context, value any) error {
 }
 
 func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration) error {
+	// Internal atomic question state must never leak into strict legacy thread
+	// objects. Only negotiated cache sidecars carry it on the wire.
+	if envelope, ok := value.(map[string]any); ok {
+		copy := make(map[string]any, len(envelope))
+		for key, v := range envelope {
+			copy[key] = v
+		}
+		if thread, ok := copy["thread"].(map[string]any); ok {
+			copy["thread"] = withoutAsyncQuestions(thread)
+		}
+		if data, ok := copy["data"].(map[string]any); ok {
+			next := make(map[string]any, len(data))
+			for k, v := range data {
+				next[k] = v
+			}
+			if thread, ok := next["thread"].(map[string]any); ok {
+				next["thread"] = withoutAsyncQuestions(thread)
+			}
+			copy["data"] = next
+		}
+		value = copy
+	}
 	body, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -533,41 +557,42 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		return
 	}
 	var p struct {
-		ThreadID         string                  `json:"threadId"`
-		AgentEpoch       string                  `json:"agentEpoch"`
-		TurnID           string                  `json:"turnId"`
-		TurnIDs          []string                `json:"turnIds"`
-		SubscriptionID   string                  `json:"subscriptionId"`
-		Cursor           string                  `json:"cursor"`
-		SearchTerm       string                  `json:"searchTerm"`
-		Limit            int                     `json:"limit"`
-		LimitBytes       int                     `json:"limitBytes"`
-		ExpectedRevision string                  `json:"expectedRevision"`
-		ClientMessageID  string                  `json:"clientMessageId"`
-		Text             string                  `json:"text"`
-		Images           []string                `json:"images"`
-		ItemID           string                  `json:"itemId"`
-		Path             string                  `json:"path"`
-		ReferenceKind    string                  `json:"referenceKind"`
-		RawReference     string                  `json:"rawReference"`
-		StartLine        int                     `json:"startLine"`
-		EndLine          int                     `json:"endLine"`
-		ImageIndex       int                     `json:"imageIndex"`
-		ExpectedTurnID   string                  `json:"expectedTurnId"`
-		QueueID          string                  `json:"queueId"`
-		QueueIDs         []string                `json:"queueIds"`
-		InteractionID    string                  `json:"interactionId"`
-		Decision         string                  `json:"decision"`
-		Answers          map[string][]string     `json:"answers"`
-		CWD              string                  `json:"cwd"`
-		Archived         bool                    `json:"archived"`
-		Name             string                  `json:"name"`
-		Pinned           *bool                   `json:"pinned"`
-		OperationID      string                  `json:"operationId"`
-		UpdateMode       string                  `json:"updateMode"`
-		Watching         *bool                   `json:"watching"`
-		FileContexts     []filecontext.Selection `json:"fileContexts"`
-		Settings         *modelsettings.Values   `json:"settings"`
+		ThreadID              string                  `json:"threadId"`
+		AgentEpoch            string                  `json:"agentEpoch"`
+		TurnID                string                  `json:"turnId"`
+		TurnIDs               []string                `json:"turnIds"`
+		SubscriptionID        string                  `json:"subscriptionId"`
+		Cursor                string                  `json:"cursor"`
+		SearchTerm            string                  `json:"searchTerm"`
+		Limit                 int                     `json:"limit"`
+		LimitBytes            int                     `json:"limitBytes"`
+		ExpectedRevision      string                  `json:"expectedRevision"`
+		ClientMessageID       string                  `json:"clientMessageId"`
+		Text                  string                  `json:"text"`
+		Images                []string                `json:"images"`
+		ItemID                string                  `json:"itemId"`
+		Path                  string                  `json:"path"`
+		ReferenceKind         string                  `json:"referenceKind"`
+		RawReference          string                  `json:"rawReference"`
+		StartLine             int                     `json:"startLine"`
+		EndLine               int                     `json:"endLine"`
+		ImageIndex            int                     `json:"imageIndex"`
+		ExpectedTurnID        string                  `json:"expectedTurnId"`
+		QueueID               string                  `json:"queueId"`
+		QueueIDs              []string                `json:"queueIds"`
+		InteractionID         string                  `json:"interactionId"`
+		Decision              string                  `json:"decision"`
+		Answers               map[string][]string     `json:"answers"`
+		CWD                   string                  `json:"cwd"`
+		Archived              bool                    `json:"archived"`
+		Name                  string                  `json:"name"`
+		Pinned                *bool                   `json:"pinned"`
+		OperationID           string                  `json:"operationId"`
+		UpdateMode            string                  `json:"updateMode"`
+		Watching              *bool                   `json:"watching"`
+		AsyncQuestionsVersion int                     `json:"asyncQuestionsVersion"`
+		FileContexts          []filecontext.Selection `json:"fileContexts"`
+		Settings              *modelsettings.Values   `json:"settings"`
 	}
 	if json.Unmarshal(raw, &p) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -756,12 +781,15 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 			data = map[string]any{}
 		}
 	case "thread.cache.touch":
+		if p.AsyncQuestionsVersion == 1 {
+			a.enableAsyncQuestions()
+		}
 		watching := true
 		if p.Watching != nil {
 			watching = *p.Watching
 		}
 		err = a.touchCache(ctx, p.ThreadID, watching)
-		data = map[string]any{}
+		data = map[string]any{"asyncQuestionsVersion": 1, "asyncQuestionWrite": false}
 	case "turn.start":
 		var turnID string
 		var text string
@@ -800,8 +828,20 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "interaction.respond":
 		err = a.service.Respond(ctx, p.ThreadID, p.InteractionID, p.Decision, p.Answers)
 		data = map[string]any{}
+	case "thread.questions.respond":
+		// Native async writes remain closed until this Desktop profile passes
+		// the dedicated async fixture, not the synchronous user-input probe.
+		err = errors.New("PROTOCOL_UNSUPPORTED")
 	default:
 		err = errors.New("INVALID_ARGUMENT")
+	}
+	if data != nil {
+		if questions, ok := data["_asyncQuestions"]; ok {
+			if p.AsyncQuestionsVersion == 1 {
+				data["asyncQuestions"] = questions
+			}
+			delete(data, "_asyncQuestions")
+		}
 	}
 	a.reply(ctx, id, method, data, err)
 }
@@ -900,6 +940,7 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	state.runtime, _ = thread["runtime"].(string)
 	state.structure = cacheStructure(thread)
 	state.latestSeq = 1
+	state.latestThread = thread
 	a.cacheMu.Unlock()
 	if err := a.publishCacheSnapshot(ctx, threadID, streamID, 1, thread); err != nil {
 		a.service.Unsubscribe(subID)
@@ -1028,6 +1069,10 @@ func (a *agent) invalidateCacheSubscription(threadID string, state *cacheSubscri
 func cacheStructure(thread map[string]any) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprint(thread["runtime"]))
+	if questions := thread["_asyncQuestions"]; questions != nil {
+		raw, _ := json.Marshal(questions)
+		fmt.Fprintf(&b, "!%x", sha256.Sum256(raw))
+	}
 	// Questions and approvals are structural, never ordinary streaming text.
 	// Hash only the bounded interaction projection, not full turn bodies.
 	if cards := cacheMapSlice(thread["pendingInteractions"]); len(cards) > 0 {
@@ -1076,6 +1121,7 @@ func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, se
 		return
 	}
 	state.latestSeq = seq
+	state.latestThread = thread
 	state.recoveryFailed = false
 	immediate := runtime != state.runtime || structure != state.structure || state.lastPublished.IsZero() || now.Sub(state.lastPublished) >= a.cachePublishInterval
 	state.runtime = runtime
@@ -1192,12 +1238,18 @@ func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID str
 	defer a.cachePublishMu.Unlock()
 	a.cacheMu.Lock()
 	state := a.cacheSubs[threadID]
-	current := state != nil && state.streamID == streamID && seq > state.lastSentSeq
+	questionsEnabled := a.questionsEnabled
+	wireSeq := seq
+	if questionsEnabled {
+		wireSeq++
+	}
+	current := state != nil && state.streamID == streamID && wireSeq > state.lastSentSeq
 	a.cacheMu.Unlock()
 	if !current {
 		return nil
 	}
-	body, err := json.Marshal(thread)
+	wireThread := withoutAsyncQuestions(thread)
+	body, err := json.Marshal(wireThread)
 	if err != nil {
 		return err
 	}
@@ -1211,16 +1263,22 @@ func (a *agent) publishCacheSnapshot(ctx context.Context, threadID, streamID str
 		}
 		return errCacheSnapshotOversized
 	}
-	err = a.sendWithin(ctx, map[string]any{
+	message := map[string]any{
 		"type": "event", "v": 1, "event": "thread.cache.snapshot", "deviceId": a.deviceID, "threadId": threadID,
-		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "seq": seq, "capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
-		"payloadBytes": len(body), "thread": thread,
-	}, cacheSnapshotWriteTimeout)
+		"agentEpoch": a.agentEpoch, "cacheStreamId": streamID, "seq": wireSeq, "capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
+		"payloadBytes": len(body), "thread": wireThread,
+	}
+	if questionsEnabled {
+		if snapshot := thread["_asyncQuestions"]; snapshot != nil {
+			message["asyncQuestions"] = snapshot
+		}
+	}
+	err = a.sendWithin(ctx, message, cacheSnapshotWriteTimeout)
 	if err == nil {
 		runtime, _ := thread["runtime"].(string)
 		a.cacheMu.Lock()
 		runtimeChanged := state.lastSentRuntime != runtime
-		state.lastSentSeq = seq
+		state.lastSentSeq = wireSeq
 		state.lastSentRuntime = runtime
 		a.cacheMu.Unlock()
 		if runtimeChanged {

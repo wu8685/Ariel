@@ -24,7 +24,7 @@ func CreateFixture(ctx context.Context, rpc appserver.RPC, opts CreateOptions) (
 	if !opts.WriteEnabled || !filepath.IsAbs(opts.Parent) || !filepath.IsAbs(opts.ManifestPath) {
 		return m, ErrFixtureGuard
 	}
-	if opts.Purpose != "" && opts.Purpose != "user-input" && opts.Purpose != "command-decline" && opts.Purpose != "command-cancel" && opts.Purpose != "command-accept" && opts.Purpose != "file-change" && opts.Purpose != "permission-request" {
+	if opts.Purpose != "" && opts.Purpose != "async-question" && opts.Purpose != "user-input" && opts.Purpose != "command-decline" && opts.Purpose != "command-cancel" && opts.Purpose != "command-accept" && opts.Purpose != "file-change" && opts.Purpose != "permission-request" {
 		return m, ErrFixtureGuard
 	}
 	if _, err := os.Lstat(opts.ManifestPath); !os.IsNotExist(err) {
@@ -48,6 +48,9 @@ func CreateFixture(ctx context.Context, rpc appserver.RPC, opts CreateOptions) (
 	params := map[string]any{"cwd": workspace, "ephemeral": false, "sandbox": "read-only", "approvalPolicy": "never", "developerInstructions": "This is an isolated Ariel compatibility fixture. Do not use tools, inspect files, access the network, change settings, or create other tasks. Follow the requested literal response only."}
 	if opts.Purpose == "user-input" {
 		params["developerInstructions"] = "This is an isolated Ariel user-input compatibility fixture. Only when explicitly requested, use request_user_input for the specified questions. Never use any other tool, inspect files, access the network, change settings, or create other tasks. After receiving answers, follow the requested literal response. For the seed turn, do not use any tools."
+	}
+	if opts.Purpose == "async-question" {
+		params["developerInstructions"] = "This is an isolated Ariel asynchronous question compatibility fixture. Only when explicitly requested, use request_user_input_async with the specified questions, then continue independent reasoning while awaiting answers. Do not use any other tool, inspect files, access the network, change settings, or create tasks. If the asynchronous tool is unavailable, state that and stop; do not substitute request_user_input or plain-text questions. For the seed turn, do not use any tools."
 	}
 	if opts.Purpose == "command-decline" {
 		params["approvalPolicy"] = "on-request"

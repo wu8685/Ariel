@@ -38,6 +38,16 @@ go run ./cmd/probe fixture stale-interaction --manifest .local/fixture.json --wr
 
 ## 补充问题测试
 
+异步问题使用单独目的的隔离 fixture，不能将下面的阻塞式实测外推为异步支持：
+
+```sh
+go run ./cmd/probe fixture create --purpose async-question --manifest .local/async-input.json --write-enabled
+# 在 Desktop 打开该隔离会话并用只读 owner 探针确认就绪后：
+go run ./cmd/probe fixture async-question --manifest .local/async-input.json --write-enabled
+```
+
+该探针只检查真实异步问题能否出现，结束时按 exact turn 清理仍在进行的测试；即使观察到问题，也仅报告 `writeCapability: unverified`，不提交答案或打开生产写入。当前安装组合的隔离 App Server 会话返回工具不可用；这不是所有 Desktop 会话均不支持异步问题的证明。
+
 普通 fixture 明确禁止工具，不能用它测试提问。创建专用 fixture：
 
 ```sh

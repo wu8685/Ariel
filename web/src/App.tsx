@@ -4,6 +4,7 @@ import { ArielSocket, isWebPIN, type ConnectionStatus } from "./client";
 import { applyThreadEvent, belongsToSubscription, keepOfflineDevice, recoveryTarget, permissionSummary, canSend, type ThreadView } from "./state";
 import { answersForSubmission } from "./interaction";
 import { InteractionCard } from "./interaction-card";
+import {AsyncQuestionContext,TurnQuestionCards,TurnQuestionWarnings,QuestionMemory} from "./async-questions";
 import { newRequestID } from "./ids";
 import { ExecutionSettingsControl } from "./execution-settings";
 import { nativeNoticeKind } from "./native-notice";
@@ -296,6 +297,9 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [devices, setDevices] = useState<Device[]>([]);
   const [relayAssetVersion,setRelayAssetVersion]=useState(0);
+	const relayQuestionsVersion=useRef(0);
+	const questionMemory=useRef(new QuestionMemory());
+	const questionScope=(device:string,thread:string,epoch=agentEpochFor(device))=>JSON.stringify([device,epoch,thread]);
   const fileCapabilityRefresh=useRef(new Map<string,Promise<void>>());
   const [deviceId, setDeviceId] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -1015,6 +1019,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     durableRestoreAttempt.current = "";
     selection.current = { deviceId: "", threadId: "", view: null };
     expectedSubscription.current = "";
+    questionMemory.current.clear(); relayQuestionsVersion.current=0;
     fileWorkspaceSession.clear(); setView(null); setThreadId(""); setLocalThreadDraft(null); clearAllComposerDrafts(); resetHistory();
     fileContentCache.current.clear(); workspaceDirectoryCache.current.clear(); fileContentCacheEpoch.current = ""; setShowWorkspaceBrowser(false);
     void durableCache.clear();
@@ -1148,6 +1153,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const found = (response.data?.devices as Device[] | undefined) || [];
     const restoredDevice = fileWorkspaceSession.acceptDevices(found,webFileContextEnabled());
     setRelayAssetVersion(response.data?.documentAssetsVersion===1?1:0);
+		relayQuestionsVersion.current=response.data?.asyncQuestionsVersion===1?1:0;
     const foundIDs = new Set(found.map(candidate => candidate.deviceId));
     for (const previous of devicesRef.current) {
       if (!foundIDs.has(previous.deviceId)) {
@@ -1397,7 +1403,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     // Spec 0100: the hot path terminates at Relay. A fresh cache response is
     // already a complete two-turn view, so opening it must not create a
     // Web-owned Desktop subscription or wait for the owner snapshot.
-    const cacheResponse = await client.request("thread.cache.watch", targetDevice, { threadId: id });
+    const cacheResponse = await client.request("thread.cache.watch", targetDevice, { threadId: id,...(relayQuestionsVersion.current===1?{asyncQuestionsVersion:1}:{}) });
     if (epoch !== pendingSelect.current) {
       const staleWatchID = cacheResponse.data?.watchId;
       if (cacheResponse.outcome === "accepted" && typeof staleWatchID === "string") releaseSubscription(targetDevice, staleWatchID);
@@ -1408,6 +1414,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       const watchID = typeof cacheData.watchId === "string" ? cacheData.watchId : "";
       const freshness = cacheData.freshness;
       const cachedThread = cacheData.thread as Thread | undefined;
+			if(cachedThread&&cacheData.asyncQuestions!==undefined)questionMemory.current.receive(questionScope(targetDevice,id,typeof cacheData.agentEpoch==="string"?cacheData.agentEpoch:agentEpochFor(targetDevice)),cacheData.asyncQuestions,cachedThread.turns);
       if (watchID && (!cachedThread || cachedThread.threadId === id)) {
         expectedSubscription.current = watchID;
         const source = cachedThread || cachedView?.thread;
@@ -1808,6 +1815,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         // normal duplicates, older seq and retired streams remain fenced.
         const freshnessRecovery = source?.streamId === "cache-pending" && source.seq === next.seq;
         if(!acceptStream(next,source,freshnessRecovery))return;
+				if(event.asyncQuestions!==undefined)questionMemory.current.receive(questionScope(event.deviceId,event.threadId,event.agentEpoch||agentEpochFor(event.deviceId)),event.asyncQuestions,event.thread.turns);
         terminalCacheFailure.current = null;
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);
@@ -2285,7 +2293,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     try {
       for (let pageNumber = 0; pageNumber < 20; pageNumber++) {
         const current = historyRef.current;
-        const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: requestLimit, ...(current.cursor ? { cursor: current.cursor } : {}) });
+        const response = await client.request("thread.history", deviceId, { threadId: targetThread, limit: requestLimit, ...(current.cursor ? { cursor: current.cursor } : {}),...(relayQuestionsVersion.current===1?{asyncQuestionsVersion:1}:{}) });
         if (epoch !== pendingSelect.current || historyEpoch!==historyGeneration.current || selection.current.threadId !== targetThread) return;
         if (response.outcome !== "accepted") {
           if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) continue;
@@ -2297,6 +2305,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           if (discardRestoredHistory(deviceId, targetThread)) continue;
           setNotice("历史页格式无法识别，已保留当前会话。"); return;
         }
+				if(response.data?.asyncQuestions!==undefined)questionMemory.current.receive(questionScope(deviceId,targetThread),response.data.asyncQuestions,turns);
         const next = appendOlderPage(current, selection.current.view?.thread.turns || view.thread.turns, { turns, nextCursor });
         if (next.older.length-current.older.length > requestLimit) {
           setNotice("历史页返回数量超过请求范围，已保留当前会话。"); return;
@@ -2331,7 +2340,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     itemLoadingRef.current = turn.turnId;
     setItemLoading(turn.turnId);
     try {
-      const response = await client.request("thread.history.items", deviceId, { threadId: targetThread, turnId: turn.turnId, cursor: turn.nextItemCursor, limit: 100 });
+      const response = await client.request("thread.history.items", deviceId, { threadId: targetThread, turnId: turn.turnId, cursor: turn.nextItemCursor, limit: 100,...(relayQuestionsVersion.current===1?{asyncQuestionsVersion:1}:{}) });
       if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
       if (response.outcome !== "accepted") {
         if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) void loadOlder();
@@ -2342,6 +2351,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       const nextItemCursor = response.data?.nextItemCursor;
       const itemsComplete = response.data?.itemsComplete;
       if (response.data?.turnId !== turn.turnId || !Array.isArray(items) || typeof nextItemCursor !== "string" || typeof itemsComplete !== "boolean") { setNotice("消息页格式无法识别，已保留当前内容。"); return; }
+			if(response.data?.asyncQuestions!==undefined)questionMemory.current.receive(questionScope(deviceId,targetThread),response.data.asyncQuestions,[{turnId:turn.turnId,items}],true);
       pendingReadingAnchor.current = captureReadingAnchor(transcriptRef.current, readingKey(deviceId, targetThread));
       const next = { ...itemOverridesRef.current, [turn.turnId]: prependOlderItems(itemOverridesRef.current[turn.turnId] || turn, items, nextItemCursor, itemsComplete) };
       replaceItemOverrides(next);
@@ -2925,7 +2935,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         {status === "incompatible" && hasConversationContext && <div className="readonly-banner protocol-incompatible" role="alert"><span>页面版本与 Relay 不兼容，操作已暂停。请刷新页面。</span><button type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button></div>}
         {!inlineAuthRecovery && readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
         {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
-        <div className="transcript" ref={transcriptRef} tabIndex={-1} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
+        <AsyncQuestionContext.Provider value={{memory:questionMemory.current,scope:questionScope(deviceId,view?.threadId||""),disabledReason:!ownerReady?"当前连接尚未确认，请等待恢复。":view?.thread.pendingInteractions.length?"请先处理当前阻塞式问题或审批。":""}}><div className="transcript" ref={transcriptRef} tabIndex={-1} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
+          {view&&questionMemory.current.invalid(questionScope(deviceId,view.threadId))&&<p className="async-question-note" role="status">异步问题数据暂时无法识别，会话仍可使用；请在 Codex 中查看问题。</p>}
           {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
           {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} onEdit={currentExecution?.editSupported && !messageEdit && ownerReady && !working && !queueWorking && !readOnlyHistory && view?.thread.runtime==="idle" && !view.thread.pendingInteractions.length && !queuedMessages.length && view.thread.turns.at(-1)?.turnId===turn.turnId && editableMessage(turn)?()=>void beginMessageEdit(turn):undefined} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
@@ -2938,7 +2949,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             </article>;
           })}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} submitting={working} />)}
-        </div>
+        </div></AsyncQuestionContext.Provider>
         {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><CircleButton className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></CircleButton></div>}
         <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<CircleButton className="icon-control" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setNotice("")}><CloseIcon /></CircleButton></div>}
           {recoveringDeviceId === deviceId && view && <div className="readonly-banner" role="status">Desktop Agent 正在重连 · 当前显示最后确认的会话内容，操作暂时禁用。</div>}
@@ -3064,6 +3075,7 @@ function ConversationTurn({ onEdit, turn, fileChanges, onOpenFile, onOpenReferen
   const activityLabel = `${activityExpanded ? "收起" : "打开"}工具调用（${activityCount} 项）`;
   const activityToggleText = activityExpanded ? activityLabel : `使用了 ${activityCount} 个工具`;
   return <section className="turn">
+    <TurnQuestionWarnings turnId={turn.turnId}/>
     {turn.status !== "inProgress" && <div className="turn-status">{turn.status === "completed" ? "已完成" : turn.status === "interrupted" ? "已停止" : "失败"}</div>}
     {turn.itemsComplete === false && <button className="history-action item-history-action" type="button" onClick={() => onLoadOlderItems(turn)} disabled={loading}>{loading ? "正在加载…" : "加载此回合更早内容"}</button>}
     {parts.map(part => {
@@ -3073,7 +3085,7 @@ function ConversationTurn({ onEdit, turn, fileChanges, onOpenFile, onOpenReferen
 		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];
-        return <article className={`message ${item.role}${notice ? ` native-notice ${notice}` : ""}`} role={notice ? notice === "failure" ? "alert" : "status" : undefined} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div>{item.role==="user"&&onEdit&&<CircleButton className="message-edit-button" aria-label="编辑并重新发送" data-tooltip="编辑并重新发送" onClick={onEdit}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 4 5 5M4 20l4-1L20 7a2 2 0 0 0-4-4L4 15z"/></svg></CircleButton>}</article>;
+        return <article className={`message ${item.role}${notice ? ` native-notice ${notice}` : ""}`} role={notice ? notice === "failure" ? "alert" : "status" : undefined} aria-label={item.role === "user" ? "你" : item.role === "assistant" ? "Codex" : "系统"} key={item.itemId} data-item-id={item.itemId}><div className="message-body"><HistoricalFileQuotes quotes={projected.quotes}/><div className="message-text">{item.role === "system" ? projected.text : <ConversationMarkdown text={projected.text} onOpenDocument={item.role==="assistant"&&onOpenReference?reference=>onOpenReference(item.itemId,reference):undefined} renderImage={(source, alt) => { const ref = markdownImages.find(image => image.source === source); return ref ? <ConversationImage alt={alt || ref.alt} autoLoad={false} load={() => onLoadImage(item.itemId, ref.index)} /> : null; }} />}</div>{item.role==="assistant"&&<TurnQuestionCards turnId={turn.turnId} itemId={item.itemId}/ >}{nativeImages.map(image => <ConversationImage key={image.index} alt={image.alt} load={() => onLoadImage(item.itemId, image.index)} />)}</div>{item.role==="user"&&onEdit&&<CircleButton className="message-edit-button" aria-label="编辑并重新发送" data-tooltip="编辑并重新发送" onClick={onEdit}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 4 5 5M4 20l4-1L20 7a2 2 0 0 0-4-4L4 15z"/></svg></CircleButton>}</article>;
       }
       if (!activityExpanded && part !== firstActivity) return null;
       return <section className="activity-group" key={part.items[0].itemId} data-item-id={part === firstActivity ? `${turn.turnId}:activity-control` : undefined}>

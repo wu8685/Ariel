@@ -463,8 +463,15 @@ test("storage quota failure keeps file reading usable and does not restore a sta
   await expect(page.getByTestId("file-source")).toContainText("# a.md");
   await expect(page.getByText("无法保存文件阅读现场；当前文件仍可阅读，刷新后可能需要重新打开。")).toBeVisible();
   await chooseFileView(page,"阅读模式");await expect(page.getByTestId("file-reading")).toContainText("a.md");
-  await page.reload();await expect(page.getByRole("button",{name:"展开项目 tabs，/work/tabs"})).toBeVisible();
+  expect(await page.evaluate(()=>sessionStorage.getItem("ariel.file-workspace.v1"))).toBeNull();
+  await page.reload();
+  // History may restore the main chat and close the drawer. Select the chat
+  // when listed, or click its inert heading when already restored; never
+  // couple a failed file checkpoint to that independent cache's timing.
+  await page.getByText(thread.title,{exact:true}).first().click();
+  await expect(page.getByRole("textbox",{name:"发送消息"})).toBeEnabled();
   await expect(page.getByRole("tab")).toHaveCount(0);
+  expect(await page.evaluate(()=>sessionStorage.getItem("ariel.file-workspace.v1"))).toBeNull();
 });
 
 for (const width of [320, 390, 1280])

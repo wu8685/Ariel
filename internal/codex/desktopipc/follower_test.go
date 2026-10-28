@@ -96,6 +96,18 @@ func TestFollowerPreservesReducerOverflowCauseWhenIPCCloses(t *testing.T) {
 	}
 }
 
+func TestFollowerRefreshPreservesKnownReducerCauseBeforeLoadReceipt(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	client := NewClient(local, Options{})
+	client.Close()
+	f := &Follower{c: client, o: newObservationState("thread", "owner"), err: errors.Join(ErrFrameTooLarge, ErrResyncRequired)}
+	_, err := f.Refresh(context.Background())
+	if !errors.Is(err, ErrFrameTooLarge) || !errors.Is(err, ErrResyncRequired) {
+		t.Fatalf("closed receipt overwrote classified native failure: %v", err)
+	}
+}
+
 func TestFollowerReceivesSnapshotAndRejectsBusyStart(t *testing.T) {
 	local, peer := net.Pipe()
 	defer peer.Close()

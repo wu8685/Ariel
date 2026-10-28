@@ -48,6 +48,8 @@ Web 与 Relay 使用一条多路复用 WebSocket，每台 Desktop Agent 与 Rela
 
 Agent transport 断线后独立重连，保留可继续使用的 Codex Service 与 follower；重新连接时按 Relay 关注集合恢复并核对会话，不要求 Web 刷新才能接收终态。具体恢复条件见 [0107](../specs/0107-resilient-agent-transport-and-cache-recovery.md)。
 
+异步问题复用相同 follower 和 WebSocket，以显式协商的 `asyncQuestions` sidecar 绑定相同 cache stream／seq，与双 turn 正文原子替换。单窗口最多 64 题／64 KiB，实际字节计入 Relay 内存预算；正文仍按 5 秒合并，问题状态变化即时推送。旧 Web 不接收新字段，旧 Agent 不接收未经协商的参数；Web 按 turn 仅保留有界内存视图，不建立问题数据库。当前 native 异步提交门禁关闭，读取支持不代表写入受支持，见 [0126](../specs/0126-asynchronous-question-cards.md)。
+
 ## 缓存与资源边界
 
 | 层 | 内容与用途 | 生命周期与约束 |
