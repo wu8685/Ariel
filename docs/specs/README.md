@@ -127,6 +127,7 @@
 
 | 0122 | [多文件 Tab 与全屏／最小化阅读](0122-minimizable-file-viewer.md) | Implemented（基础体验 v0.12.1；文件菜单／引用栏纳入 v0.12.2） | 无固定 Tab 上限、来源绑定、单正文挂载与共享有界 LRU；模式收进菜单、引用栏按需显示 |
 | 0123 | [刷新恢复文件阅读现场](0123-file-reading-refresh-restore.md) | Implemented（Web 349／Chromium 125；纳入 v0.12.2） | 当前标签页仅保存有界元信息；核验认证／设备／版本后按需恢复 Tab、模式、位置与最小化 |
+| 0127 | [宽屏文件／主会话分屏与常驻会话菜单](0127-wide-screen-file-chat-layout.md) | Implemented（Web 368／Chromium 152／build／Go 已验） | ≥1200px 左菜单／中文件／右主会话；窄屏保留独占阅读，保持单连接、文件 Tab 与安全引用 |
 
 ## 设计基线
 

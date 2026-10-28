@@ -23,6 +23,7 @@ test("execution settings preserve the transcript, fence old events and remain us
  const trigger=page.getByRole("button",{name:"模型与推理设置"});await expect(trigger).toContainText("Model A");await page.getByRole("textbox",{name:"发送消息"}).fill("输入草稿保留");
  const verifyActionRow=async()=>{
   expect(await trigger.evaluate(el=>!!el.closest(".composer-actions"))).toBe(true);
+  await expect(page.getByRole("textbox",{name:"发送消息"})).toHaveCSS("height","44px");
   // Sample every rectangle atomically: separate round trips can observe
   // different resize frames and manufacture an overlap that never existed.
   const controls=await page.locator(".composer-actions").evaluate(el=>[...el.querySelectorAll(".attach-button,.permission-info-button,.execution-trigger,.queue-cancel-button,.stop-button,.send-button")].map(control=>{const r=control.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};}));
@@ -35,6 +36,7 @@ test("execution settings preserve the transcript, fence old events and remain us
  };
  for(const width of [320,390,1280]){await page.setViewportSize({width,height:844});await verifyActionRow();}
  await page.setViewportSize({width:390,height:844});
+ await verifyActionRow();
  await expect(page.getByLabel("推理强度：高",{exact:true})).toBeVisible();await expect(page.getByLabel("速度：Fast",{exact:true})).toBeVisible();
  await expect(page.locator(".composer")).toHaveScreenshot("mobile-inline-model-controls.png",{caret:"hide"});
  await trigger.click();

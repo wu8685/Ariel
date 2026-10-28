@@ -97,8 +97,8 @@ test("desktop reuses the compact mobile shell and icon controls", async ({ page 
   await expect(page.locator(".permission-strip")).toBeHidden();
   await expect(page.locator(".permission-info-button")).toBeVisible();
   const conversationBox = await page.locator(".conversation").boundingBox();
-  expect(conversationBox?.x).toBe(0);
-  expect(conversationBox?.width).toBe(1280);
+  expect(conversationBox?.x).toBe(280);
+  expect(conversationBox?.width).toBe(1000);
 
   const composer = page.locator(".composer");
   const queuePanel = page.locator(".queue-panel");
@@ -119,16 +119,15 @@ test("desktop reuses the compact mobile shell and icon controls", async ({ page 
   await send.hover();
   await expect.poll(() => send.evaluate(element => getComputedStyle(element, "::after").opacity)).toBe("1");
 
-  const menu = page.getByRole("button", { name: /打开会话列表/ });
-  await menu.click();
+  const menu = page.locator('.mobile-list[aria-controls="session-sidebar"]');
   const sidebar = page.locator(".sidebar");
   await expect(sidebar).toHaveClass(/\bopen\b/);
-  await expect(page.getByRole("button", { name: "关闭会话列表遮罩" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "关闭会话列表遮罩" })).toHaveCount(0);
   expect((await sidebar.locator(".thread-list").boundingBox())?.y).toBeLessThanOrEqual(190);
   await expect(sidebar.locator(".sidebar-head, .device-label, .device-meta")).toHaveCount(0);
   expect((await sidebar.locator('[data-thread-id="desktop-unified"]').boundingBox())?.height).toBe(44);
   await expect(page).toHaveScreenshot("desktop-unified-sidebar.png", { animations: "disabled", caret: "hide" });
-  await page.getByRole("button", { name: "关闭会话列表遮罩" }).click();
+  await menu.click();
   await expect(sidebar).not.toHaveClass(/\bopen\b/);
 
   await send.hover();

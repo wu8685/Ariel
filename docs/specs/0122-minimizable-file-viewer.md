@@ -4,6 +4,7 @@
 - 范围：仅 Ariel Web 文件 Tab、全屏阅读与主会话二选一、整体收起／展开；不增加 Codex IPC／协议／Chilling 依赖。
 - 第二阶段：带父上下文的侧边对话不在本阶段，须另写规格并通过 [原生分支 compatibility gate](../compatibility/2026-10-27-side-chat-context.md)。
 - 关联：0090／0094／0105 的阅读、Diff、精确引用与来源校验，0118 阅读模式／图片，0119 Ariel 内置文件后端继续有效。
+- 2026-10-28：[0127 宽屏分屏](0127-wide-screen-file-chat-layout.md) 已获批准，取代本规格中 ≥1200px 的独占展示及引用后收起规则；窄屏继续遵循下述二选一行为。
 
 ## 1. 用户行为
 

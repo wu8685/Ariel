@@ -25,6 +25,7 @@ import { reorderQueueAtPointer } from "./queue-order";
 import { ArielLogo } from "./ArielLogo";
 import { CircleButton } from "./circular-button";
 import { DevicePicker } from "./device-picker";
+import { useWorkspaceLayout } from "./workspace-layout";
 import { editableMessage, parseEditTarget, historyRewritten, type MessageEdit } from "./message-edit";
 import {StreamFence} from "./stream-fence";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
@@ -338,6 +339,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 	const [fileChanges, setFileChanges] = useState<Record<string, FileChange[]>>({});
 	const fileWorkspace=useRef(new FileWorkspaceModel()).current;
 	useFileWorkspace(fileWorkspace);
+  const filesExpanded = fileWorkspace.tabs.length > 0 && !fileWorkspace.collapsed;
 	const fileWorkspaceSession=useMemo(()=>new FileWorkspaceSession(fileWorkspace,()=>window.sessionStorage),[fileWorkspace]);
 	const [filePersistenceWarning,setFilePersistenceWarning]=useState("");
 	const [showWorkspaceBrowser,setShowWorkspaceBrowser]=useState(false);
@@ -366,7 +368,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [dragQueueOrder, setDragQueueOrder] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
   const [recoveringDeviceId, setRecoveringDeviceId] = useState("");
-  const [showList, setShowList] = useState(true);
+  const layout = useWorkspaceLayout();
+  const showList = layout.sidebarVisible;
+  const setShowList = layout.setSidebarOpen;
+  const [composing, setComposing] = useState(false);
+  const conversationLayoutRef = useRef<HTMLDivElement>(null);
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
   const [historyChromeCollapsed, setHistoryChromeCollapsed] = useState(false);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
@@ -403,6 +409,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const lastTranscriptScrollTop = useRef(0);
+  const transcriptLayoutWidth = useRef(0);
+  const transcriptLayoutAnchor = useRef<ReadingAnchor | null>(null);
   const historyReturnIntent = useRef(false);
   const transcriptTouchY = useRef<number | null>(null);
   const transcriptGestureDeadline = useRef(0);
@@ -908,6 +916,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   function onTranscriptScroll() {
     const container = transcriptRef.current;
     if (!container || container.clientHeight === 0) return;
+    // Reflow can dispatch scroll before ResizeObserver. Keep the pre-reflow
+    // anchor/intent until the observer restores it, not the newly shifted item.
+    if(transcriptLayoutWidth.current && transcriptLayoutWidth.current!==container.clientWidth)return;
+    transcriptLayoutAnchor.current=captureReadingAnchor(container,readingKey(selection.current.deviceId,selection.current.threadId));
     const composerEditingWithoutTranscriptGesture = window.innerWidth <= mobileViewportMaxWidth
       && document.activeElement === composerInputRef.current
       && followLatestRef.current
@@ -1280,7 +1292,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     activateComposer({ deviceId, threadId: draftId });
     setNotice("");
     setNewThreadOpen(false);
-    setShowList(false);
+    layout.afterThreadSelection();
     window.setTimeout(() => composerInputRef.current?.focus(), 0);
   }
 
@@ -1332,7 +1344,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   async function selectThread(id: string, targetDevice = deviceId, cachePrevious = true, retryCreatedSubscribe = false, initialThread?: Thread) {
     if (!targetDevice) return;
-    setShowList(false);
+    layout.afterThreadSelection();
     if (cachePrevious) cacheCurrentHistory();
     const sameThread = selection.current.deviceId === targetDevice && selection.current.threadId === id;
     if (!sameThread) activateComposer({ deviceId: targetDevice, threadId: id });
@@ -2014,13 +2026,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   }, [view?.threadId, view?.thread.updatedAt, view?.seq, syncingView, readOnlyHistory]);
 
   useEffect(() => {
-    if (!showList) return;
+    if (!showList || layout.wide) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setShowList(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showList]);
+  }, [showList, layout.wide, setShowList]);
 
   useEffect(() => {
     if (!newThreadOpen) return;
@@ -2153,6 +2165,26 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   useEffect(() => () => cancelLatestChromeRestore(), []);
 
+  useEffect(()=>{
+    const container=transcriptRef.current;
+    if(!container || typeof ResizeObserver==="undefined")return;
+    transcriptLayoutWidth.current=container.clientWidth;
+    const observer=new ResizeObserver(()=>{
+      const width=container.clientWidth;if(!width)return;
+      const changed=transcriptLayoutWidth.current>0&&transcriptLayoutWidth.current!==width;
+      transcriptLayoutWidth.current=width;
+      const key=readingKey(selection.current.deviceId,selection.current.threadId);
+      if(changed){
+        if(followLatestRef.current)scrollToLatest(container);
+        else if(transcriptLayoutAnchor.current?.key===key)restoreReadingAnchor(container,{...transcriptLayoutAnchor.current,scrollTop:container.scrollTop});
+        lastTranscriptScrollTop.current=container.scrollTop;
+      }
+      transcriptLayoutAnchor.current=captureReadingAnchor(container,key);
+    });
+    observer.observe(container);
+    return ()=>observer.disconnect();
+  },[]);
+
   useLayoutEffect(() => {
     const input = composerInputRef.current;
     if (!input) return;
@@ -2173,7 +2205,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [draft, activeTurn?.turnId]);
+  }, [draft, activeTurn?.turnId, layout.wide, showList, filesExpanded]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -2794,7 +2826,27 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   const hasConversationContext = Boolean(view || localThreadDraft || threadId);
   const inlineAuthRecovery = authRecovery && hasConversationContext && status !== "incompatible";
-  const filesExpanded = fileWorkspace.tabs.length > 0 && !fileWorkspace.collapsed;
+  function quoteFromWorkspace(quote:FileQuote){
+    if(quote.threadId!==selection.current.threadId || quote.threadId!==view?.threadId)return;
+    if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}
+    setFileQuotes(current=>[...current,quote]);
+    if(historyChromeCollapsed)restoreLatestChrome();
+    if(!layout.wide)fileWorkspace.collapse();
+    window.setTimeout(()=>composerInputRef.current?.focus(),0);
+  }
+  const exclusiveFiles = filesExpanded && !layout.wide && !composing;
+  // Do not hide an active IME composition. The file stays mounted until the
+  // composition commits; then the exclusive reader receives keyboard focus.
+  const suspendedFiles = filesExpanded && !layout.wide && composing;
+  useLayoutEffect(()=>{
+    if(!exclusiveFiles)return;
+    const root=conversationLayoutRef.current;
+    // Native media CSS may already have blurred the now-hidden conversation
+    // to body. Recover that focus too, without stealing it from an open modal.
+    if(document.activeElement===document.body || root?.querySelector(".conversation")?.contains(document.activeElement)){
+      root?.querySelector<HTMLElement>('.file-workspace [role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
+    }
+  },[exclusiveFiles]);
   return <div className={`app-shell ${status === "ready" || hasConversationContext ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
@@ -2829,10 +2881,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       </section>
     </div>}
     {status === "incompatible" && !hasConversationContext ? incompatiblePanel : status !== "ready" && !hasConversationContext && accessPanel}
-    <div className="workspace">
-      {showList && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
-      <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表">
-        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <CircleButton className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></CircleButton>}{webAuthMode === "pin" ? <CircleButton className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></CircleButton> : <CircleButton className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></CircleButton>}<CircleButton className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></CircleButton><CircleButton className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></CircleButton><CircleButton className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></CircleButton></div></div>
+    <div className={`workspace${layout.wide?" wide-layout":""}${showList?" sidebar-visible":""}`}>
+      {showList && !layout.wide && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
+      <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表" aria-hidden={!showList || undefined} inert={!showList}>
+        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={layout.wide?20:24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <CircleButton className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></CircleButton>}{webAuthMode === "pin" ? <CircleButton className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></CircleButton> : <CircleButton className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></CircleButton>}<CircleButton className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></CircleButton><CircleButton className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></CircleButton><CircleButton className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></CircleButton></div></div>
         <DevicePicker devices={devices} value={deviceId} disabled={status !== "ready"} visible={showList && !threadMenu} onOpen={()=>setThreadMenu(null)} onChange={id=>{if(id!==deviceId)fileWorkspaceSession.clear();setDeviceId(id)}}/>
         <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <CircleButton className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></CircleButton>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
@@ -2848,10 +2900,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         {cursor && <button className="load-more" onClick={() => void loadThreads(deviceId, cursor, searchInputRef.current.trim())} disabled={listLoading}>加载更多 →</button>}
         <div className="sidebar-foot">{mock ? "MOCK SESSION · 非真实 Codex 历史" : "原始会话 · 不创建远程副本"}</div>
       </aside>
-      <div className={`conversation-layout ${filesExpanded?"files-expanded":""}`}>
-      <main className="conversation" aria-hidden={filesExpanded || undefined} inert={filesExpanded}>
+      <div ref={conversationLayoutRef} className={`conversation-layout ${filesExpanded?"files-expanded":""}${filesExpanded&&composing?" ime-composing":""}`}>
+      <FileWorkspace suspended={suspendedFiles} model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} canLoad={status==="ready"&&fileContextEnabled&&!!device?.agentOnline&&device.codexReady} persistenceWarning={filePersistenceWarning} onReturnFocus={()=>{if(historyChromeCollapsed)transcriptRef.current?.focus({preventScroll:true});else composerInputRef.current?.focus({preventScroll:true})}} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quoteFromWorkspace}/>
+      <main className="conversation" aria-hidden={exclusiveFiles || undefined} inert={exclusiveFiles}>
         <div className={`conversation-head ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}>
-          <CircleButton className="mobile-list icon-control" aria-label={`打开会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(true); void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></CircleButton>
+          <CircleButton className="mobile-list icon-control" aria-label={`${layout.wide&&showList?"收起":"打开"}会话列表，${connectionLabel}`} data-tooltip="会话列表" aria-expanded={showList} aria-controls="session-sidebar" onClick={() => { setShowList(layout.wide?!showList:true); if(!showList)void refreshUnreadThreads(true); }}><MenuIcon /><span className={`status-dot ${status === "ready" ? "online" : ""}`} aria-hidden="true" /></CircleButton>
           <div className="conversation-title"><span className="eyebrow">{mock ? "MOCK DEMO" : "CODEX SESSION"}</span><h2>{localThreadDraft ? "未命名会话" : view ? view.thread.title || "未命名会话" : selectedThread ? selectedThread.title || "未命名会话" : "选择一个会话"}</h2><span className="head-path">{localThreadDraft?.cwd || view?.thread.cwd || selectedThread?.cwd || "从左侧选择历史会话，接着工作。"}</span></div>
           <div className="head-right">{mock && <span className="mock-badge">模拟环境</span>}{view && <span className="runtime">{view.thread.runtime === "inProgress" ? "运行中" : view.thread.runtime === "idle" ? "待命" : view.thread.runtime === "notLoaded" ? "加载中" : "状态未知"}</span>}</div>
           {workspaceBrowserEnabled&&<CircleButton className="workspace-open icon-control" type="button" aria-label="浏览工作区文件" data-tooltip="工作区文件" onClick={()=>setShowWorkspaceBrowser(true)}><FolderIcon/></CircleButton>}
@@ -2909,7 +2962,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           {messageEdit&&<div className="message-edit-banner" role="status"><span>正在编辑上一条消息 · 不撤销已发生的文件修改{messageEdit.uncertain?" · 结果待核对":view?.thread.turns.at(-1)?.turnId!==messageEdit.turnId||messageEdit.agentEpoch!==device?.agentEpoch?" · 目标已变化，草稿保留":""}</span><button type="button" onClick={()=>setMessageEdit(undefined)} disabled={working}>取消编辑</button></div>}
           <FileQuoteChips quotes={fileQuotes} onRemove={index=>setFileQuotes(current=>current.filter((_,position)=>position!==index))}/>
           {screenshots.length > 0 && <div className="screenshot-drafts" aria-label="待发送截图">{screenshots.map((image, index) => <div className="screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name} /><CircleButton className="icon-control" type="button" aria-label={`移除截图：${image.name}`} data-tooltip="移除截图" onClick={() => setScreenshots(current => current.filter((_, position) => position !== index))}><CloseIcon /></CircleButton></div>)}</div>}
-          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={localThreadDraft ? "发送第一条消息，创建 Codex 会话…" : view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={(!view && !localThreadDraft) || readOnlyHistory} rows={1} />
+          <div className="composer"><textarea ref={composerInputRef} aria-label="发送消息" enterKeyHint="enter" placeholder={localThreadDraft ? "发送第一条消息，创建 Codex 会话…" : view ? editingQueueId ? "编辑排队消息…" : view.thread.runtime === "inProgress" ? queueEnabled ? "继续输入，发送后加入队列…" : "Codex 正在运行；你可以先写草稿…" : "给 Codex 发消息…" : "选择会话后开始输入…"} value={draft} onChange={e => setDraft(e.target.value)} onCompositionStart={()=>setComposing(true)} onCompositionEnd={()=>setComposing(false)} onBlur={()=>setComposing(false)} onKeyDown={e => { if (window.innerWidth > mobileViewportMaxWidth && e.key === "Enter" && !e.shiftKey && !composing && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} disabled={(!view && !localThreadDraft) || readOnlyHistory} rows={1} />
             {currentExecution?.imagesBlocked && <small className="execution-image-warning" role="status">当前模型不支持图片，请更换模型或移除截图。</small>}
             <div className="composer-actions"><span>Enter 发送 · Shift+Enter 换行</span><div>
               <input ref={screenshotInputRef} className="screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={e => void addScreenshots(e.target.files)} disabled={(!view && !localThreadDraft) || readOnlyHistory || working} />
@@ -2922,7 +2975,6 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             </div></div>
             </div></div></div>
       </main>
-      <FileWorkspace model={fileWorkspace} request={(method,target,params)=>client.request(method,target,params)} currentThreadId={view?.threadId||""} canLoad={status==="ready"&&fileContextEnabled&&!!device?.agentOnline&&device.codexReady} persistenceWarning={filePersistenceWarning} onReturnFocus={()=>{if(historyChromeCollapsed)transcriptRef.current?.focus({preventScroll:true});else composerInputRef.current?.focus({preventScroll:true})}} assetContext={fileAssetContext} canReadWorkspace={workspaceBrowserEnabled} onBrowse={workspaceBrowserEnabled?()=>setShowWorkspaceBrowser(true):undefined} onQuote={quote=>{if(quote.threadId!==view?.threadId)return;if(fileQuotes.length>=5){setNotice("每条消息最多引用 5 个文件片段。");return}setFileQuotes(current=>[...current,quote]);fileWorkspace.collapse();window.setTimeout(()=>composerInputRef.current?.focus(),0)}}/>
       </div>
     </div>
     {threadMenu && (() => {
