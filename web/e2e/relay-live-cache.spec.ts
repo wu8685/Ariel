@@ -205,7 +205,8 @@ test("a completed conversation continues and reaches terminal through the real R
   await expect(page.locator(".runtime")).toHaveText("待命");
   await page.getByLabel("发送消息").fill("终态到达后恢复发送");
   await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
-  } finally {
-    if (info.status !== info.expectedStatus || test.info().errors.length) await info.attach("isolated-relay-frames", { body: frames.join("\n"), contentType: "application/x-ndjson" });
+  } catch (error) {
+    await info.attach("isolated-relay-frames", { body: frames.join("\n"), contentType: "application/x-ndjson" });
+    throw error;
   }
 });

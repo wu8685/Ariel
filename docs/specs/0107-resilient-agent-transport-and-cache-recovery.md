@@ -105,6 +105,20 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 12. outbound snapshot mailbox 按同一 stream 的 seq 保留最新值；旧 timer 的迟到结果、重复 snapshot 和旧 stream status 均不得覆盖终态或使合法 cache 再次 stale。stream 替换必须按当前 subscription identity 核对。
 13. recovery 失败后，用户显式点击“重新连接”必须通过既有 watcher 发起 promotion；仍有效的 follower 在该次显式请求内允许一次有界 refresh，失效的 follower 则重新 attach。正常 warm rewatch 仍不刷新 owner；不得因此引入常驻轮询。Web 已接管更新 snapshot 后，迟到的 retry 错误回执不得覆盖它。
 
+### 5.5 Relay delivery 与 Web stale 状态防倒退
+
+2026-10-28 用户批准修复已复现的迟到错误；本节细化 §5.4.12、§8.4，不新增 wire 字段、轮询或 mutation 权限。
+
+1. 输入包括同一 watcher 的 snapshot／lease／stale／remove，以及解锁后才执行的异步 delivery；输出仍为 v1 `thread.cache.update`。
+2. Relay 为 entry 生成 delivery 时在 `Server.mu` 内分配内部 revision。解锁后的 delivery 在入 latest-only mailbox 前必须重新核对 entry identity、revision、watcher identity；核对与入队在同一临界区完成，网络写入不在该锁内。
+3. 较旧 revision 即使比新 revision 更晚入队、或新消息已被 sender 取走，也不得再次写入 mailbox。unwatch、entry 淘汰／重建后旧 delivery 同样失效；不能用无界的历史 revision map 实现该约束。
+4. Web 的 stale／missing 分支与 fresh snapshot 共用同一 session／device／thread／watch lineage：已退休 stream 或当前 stream 的较低 seq 不得改变正文、草稿、只读状态、loading 或 notice。
+5. 状态校验不得推进或退休正文 stream；当前 stream 同 seq 的真实错误仍应禁用 mutation，匹配 lease 的合法恢复仍可在同 seq 接管。尚无 lineage 的 cold promotion failure／missing 和合法 remove 必须继续可见。
+6. 回归必须先 red 后 green：Go 确定性交错入队（跨 stream、同 stream seq、同 seq lease、sender drain、unwatch／entry 重建）；Web unit 与手机 viewport Chromium 注入迟到错误并断言草稿、正文、发送能力及无自动 mutation。当前真实错误、后续 snapshot 恢复与现有跨层 E2E 同时保持通过。
+7. promotion 的 transport write failure 必须绑定原 operation ID；snapshot 已结束该 operation、或新 operation 已接管时，迟到错误不能清除新 operation，也不能把已恢复 entry 重新标 stale。当前 operation 的真实失败仍按原规则明确终止并广播。
+8. Web transport 必须先完成 `hello.ok` 写入，再注册到设备事件广播集合；并发 Agent presence 更新不得抢先发送业务事件，使恢复中的 Web 误判协议不兼容。首帧顺序通过真实 WebSocket 广播竞争测试验证，不放宽客户端握手校验。
+9. cold cache miss 发起的轻量历史 read，一旦被 owner snapshot 接管就永久失去该 watch 的覆盖权限，即使 owner 随后短暂 stale。迟到历史不能清零已观察的 seq 或覆盖较新正文；同 seq lease 恢复必须仍有效，不需要新 turn 或手动刷新。
+
 ## 6. Promotion 状态机
 
 每个 device／thread promotion 只能处于：
@@ -220,3 +234,4 @@ Relay 仅在以下条件全部成立时返回 `fresh`：
 8. restart recovery guard 已接入 cache cold attach：`inProgress` 首帧在 45 秒静默窗口后至多触发一次既有 owner follower refresh；普通 update 重置窗口，terminal update 取消窗口，refresh 结果仍从原 follower update 通道发布。新增单次触发、终态取消、窗口重置、禁止 reattach 与终态发布测试；本轮全仓验收为 263 个 Web unit、48 个 Playwright 用例，并再次通过 Go 全量 test／vet 与关键包 race。
 9. 真实故障定位到两个组合问题：large-frame 会话使用的 `leasedLive` wrapper 丢失了可选 `Refresh` method，guard 因此返回 `RESYNC_REQUIRED`；失败分支随后又注销 follower，导致会话列表仍能看到 `inProgress`，但正文和 terminal update 只能等 reload 重建 follower 后恢复。现已显式转发 `Refresh`，且 guard 失败仅将 Relay cache 标 stale，不再删除原 subscription。新增 wrapper capability UT、失败后 late terminal update UT、WebSocket 重连后重建 cache watcher UT，以及“已完成会话继续对话 → running → recovery stale → terminal fresh”的真实 Relay WebSocket + Playwright 跨层 E2E。本轮最终验收为 264 个 Web unit、49 个 Playwright 用例，并通过 Go 全量 test／vet 与关键包 race。
 10. 第二轮故障注入已先复现并修复：原生 follower 失效后 cache subscription 未移除、迟到 refresh failure 覆盖新终态、倒序 mailbox 覆盖终态、lease／transport reconnect 清除显式内容错误、旧 stream status／remove 影响新 cache，以及 Web“重新连接”复用旧 warm view 而没有 promotion。显式 retry 已接到既有 watcher；仍有效但 recovery 失败的 follower 在用户请求内执行一次 refresh，终态先到时迟到错误回执被丢弃。新增真正运行 Go Desktop Agent Service／sender、真实 Relay 和 Chromium 手机 viewport 的故障注入 E2E；fixture 仅替换 native owner，且以 race build 运行。最终通过 Go 全量 test／vet、关键包 race、265 个 Web unit、production build 和 50 个 Playwright 用例。真实 Codex 只读被动订阅检查在 20 秒内收到 1 个 snapshot 与 25 批 patch；这只证明当前 stream 兼容性，不冒充对物理 iPhone／Safari 的验收。runtime 转换发布新增只含 opaque thread key、seq、runtime、bytes 的结构化日志。
+11. 2026-10-28 修复 Relay 解锁后 delivery 乱序和 Web stale 分支遗漏 lineage 校验，补充 promotion write failure 的 operation ID 核对。无新协议／轮询／权限放宽；回归及边界见 [cache delivery 顺序验收](../testing/2026-10-28-cache-delivery-order-fence.md)。

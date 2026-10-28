@@ -121,7 +121,7 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 		_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": data})
 		if promotionID != "" {
 			if err := sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
-				s.failCachePromotion(key, "DEVICE_OFFLINE")
+				s.failCachePromotion(key, promotionID, "DEVICE_OFFLINE")
 			}
 		}
 		return true
@@ -171,7 +171,7 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 		s.mu.Unlock()
 		if !already {
 			if err := sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
-				s.failCachePromotion(key, "DEVICE_OFFLINE")
+				s.failCachePromotion(key, promotionID, "DEVICE_OFFLINE")
 				_ = web.send(ctx, responseError(requestID, "rejected", "DEVICE_OFFLINE", "cache promotion could not reach agent"))
 				return true
 			}
@@ -212,7 +212,7 @@ func (s *Server) beginCachePromotionLocked(key cacheKey) string {
 		}
 		deliveries := s.cacheUpdateMessagesLocked(key)
 		s.mu.Unlock()
-		sendCacheDeliveries(context.Background(), deliveries)
+		s.sendCacheDeliveries(context.Background(), deliveries)
 	})
 	return requestID
 }
@@ -231,8 +231,15 @@ func (s *Server) finishCachePromotionLocked(key cacheKey) {
 	delete(s.cachePromoting, key)
 }
 
-func (s *Server) failCachePromotion(key cacheKey, reason string) {
+func (s *Server) failCachePromotion(key cacheKey, requestID, reason string) {
 	s.mu.Lock()
+	// The write can finish after a snapshot already recovered this operation,
+	// or after a new transport started its replacement. Its error is no longer
+	// evidence about the current cache or the replacement promotion.
+	if requestID == "" || s.cachePromotionIDs[key] != requestID {
+		s.mu.Unlock()
+		return
+	}
 	s.finishCachePromotionLocked(key)
 	if entry := s.cache.entries[key]; entry != nil {
 		entry.stale = true
@@ -240,7 +247,7 @@ func (s *Server) failCachePromotion(key cacheKey, reason string) {
 	}
 	deliveries := s.cacheUpdateMessagesLocked(key)
 	s.mu.Unlock()
-	sendCacheDeliveries(context.Background(), deliveries)
+	s.sendCacheDeliveries(context.Background(), deliveries)
 }
 
 func randCacheID() string { return "watch-" + newRequestID() }
@@ -287,6 +294,7 @@ func (s *Server) cacheUpdateMessagesLocked(key cacheKey) []cacheDelivery {
 	if entry == nil {
 		return nil
 	}
+	entry.deliveryRevision++
 	agent := s.agents[key.deviceID]
 	base := s.cacheDataLocked(entry, agent)
 	deliveries := make([]cacheDelivery, 0, len(entry.watchers))
@@ -295,21 +303,35 @@ func (s *Server) cacheUpdateMessagesLocked(key cacheKey) []cacheDelivery {
 		for name, value := range base {
 			msg[name] = value
 		}
-		deliveries = append(deliveries, cacheDelivery{web: watcher.web, key: watcher.id, message: msg})
+		deliveries = append(deliveries, cacheDelivery{web: watcher.web, key: watcher.id, message: msg, cacheKey: key, entry: entry, revision: entry.deliveryRevision})
 	}
 	return deliveries
 }
 
 type cacheDelivery struct {
-	web     *peer
-	key     string
-	message map[string]any
+	web      *peer
+	key      string
+	message  map[string]any
+	cacheKey cacheKey
+	entry    *cacheEntry
+	revision uint64
 }
 
-func sendCacheDeliveries(ctx context.Context, deliveries []cacheDelivery) {
+func (s *Server) sendCacheDeliveries(ctx context.Context, deliveries []cacheDelivery) {
 	_ = ctx
 	for _, delivery := range deliveries {
-		delivery.web.enqueueCacheDelivery(delivery.key, delivery.message)
+		// State generation and mailbox insertion have separate scheduling points.
+		// Recheck both identities and revision under the producer lock so a late
+		// disconnect/error cannot overwrite a newer snapshot or lease, even after
+		// the sender has drained it. This only queues; network I/O stays outside.
+		s.mu.Lock()
+		entry := s.cache.entries[delivery.cacheKey]
+		if entry != nil && entry == delivery.entry && entry.deliveryRevision == delivery.revision {
+			if watcher, ok := entry.watchers[delivery.key]; ok && watcher.web == delivery.web {
+				delivery.web.enqueueCacheDelivery(delivery.key, delivery.message)
+			}
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -398,7 +420,7 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 		return false
 	}
 	s.mu.Unlock()
-	sendCacheDeliveries(ctx, deliveries)
+	s.sendCacheDeliveries(ctx, deliveries)
 	return true
 }
 

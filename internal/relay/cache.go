@@ -39,13 +39,14 @@ type cacheWatcher struct {
 
 type cacheEntry struct {
 	cacheSnapshot
-	watchers        map[string]cacheWatcher
-	lastUsed        time.Time
-	warmUntil       time.Time
-	stale           bool
-	staleReason     string
-	leaseValidUntil time.Time
-	retainedBytes   int64
+	watchers         map[string]cacheWatcher
+	lastUsed         time.Time
+	warmUntil        time.Time
+	stale            bool
+	staleReason      string
+	leaseValidUntil  time.Time
+	retainedBytes    int64
+	deliveryRevision uint64 // protected by Server.mu; never sent on the wire
 }
 
 type cacheStore struct {
