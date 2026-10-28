@@ -89,6 +89,10 @@ npm run test:ui -- e2e/document-reading.spec.ts --grep 'entry renders lazy image
 
 ## 7. TDD 与验收
 
+### 2026-10-28：图片错误提示维护（Issue #54）
+
+本项落实第 6.1 节已批准的局部错误区分：`file.context.asset.read` 返回 `UNSUPPORTED_FILE_TYPE` 时必须提示图片类型／内容问题与当前协商支持的格式，不能复用文本读取的“只支持 UTF-8 文本文件”；大小错误显示图片的 4 MiB／8192px／12 MP 及复杂度限制，缺失／路径／版本等错误也使用图片语境。文本读取仍保持 UTF-8 规则。先以真实浏览器 fixture 复现旧错误文案，再修复并回归。用户随后批准的 [0125](0125-static-svg-document-images.md) 单独增加受限静态 SVG，取代先前对本地 SVG 的整体排除；不因文案修复本身就宣称 SVG 已能读取。
+
 批准后先新增并实际运行失败的测试，保存 red 证据，再实现最小修复；不得把现有用例全绿当作本次 red。用户原始样例经脱敏后优先纳入；没有样例的分支标明验证范围。
 
 | 行为 | 必须覆盖 |

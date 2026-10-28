@@ -21,7 +21,7 @@ import (
 
 func TestBuiltinFilesAndImagesThroughRealAgentRelayWithoutChilling(t *testing.T) {
 	root := t.TempDir()
-	content := "hello\n\n![pixel](pixel.png)"
+	content := "hello\n\n![pixel](pixel.png)\n\n![vector](vector.svg)"
 	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +30,9 @@ func TestBuiltinFilesAndImagesThroughRealAgentRelayWithoutChilling(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "pixel.png"), imageBody.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vector.svg"), []byte(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="72pt" height="36pt" viewBox="0 0 72 36"><defs><path id="glyph" d="M0 0L10 10"/></defs><use xlink:href="#glyph"/></svg>`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	router, _ := relay.New(relay.Config{Token: "fixture-token", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}})
@@ -91,6 +94,9 @@ func TestBuiltinFilesAndImagesThroughRealAgentRelayWithoutChilling(t *testing.T)
 	if list["documentAssetsVersion"] != float64(1) {
 		t.Fatal("extension missing")
 	}
+	if list["documentSvgVersion"] != float64(1) {
+		t.Fatal("SVG Relay extension missing")
+	}
 	changed := request("file.context.changes", map[string]any{"threadId": "t", "turnIds": []string{"turn"}})
 	if len(changed["turns"].([]any)) != 1 {
 		t.Fatal("changes missing")
@@ -102,6 +108,10 @@ func TestBuiltinFilesAndImagesThroughRealAgentRelayWithoutChilling(t *testing.T)
 	resource := request("file.context.asset.read", map[string]any{"threadId": "t", "source": "workspace_browser", "path": "a.md", "agentEpoch": cfg.AgentEpoch, "documentSha256": doc["sha256"], "imageReference": "pixel.png"})
 	if resource["mime"] != "image/png" || resource["width"] != float64(2) || resource["height"] != float64(3) {
 		t.Fatal("resource mismatch")
+	}
+	vector := request("file.context.asset.read", map[string]any{"threadId": "t", "source": "workspace_browser", "path": "a.md", "agentEpoch": cfg.AgentEpoch, "documentSha256": doc["sha256"], "imageReference": "vector.svg", "svgVersion": 1})
+	if vector["mime"] != "image/svg+xml" || vector["width"] != float64(96) || vector["height"] != float64(48) {
+		t.Fatal("negotiated SVG failed through real Agent/Relay")
 	}
 	cancel()
 	select {

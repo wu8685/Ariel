@@ -236,6 +236,10 @@ test("reload preserves minimized files without eagerly reading their bodies", as
 });
 
 test("reload verifies source SHA before restoring captured selection and never persists quote or file text", async ({page})=>{
+  // Isolate file sessionStorage restore from the independently permitted main
+  // conversation IndexedDB restore. Its async commit used to race this test's
+  // intentional "no current conversation" precondition after reload.
+  await page.addInitScript(() => Object.defineProperty(globalThis, "indexedDB", {value: undefined, configurable: true}));
   const {config,reads}=await setup(page);
   await page.getByRole("button",{name:"查看原文：a.md"}).click();
   const source=page.getByTestId("file-source");await expect(source).toContainText("# a.md");

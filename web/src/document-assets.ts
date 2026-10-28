@@ -1,10 +1,30 @@
 import type { OpenFile } from "./file-context";
+import {staticSVGInfo} from "./static-svg";
 
-export type AssetContext = { agentEpoch:string; relayVersion:number; request:(params:Record<string,unknown>,signal:AbortSignal)=>Promise<Record<string,unknown>> };
+export type AssetContext = { agentEpoch:string; relayVersion:number; relaySvgVersion?:number; request:(params:Record<string,unknown>,signal:AbortSignal)=>Promise<Record<string,unknown>> };
 export type ImageSource = {kind:"local"|"data";url:string}|{kind:"external";url:string;domain:string}|{kind:"blocked";reason:string};
 const maxBytes=4*1024*1024, maxMemory=16*1024*1024, chunkBytes=256*1024;
 const supportedMIME=new Set(["image/png","image/jpeg","image/gif","image/webp"]);
 const abortError=()=>new DOMException("读取已取消","AbortError");
+
+// Asset failures share wire codes with text reads, not their UI constraints.
+// Never forward backend details (which may contain local paths) into the viewer.
+export function documentAssetErrorText(code?: string, svgEnabled = false): string {
+  switch (code) {
+    case "UNSUPPORTED_FILE_TYPE": return svgEnabled
+      ? "图片格式不受支持、文件已损坏或 SVG 不满足静态安全要求；当前支持 PNG、JPEG、GIF、WebP 和受限静态 SVG。"
+      : "图片格式不受支持或文件已损坏；当前支持 PNG、JPEG、GIF、WebP。";
+    case "FILE_TOO_LARGE": return "图片超过大小、尺寸或复杂度限制（最大 4 MiB、单边 8192 px、1200 万像素）。";
+    case "FILE_NOT_FOUND": return "图片文件已不存在，请检查文档中的图片引用。";
+    case "PATH_NOT_ALLOWED": return "这项图片引用不允许读取。";
+    case "FILE_CHANGED": return "文档或图片已经变化，请重新打开文档。";
+    case "FEATURE_DISABLED": return "当前设备尚未启用文档图片读取。";
+    case "TIMEOUT": return "图片读取超时或分块已过期，请重试图片。";
+    case "OVERLOADED": return "等待加载的图片过多，请稍后重试图片。";
+    case "PROTOCOL_UNSUPPORTED": return "当前设备的文档图片能力暂不可用，请重新打开文档。";
+    default: return "图片暂时无法读取，请重试。";
+  }
+}
 
 export function classifyImageSource(source:string):ImageSource{
   if(!source||source.length>Math.ceil(maxBytes*4/3)+128||/[\u0000-\u001f\u007f\\]/u.test(source))return {kind:"blocked",reason:"图片地址不受支持"};
@@ -92,28 +112,28 @@ export class DocumentImageSession{
       const duplicate=this.cache.get(source);if(duplicate)return this.reference(duplicate);
       for(const [key,entry]of this.cache){if(this.bytes+image.body.length<=maxMemory&&this.cache.size<32)break;if(entry.refs===0){this.cache.delete(key);this.bytes-=entry.bytes;URL.revokeObjectURL(entry.url)}}
       if(this.bytes+image.body.length>maxMemory||this.cache.size>=32)throw new Error("图片缓存已达到限制");
-      const dimensions=rasterInfo(image.body,image.mime);
-      const entry:Entry={url:URL.createObjectURL(new Blob([image.body as BlobPart],{type:image.mime})),...dimensions,bytes:image.body.length,refs:0};
+      const entry:Entry={url:URL.createObjectURL(new Blob([image.body as BlobPart],{type:image.mime})),width:image.width,height:image.height,bytes:image.body.length,refs:0};
       this.cache.set(source,entry);this.bytes+=entry.bytes;return this.reference(entry);
     }finally{signal.removeEventListener("abort",abort);this.controllers.delete(controller);if(granted){this.active--;this.pump()}}
   }
-  private async read(source:string,signal:AbortSignal):Promise<{body:Uint8Array;mime:string}>{
+  private async read(source:string,signal:AbortSignal):Promise<{body:Uint8Array;mime:string;width:number;height:number}>{
     const kind=classifyImageSource(source);
     if(kind.kind==="data"){
       const [header,value]=source.split(",");if(value.length>Math.ceil(maxBytes*4/3)+4)throw new Error("图片超过 4 MiB");
-      const body=decodeBase64(value);if(body.length>maxBytes)throw new Error("图片超过 4 MiB");return {body,mime:header.slice(5,-7)};
+      const body=decodeBase64(value);if(body.length>maxBytes)throw new Error("图片超过 4 MiB");const mime=header.slice(5,-7);return {body,mime,...rasterInfo(body,mime)};
     }
     if(kind.kind!=="local")throw new Error("不支持此本地图片");
     if(!this.context||this.context.relayVersion!==1||!this.context.agentEpoch||this.file.documentAssets?.version!==1)throw new Error("当前设备尚未启用文档图片读取");
+    const svgAllowed=this.context.relaySvgVersion===1&&this.file.documentAssets.svgVersion===1;
     const chunks:Uint8Array[]=[];let offset=0,total=0,digest="",mime="",width=0,height=0,cursor="";
     const {threadId,turnId,itemId,path,sha256,referenceKind,rawReference}=this.file;
     for(let page=0;page<16;page++){
       stopped(signal);
-      const params={source:this.file.source||"turn_change",threadId,...(turnId?{turnId}:{}),...(itemId?{itemId}:{}),path,...(referenceKind&&rawReference?{referenceKind,rawReference}:{}),agentEpoch:this.context.agentEpoch,documentSha256:sha256,imageReference:source,...(cursor?{cursor}:{})};
+      const params={source:this.file.source||"turn_change",threadId,...(turnId?{turnId}:{}),...(itemId?{itemId}:{}),path,...(referenceKind&&rawReference?{referenceKind,rawReference}:{}),agentEpoch:this.context.agentEpoch,documentSha256:sha256,imageReference:source,...(svgAllowed?{svgVersion:1}:{}),...(cursor?{cursor}:{})};
       const data=await abortable(this.context.request(params,signal),signal);
       if(new TextEncoder().encode(JSON.stringify(data)).byteLength>384*1024)throw new Error("图片分块超过限制");
       const nextTotal=data.totalBytes,nextOffset=data.offset,nextDigest=data.assetSha256,nextMIME=data.mime,nextWidth=data.width,nextHeight=data.height;
-      if(!Number.isInteger(nextTotal)||Number(nextTotal)<1||Number(nextTotal)>maxBytes||nextOffset!==offset||typeof nextDigest!=="string"||!/^[a-f\d]{64}$/u.test(nextDigest)||typeof nextMIME!=="string"||!supportedMIME.has(nextMIME)||!Number.isInteger(nextWidth)||!Number.isInteger(nextHeight)||Number(nextWidth)<1||Number(nextHeight)<1||Number(nextWidth)>8192||Number(nextHeight)>8192||Number(nextWidth)*Number(nextHeight)>12_000_000||typeof data.dataBase64!=="string"||data.dataBase64.length>Math.ceil(chunkBytes*4/3)+4)throw new Error("图片分块格式无效");
+      if(!Number.isInteger(nextTotal)||Number(nextTotal)<1||Number(nextTotal)>maxBytes||nextOffset!==offset||typeof nextDigest!=="string"||!/^[a-f\d]{64}$/u.test(nextDigest)||typeof nextMIME!=="string"||!(supportedMIME.has(nextMIME)||svgAllowed&&nextMIME==="image/svg+xml")||!Number.isInteger(nextWidth)||!Number.isInteger(nextHeight)||Number(nextWidth)<1||Number(nextHeight)<1||Number(nextWidth)>8192||Number(nextHeight)>8192||Number(nextWidth)*Number(nextHeight)>12_000_000||typeof data.dataBase64!=="string"||data.dataBase64.length>Math.ceil(chunkBytes*4/3)+4)throw new Error("图片分块格式无效");
       if(offset&&(nextTotal!==total||nextDigest!==digest||nextMIME!==mime||nextWidth!==width||nextHeight!==height))throw new Error("图片读取期间发生变化");
       total=Number(nextTotal);digest=nextDigest;mime=nextMIME;width=Number(nextWidth);height=Number(nextHeight);
       const part=decodeBase64(data.dataBase64);if(!part.length||part.length>chunkBytes||offset+part.length>total)throw new Error("图片分块范围无效");
@@ -124,8 +144,9 @@ export class DocumentImageSession{
         if(globalThis.crypto?.subtle)hash=new Uint8Array(await crypto.subtle.digest("SHA-256",body));
         else{const {sha256}=await import("@noble/hashes/sha2.js");stopped(signal);hash=sha256(body)}
         const actual=Array.from(hash).map(n=>n.toString(16).padStart(2,"0")).join("");stopped(signal);
-        const dimensions=rasterInfo(body,mime);if(actual!==digest||dimensions.width!==width||dimensions.height!==height)throw new Error("图片内容校验失败");
-        return {body,mime};
+        if(actual!==digest)throw new Error("图片内容校验失败");
+        const dimensions=mime==="image/svg+xml"?staticSVGInfo(body):rasterInfo(body,mime);if(dimensions.width!==width||dimensions.height!==height)throw new Error("图片内容校验失败");
+        return {body,mime,...dimensions};
       }
       if(!/^[a-z\d_-]{16,128}$/iu.test(cursor)||offset>=total)throw new Error("图片续读标识无效");
     }

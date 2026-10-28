@@ -40,6 +40,7 @@ type DocumentAssetCapability struct {
 	Version    int `json:"version"`
 	MaxBytes   int `json:"maxBytes"`
 	ChunkBytes int `json:"chunkBytes"`
+	SVGVersion int `json:"svgVersion,omitempty"`
 }
 
 func NewWithOptions(source Source, options Options) *Service {
@@ -54,7 +55,7 @@ func (s *Service) AssetCapability() *DocumentAssetCapability {
 	if !s.DocumentAssets() {
 		return nil
 	}
-	return &DocumentAssetCapability{Version: 1, MaxBytes: MaxAssetBytes, ChunkBytes: MaxAssetChunk}
+	return &DocumentAssetCapability{Version: 1, MaxBytes: MaxAssetBytes, ChunkBytes: MaxAssetChunk, SVGVersion: 1}
 }
 
 type DocumentRequest struct {
@@ -71,6 +72,7 @@ type AssetReadRequest struct {
 	DocumentSHA256 string `json:"documentSha256"`
 	ImageReference string `json:"imageReference"`
 	Cursor         string `json:"cursor,omitempty"`
+	SVGVersion     int    `json:"svgVersion,omitempty"`
 }
 type AssetResponse struct {
 	MIME        string `json:"mime"`
@@ -132,6 +134,9 @@ func (s *Service) assetRead(ctx context.Context, req AssetReadRequest) (AssetRes
 		return empty, fail(CodeFeatureDisabled)
 	}
 	if len(req.DocumentSHA256) != 64 || req.ImageReference == "" || len(req.ImageReference) > 4096 {
+		return empty, fail(CodeInvalidArgument)
+	}
+	if req.SVGVersion != 0 && req.SVGVersion != 1 {
 		return empty, fail(CodeInvalidArgument)
 	}
 	identity := req
@@ -208,11 +213,17 @@ func (s *Service) assetRead(ctx context.Context, req AssetReadRequest) (AssetRes
 		return empty, err
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(body))
-	if err != nil {
-		return empty, fail(CodeUnsupportedFileType)
-	}
 	mime := map[string]string{"png": "image/png", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}[format]
-	if mime == "" {
+	if err != nil && req.SVGVersion == 1 {
+		var width, height int
+		body, width, height, err = staticSVGImage(ctx, body)
+		if err != nil {
+			return empty, err
+		}
+		config = image.Config{Width: width, Height: height}
+		mime = "image/svg+xml"
+	}
+	if err != nil || mime == "" {
 		return empty, fail(CodeUnsupportedFileType)
 	}
 	if config.Width < 1 || config.Height < 1 || config.Width > 8192 || config.Height > 8192 || int64(config.Width)*int64(config.Height) > 12_000_000 {

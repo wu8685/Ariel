@@ -4,6 +4,7 @@ import { chooseFileView } from "./file-view-menu";
 
 const token = `s_${"a".repeat(64)}`;
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64");
+const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="48" viewBox="0 0 72 36"><defs><path id="glyph" d="M0 0L10 0L5 10Z"/><clipPath id="clip"><rect width="72" height="36"/></clipPath></defs><g clip-path="url(#clip)"><use href="#glyph" fill="#3584e4" transform="translate(5 5)"/></g></svg>');
 const content = [
   "# 公式与算法", "", String.raw`行内 $x^2 + \frac{a}{b}$，以及 \(y_1\)。价格 $20 和 $30 不转换。`, "",
   "$$", String.raw`\sum_{i=1}^{n} i = \frac{n(n+1)}{2}`, "$$", "",
@@ -13,7 +14,7 @@ const content = [
   ...Array.from({ length: 40 }, (_, i) => `第 ${i} 段，检查图片滚动和文件阅读现场。`), "", "![末尾图片](images/later.png)",
 ].join("\n");
 
-async function fixture(page: Page, options: { image?: "good" | "transient" | "broken" | "held"; conversation?: string; document?:string; noSubtle?:boolean } = {}) {
+async function fixture(page: Page, options: { image?: "good" | "transient" | "broken" | "held"; svg?: "supported" | "oldRelay" | "oldAgent" | "malicious"; imageError?: string; conversation?: string; document?:string; noSubtle?:boolean } = {}) {
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [], external: string[] = [], fonts: string[] = [];
   const body=options.document??content;
   const thread = { threadId: "reading", title: "Markdown 修复验收", cwd: "/work/reading", updatedAt: "2026-10-28T00:00:00Z", runtime: "idle", turns: [{ turnId: "turn", status: "completed", items: [{ itemId: "reply", role: "assistant", text: options.conversation || "[查看文档](docs/read.md)", images: [] }] }], pendingInteractions: [] };
@@ -31,16 +32,18 @@ async function fixture(page: Page, options: { image?: "good" | "transient" | "br
       if (m.type !== "request") return;
       requests.push({ method: m.method, params: m.params }); let data: Record<string, unknown> = {};
       const respond = () => socket.send(JSON.stringify({ type: "response", v: 1, requestId: m.requestId, outcome: "accepted", data }));
-      if (m.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "Reader Mac", agentEpoch: "epoch", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, send: true, chillingFileContext: true, chillingMessageReferences: true } }], documentAssetsVersion: 1 };
+      if (m.method === "device.list") data = { devices: [{ deviceId: "mac", deviceName: "Reader Mac", agentEpoch: "epoch", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, send: true, chillingFileContext: true, chillingMessageReferences: true } }], documentAssetsVersion: 1, ...(options.svg && options.svg !== "oldRelay" ? {documentSvgVersion:1} : {}) };
       if (m.method === "thread.list") data = { threads: [thread], nextCursor: "" };
       if (m.method === "thread.cache.watch") data = { watchId: "w", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "s", seq: 1, capturedAt: "2026-10-28T00:00:00Z", thread };
       if (m.method === "file.context.changes") data = { turns: [{ turnId: "turn", fileChanges: [{ itemId: "change", path: "docs/read.md", kind: "update", diff: "@@ -1 +1 @@\n-old\n+new" }] }] };
-      if (["file.context.read", "file.context.reference.read"].includes(m.method)) data = { path: "docs/read.md", content:body, sha256: "a".repeat(64), modifiedAtMs: 1, lineCount: body.split("\n").length, language: "md", version: "current-workspace", documentAssets: { version: 1, maxBytes: 4 * 1024 * 1024, chunkBytes: 256 * 1024 } };
+      if (["file.context.read", "file.context.reference.read"].includes(m.method)) data = { path: "docs/read.md", content:body, sha256: "a".repeat(64), modifiedAtMs: 1, lineCount: body.split("\n").length, language: "md", version: "current-workspace", documentAssets: { version: 1, maxBytes: 4 * 1024 * 1024, chunkBytes: 256 * 1024, ...(options.svg && options.svg !== "oldAgent" ? {svgVersion:1} : {}) } };
       if (m.method === "file.context.asset.read") {
         imageAttempt++;
+        if (options.imageError && imageAttempt === 1) { socket.send(JSON.stringify({type: "response", v: 1, requestId: m.requestId, outcome: "rejected", error: {code: options.imageError, message: "private backend detail must not leak"}})); return; }
         if (options.image === "transient" && imageAttempt === 1) { socket.send(JSON.stringify({ type: "response", v: 1, requestId: m.requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "image temporary timeout" } })); return; }
-        const bytes = options.image === "broken" && imageAttempt === 1 ? png.subarray(0, 24) : png;
-        data = { mime: "image/png", assetSha256: createHash("sha256").update(bytes).digest("hex"), width: 1, height: 1, totalBytes: bytes.length, offset: 0, dataBase64: bytes.toString("base64") };
+        const isSVG = options.svg && String(m.params.imageReference).endsWith('.svg');
+        const bytes = isSVG ? options.svg === "malicious" ? Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="48"><script>window.__svgExecuted=true</script><image href="https://images.example.test/secret.png"/></svg>') : svg : options.image === "broken" && imageAttempt === 1 ? png.subarray(0, 24) : png;
+        data = { mime: isSVG ? "image/svg+xml" : "image/png", assetSha256: createHash("sha256").update(bytes).digest("hex"), width: isSVG ? 96 : 1, height: isSVG ? 48 : 1, totalBytes: bytes.length, offset: 0, dataBase64: bytes.toString("base64") };
         if (options.image === "held" && imageAttempt === 1) { finishImage = respond; return; }
       }
       respond();
@@ -50,6 +53,30 @@ async function fixture(page: Page, options: { image?: "good" | "transient" | "br
   await expect(page.getByRole("button", { name: "查看原文：docs/read.md" })).toBeVisible();
   return { requests, external, fonts, finishImage: () => finishImage(), push: (text: string) => push(text) };
 }
+
+for (const width of [320,390,1280]) test(`negotiated local static SVG decodes as an isolated image at ${width}px`, async ({page})=>{
+ await page.setViewportSize({width,height:844});const {requests,external}=await fixture(page,{svg:"supported",document:"# 静态 SVG\n\n![静态矢量图](images/a.svg)\n\n可引用原文"+"\n\n正文".repeat(80)+"\n\n![未可见图片](images/later.svg)"});
+ await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();expect(requests.some(r=>r.method==="file.context.asset.read")).toBe(false);
+ await chooseFileView(page,"阅读模式");const reading=page.getByTestId("file-reading"),img=reading.getByRole("img",{name:"静态矢量图",exact:true});
+ await expect.poll(()=>img.evaluate((el:HTMLImageElement)=>el.naturalWidth)).toBe(96);
+ expect(requests.filter(r=>r.method==="file.context.asset.read").every(r=>r.params.svgVersion===1)).toBe(true);
+ expect(requests.filter(r=>r.method==="file.context.asset.read")).toHaveLength(1);
+ expect(await reading.locator("svg,object,iframe,embed").count()).toBe(0);expect(external).toHaveLength(0);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await expect(page).toHaveScreenshot(`static-svg-${width}.png`,{animations:"disabled",caret:"hide"});
+ await chooseFileView(page,"原版模式");await expect(page.getByTestId("file-source")).toContainText("images/a.svg");
+ await chooseFileView(page,"阅读模式");await expect.poll(()=>img.evaluate((el:HTMLImageElement)=>el.naturalWidth)).toBe(96);
+ expect(requests.filter(r=>r.method==="file.context.asset.read")).toHaveLength(1);
+});
+
+for(const svg of ["oldRelay","oldAgent","malicious"] as const)test(`SVG ${svg} fails locally without unknown opt-in, scripts, or external requests`,async({page})=>{
+ const {requests,external}=await fixture(page,{svg,document:"# 静态 SVG\n\n![静态矢量图](images/a.svg)"});
+ await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();await chooseFileView(page,"阅读模式");
+ await expect(page.getByTestId("file-reading").getByRole("button",{name:"重试图片"})).toBeVisible();
+ if(svg!=="malicious")expect(requests.filter(r=>r.method==="file.context.asset.read").every(r=>r.params.svgVersion===undefined)).toBe(true);
+ expect(external).toHaveLength(0);expect(await page.evaluate(()=>(window as unknown as {__svgExecuted?:boolean}).__svgExecuted)).not.toBe(true);
+ await expect(page.getByTestId("file-reading").locator("img,svg,iframe,object,embed")).toHaveCount(0);
+});
 
 for (const width of [320, 390, 1280]) test(`math and pseudocode fit ${width}px with local fonts and exact source quotation`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 }); const { requests, fonts } = await fixture(page);
@@ -70,6 +97,32 @@ for (const width of [320, 390, 1280]) test(`math and pseudocode fit ${width}px w
   await quote.evaluate(el => { const node = el.firstChild!, range = document.createRange(); range.selectNodeContents(node); const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range); el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); });
   await expect(page.getByRole("button", { name: "引用到会话" })).toBeEnabled();
   expect(requests.filter(r => r.method === "file.context.read")).toHaveLength(1); expect(requests.filter(r => r.method === "thread.cache.watch")).toHaveLength(1);
+});
+
+for (const width of [320, 390, 1280]) for (const [code, message] of [
+  ["UNSUPPORTED_FILE_TYPE", "图片格式不受支持或文件已损坏；当前支持 PNG、JPEG、GIF、WebP。"],
+  ["FILE_TOO_LARGE", "图片超过大小、尺寸或复杂度限制（最大 4 MiB、单边 8192 px、1200 万像素）。"],
+  ["FILE_NOT_FOUND", "图片文件已不存在，请检查文档中的图片引用。"],
+  ["PATH_NOT_ALLOWED", "这项图片引用不允许读取。"],
+] as const) test(`document image error ${code} has image-specific feedback at ${width}px instead of UTF-8 text restrictions`, async ({page}) => {
+  await page.setViewportSize({width, height: 844});
+  const {requests} = await fixture(page, {imageError: code, document: "# 格式提示验收\n\n![矢量插图](images/a.svg)\n\n可引用原文"});
+  await page.getByRole("textbox", {name: "发送消息"}).fill("保留主会话草稿");
+  await page.getByRole("button", {name: "查看原文：docs/read.md"}).click(); await chooseFileView(page, "阅读模式");
+  const reading = page.getByTestId("file-reading");
+  await expect(reading.getByText(`矢量插图 · ${message}`, {exact: true})).toBeVisible();
+  await expect(reading).not.toContainText("UTF-8"); await expect(reading).not.toContainText("private backend detail");
+  expect(requests.filter(r => r.method === "file.context.asset.read")).toHaveLength(1);
+  expect(requests.find(r => r.method === "file.context.asset.read")?.params.imageReference).toBe("images/a.svg");
+  expect(requests.filter(r => r.method === "thread.cache.watch")).toHaveLength(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (code === "UNSUPPORTED_FILE_TYPE") await expect(page).toHaveScreenshot(`document-image-format-error-${width}.png`, {animations: "disabled", caret: "hide"});
+  await reading.getByRole("button", {name: "重试图片"}).click();
+  const img = reading.getByRole("img", {name: "矢量插图", exact: true});
+  await expect.poll(() => img.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1);
+  expect(requests.filter(r => r.method === "file.context.read")).toHaveLength(1);
+  await page.getByRole("button", {name: "收起文件工作区", exact: true}).click();
+  await expect(page.getByRole("textbox", {name: "发送消息"})).toHaveValue("保留主会话草稿");
 });
 
 for (const image of ["transient", "broken"] as const) test(`document image ${image} failure retries and actually decodes without reopening`, async ({ page }) => {

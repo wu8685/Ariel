@@ -32,6 +32,7 @@ import { FileContentCache, FileQuoteChips, HistoricalFileQuotes, TurnFileChanges
 import { FileWorkspace, FileWorkspaceModel, useFileWorkspace } from "./file-workspace";
 import { FileWorkspaceSession } from "./file-workspace-session";
 import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
+import { documentAssetErrorText } from "./document-assets";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 export { InteractionCard } from "./interaction-card";
@@ -295,6 +296,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [devices, setDevices] = useState<Device[]>([]);
   const [relayAssetVersion,setRelayAssetVersion]=useState(0);
+  const [relaySvgVersion,setRelaySvgVersion]=useState(0);
   const fileCapabilityRefresh=useRef(new Map<string,Promise<void>>());
   const [deviceId, setDeviceId] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -459,10 +461,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 			response=await client.request("file.context.asset.read",deviceId,params);
 		}
 		if(signal.aborted)throw new DOMException("读取已取消","AbortError");
-		if(response.outcome!=="accepted"||!response.data)throw new Error(response.error?.code==="FILE_TOO_LARGE"?"图片超过大小或尺寸限制":errorText(response));
+		if(response.outcome!=="accepted"||!response.data)throw new Error(documentAssetErrorText(response.error?.code, params.svgVersion===1));
 		return response.data;
 	},[client,deviceId]);
-	const fileAssetContext=useMemo(()=>({agentEpoch:device?.agentEpoch||"",relayVersion:relayAssetVersion,request:requestDocumentAsset}),[device?.agentEpoch,relayAssetVersion,requestDocumentAsset]);
+	const fileAssetContext=useMemo(()=>({agentEpoch:device?.agentEpoch||"",relayVersion:relayAssetVersion,relaySvgVersion,request:requestDocumentAsset}),[device?.agentEpoch,relayAssetVersion,relaySvgVersion,requestDocumentAsset]);
   const threadContextActionsEnabled = threadArchiveEnabled || threadRenameEnabled || threadPinEnabled;
   const agentReady = status === "ready" && Boolean(device?.agentOnline && device.codexReady) && recoveringDeviceId !== deviceId;
   const ownerReady = agentReady && !syncingView;
@@ -1132,6 +1134,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const found = (response.data?.devices as Device[] | undefined) || [];
     const restoredDevice = fileWorkspaceSession.acceptDevices(found,webFileContextEnabled());
     setRelayAssetVersion(response.data?.documentAssetsVersion===1?1:0);
+    setRelaySvgVersion(response.data?.documentSvgVersion===1?1:0);
     const foundIDs = new Set(found.map(candidate => candidate.deviceId));
     for (const previous of devicesRef.current) {
       if (!foundIDs.has(previous.deviceId)) {
@@ -1669,6 +1672,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   useEffect(() => {
     client.onStatus = next => {
       setStatus(next);
+      if(next!=="ready")setRelaySvgVersion(0);
       if (next === "invalid") {
         setAuthRecovery(true);
         if (webAuthMode === "passkey") {

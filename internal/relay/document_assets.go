@@ -8,7 +8,7 @@ import (
 var assetSHA = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var assetCursor = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 
-func validAssetReply(body []byte, value any) bool {
+func validAssetReply(body []byte, value any, svgOptIn ...bool) bool {
 	if len(body) > 384<<10 {
 		return false
 	}
@@ -17,7 +17,8 @@ func validAssetReply(body []byte, value any) bool {
 		return false
 	}
 	mime, _ := data["mime"].(string)
-	if mime != "image/png" && mime != "image/jpeg" && mime != "image/gif" && mime != "image/webp" {
+	allowSVG := len(svgOptIn) > 0 && svgOptIn[0]
+	if mime != "image/png" && mime != "image/jpeg" && mime != "image/gif" && mime != "image/webp" && !(allowSVG && mime == "image/svg+xml") {
 		return false
 	}
 	digest, _ := data["assetSha256"].(string)

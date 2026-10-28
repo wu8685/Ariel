@@ -10,6 +10,15 @@ func TestDocumentAssetsContractIsNarrow(t *testing.T) {
 	if err := Validate([]byte(body)); err != nil {
 		t.Fatal(err)
 	}
+	svg := strings.Replace(body, `"imageReference":"../a.png"`, `"imageReference":"../a.svg","svgVersion":1`, 1)
+	if err := Validate([]byte(svg)); err != nil {
+		t.Fatalf("negotiated SVG params rejected: %v", err)
+	}
+	for _, version := range []string{`0`, `2`, `"1"`, `true`} {
+		if Validate([]byte(strings.Replace(svg, `"svgVersion":1`, `"svgVersion":`+version, 1))) == nil {
+			t.Fatal("invalid SVG version accepted")
+		}
+	}
 	for _, bad := range []string{
 		strings.Replace(body, `"agentEpoch":"epoch",`, "", 1),
 		strings.Replace(body, `"path":"docs/read.md"`, `"path":"/etc/passwd"`, 1),

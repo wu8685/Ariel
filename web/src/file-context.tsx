@@ -6,7 +6,7 @@ import { DocumentImageSession, type AssetContext } from "./document-assets";
 
 export type FileChange = { itemId: string; path: string; kind: "add" | "update" | "delete"; diff?: string; diffTruncated?: boolean };
 export type FileQuote = { source?: "turn_change" | "message_reference" | "workspace_browser"; threadId: string; turnId?: string; itemId?: string; path: string; sha256: string; modifiedAtMs: number; startLine: number; endLine: number; text: string; referenceKind?: "markdown_link" | "plain_path"; rawReference?: string };
-export type OpenFile = { documentAssets?: {version:number;maxBytes:number;chunkBytes:number}; source?: "turn_change" | "message_reference" | "workspace_browser"; threadId: string; turnId?: string; itemId?: string; path: string; content: string; sha256: string; modifiedAtMs: number; lineCount: number; language: string; diff?: string; diffTruncated?: boolean; version: "current-workspace"; referenceKind?: "markdown_link" | "plain_path"; rawReference?: string };
+export type OpenFile = { documentAssets?: {version:number;maxBytes:number;chunkBytes:number;svgVersion?:number}; source?: "turn_change" | "message_reference" | "workspace_browser"; threadId: string; turnId?: string; itemId?: string; path: string; content: string; sha256: string; modifiedAtMs: number; lineCount: number; language: string; diff?: string; diffTruncated?: boolean; version: "current-workspace"; referenceKind?: "markdown_link" | "plain_path"; rawReference?: string };
 export type FileViewMode = "source" | "diff";
 export type FileView = { threadId:string;turnId:string;change:FileChange;mode:FileViewMode;file?:OpenFile;loading?:boolean;diffChanged?:boolean;focusStartLine?:number;focusEndLine?:number };
 export type FileReaderState = { reading:boolean; positions:{source:number;reading:number;diff:number}; identity?:string;sha256?:string;diffFingerprint?:string; selection?:{start:number;end:number}; focusApplied?:boolean };
@@ -166,7 +166,7 @@ export function FileViewer({ view, onClose, onModeChange, onQuote, backLabel="è¿
   const positions=useRef(saved.positions);
   const file=view.file;
   const markdown=/\.(?:md|markdown)$/iu.test(view.change.path);
-  const imageIdentity=useMemo(()=>({}),[file,source,assetContext?.agentEpoch,assetContext?.relayVersion,assetContext?.request]);
+  const imageIdentity=useMemo(()=>({}),[file,source,assetContext?.agentEpoch,assetContext?.relayVersion,assetContext?.relaySvgVersion,assetContext?.request]);
   const [imageState,setImageState]=useState<{identity:object;session:DocumentImageSession}|null>(null);
   const session=imageState?.identity===imageIdentity?imageState.session:null;
   useEffect(()=>{
