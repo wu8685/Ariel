@@ -274,6 +274,42 @@ describe("Ariel app interactions", () => {
 		expect(screen.getByLabelText("发送消息")).toHaveProperty("value", "lease 恢复保留草稿");
 		expect(requests("turn.start")).toHaveLength(0);
 	});
+	it("ignores retired stream and older seq errors after cache recovery without hiding current errors", async () => {
+		BrowserSocket.autoRejectCacheWatch = false;
+		sessionStorage.setItem("ariel.web-session.v1", relaySession);
+		render(<App />);
+		const socket = BrowserSocket.sockets[0];
+		const requests = (method: string) => socket.sent.map(value => JSON.parse(value)).filter(value => value.method === method);
+		socket.onopen?.(new Event("open"));
+		act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e", sessionToken: relaySession }));
+		await waitFor(() => expect(requests("device.list")).toHaveLength(1));
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("device.list")[0].requestId, outcome: "accepted", data: { devices: [{ deviceId: "mac", deviceName: "Mac", agentOnline: true, codexReady: true, agentEpoch: "epoch", capabilities: { autoLoad: true } }] } }));
+		await waitFor(() => expect(requests("thread.list")).toHaveLength(1));
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.list")[0].requestId, outcome: "accepted", data: { threads: [fixtureThread] } }));
+		await expandProject(fixtureThread.cwd);
+		fireEvent.click((await screen.findByText(fixtureThread.title)).closest("button")!);
+		await waitFor(() => expect(requests("thread.cache.watch")).toHaveLength(1));
+		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-order", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "old", seq: 1, capturedAt: fixtureThread.updatedAt, thread: fixtureThread } }));
+		fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "不能被迟到错误禁用的草稿" } });
+		const update = { type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: fixtureThread.threadId, watchId: "watch-order", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "new", seq: 3, capturedAt: fixtureThread.updatedAt, thread: fixtureThread };
+		act(() => socket.message({ ...update, freshness: "fresh" }));
+		for (const [cacheStreamId, seq] of [["old", 99], ["new", 2]] as const) {
+			act(() => socket.message({ ...update, cacheStreamId, seq, freshness: "stale", staleReason: "RESYNC_REQUIRED" }));
+			expect(screen.queryByRole("button", { name: "重新连接" })).toBeNull();
+			expect(screen.getByRole("button", { name: /^发送$/ })).toHaveProperty("disabled", false);
+			expect(screen.getByLabelText("发送消息")).toHaveProperty("value", "不能被迟到错误禁用的草稿");
+		}
+		act(() => socket.message({ ...update, freshness: "stale", staleReason: "RESYNC_REQUIRED" }));
+		expect(screen.getByRole("button", { name: "重新连接" })).toBeTruthy();
+		expect(document.querySelector(".send-button")).toHaveProperty("disabled", true);
+		act(() => socket.message({ ...update, cacheStreamId: "old", seq: 99, freshness: "stale", staleReason: "agent_offline" }));
+		expect(screen.getByRole("button", { name: "重新连接" })).toBeTruthy();
+		act(() => socket.message({ ...update, seq: 4, freshness: "fresh" }));
+		expect(screen.queryByRole("button", { name: "重新连接" })).toBeNull();
+		expect(screen.getByRole("button", { name: /^发送$/ })).toHaveProperty("disabled", false);
+		expect(requests("turn.start")).toHaveLength(0);
+		expect(requests("thread.cache.promote")).toHaveLength(0);
+	});
 	it("re-establishes a Relay cache watcher after WebSocket reconnect and receives the terminal snapshot", async () => {
 		BrowserSocket.autoRejectCacheWatch = false;
 		sessionStorage.setItem("ariel.web-session.v1", relaySession);
@@ -371,7 +407,7 @@ describe("Ariel app interactions", () => {
 		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.promote")[0].requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
 		expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(false);
 	});
-	it("keeps a fresh owner snapshot when the lightweight history response arrives late", async () => {
+	it.each([false, true])("keeps the owner lineage when history arrives late, including a stale lease: %s", async (staleLease) => {
 		BrowserSocket.autoRejectCacheWatch = false;
 		sessionStorage.setItem("ariel.web-session.v1", relaySession);
 		render(<App />);
@@ -391,10 +427,16 @@ describe("Ariel app interactions", () => {
 		const fresh: Thread = { ...fixtureThread, turns: [{ turnId: "fresh", status: "completed", items: [{ itemId: "fresh-item", role: "assistant", text: "Owner 先完成" }] }] };
 		act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: "fixture", watchId: "watch-race", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache-fresh", seq: 1, capturedAt: "2026-10-25T00:00:01Z", thread: fresh }));
 		expect(await screen.findByText("Owner 先完成")).toBeTruthy();
+		if (staleLease) act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: "fixture", watchId: "watch-race", freshness: "stale", staleReason: "follower_lease_expired", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache-fresh", seq: 1, capturedAt: "2026-10-25T00:00:01Z", thread: fresh }));
 		const late: Thread = { ...fixtureThread, turns: [{ turnId: "late", status: "completed", items: [{ itemId: "late-item", role: "assistant", text: "迟到的轻量历史" }] }] };
 		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: late } }));
 		expect(screen.queryByText("迟到的轻量历史")).toBeNull();
 		expect(screen.getByText("Owner 先完成")).toBeTruthy();
+		if (staleLease) {
+			act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: "fixture", watchId: "watch-race", freshness: "fresh", agentOnline: true, agentEpoch: "epoch", cacheStreamId: "cache-fresh", seq: 1, capturedAt: "2026-10-25T00:00:01Z", thread: fresh }));
+			fireEvent.change(screen.getByLabelText("发送消息"), { target: { value: "lease 恢复仍可发送" } });
+			expect(screen.getByRole("button", { name: /^发送$/ })).toHaveProperty("disabled", false);
+		}
 	});
 	it("stops background syncing when an empty cache promotion ends in a terminal error", async () => {
 		BrowserSocket.autoRejectCacheWatch = false;

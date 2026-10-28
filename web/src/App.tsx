@@ -784,8 +784,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     void durableCache.set(identity, value);
   }
 
+  function streamFenceKey(targetDevice:string,targetThread:string,subscriptionId:string):string{
+    return `${client.sessionGeneration}\0${targetDevice}\0${targetThread}\0${subscriptionId}`;
+  }
+
   function acceptStream(next:ThreadView,source:ThreadView|null|undefined,allowCurrent=false):boolean{
-    const key=`${client.sessionGeneration}\0${next.deviceId}\0${next.threadId}\0${next.subscriptionId}`;
+    const key=streamFenceKey(next.deviceId,next.threadId,next.subscriptionId);
     if(source?.subscriptionId===next.subscriptionId&&source.streamId&&source.streamId!=="cache-pending"&&source.seq>0){
       if(source.streamId===next.streamId&&next.seq<=source.seq)return false;
       streamFence.current.accept(key,source.streamId,source.seq);
@@ -1461,7 +1465,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
             if (!thread || epoch !== pendingSelect.current) return;
             if (selection.current.deviceId !== targetDevice || selection.current.threadId !== id || expectedSubscription.current !== watchID) return;
             const currentView = selection.current.view;
-            if (currentView?.subscriptionId === watchID && currentView.streamId !== "cache-pending" && currentView.seq > 0) return;
+            // Once an owner snapshot has won, even its temporarily stale view
+            // outranks this old read. Resetting seq here loses the lineage and
+            // prevents a matching same-seq lease from restoring freshness.
+            if (currentView?.subscriptionId === watchID && currentView.seq > 0) return;
             const readOnlyThread = asReadOnlyThread(thread);
             const next: ThreadView = {
               deviceId: targetDevice,
@@ -1771,10 +1778,11 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (!currentEvent && !warmEvent) return;
         if (event.freshness !== "fresh" || !event.thread || !event.cacheStreamId || !event.seq) {
           const source = currentEvent ? current.view : warm;
+          // Watch responses can seed the display before the first event. The
+          // same lineage must fence stale errors as well as fresh snapshots.
+          if (source) acceptStream(source, null);
+          if (!streamFence.current.acceptStatus(streamFenceKey(event.deviceId,event.threadId,event.watchId),event.cacheStreamId,event.seq)) return;
           if (source) {
-            // Seed the lineage even if this view came from the initial watch
-            // response, before the first asynchronous content update.
-            acceptStream(source, null);
             const stale = { ...source, streamId: "cache-pending", thread: asReadOnlyThread(source.thread) };
             retainWarmSubscription(stale);
             if (currentEvent) {

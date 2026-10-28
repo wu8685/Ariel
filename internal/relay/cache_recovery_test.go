@@ -122,3 +122,36 @@ func applyCacheTestEvent(t *testing.T, r *Server, agent *peer, event map[string]
 		t.Fatal("cache event was not handled")
 	}
 }
+
+func TestRelayPromotionSendFailureBelongsToItsOperation(t *testing.T) {
+	for _, state := range []string{"recovered", "replaced", "current"} {
+		t.Run(state, func(t *testing.T) {
+			r, agent, _, key := cacheDeliveryFixture(t)
+			applyCacheTestEvent(t, r, agent, cacheSnapshotEvent(key.threadID, agent.agentEpoch, "stream", 1))
+			r.mu.Lock()
+			oldID := r.beginCachePromotionLocked(key)
+			r.mu.Unlock()
+			currentID := oldID
+			if state == "recovered" {
+				applyCacheTestEvent(t, r, agent, cacheSnapshotEvent(key.threadID, agent.agentEpoch, "stream", 2))
+			} else if state == "replaced" {
+				r.mu.Lock()
+				r.finishCachePromotionLocked(key)
+				currentID = r.beginCachePromotionLocked(key)
+				r.mu.Unlock()
+			}
+			r.failCachePromotion(key, oldID, "DEVICE_OFFLINE")
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			got := r.cacheDataLocked(r.cache.entries[key], agent)
+			if state == "current" {
+				if got["freshness"] != "stale" || got["staleReason"] != "DEVICE_OFFLINE" || r.cachePromoting[key] {
+					t.Fatal("current send failure was not surfaced and retired")
+				}
+			} else if got["freshness"] != "fresh" || state == "replaced" && r.cachePromotionIDs[key] != currentID {
+				t.Fatalf("late send failure from %q invalidated %s state", oldID, state)
+			}
+			r.finishCachePromotionLocked(key)
+		})
+	}
+}

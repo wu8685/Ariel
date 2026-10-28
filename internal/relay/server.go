@@ -428,8 +428,6 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			// retry storms while removePeer's identity check fences stale cleanup.
 			go previous.conn.Close(websocket.StatusNormalClosure, "replaced by newer agent transport")
 		}
-	} else {
-		s.webs[p] = struct{}{}
 	}
 	s.mu.Unlock()
 	defer s.removePeer(p)
@@ -439,6 +437,14 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := p.send(ctx, ack); err != nil {
 		return
+	}
+	if p.role == "web" {
+		// A peer must not be visible to broadcast producers before hello.ok
+		// has been written. Otherwise device events can win the write lock and
+		// the strict Web client correctly rejects an event before its handshake.
+		s.mu.Lock()
+		s.webs[p] = struct{}{}
+		s.mu.Unlock()
 	}
 	if pairingCreator != nil {
 		_ = pairingCreator.send(ctx, map[string]any{"type": "event", "v": 1, "event": "auth.pair.consumed"})
@@ -592,7 +598,7 @@ func (s *Server) removePeer(p *peer) {
 		}
 	}
 	s.mu.Unlock()
-	sendCacheDeliveries(context.Background(), cacheDeliveries)
+	s.sendCacheDeliveries(context.Background(), cacheDeliveries)
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelCleanup()
 	for _, sub := range orphans {
@@ -938,7 +944,7 @@ func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []by
 			}
 			deliveries := s.cacheUpdateMessagesLocked(key)
 			s.mu.Unlock()
-			sendCacheDeliveries(ctx, deliveries)
+			s.sendCacheDeliveries(ctx, deliveries)
 			return
 		}
 		s.mu.Unlock()

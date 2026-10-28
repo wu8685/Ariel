@@ -277,10 +277,8 @@ func TestRelayDropsCacheEventsFromReplacedAgentTransport(t *testing.T) {
 
 func TestRelayCacheDeliveryQueueKeepsOnlyLatestWatcherUpdate(t *testing.T) {
 	web := &peer{cachePending: map[string]map[string]any{}, cacheWake: make(chan struct{}, 1)}
-	sendCacheDeliveries(context.Background(), []cacheDelivery{
-		{web: web, key: "watch-a", message: map[string]any{"seq": 1}},
-		{web: web, key: "watch-a", message: map[string]any{"seq": 2}},
-	})
+	web.enqueueCacheDelivery("watch-a", map[string]any{"seq": 1})
+	web.enqueueCacheDelivery("watch-a", map[string]any{"seq": 2})
 	web.cacheSendMu.Lock()
 	defer web.cacheSendMu.Unlock()
 	if len(web.cachePending) != 1 || web.cachePending["watch-a"]["seq"] != 2 {
