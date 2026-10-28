@@ -236,6 +236,9 @@ test("reload preserves minimized files without eagerly reading their bodies", as
 });
 
 test("reload verifies source SHA before restoring captured selection and never persists quote or file text", async ({page})=>{
+  // Isolate file restoration from the independent, permitted conversation
+  // history restore. Without a main conversation, a restored quote stays disabled.
+  await page.addInitScript(()=>Object.defineProperty(globalThis,"indexedDB",{value:undefined,configurable:true}));
   const {config,reads}=await setup(page);
   await page.getByRole("button",{name:"查看原文：a.md"}).click();
   const source=page.getByTestId("file-source");await expect(source).toContainText("# a.md");

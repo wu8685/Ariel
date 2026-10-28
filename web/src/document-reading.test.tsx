@@ -42,6 +42,33 @@ it("does not offer Markdown rendering for other file types",()=>{
  expect(screen.queryByRole("button",{name:"阅读模式"})).toBeNull();
 });
 
+it("scopes the reading surface to rendered Markdown, never source or Diff",()=>{
+ const original=view();const props={onClose:vi.fn(),onModeChange:vi.fn(),onQuote:vi.fn()};
+ const rendered=render(<FileViewer view={original} {...props}/>);
+ expect(screen.getByRole("dialog").classList.contains("is-reading")).toBe(false);
+ fireEvent.click(screen.getByRole("button",{name:"阅读模式"}));
+ expect(screen.getByRole("dialog").classList.contains("is-reading")).toBe(true);
+ rendered.rerender(<FileViewer view={{...original,mode:"diff"}} {...props}/>);
+ expect(screen.getByRole("dialog").classList.contains("is-reading")).toBe(false);
+ rendered.rerender(<FileViewer view={original} {...props}/>);
+ expect(screen.getByRole("dialog").classList.contains("is-reading")).toBe(true);
+ fireEvent.click(screen.getByRole("button",{name:"原版模式"}));
+ expect(screen.getByRole("dialog").classList.contains("is-reading")).toBe(false);
+});
+
+it("quotes the exact original newline across a visually flowing soft break",()=>{
+ const original=view();original.file!.content="第一部分\n第二部分";const quote=vi.fn();
+ render(<FileViewer view={original} onClose={()=>{}} onModeChange={()=>{}} onQuote={quote}/>);
+ fireEvent.click(screen.getByRole("button",{name:"阅读模式"}));
+ const reading=screen.getByTestId("file-reading"),paragraph=reading.querySelector("p")!;
+ // Text-node endpoints model a real drag across the soft break. An unmapped
+ // paragraph-element endpoint intentionally uses the existing fail-closed UI.
+ const node=paragraph.querySelector("[data-source-start]")!.firstChild!;
+ const range=document.createRange();range.setStart(node,0);range.setEnd(node,node.textContent!.length);const selection=getSelection()!;selection.removeAllRanges();selection.addRange(range);fireEvent.mouseUp(reading);
+ fireEvent.click(screen.getByRole("button",{name:"引用到会话"}));
+ expect(quote).toHaveBeenCalledWith(expect.objectContaining({startLine:1,endLine:2,text:"第一部分\n第二部分"}));
+});
+
 it("keeps image resources usable when a cached file mounts under StrictMode",async()=>{
  const original=view();
  original.file!.content="![cached](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==)";

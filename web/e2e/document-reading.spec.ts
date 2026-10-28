@@ -7,7 +7,7 @@ const image=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQ
 const text="# 文档标题\n\n重复片段\n\n重复**片段**与结尾\n\n![本地图片](../images/a.png)\n\n![外部图片](https://images.example.test/remote.png)\n\n| 长列 | 内容 |\n| --- | --- |\n| "+"long_cell_".repeat(35)+" | 表格可单独滚动 |\n\n"+Array.from({length:30},(_,i)=>`第 ${i+1} 段：用于检查滚动位置与延迟图片。`).join("\n\n")+"\n\n![末尾图片](../images/b.png)\n";
 const thread={threadId:"reading",title:"阅读模式验收",cwd:"/work/reading",updatedAt:"2026-10-27T00:00:00Z",runtime:"idle",turns:[{turnId:"turn",status:"completed",items:[{itemId:"reply",role:"assistant",text:"[查看说明](docs/read.md)",images:[]}]}],pendingInteractions:[]};
 
-async function fixture(page:Page,{legacy=false,lostCapability=false}={}){
+async function fixture(page:Page,{legacy=false,lostCapability=false,document=text}={}){
  const requests:{method:string;params:Record<string,unknown>}[]=[];const external:string[]=[];
  await page.route("**/",async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text()).replace("__ARIEL_CHILLING_FILE_CONTEXT__","true")})});
  await page.route("https://images.example.test/**",async route=>{external.push(route.request().url());await route.fulfill({contentType:"image/png",body:image})});
@@ -20,7 +20,7 @@ async function fixture(page:Page,{legacy=false,lostCapability=false}={}){
   if(m.method==="thread.cache.watch")data={watchId:"w",freshness:"fresh",agentOnline:true,agentEpoch:"epoch",cacheStreamId:"s",seq:1,capturedAt:"2026-10-27T00:00:00Z",thread};
   if(m.method==="file.context.changes")data={turns:[{turnId:"turn",fileChanges:[{itemId:"change",path:"docs/read.md",kind:"update",diff:"@@ -1 +1 @@\n-old\n+文档标题"}]}]};
   if(m.method==="workspace.files.list")data={path:m.params.path,revision:"r",entries:m.params.path==="docs"?[{name:"read.md",path:"docs/read.md",kind:"file",sizeBytes:text.length,modifiedAtMs:1,readable:true}]:[{name:"docs",path:"docs",kind:"directory",sizeBytes:1,modifiedAtMs:1,readable:true}]};
-  if(["file.context.read","file.context.reference.read","workspace.file.read"].includes(m.method))data={path:"docs/read.md",content:text,sha256:"a".repeat(64),modifiedAtMs:1,lineCount:text.split("\n").length,language:"md",version:"current-workspace",...(!legacy?{documentAssets:{version:1,maxBytes:4*1024*1024,chunkBytes:256*1024}}:{})};
+  if(["file.context.read","file.context.reference.read","workspace.file.read"].includes(m.method))data={path:"docs/read.md",content:document,sha256:"a".repeat(64),modifiedAtMs:1,lineCount:document.split("\n").length,language:"md",version:"current-workspace",...(!legacy?{documentAssets:{version:1,maxBytes:4*1024*1024,chunkBytes:256*1024}}:{})};
   if(m.method==="file.context.asset.read"){
    if(lostCapability){lostCapability=false;socket.send(JSON.stringify({type:"response",v:1,requestId:m.requestId,outcome:"rejected",error:{code:"PROTOCOL_UNSUPPORTED",message:"document assets not confirmed after Agent reconnect"}}));return}
    data={mime:"image/png",assetSha256:createHash("sha256").update(image).digest("hex"),width:1,height:1,totalBytes:image.length,offset:0,dataBase64:image.toString("base64")};
@@ -103,4 +103,37 @@ test("reopening a cached document recreates its image session without rereading 
  expect(requests.filter(r=>r.method==="file.context.read")).toHaveLength(1);
  expect(requests.filter(r=>r.method==="file.context.asset.read")).toHaveLength(2);
  expect(requests.filter(r=>r.method==="thread.cache.watch")).toHaveLength(1);
+});
+
+const readingStyleDocument = "# 长文阅读\n\n这是一段用于排版验收的中文正文，保留英文术语与自然标点。阅读区域应该有柔和的深灰底色，文字清晰但不刺眼，并保持连续阅读的节奏。\n\n这是 soft break 的第一部分\n第二部分继续自然排版，**可精确引用**。\n\n显式换行第一行  \n显式换行第二行\n\n## 方法与边界\n\n- 列表保留层级，不额外占用横向空间。\n- 公式继续渲染，例如 $x^2 + y^2 = z^2$。\n\n> 这里是引用说明，不改变原文的内容和版本。\n\n![本地图片](../images/a.png)\n\n```pseudocode\nfor each item:\n    if ready:\n        emit(item)\n\tkeep_tab(item)\n" + "very_long_identifier_".repeat(16) + "\n```\n\n| 列名 | 说明 |\n| --- | --- |\n| " + "wide_column_".repeat(50) + " | 宽表格内部滚动 |\n\n" + Array.from({length:30},(_,i)=>`后续第 ${i+1} 段用于检查连续阅读、滚动位置和模式恢复。`).join("\n\n");
+
+for (const width of [320,390,1280]) test(`editorial reading surface has scoped typography and natural flow at ${width}px`,async({page})=>{
+ await page.setViewportSize({width,height:844});const {requests}=await fixture(page,{document:readingStyleDocument});
+ const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("阅读时保留的主会话草稿");
+ const chatBefore=await page.locator(".message.assistant").first().evaluate(el=>({font:getComputedStyle(el).fontSize,color:getComputedStyle(el).color}));
+ await page.getByRole("button",{name:"查看原文：docs/read.md"}).click();
+ const sourceBefore=await page.getByTestId("file-source").evaluate(el=>({font:getComputedStyle(el).fontSize,color:getComputedStyle(el).color}));
+ await chooseFileView(page,"阅读模式");const reading=page.getByTestId("file-reading");
+ const metrics=await reading.evaluate(el=>{
+  const style=getComputedStyle(el),surface=getComputedStyle(el.closest(".file-viewer")!);const p=el.querySelector("p")!;const code=el.querySelector("pre")!;
+  return {background:surface.backgroundColor,color:style.color,font:parseFloat(style.fontSize),line:parseFloat(style.lineHeight),left:parseFloat(style.paddingLeft),right:parseFloat(style.paddingRight),paragraphWidth:p.getBoundingClientRect().width,paragraphMargin:parseFloat(getComputedStyle(p).marginBottom),whiteSpace:getComputedStyle(p).whiteSpace,codeFont:parseFloat(getComputedStyle(code).fontSize),codeSpace:getComputedStyle(code).whiteSpace,tabSize:getComputedStyle(code).tabSize};
+ });
+ const font=width<=800?15:16;
+ expect(metrics.background).toBe("rgb(32, 32, 32)");expect(metrics.color).toBe("rgb(224, 224, 224)");expect(metrics.font).toBe(font);expect(metrics.line).toBeCloseTo(font*1.75,1);
+ expect(metrics.left).toBeGreaterThanOrEqual(width<=800?16:20);expect(metrics.right).toBe(metrics.left);expect(metrics.paragraphWidth).toBeLessThanOrEqual(721);expect(metrics.paragraphMargin).toBeGreaterThanOrEqual(font*.9);expect(metrics.whiteSpace).toBe("normal");
+ expect(metrics.codeFont).toBeCloseTo(font*.875,1);expect(metrics.codeSpace).toBe("pre");expect(metrics.tabSize).toBe("4");expect(await reading.locator("br").count()).toBe(1);
+ await expect(reading.locator(".katex")).toHaveCount(1);await page.evaluate(()=>document.fonts.ready);
+ await expect.poll(()=>page.getByRole("img",{name:"本地图片",exact:true}).evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
+ expect(await reading.locator("pre").textContent()).toContain("    if ready:\n        emit(item)\n\tkeep_tab(item)");
+ expect(await reading.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);expect(await page.evaluate(()=>document.body.scrollWidth<=innerWidth)).toBe(true);
+ await expect(page).toHaveScreenshot(`reading-surface-${width}.png`,{animations:"disabled",caret:"hide"});
+ await reading.evaluate(el=>el.scrollTop=420);const position=await reading.evaluate(el=>el.scrollTop);
+ await chooseFileView(page,"原版模式");expect(await page.getByTestId("file-source").evaluate(el=>({font:getComputedStyle(el).fontSize,color:getComputedStyle(el).color}))).toEqual(sourceBefore);await expect(page.getByRole("dialog")).not.toHaveClass(/is-reading/u);
+ await chooseFileView(page,"查看 Diff");await expect(page.getByTestId("file-diff")).toBeVisible();await expect(page.getByRole("dialog")).not.toHaveClass(/is-reading/u);
+ await chooseFileView(page,"阅读模式");await expect.poll(()=>reading.evaluate(el=>el.scrollTop)).toBe(position);
+ await reading.evaluate(el=>el.scrollTop=0);
+ await reading.locator("strong span").first().evaluate(el=>{const range=document.createRange();range.selectNodeContents(el);const selection=getSelection()!;selection.removeAllRanges();selection.addRange(range);el.closest(".file-reading")!.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}))});
+ await page.getByRole("button",{name:"引用到会话"}).click();await expect(composer).toHaveValue("阅读时保留的主会话草稿");
+ expect(await page.locator(".message.assistant").first().evaluate(el=>({font:getComputedStyle(el).fontSize,color:getComputedStyle(el).color}))).toEqual(chatBefore);
+ expect(requests.filter(r=>r.method==="file.context.read")).toHaveLength(1);expect(requests.filter(r=>r.method==="thread.cache.watch")).toHaveLength(1);
 });
