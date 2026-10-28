@@ -293,10 +293,63 @@
   color: var(--color-danger);
   font-size: 12px;
 }
+
+/* A quiet, bounded reading column. Keep source, Diff and chat typography out
+   of this scope; no wrapper DOM is added around source-mapped selections. */
+.file-viewer.is-reading {
+  --reader-surface: var(--color-panel);
+  --reader-text: var(--color-muted);
+  --reader-code-surface: #161616;
+  --reader-font-size: 16px;
+  background: var(--reader-surface);
+}
+.file-viewer.is-reading .file-reading {
+  padding: 16px max(20px, calc((100% - 720px) / 2)) 48px;
+  color: var(--reader-text);
+  font-size: var(--reader-font-size);
+  line-height: 1.75;
+  letter-spacing: normal;
+  text-align: left;
+  word-break: normal;
+}
+.file-viewer.is-reading .file-reading p {
+  margin: 0 0 1em;
+  white-space: normal;
+}
+.file-viewer.is-reading .file-reading :is(h1,h2,h3,h4,h5,h6) {
+  margin: 1.5em 0 .65em;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+.file-viewer.is-reading .file-reading h1 { font-size: 1.5em; }
+.file-viewer.is-reading .file-reading h2 { font-size: 1.25em; }
+.file-viewer.is-reading .file-reading h3 { font-size: 1.125em; }
+.file-viewer.is-reading .file-reading > :first-child { margin-top: 0; }
+.file-viewer.is-reading .file-reading > :last-child { margin-bottom: 0; }
+.file-viewer.is-reading .file-reading :is(ul,ol) {
+  margin: 0 0 1em;
+  padding-left: 1.5em;
+}
+.file-viewer.is-reading .file-reading li { margin: .25em 0; }
+.file-viewer.is-reading .file-reading li > p { margin: .25em 0; }
+.file-viewer.is-reading .file-reading blockquote {
+  margin: 1em 0;
+  color: var(--color-subtle);
+}
+.file-viewer.is-reading .file-reading pre {
+  margin: 1em 0;
+  padding: 12px 14px;
+  background: var(--reader-code-surface);
+  color: var(--reader-text);
+  font-size: .875em;
+  line-height: 1.65;
+}
 @media (max-width: 800px) {
-  .file-workspace .file-reading {
-    padding: 10px 12px 24px;
-    font-size: 12px;
+  .file-viewer.is-reading {
+    --reader-font-size: 15px;
+  }
+  .file-viewer.is-reading .file-reading {
+    padding: 12px max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
   .file-workspace .file-code,
   .file-workspace .file-diff {
