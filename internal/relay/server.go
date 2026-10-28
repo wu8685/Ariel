@@ -86,6 +86,7 @@ type pairing struct {
 }
 
 type route struct {
+	svgOptIn bool
 	web      *peer
 	agent    *peer
 	webID    string
@@ -106,6 +107,7 @@ type subscription struct {
 }
 
 type peer struct {
+	documentSVG    bool // negotiated via current Agent's trusted file receipt
 	documentAssets bool // current connection only, protected by Server.mu
 	settingsOptIn  bool // protected by Server.mu
 	taskState      atomic.Pointer[taskPeerState]
@@ -775,7 +777,7 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		devices = append(devices, device)
 	}
 	s.mu.Unlock()
-	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices, "documentAssetsVersion": 1}})
+	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices, "documentAssetsVersion": 1, "documentSvgVersion": 1}})
 	return true
 }
 
@@ -796,6 +798,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		SearchTerm     string          `json:"searchTerm"`
 		Settings       json.RawMessage `json:"settings"`
 		AgentEpoch     string          `json:"agentEpoch"`
+		SVGVersion     int             `json:"svgVersion"`
 	}
 	json.Unmarshal(params, &reference)
 	s.mu.Lock()
@@ -806,7 +809,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		return true
 	}
 	settingsMethod := method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.")
-	if method == "file.context.asset.read" && (!agent.documentAssets || reference.AgentEpoch != agent.agentEpoch) {
+	if method == "file.context.asset.read" && (!agent.documentAssets || reference.AgentEpoch != agent.agentEpoch || reference.SVGVersion == 1 && !agent.documentSVG) {
 		s.mu.Unlock()
 		web.send(ctx, responseError(webID, "rejected", "PROTOCOL_UNSUPPORTED", "document assets unavailable or stale Agent"))
 		return true
@@ -872,7 +875,7 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 		return true
 	}
 	relayID := newRequestID()
-	entry := &route{web: web, agent: agent, webID: webID, method: method, deviceID: deviceID, threadID: reference.ThreadID, subID: reference.SubscriptionID}
+	entry := &route{web: web, agent: agent, webID: webID, method: method, deviceID: deviceID, threadID: reference.ThreadID, subID: reference.SubscriptionID, svgOptIn: reference.SVGVersion == 1}
 	s.routes[relayID] = entry
 	s.byWeb[web][webID] = relayID
 	timeout := s.cfg.RequestTimeout
@@ -961,9 +964,10 @@ func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []by
 		capability, _ := data["documentAssets"].(map[string]any)
 		if capability["version"] == float64(1) && capability["maxBytes"] == float64(4<<20) && capability["chunkBytes"] == float64(256<<10) {
 			agent.documentAssets = true
+			agent.documentSVG = capability["svgVersion"] == float64(1)
 		}
 	}
-	if entry.method == "file.context.asset.read" && reply["outcome"] == "accepted" && !validAssetReply(body, reply["data"]) {
+	if entry.method == "file.context.asset.read" && reply["outcome"] == "accepted" && !validAssetReply(body, reply["data"], entry.svgOptIn) {
 		reply = responseError(entry.webID, "rejected", "FILE_TOO_LARGE", "invalid or oversized document resource")
 	}
 	s.mu.Unlock()

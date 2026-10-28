@@ -234,6 +234,7 @@
         "imageReference"
       ],
       "properties": {
+        "svgVersion": { "const": 1 },
         "source": {
           "enum": [
             "turn_change",

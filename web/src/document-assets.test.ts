@@ -4,9 +4,35 @@ import { afterEach,expect,it,vi } from "vitest";
 import { DocumentImageSession,classifyImageSource,rasterInfo } from "./document-assets";
 import type { OpenFile } from "./file-context";
 
-afterEach(()=>vi.unstubAllGlobals());
+afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks()});
 const png=Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="),c=>c.charCodeAt(0));
 const file:OpenFile={source:"workspace_browser",threadId:"t",path:"docs/read.md",content:"![图](../a.png)",sha256:"a".repeat(64),modifiedAtMs:1,lineCount:1,language:"md",version:"current-workspace",documentAssets:{version:1,maxBytes:4*1024*1024,chunkBytes:256*1024}};
+
+it("negotiates local static SVG and validates its XML before creating an image Blob",async()=>{
+ vi.stubGlobal("crypto",webcrypto);URL.createObjectURL=vi.fn(()=>"blob:static-svg");URL.revokeObjectURL=vi.fn();
+ const parse=vi.spyOn(DOMParser.prototype,"parseFromString");
+ const svg=new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><defs><path id="glyph" d="M0 0L10 10"/></defs><use href="#glyph" fill="#5e55ff"/></svg>');
+ const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",svg))).map(n=>n.toString(16).padStart(2,"0")).join("");
+ const request=vi.fn(async()=>({mime:"image/svg+xml",assetSha256:digest,width:100,height:50,totalBytes:svg.length,offset:0,dataBase64:btoa(String.fromCharCode(...svg))}));
+ const svgFile={...file,documentAssets:{...file.documentAssets!,svgVersion:1}};
+ const context={agentEpoch:"epoch",relayVersion:1,relaySvgVersion:1,request};
+ const session=new DocumentImageSession(svgFile,context);
+ const result=await session.acquire("../a.svg",new AbortController().signal);
+ expect(parse).toHaveBeenCalledTimes(1);parse.mockRestore();
+ expect(result).toMatchObject({url:"blob:static-svg",width:100,height:50});
+ expect(request).toHaveBeenCalledWith(expect.objectContaining({svgVersion:1}),expect.any(AbortSignal));result.release();session.dispose();
+ for(const legacy of [new DocumentImageSession(file,context),new DocumentImageSession(svgFile,{...context,relaySvgVersion:0})]){
+  await expect(legacy.acquire("../a.svg",new AbortController().signal)).rejects.toThrow();legacy.dispose();
+ }
+});
+
+it.each(['<script/>','<image href="https://example.invalid/x"/>','<path onload="x"/>','<use href="#missing"/>','<g id="a"><use href="#a"/></g>','<foreignObject/>'])("rejects untrusted SVG response %s before a Blob URL exists",async inner=>{
+ vi.stubGlobal("crypto",webcrypto);URL.createObjectURL=vi.fn();URL.revokeObjectURL=vi.fn();
+ const bytes=new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50">${inner}</svg>`);
+ const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))).map(n=>n.toString(16).padStart(2,"0")).join("");
+ const session=new DocumentImageSession({...file,documentAssets:{...file.documentAssets!,svgVersion:1}},{agentEpoch:"epoch",relayVersion:1,relaySvgVersion:1,request:async()=>({mime:"image/svg+xml",assetSha256:digest,width:100,height:50,totalBytes:bytes.length,offset:0,dataBase64:btoa(String.fromCharCode(...bytes))})});
+ await expect(session.acquire("../a.svg",new AbortController().signal)).rejects.toThrow();expect(URL.createObjectURL).not.toHaveBeenCalled();session.dispose();
+});
 
 it("blocks unsafe image URLs and recognizes safe HTTPS / relative / bounded raster data",()=>{
  for(const src of ["javascript:alert(1)","file:///a.png","http://x.test/a.png","//x.test/a.png","https://127.0.0.1/a.png","https://[::1]/a.png","https://10.0.0.1/a.png","https://u:p@x.test/a.png","https://localhost/a.png","data:image/svg+xml,<svg/>"]){expect(classifyImageSource(src).kind,src).toBe("blocked")}

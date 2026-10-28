@@ -127,6 +127,8 @@
 
 | 0122 | [多文件 Tab 与全屏／最小化阅读](0122-minimizable-file-viewer.md) | Implemented（基础体验 v0.12.1；文件菜单／引用栏纳入 v0.12.2） | 无固定 Tab 上限、来源绑定、单正文挂载与共享有界 LRU；模式收进菜单、引用栏按需显示 |
 | 0123 | [刷新恢复文件阅读现场](0123-file-reading-refresh-restore.md) | Implemented（Web 349／Chromium 125；纳入 v0.12.2） | 当前标签页仅保存有界元信息；核验认证／设备／版本后按需恢复 Tab、模式、位置与最小化 |
+| 0124 | [Markdown 公式、伪代码与图片可靠性](0124-markdown-math-code-and-image-reliability.md) | Implemented（核心纳入 v0.12.3；图片提示维护见 Issue #54） | 本地公式渲染、保留代码缩进、图片按需解码与显式重试，原文／Diff／精确引用不变 |
+| 0125 | [受限静态 SVG 插图](0125-static-svg-document-images.md) | Implemented（Web 384／Chromium 154／实际五张 SVG 只读解码已验，未部署） | Agent 规范化静态子集、双端协商、Web 独立 img 解码；限制外部资源与展开复杂度 |
 
 ## 设计基线
 
