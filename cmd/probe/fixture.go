@@ -15,6 +15,9 @@ import (
 )
 
 func fixtureCommand(ctx context.Context, args []string, out, errout io.Writer) int {
+	if len(args) > 0 && args[0] == "async-question" {
+		return fixtureControlCommand(ctx, args[1:], out, errout, "async-question")
+	}
 	if len(args) > 0 && (args[0] == "exercise" || args[0] == "stale-interaction" || args[0] == "user-input" || args[0] == "user-input-race" || args[0] == "user-input-interrupt" || args[0] == "command-decline" || args[0] == "command-cancel" || args[0] == "command-pending" || args[0] == "user-input-pending" || args[0] == "file-pending" || args[0] == "permission-pending" || args[0] == "busy-submit") {
 		return fixtureControlCommand(ctx, args[1:], out, errout, args[0])
 	}
@@ -38,7 +41,7 @@ func fixtureCommand(ctx context.Context, args []string, out, errout io.Writer) i
 		fmt.Fprintln(errout, "requires --write-enabled and --manifest")
 		return 2
 	}
-	if *purpose != "" && *purpose != "user-input" && *purpose != "command-decline" && *purpose != "command-cancel" && *purpose != "command-accept" && *purpose != "file-change" && *purpose != "permission-request" {
+	if *purpose != "" && *purpose != "async-question" && *purpose != "user-input" && *purpose != "command-decline" && *purpose != "command-cancel" && *purpose != "command-accept" && *purpose != "file-change" && *purpose != "permission-request" {
 		fmt.Fprintln(errout, "unknown fixture purpose")
 		return 2
 	}
@@ -108,6 +111,10 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		fmt.Fprintln(errout, "requires a dedicated user-input fixture")
 		return 1
 	}
+	if operation == "async-question" && m.Purpose != "async-question" {
+		fmt.Fprintln(errout, "requires a dedicated async-question fixture")
+		return 1
+	}
 	if operation == "command-decline" && m.Purpose != "command-decline" {
 		fmt.Fprintln(errout, "requires a dedicated command-decline fixture")
 		return 1
@@ -174,6 +181,17 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		return 1
 	}
 	defer c.Close()
+	if operation == "async-question" {
+		result, e := c.ProbeAsyncQuestionAvailability(ctx, m.ThreadID, m.Workspace)
+		output := map[string]any{"asyncQuestion": result, "writeCapability": "unverified"}
+		if e != nil {
+			output["reason"] = e.Error()
+		}
+		if json.NewEncoder(out).Encode(output) != nil || e != nil {
+			return 1
+		}
+		return 0
+	}
 	if operation == "command-pending" || operation == "user-input-pending" || operation == "file-pending" || operation == "permission-pending" {
 		purpose := "command-accept"
 		if operation == "user-input-pending" {

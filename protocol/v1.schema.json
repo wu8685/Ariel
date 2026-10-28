@@ -88,7 +88,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond", "thread.questions.respond"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -125,7 +125,8 @@
         { "if": { "properties": { "method": { "const": "queue.delete" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueItemParams" } } } },
         { "if": { "properties": { "method": { "const": "queue.reorder" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueReorderParams" } } } },
         { "if": { "properties": { "method": { "const": "queue.steer" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueSteerParams" } } } },
-        { "if": { "properties": { "method": { "const": "interaction.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/respondParams" } } } }
+        { "if": { "properties": { "method": { "const": "interaction.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/respondParams" } } } },
+        { "if": { "properties": { "method": { "const": "thread.questions.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/questionAnswerParams" } } } }
       ]
     },
     "emptyParams": { "type": "object", "additionalProperties": false },
@@ -173,7 +174,7 @@
     },
     "threadParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
-      "properties": { "threadId": { "$ref": "#/$defs/id" } }
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "asyncQuestionsVersion": {"const": 1} }
     },
     "subscribeParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
@@ -184,11 +185,11 @@
     },
     "historyParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
-      "properties": { "threadId": { "$ref": "#/$defs/id" }, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 10 } }
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "asyncQuestionsVersion": {"const": 1}, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 10 } }
     },
     "historyItemsParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "turnId"],
-      "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" }, "asyncQuestionsVersion": {"const": 1}, "cursor": { "type": ["string", "null"] }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }
     },
     "imageParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId", "turnId", "itemId", "imageIndex"],
@@ -213,7 +214,11 @@
     },
     "cacheTouchParams": {
       "type": "object", "additionalProperties": false, "required": ["threadId"],
-      "properties": { "threadId": { "$ref": "#/$defs/id" }, "watching": { "type": "boolean" } }
+      "properties": { "threadId": { "$ref": "#/$defs/id" }, "watching": { "type": "boolean" }, "asyncQuestionsVersion": {"const":1} }
+    },
+    "questionAnswerParams": {
+      "type":"object","additionalProperties":false,"required":["threadId","agentEpoch","turnId","questionId","fingerprint","operationId","answer"],
+      "properties":{"threadId":{"$ref":"#/$defs/id"},"agentEpoch":{"$ref":"#/$defs/id"},"turnId":{"$ref":"#/$defs/id"},"questionId":{"$ref":"#/$defs/id"},"fingerprint":{"type":"string","minLength":1,"maxLength":128},"operationId":{"$ref":"#/$defs/id"},"answer":{"type":"string","minLength":1,"maxLength":8192}}
     },
     "relativeFilePath": {
       "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^/\\\\].*$",
@@ -682,7 +687,7 @@
         "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "agentEpoch": { "$ref": "#/$defs/id" },
         "cacheStreamId": { "$ref": "#/$defs/id" }, "seq": { "type": "integer", "minimum": 1 },
         "capturedAt": { "type": "string", "minLength": 1, "maxLength": 64 }, "payloadBytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
-        "thread": { "$ref": "#/$defs/thread" }
+        "thread": { "$ref": "#/$defs/thread" }, "asyncQuestions": {}
       }
     },
     "threadCacheUpdate": {
@@ -694,7 +699,7 @@
         "freshness": { "enum": ["fresh", "stale", "missing"] }, "staleReason": { "type": "string", "maxLength": 128 },
         "agentOnline": { "type": "boolean" }, "agentEpoch": { "$ref": "#/$defs/id" }, "cacheStreamId": { "$ref": "#/$defs/id" },
         "seq": { "type": "integer", "minimum": 1 }, "capturedAt": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "thread": { "$ref": "#/$defs/thread" }
+        "thread": { "$ref": "#/$defs/thread" }, "asyncQuestions": {}
       }
     },
     "threadCacheStatus": {

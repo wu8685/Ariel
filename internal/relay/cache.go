@@ -29,12 +29,14 @@ type cacheSnapshot struct {
 	seq        int64
 	capturedAt time.Time
 	thread     json.RawMessage
+	questions  json.RawMessage
 	bytes      int64
 }
 
 type cacheWatcher struct {
-	id  string
-	web *peer
+	id        string
+	web       *peer
+	questions bool
 }
 
 type cacheEntry struct {
@@ -121,7 +123,7 @@ func (s *cacheStore) put(snapshot cacheSnapshot, now time.Time) error {
 	if snapshot.bytes <= 0 {
 		snapshot.bytes = int64(len(snapshot.thread))
 	}
-	if snapshot.bytes != int64(len(snapshot.thread)) || snapshot.bytes > s.maxEntryBytes {
+	if snapshot.bytes != int64(len(snapshot.thread)) || snapshot.bytes+int64(len(snapshot.questions)) > s.maxEntryBytes {
 		return errCacheOversized
 	}
 	key := cacheKey{snapshot.deviceID, snapshot.threadID}
@@ -133,7 +135,7 @@ func (s *cacheStore) put(snapshot cacheSnapshot, now time.Time) error {
 	if prior != nil {
 		priorBytes = prior.retainedBytes
 	}
-	retainedBytes := snapshot.bytes + cacheEntryMetadataBytes
+	retainedBytes := snapshot.bytes + int64(len(snapshot.questions)) + cacheEntryMetadataBytes
 	needed := retainedBytes - priorBytes
 	if needed > 0 && !s.makeRoom(needed, key, now) {
 		return errCacheCapacity

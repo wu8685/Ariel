@@ -35,6 +35,8 @@ const usage = `Ariel read-only compatibility probe
   probe fixture user-input --manifest PATH --write-enabled
   probe fixture user-input-race --manifest PATH --write-enabled
   probe fixture user-input-interrupt --manifest PATH --write-enabled
+  probe fixture create --purpose async-question --manifest PATH --write-enabled
+  probe fixture async-question --manifest PATH --write-enabled
   probe fixture create --purpose command-decline --manifest PATH --write-enabled
   probe fixture command-decline --manifest PATH --write-enabled
   probe fixture create --purpose command-cancel --manifest PATH --write-enabled

@@ -44,6 +44,14 @@ func TestCreateFixturePersistsIdentityBeforeSeed(t *testing.T) {
 	}
 }
 
+func TestAsyncQuestionFixturePurposeIsExplicit(t *testing.T) {
+	f := &fixtureRPC{}
+	m, err := CreateFixture(context.Background(), f, CreateOptions{Parent: t.TempDir(), ManifestPath: filepath.Join(t.TempDir(), "async.json"), WriteEnabled: true, Purpose: "async-question"})
+	if err != nil || m.Purpose != "async-question" || !strings.Contains(f.instructions, "request_user_input_async") {
+		t.Fatalf("async fixture not supported: %v", err)
+	}
+}
+
 func TestUserInputFixturePurposeIsExplicit(t *testing.T) {
 	f := &fixtureRPC{}
 	m, err := CreateFixture(context.Background(), f, CreateOptions{Parent: t.TempDir(), ManifestPath: filepath.Join(t.TempDir(), "input.json"), WriteEnabled: true, Purpose: "user-input"})

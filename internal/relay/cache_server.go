@@ -40,7 +40,7 @@ func (s *Server) restoreAgentCacheFollowers(ctx context.Context, agent *peer) {
 	})
 	for _, candidate := range candidates {
 		requestID := s.promotionRequestID(candidate.key)
-		if err := sendCacheTouch(ctx, agent, candidate.key, true, requestID); err != nil {
+		if err := s.sendCacheTouch(ctx, agent, candidate.key, true, requestID); err != nil {
 			s.mu.Lock()
 			s.finishCachePromotionLocked(candidate.key)
 			s.mu.Unlock()
@@ -75,6 +75,10 @@ func cacheRequestReference(raw json.RawMessage) (threadID, watchID string, ok bo
 }
 
 func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, deviceID, method string, params json.RawMessage) bool {
+	var extension struct {
+		Version int `json:"asyncQuestionsVersion"`
+	}
+	_ = json.Unmarshal(params, &extension)
 	threadID, watchID, ok := cacheRequestReference(params)
 	if !ok {
 		_ = web.send(ctx, responseError(requestID, "rejected", "INVALID_ARGUMENT", "invalid cache request"))
@@ -88,6 +92,9 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 		entry := s.cache.entries[key]
 		agent := s.agents[deviceID]
 		data := s.cacheDataLocked(entry, agent)
+		if extension.Version == 1 && entry != nil && len(entry.questions) > 0 {
+			data["asyncQuestions"] = entry.questions
+		}
 		s.mu.Unlock()
 		_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": data})
 		return true
@@ -109,20 +116,30 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 		key := cacheKey{deviceID, threadID}
 		firstWatcher := s.cache.entries[key] == nil || len(s.cache.entries[key].watchers) == 0
 		entry := s.cache.watch(key, watchID, web, now)
+		watcher := entry.watchers[watchID]
+		watcher.questions = extension.Version == 1
+		entry.watchers[watchID] = watcher
 		agent := s.agents[deviceID]
 		data := s.cacheDataLocked(entry, agent)
+		if watcher.questions && len(entry.questions) > 0 {
+			data["asyncQuestions"] = entry.questions
+		}
 		needsPromotion := data["freshness"] != "fresh"
 		promotionID := ""
 		if firstWatcher && agent != nil && needsPromotion {
 			promotionID = s.beginCachePromotionLocked(key)
 		}
 		data["watchId"] = watchID
+		negotiateQuestions := watcher.questions && agent != nil && !agent.asyncQuestions && len(agent.questionTouches) == 0 && promotionID == ""
 		s.mu.Unlock()
 		_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": data})
 		if promotionID != "" {
-			if err := sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
+			if err := s.sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
 				s.failCachePromotion(key, promotionID, "DEVICE_OFFLINE")
 			}
+		}
+		if negotiateQuestions {
+			_ = s.sendCacheTouch(ctx, agent, key, true, newRequestID())
 		}
 		return true
 	case "thread.cache.unwatch":
@@ -135,7 +152,7 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 				s.mu.Unlock()
 				_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": map[string]any{}})
 				if lastWatcher && agent != nil {
-					_ = sendCacheTouch(ctx, agent, key, false, newRequestID())
+					_ = s.sendCacheTouch(ctx, agent, key, false, newRequestID())
 				}
 				return true
 			}
@@ -170,7 +187,7 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 		}
 		s.mu.Unlock()
 		if !already {
-			if err := sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
+			if err := s.sendCacheTouch(ctx, agent, key, true, promotionID); err != nil {
 				s.failCachePromotion(key, promotionID, "DEVICE_OFFLINE")
 				_ = web.send(ctx, responseError(requestID, "rejected", "DEVICE_OFFLINE", "cache promotion could not reach agent"))
 				return true
@@ -184,11 +201,29 @@ func (s *Server) handleCacheRequest(ctx context.Context, web *peer, requestID, d
 	}
 }
 
-func sendCacheTouch(ctx context.Context, agent *peer, key cacheKey, watching bool, requestID string) error {
+func (s *Server) sendCacheTouch(ctx context.Context, agent *peer, key cacheKey, watching bool, requestID string) error {
 	if requestID == "" {
 		requestID = newRequestID()
 	}
-	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": key.deviceID, "method": "thread.cache.touch", "params": map[string]any{"threadId": key.threadID, "watching": watching}})
+	params := map[string]any{"threadId": key.threadID, "watching": watching}
+	s.mu.Lock()
+	if s.agents[agent.deviceID] != agent {
+		s.mu.Unlock()
+		return errors.New("DEVICE_OFFLINE")
+	}
+	if agent.asyncQuestions {
+		params["asyncQuestionsVersion"] = 1
+	} else if watching {
+		if agent.questionTouches == nil {
+			agent.questionTouches = map[string]questionTouch{}
+		}
+		if len(agent.questionTouches) < 1024 {
+			agent.questionTouches[requestID] = questionTouch{key: key, watching: watching}
+			time.AfterFunc(s.cfg.SubscriptionTimeout, func() { s.mu.Lock(); delete(agent.questionTouches, requestID); s.mu.Unlock() })
+		}
+	}
+	s.mu.Unlock()
+	return agent.send(ctx, map[string]any{"type": "request", "v": 1, "requestId": requestID, "deviceId": key.deviceID, "method": "thread.cache.touch", "params": params})
 }
 
 func (s *Server) beginCachePromotionLocked(key cacheKey) string {
@@ -303,6 +338,9 @@ func (s *Server) cacheUpdateMessagesLocked(key cacheKey) []cacheDelivery {
 		for name, value := range base {
 			msg[name] = value
 		}
+		if watcher.questions && len(entry.questions) > 0 {
+			msg["asyncQuestions"] = entry.questions
+		}
 		deliveries = append(deliveries, cacheDelivery{web: watcher.web, key: watcher.id, message: msg, cacheKey: key, entry: entry, revision: entry.deliveryRevision})
 	}
 	return deliveries
@@ -346,6 +384,7 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 		CapturedAt    time.Time       `json:"capturedAt"`
 		PayloadBytes  int64           `json:"payloadBytes"`
 		Thread        json.RawMessage `json:"thread"`
+		Questions     json.RawMessage `json:"asyncQuestions"`
 		Freshness     string          `json:"freshness"`
 		Reason        string          `json:"reason"`
 	}
@@ -364,7 +403,8 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 	var deliveries []cacheDelivery
 	switch envelope.Event {
 	case "thread.cache.snapshot":
-		err := s.cache.put(cacheSnapshot{deviceID: agent.deviceID, threadID: envelope.ThreadID, agentEpoch: envelope.AgentEpoch, streamID: envelope.CacheStreamID, seq: envelope.Seq, capturedAt: envelope.CapturedAt, thread: envelope.Thread, bytes: envelope.PayloadBytes}, s.now())
+		questions := validatedQuestionSidecar(agent, envelope.Questions, envelope.Thread)
+		err := s.cache.put(cacheSnapshot{deviceID: agent.deviceID, threadID: envelope.ThreadID, agentEpoch: envelope.AgentEpoch, streamID: envelope.CacheStreamID, seq: envelope.Seq, capturedAt: envelope.CapturedAt, thread: envelope.Thread, questions: questions, bytes: envelope.PayloadBytes}, s.now())
 		if errors.Is(err, errCacheSequence) {
 			// Full replacement snapshots may be coalesced. A duplicate or older
 			// frame cannot invalidate the newer snapshot already held by Relay.
@@ -408,6 +448,7 @@ func (s *Server) handleCacheAgentEvent(ctx context.Context, agent *peer, body []
 			}
 			s.cache.totalBytes -= entry.retainedBytes
 			entry.thread = nil
+			entry.questions = nil
 			entry.bytes = 0
 			entry.retainedBytes = 0
 			entry.stale = true

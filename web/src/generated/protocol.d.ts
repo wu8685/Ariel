@@ -66,7 +66,8 @@ export type Request = {
     | "queue.delete"
     | "queue.reorder"
     | "queue.steer"
-    | "interaction.respond";
+    | "interaction.respond"
+    | "thread.questions.respond";
   params: {
     [k: string]: unknown;
   };
@@ -546,6 +547,7 @@ export interface ThreadCacheSnapshot {
   capturedAt: string;
   payloadBytes: number;
   thread: Thread;
+  asyncQuestions?: unknown;
 }
 export interface ThreadCacheUpdate {
   type: "event";
@@ -562,6 +564,7 @@ export interface ThreadCacheUpdate {
   seq?: number;
   capturedAt?: string;
   thread?: Thread;
+  asyncQuestions?: unknown;
 }
 export interface ThreadCacheStatus {
   type: "event";

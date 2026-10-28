@@ -1020,7 +1020,11 @@ func (s *Service) History(ctx context.Context, id, cursor string, limit int) (ma
 		if page.NextCursor != nil {
 			next = *page.NextCursor
 		}
-		result := map[string]any{"turns": turns, "nextCursor": next}
+		questionTurns := make([]desktopipc.AsyncQuestionTurn, 0, len(page.Data))
+		for _, native := range page.Data {
+			questionTurns = append(questionTurns, desktopipc.AsyncQuestionTurn{ID: native.ID, Status: native.Status, Items: native.Items})
+		}
+		result := map[string]any{"turns": turns, "nextCursor": next, "_asyncQuestions": desktopipc.ProjectAsyncQuestions(id, questionTurns)}
 		if err := checkPayloadSize(result, maxHistoryPageBytes); err != nil {
 			if errors.Is(err, ErrHistoryTooLarge) && limit > 1 {
 				limit = max(1, limit/2)
@@ -1062,7 +1066,7 @@ func (s *Service) giantHistory(ctx context.Context, paged PagedHistory, id, curs
 	if page.NextCursor != nil {
 		nextTurn = *page.NextCursor
 	}
-	result := map[string]any{"turns": []any{turn}, "nextCursor": nextTurn}
+	result := map[string]any{"turns": []any{turn}, "nextCursor": nextTurn, "_asyncQuestions": desktopipc.ProjectAsyncQuestions(id, []desktopipc.AsyncQuestionTurn{{ID: native.ID, Status: native.Status, Items: items.Data, Partial: items.NextCursor != nil}})}
 	return result, checkPayloadSize(result, maxHistoryPageBytes)
 }
 
@@ -1139,7 +1143,7 @@ func (s *Service) HistoryItems(ctx context.Context, threadID, turnID, cursor str
 	if page.NextCursor != nil {
 		next = *page.NextCursor
 	}
-	result := map[string]any{"turnId": turnID, "items": turn["items"], "nextItemCursor": next, "itemsComplete": page.NextCursor == nil}
+	result := map[string]any{"turnId": turnID, "items": turn["items"], "nextItemCursor": next, "itemsComplete": page.NextCursor == nil, "_asyncQuestions": desktopipc.ProjectAsyncQuestions(threadID, []desktopipc.AsyncQuestionTurn{{ID: turnID, Status: "completed", Items: page.Data, Partial: true}})}
 	return result, checkPayloadSize(result, maxHistoryPageBytes)
 }
 
@@ -1265,7 +1269,7 @@ func currentLiveThread(c *threadController, live Live) (map[string]any, json.Raw
 	if err != nil {
 		return nil, raw, err
 	}
-	thread, err := NormalizeLive(c.id, c.title, c.cwd, raw)
+	thread, err := normalizeLiveQuestions(c.id, c.title, c.cwd, raw)
 	return thread, raw, err
 }
 
@@ -1586,7 +1590,7 @@ func (s *Service) SubscribeWithMode(ctx context.Context, id, updateMode string, 
 }
 
 func sameThreadContent(a, b map[string]any) bool {
-	return a["runtime"] == b["runtime"] && a["historyComplete"] == b["historyComplete"] && a["recentComplete"] == b["recentComplete"] && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"]) && reflect.DeepEqual(a["queuedMessages"], b["queuedMessages"])
+	return a["runtime"] == b["runtime"] && a["historyComplete"] == b["historyComplete"] && a["recentComplete"] == b["recentComplete"] && reflect.DeepEqual(a["_asyncQuestions"], b["_asyncQuestions"]) && reflect.DeepEqual(a["turns"], b["turns"]) && reflect.DeepEqual(a["pendingInteractions"], b["pendingInteractions"]) && reflect.DeepEqual(a["permissions"], b["permissions"]) && reflect.DeepEqual(a["queuedMessages"], b["queuedMessages"])
 }
 
 func (s *Service) Unsubscribe(id string) bool {

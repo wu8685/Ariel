@@ -106,23 +106,25 @@ type subscription struct {
 }
 
 type peer struct {
-	documentAssets bool // current connection only, protected by Server.mu
-	settingsOptIn  bool // protected by Server.mu
-	taskState      atomic.Pointer[taskPeerState]
-	taskStoreID    string
-	taskCredential *TaskDeviceCredential
-	conn           *websocket.Conn
-	id             string
-	role           string
-	deviceID       string
-	deviceName     string
-	agentEpoch     string
-	adapterVersion string
-	capabilities   map[string]bool
-	writeMu        sync.Mutex
-	cacheSendMu    sync.Mutex
-	cachePending   map[string]map[string]any
-	cacheWake      chan struct{}
+	asyncQuestions  bool // current Agent transport only, Server.mu
+	questionTouches map[string]questionTouch
+	documentAssets  bool // current connection only, protected by Server.mu
+	settingsOptIn   bool // protected by Server.mu
+	taskState       atomic.Pointer[taskPeerState]
+	taskStoreID     string
+	taskCredential  *TaskDeviceCredential
+	conn            *websocket.Conn
+	id              string
+	role            string
+	deviceID        string
+	deviceName      string
+	agentEpoch      string
+	adapterVersion  string
+	capabilities    map[string]bool
+	writeMu         sync.Mutex
+	cacheSendMu     sync.Mutex
+	cachePending    map[string]map[string]any
+	cacheWake       chan struct{}
 }
 
 func New(cfg Config) (*Server, error) {
@@ -605,7 +607,7 @@ func (s *Server) removePeer(p *peer) {
 		_ = sendUnsubscribe(cleanupCtx, sub.agent, sub.id)
 	}
 	for _, release := range cacheReleases {
-		_ = sendCacheTouch(cleanupCtx, release.agent, release.key, false, newRequestID())
+		_ = s.sendCacheTouch(cleanupCtx, release.agent, release.key, false, newRequestID())
 	}
 	for _, pending := range failed {
 		if pending.method == "thread.subscribe" {
@@ -781,7 +783,7 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		devices = append(devices, device)
 	}
 	s.mu.Unlock()
-	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices, "documentAssetsVersion": 1}})
+	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices, "documentAssetsVersion": 1, "asyncQuestionsVersion": 1}})
 	return true
 }
 
@@ -809,6 +811,24 @@ func (s *Server) forwardRequest(ctx context.Context, web *peer, webID, deviceID,
 	if agent == nil {
 		s.mu.Unlock()
 		web.send(ctx, responseError(webID, "rejected", "DEVICE_OFFLINE", "device offline"))
+		return true
+	}
+	if method == "thread.history" || method == "thread.history.items" || method == "thread.read" {
+		// Relay support alone cannot authorize new parameters to an old strict
+		// Agent. Strip this extension until that exact transport negotiated it.
+		if !agent.asyncQuestions {
+			var legacy map[string]json.RawMessage
+			if json.Unmarshal(params, &legacy) == nil {
+				if _, present := legacy["asyncQuestionsVersion"]; present {
+					delete(legacy, "asyncQuestionsVersion")
+					params, _ = json.Marshal(legacy)
+				}
+			}
+		}
+	}
+	if method == "thread.questions.respond" {
+		s.mu.Unlock()
+		web.send(ctx, responseError(webID, "rejected", "PROTOCOL_UNSUPPORTED", "asynchronous answer compatibility gate is closed"))
 		return true
 	}
 	settingsMethod := method == "model.catalog.read" || strings.HasPrefix(method, "thread.settings.")
@@ -926,6 +946,7 @@ func (s *Server) handleAgentResponse(ctx context.Context, agent *peer, body []by
 	if json.Unmarshal(body, &reply) != nil {
 		return
 	}
+	s.negotiateQuestionResponse(ctx, agent, relayID, reply)
 	s.mu.Lock()
 	if key, internal := s.cachePromotionRequests[relayID]; internal {
 		delete(s.cachePromotionRequests, relayID)

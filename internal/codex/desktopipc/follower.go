@@ -116,9 +116,19 @@ func (f *Follower) Refresh(ctx context.Context) (json.RawMessage, error) {
 func (f *Follower) refreshLocked(ctx context.Context) (json.RawMessage, error) {
 	f.stateMu.Lock()
 	before := f.o.summary.Snapshots
+	knownErr := f.err
 	f.stateMu.Unlock()
+	if knownErr != nil {
+		return nil, knownErr
+	}
 	_, err := f.c.Call(ctx, Request{Method: "thread-follower-load-complete-history", Version: 1, TargetClientID: f.o.owner, Params: map[string]string{"conversationId": f.o.threadID}})
 	if err != nil {
+		f.stateMu.Lock()
+		stateErr := f.err
+		f.stateMu.Unlock()
+		if stateErr != nil {
+			return nil, stateErr
+		}
 		return nil, err
 	}
 	var placeholderDeadline <-chan time.Time

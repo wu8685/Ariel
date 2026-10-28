@@ -49,6 +49,14 @@ func NormalizeStored(source appserver.Thread) (map[string]any, error) {
 }
 
 func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[string]any, error) {
+	return normalizeLiveProjection(threadID, title, cwd, state, false)
+}
+
+func normalizeLiveQuestions(threadID, title, cwd string, state json.RawMessage) (map[string]any, error) {
+	return normalizeLiveProjection(threadID, title, cwd, state, true)
+}
+
+func normalizeLiveProjection(threadID, title, cwd string, state json.RawMessage, questions bool) (map[string]any, error) {
 	if threadID == "" || cwd == "" || len(state) == 0 {
 		return nil, ErrNativeShape
 	}
@@ -130,7 +138,28 @@ func NormalizeLive(threadID, title, cwd string, state json.RawMessage) (map[stri
 		}
 		interactions = append(interactions, card)
 	}
-	return map[string]any{"threadId": threadID, "title": title, "cwd": cwd, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano), "runtime": normalizeRuntime(native.Runtime.Type), "turns": turns, "pendingInteractions": interactions, "permissions": normalizePermissions(native.LatestThreadSettings.SandboxPolicy.Type, native.LatestThreadSettings.ApprovalPolicy), "historyComplete": start == 0, "recentComplete": true}, nil
+	out := map[string]any{"threadId": threadID, "title": title, "cwd": cwd, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano), "runtime": normalizeRuntime(native.Runtime.Type), "turns": turns, "pendingInteractions": interactions, "permissions": normalizePermissions(native.LatestThreadSettings.SandboxPolicy.Type, native.LatestThreadSettings.ApprovalPolicy), "historyComplete": start == 0, "recentComplete": true}
+	if questions {
+		selected := make([]desktopipc.AsyncQuestionTurn, 0, len(allTurns)-start)
+		for _, turn := range allTurns[start:] {
+			selected = append(selected, desktopipc.AsyncQuestionTurn{ID: turn.id, Status: turn.status, Items: turn.items})
+		}
+		out["_asyncQuestions"] = desktopipc.ProjectAsyncQuestions(threadID, selected)
+	}
+	return out, nil
+}
+
+func withoutAsyncQuestions(thread map[string]any) map[string]any {
+	if thread == nil {
+		return nil
+	}
+	out := make(map[string]any, len(thread))
+	for key, value := range thread {
+		if key != "_asyncQuestions" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func normalizePermissions(sandbox, approval string) map[string]any {

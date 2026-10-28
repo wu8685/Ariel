@@ -15,6 +15,14 @@ func TestUserInputCLIRequiresWriteAndManifest(t *testing.T) {
 	}
 }
 
+func TestAsyncQuestionCLIRequiresWriteAndManifest(t *testing.T) {
+	var out, errout bytes.Buffer
+	code := fixtureCommand(context.Background(), []string{"async-question"}, &out, &errout)
+	if code != 2 || !strings.Contains(errout.String(), "requires --write-enabled and --manifest") {
+		t.Fatalf("code %d: %s", code, errout.String())
+	}
+}
+
 func TestUnknownFixturePurposeRejectedBeforeStartingServer(t *testing.T) {
 	var out, errout bytes.Buffer
 	code := fixtureCommand(context.Background(), []string{"create", "--purpose", "all-tools", "--write-enabled", "--manifest", "unused.json"}, &out, &errout)
