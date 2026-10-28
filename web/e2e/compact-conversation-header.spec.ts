@@ -147,8 +147,8 @@ for (const width of [320, 390, 1280]) {
           pageWidth: document.documentElement.scrollWidth,
         };
       });
-      expect(geometry.header.x).toBe(0);
-      expect(geometry.header.width).toBe(width);
+      expect(geometry.header.x).toBe(width<1200?0:280);
+      expect(geometry.header.width).toBe(width<1200?width:width-280);
       expect(geometry.transcriptTop).toBe(geometry.header.bottom);
       expect(geometry.pageWidth).toBe(width);
       expect(geometry.controls).toHaveLength(2);
@@ -183,14 +183,13 @@ for (const width of [320, 390, 1280]) {
           { animations: "disabled", caret: "hide" },
         );
 
-      const menu = header.getByRole("button", { name: /打开会话列表/ });
-      await menu.click();
-      await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);
+      const menu = header.locator('[aria-controls="session-sidebar"]');
+      if(width>=1200){await menu.click();await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/)}
+      await menu.click();await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);
       // On a 320px screen the drawer covers the backdrop's center. Tap the
       // exposed strip, as a touch user would, rather than forcing the click.
-      await page.getByRole("button", { name: "关闭会话列表遮罩" }).click({
-        position: { x: width - 4, y: 400 },
-      });
+      if(width<1200)await page.getByRole("button", { name: "关闭会话列表遮罩" }).click({position: { x: width - 4, y: 400 }});
+      else {await expect(page.getByRole("button",{name:"关闭会话列表遮罩"})).toHaveCount(0);await menu.click()}
       await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
 
       await header.getByRole("button", { name: "浏览工作区文件" }).click();

@@ -24,7 +24,7 @@ const thread: Thread = {
   ],
   pendingInteractions: [],
 };
-async function setup(page: Page, many = false) {
+async function setup(page: Page, many = false, options:{create?:boolean;longChat?:boolean;secondThread?:boolean} = {}) {
   const config = {epoch:"e",enabled:true,online:true,authenticated:true,sha:"a".repeat(64),diff:"@@ -1 +1 @@\n-old\n+new",otherDeviceFirst:false};
   const methods: string[] = [];
   const reads: string[] = [];
@@ -44,7 +44,8 @@ async function setup(page: Page, many = false) {
           },
         ],
       }
-    : thread;
+    : options.longChat ? {...thread,turns:[{turnId:"turn",status:"completed",items:Array.from({length:45},(_,i)=>({itemId:`long-${i}`,role:"assistant",text:`第 ${i} 条长段落：`+"窗口变化时保持原来的阅读锚点，不应跳回顶部或者自动滑到底部。".repeat(12)}))}]} : thread;
+  const second={...thread,threadId:"other-thread",title:"另外的主会话",turns:[]};
   await page.route("**/", async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -99,6 +100,7 @@ async function setup(page: Page, many = false) {
               capabilities: {
                 autoLoad: true,
                 send: true,
+                threadBootstrap: !!options.create,
                 chillingFileContext: config.enabled,
                 chillingMessageReferences: true,
                 chillingWorkspaceBrowser: true,
@@ -107,17 +109,17 @@ async function setup(page: Page, many = false) {
           ].flatMap(d=>config.otherDeviceFirst?[{...d,deviceId:"other",deviceName:"Other Mac"},d]:[d]),
         };
       if (m.method === "thread.list")
-        data = { threads: [current], nextCursor: "" };
+        data = { threads: options.secondThread?[current,second]:[current], nextCursor: "" };
       if (m.method === "thread.cache.watch")
         data = {
-          watchId: "w",
+          watchId: m.params.threadId==="other-thread"?"other-watch":"w",
           cacheStreamId: "s",
           seq: 1,
           agentEpoch: "e",
           agentOnline: true,
           freshness: "fresh",
           capturedAt: "2026-10-27T00:00:00Z",
-          thread: current,
+          thread: m.params.threadId==="other-thread"?second:current,
         };
       if (m.method === "file.context.changes")
         data = {
@@ -216,7 +218,7 @@ for (const width of [320, 390, 1280])
     await expect.poll(() => reading.evaluate(element => element.scrollTop)).toBe(650);
     expect(reads.slice(before)).toEqual(["b.md"]);
     const box = await page.getByRole("region", { name: "文件工作区", exact: true }).boundingBox();
-    expect(box!.x).toBe(0); expect(box!.y).toBe(0); expect(box!.width).toBe(width); expect(box!.height).toBe(844);
+    expect(box!.x).toBe(width<1200?0:280); expect(box!.y).toBe(0); expect(box!.width).toBeCloseTo(width<1200?width:(width-280)*.56,1); expect(box!.height).toBe(844);
     await expect(page).toHaveScreenshot(`file-refresh-restored-${width}.png`);
   });
 
@@ -266,6 +268,129 @@ test("reload verifies source SHA before restoring captured selection and never p
   expect(reads).toEqual(["a.md","a.md","a.md"]);
 });
 
+test.describe("wide-screen file and chat workspace",()=>{
+  test.use({isMobile:false,hasTouch:false,deviceScaleFactor:1});
+
+  for(const width of [1200,1280,1440,1920]) test(`wide three-column layout stays interactive at ${width}px`,async({page})=>{
+    await page.setViewportSize({width,height:900});const {reads,methods,publish}=await setup(page,false,{create:true});
+    const sidebar=page.getByRole("complementary",{name:"会话列表"}),composer=page.getByRole("textbox",{name:"发送消息"});
+    await expect(sidebar).toBeInViewport();
+    await composer.fill("边看文件边编辑的草稿");
+    await page.getByRole("button",{name:"查看原文：a.md"}).click();
+    const file=page.getByRole("region",{name:"文件工作区"}),chat=page.locator(".conversation");
+    await expect(file).toBeVisible();await expect(composer).toBeVisible();await expect(chat).not.toHaveAttribute("inert");
+    const s=(await sidebar.boundingBox())!,f=(await file.boundingBox())!,c=(await chat.boundingBox())!;
+    expect(s.width).toBe(280);expect(f.x).toBeGreaterThanOrEqual(s.x+s.width-1);expect(c.x).toBeGreaterThanOrEqual(f.x+f.width-1);
+    for(const button of await sidebar.locator('.sidebar-toolbar button:visible').all()){const r=(await button.boundingBox())!;expect(r.width).toBeGreaterThanOrEqual(44);expect(r.x+r.width).toBeLessThanOrEqual(s.x+s.width+1)}
+    expect(await sidebar.locator('.brand > span:nth-child(2)').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+    expect(f.width).toBeGreaterThanOrEqual(480);expect(c.width).toBeGreaterThanOrEqual(400);expect(c.x+c.width).toBeLessThanOrEqual(width+1);expect(f.height).toBe(c.height);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await expect(page.getByRole("button",{name:"关闭会话列表遮罩"})).toHaveCount(0);
+    await composer.fill("文件展开时仍可继续输入");publish("分屏收到的会话增量");await expect(page.getByText("分屏收到的会话增量")).toBeVisible();
+    await expect(composer).toHaveValue("文件展开时仍可继续输入");expect(reads).toEqual(["a.md"]);expect(methods.filter(m=>m==="thread.cache.watch")).toHaveLength(1);
+    if(width===1280)await expect(page).toHaveScreenshot("wide-file-chat-1280.png",{animations:"disabled",caret:"hide"});
+  });
+
+  for(const width of [1024,1199]) test(`below the desktop breakpoint the file remains exclusive at ${width}px`,async({page})=>{
+    await page.setViewportSize({width,height:844});await setup(page);
+    await page.getByRole("button",{name:"查看原文：a.md"}).click();
+    await expect(page.getByRole("textbox",{name:"发送消息",includeHidden:true})).toBeHidden();
+    await expect(page.locator(".conversation")).toHaveAttribute("inert","");
+    const file=(await page.getByRole("region",{name:"文件工作区"}).boundingBox())!;expect(file.x).toBe(0);expect(file.width).toBe(width);
+  });
+
+  test("viewport CSS prevents a stale wide layout snapshot from squeezing the narrow composer",async({page})=>{
+    await page.setViewportSize({width:1280,height:844});
+    // Hold the JS breakpoint snapshot at wide to deterministically reproduce
+    // the frame before a native media-change event reaches React.
+    await page.addInitScript(()=>{
+      const original=window.matchMedia.bind(window);
+      window.matchMedia=query=>query==="(min-width: 1200px)"?{matches:true,media:query,onchange:null,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){},dispatchEvent(){return true}}:original(query);
+    });
+    await setup(page);
+    const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("缩窗时保留草稿");
+    await page.setViewportSize({width:320,height:844});
+    await expect(page.locator(".workspace")).toHaveClass(/wide-layout/);
+    expect(await page.locator(".conversation").evaluate(el=>el.getBoundingClientRect().width)).toBe(320);
+    expect(await page.locator(".composer-actions").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await expect(composer).toHaveValue("缩窗时保留草稿");
+  });
+
+  test("wide menu preference, quoting and resizing preserve one reader and one watch",async({page})=>{
+    await page.setViewportSize({width:1280,height:844});const {reads,methods}=await setup(page);
+    const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("原来的草稿");
+    await page.getByRole("button",{name:"查看原文：a.md"}).click();const source=page.getByTestId("file-source");await expect(source).toBeVisible();
+    await source.evaluate(root=>{const node=root.querySelectorAll("code")[2].firstChild!;const r=document.createRange();r.setStart(node,0);r.setEnd(node,12);getSelection()!.removeAllRanges();getSelection()!.addRange(r);root.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}))});
+    await page.getByRole("button",{name:"引用到会话"}).click();await expect(source).toBeVisible();await expect(composer).toBeFocused();await expect(composer).toHaveValue("原来的草稿");
+    await page.locator('.mobile-list[aria-controls="session-sidebar"]').click();await expect(page.getByRole("complementary",{name:"会话列表"})).toHaveCount(0);
+    await expect(page.locator('.mobile-list[aria-controls="session-sidebar"]')).toBeFocused();
+    await composer.focus();
+    await page.setViewportSize({width:1199,height:844});await expect(page.locator(".conversation")).toHaveAttribute("inert","");await expect(page.getByRole("button",{name:"关闭会话列表遮罩"})).toHaveCount(0);
+    await expect(page.getByRole("tab",{name:"a.md",exact:true})).toBeFocused();
+    await page.setViewportSize({width:1280,height:844});await expect(composer).toBeVisible();await expect(page.getByRole("complementary",{name:"会话列表"})).toHaveCount(0);await expect(composer).toHaveValue("原来的草稿");
+    await composer.focus();await page.keyboard.press("Escape");await expect(source).toBeVisible();
+    await page.getByRole("tab",{name:"a.md",exact:true}).focus();await page.keyboard.press("Escape");await expect(source).toHaveCount(0);await expect(composer).toBeFocused();
+    await page.getByRole("button",{name:/展开文件工作区/}).click();await expect(source).toBeVisible();expect(reads).toEqual(["a.md"]);expect(methods.filter(m=>m==="thread.cache.watch")).toHaveLength(1);
+  });
+
+  test("IME composition cannot send or lose its draft during a breakpoint transition",async({page})=>{
+    await page.setViewportSize({width:1280,height:844});const {methods,reads}=await setup(page);
+    await page.getByRole("button",{name:"查看原文：a.md"}).click();await expect(page.getByTestId("file-source")).toBeVisible();
+    const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("中文组合草稿");
+    await composer.dispatchEvent("compositionstart",{data:"输"});await expect(page.getByTestId("file-source")).toBeVisible();await composer.press("Enter");
+    expect(methods.filter(m=>m==="turn.start")).toHaveLength(0);
+    const draft=await composer.inputValue();await page.setViewportSize({width:390,height:844});
+    await expect(composer).toBeVisible();await expect(composer).toBeFocused();await expect(page.getByRole("region",{name:"文件工作区"})).toHaveCount(0);
+    await expect(page.locator(".conversation")).not.toHaveAttribute("inert");await expect(composer).toHaveValue(draft);
+    await composer.dispatchEvent("compositionend",{data:"输入"});await expect(page.getByTestId("file-source")).toBeVisible();await expect(page.getByRole("tab",{name:"a.md",exact:true})).toBeFocused();
+    await page.setViewportSize({width:1280,height:844});await expect(composer).toHaveValue(draft);expect(reads).toEqual(["a.md"]);expect(methods.filter(m=>m==="thread.cache.watch")).toHaveLength(1);
+  });
+
+  test("short desktop keeps the quote footer, composer and independent scroll regions reachable",async({page})=>{
+    await page.setViewportSize({width:1280,height:420});const {methods}=await setup(page);
+    const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("短屏保留草稿");await page.getByRole("button",{name:"查看原文：a.md"}).click();
+    const source=page.getByTestId("file-source");await expect(source).toBeVisible();
+    await source.evaluate(root=>{const n=root.querySelectorAll("code")[2].firstChild!,r=document.createRange();r.setStart(n,0);r.setEnd(n,8);getSelection()!.removeAllRanges();getSelection()!.addRange(r);root.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}))});
+    const footer=(await page.locator(".file-viewer footer").boundingBox())!,input=(await composer.boundingBox())!,body=(await source.boundingBox())!;
+    expect(footer.y+footer.height).toBeLessThanOrEqual(420);expect(footer.height).toBeGreaterThanOrEqual(44);expect(body.height).toBeGreaterThan(100);expect(input.y+input.height).toBeLessThanOrEqual(420);
+    await page.getByRole("button",{name:"引用到会话"}).focus();await page.keyboard.press("Tab");await expect(page.locator('.mobile-list[aria-controls="session-sidebar"]')).toBeFocused();
+    const chatPosition=await page.locator(".transcript").evaluate(el=>el.scrollTop);await source.evaluate(el=>el.scrollTop=180);expect(await page.locator(".transcript").evaluate(el=>el.scrollTop)).toBe(chatPosition);
+    await expect(page).toHaveScreenshot("wide-short-quote-1280.png",{animations:"disabled",caret:"hide"});
+    await page.getByRole("button",{name:"引用到会话"}).click();await expect(source).toBeVisible();await expect(composer).toBeFocused();expect(methods.filter(m=>m==="turn.start")).toHaveLength(0);
+    await page.getByRole("button",{name:"发送",exact:true}).click();expect(methods.filter(m=>m==="turn.start")).toHaveLength(1);await expect(source).toBeVisible();
+    await page.getByRole("button",{name:"收起文件工作区"}).click();await expect(page.locator(".conversation")).toHaveCSS("width","1000px");
+    await expect(page).toHaveScreenshot("wide-minimized-1280.png",{animations:"disabled",caret:"hide"});
+  });
+
+  for(const position of ["middle","near-end"])test(`opening and minimizing the split preserves the ${position} history item across text reflow`,async({page})=>{
+    await page.setViewportSize({width:1280,height:844});const {methods,reads}=await setup(page,false,{longChat:true});
+    const transcript=page.locator(".transcript");await transcript.evaluate((el,position)=>{el.scrollTop=position==="middle"?1800:(el.scrollHeight-el.clientHeight)*.8;el.dispatchEvent(new Event("scroll"))},position);
+    await expect(page.locator(".conversation-head")).toHaveAttribute("data-history-collapsed","true");
+    await expect(page.locator(".conversation-head")).toHaveCSS("height","0px");
+    const anchor=()=>transcript.evaluate(el=>{const top=el.getBoundingClientRect().top;const node=[...el.querySelectorAll<HTMLElement>('[data-item-id]')].find(n=>n.getBoundingClientRect().bottom>top+1)!;return {id:node.dataset.itemId,top:node.getBoundingClientRect().top-top}});
+    const before=await anchor();
+    await page.getByRole("button",{name:"查看原文：a.md"}).evaluate((button:HTMLButtonElement)=>button.click());await expect(page.getByTestId("file-source")).toBeVisible();
+    await expect.poll(async()=> (await anchor()).id).toBe(before.id);expect(Math.abs((await anchor()).top-before.top)).toBeLessThanOrEqual(1);
+    await page.getByRole("button",{name:"收起文件工作区"}).click();await expect.poll(async()=> (await anchor()).id).toBe(before.id);expect(Math.abs((await anchor()).top-before.top)).toBeLessThanOrEqual(1);
+    expect(reads).toEqual(["a.md"]);expect(methods.filter(m=>m==="thread.cache.watch")).toHaveLength(1);
+    await page.getByRole("button",{name:/展开文件工作区/}).click();const source=page.getByTestId("file-source");await expect(source).toBeVisible();
+    await source.evaluate(root=>{const n=root.querySelectorAll("code")[2].firstChild!,r=document.createRange();r.setStart(n,0);r.setEnd(n,5);getSelection()!.removeAllRanges();getSelection()!.addRange(r);root.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}))});
+    await page.getByRole("button",{name:"引用到会话"}).click();await expect(page.getByRole("textbox",{name:"发送消息"})).toBeVisible();await expect(page.getByRole("textbox",{name:"发送消息"})).toBeFocused();await expect(source).toBeVisible();
+  });
+
+  test("wide main-thread switching leaves the old file readable but cannot quote it into another thread",async({page})=>{
+    await page.setViewportSize({width:1280,height:844});const {reads,methods}=await setup(page,false,{secondThread:true,create:true});
+    const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("第一个主会话草稿");
+    await page.getByRole("button",{name:"查看原文：a.md"}).click();const source=page.getByTestId("file-source");await expect(source).toBeVisible();
+    await page.getByText("另外的主会话",{exact:true}).click();await expect(source).toBeVisible();await expect(composer).toHaveValue("");await expect(page.getByRole("complementary",{name:"会话列表"})).toBeInViewport();
+    await source.evaluate(root=>{const n=root.querySelectorAll("code")[2].firstChild!,r=document.createRange();r.setStart(n,0);r.setEnd(n,5);getSelection()!.removeAllRanges();getSelection()!.addRange(r);root.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}))});
+    await expect(page.getByRole("button",{name:"引用到会话"})).toBeDisabled();
+    await page.getByRole("button",{name:"新建会话",exact:true}).click();await page.getByRole("button",{name:"创建会话",exact:true}).click();await expect(page.getByRole("complementary",{name:"会话列表"})).toBeInViewport();await expect(source).toBeVisible();
+    expect(methods.filter(m=>["turn.start","thread.bootstrap"].includes(m))).toHaveLength(0);expect(reads).toEqual(["a.md"]);
+  });
+});
+
 test("reload restores verified Diff scroll but resets it when the Diff changes", async ({page})=>{
   const {config}=await setup(page);
   config.diff="@@ -1 +1 @@\n"+Array.from({length:120},(_,i)=>`+DIFF_PRIVATE_${i}`).join("\n");
@@ -309,7 +434,11 @@ for(const change of ["epoch","capability","auth"] as const)
     if(change==="auth")config.authenticated=false;
     await page.reload();
     if(change==="auth")await expect(page.getByRole("textbox",{name:"6 位连接码"})).toBeVisible();
-    else await expect(page.getByRole("button",{name:"展开项目 tabs，/work/tabs"})).toBeVisible();
+    else {
+      // Independent history restoration may select a thread and close the drawer.
+      if(!await page.getByRole("button",{name:"展开项目 tabs，/work/tabs"}).count())await page.getByRole("button",{name:/打开会话列表/}).click();
+      await expect(page.getByRole("button",{name:"展开项目 tabs，/work/tabs"})).toBeVisible();
+    }
     await expect(page.getByRole("tab")).toHaveCount(0);expect(reads).toEqual(["a.md"]);
     if(change!=="auth")expect(await page.evaluate(()=>sessionStorage.getItem("ariel.file-workspace.v1"))).toBeNull();
   });
@@ -339,7 +468,7 @@ test("storage quota failure keeps file reading usable and does not restore a sta
 });
 
 for (const width of [320, 390, 1280])
-  test(`file tabs fill the content area exclusively and restore the conversation at ${width}px`, async ({
+  test(`file tabs use the responsive content area and restore the conversation at ${width}px`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 844 });
@@ -349,14 +478,19 @@ for (const width of [320, 390, 1280])
     await page.getByRole("button", { name: "查看原文：a.md" }).click();
     await expect(page.getByRole("tablist", { name: "文件标签" })).toBeVisible();
     await expect(page.getByTestId("file-source")).toContainText("# a.md");
-    await expect(composer).toBeHidden();
-    await expect(page.locator(".conversation")).toHaveAttribute("inert", "");
+    if(width<1200){
+      await expect(composer).toBeHidden();
+      await expect(page.locator(".conversation")).toHaveAttribute("inert", "");
+    }else{
+      await expect(composer).toBeVisible();
+      await expect(page.locator(".conversation")).not.toHaveAttribute("inert");
+    }
     await expect(page.getByRole("tab", { name: "a.md", exact: true })).toBeFocused();
     const panel = page.getByRole("region", { name: "文件工作区" });
     const p = await panel.boundingBox();
-    expect(p!.x).toBe(0);
+    expect(p!.x).toBe(width<1200?0:280);
     expect(p!.y).toBe(0);
-    expect(p!.width).toBe(width);
+    expect(p!.width).toBeCloseTo(width<1200?width:(width-280)*.56,1);
     expect(p!.height).toBe(844);
     expect(p!.x + p!.width).toBeLessThanOrEqual(width + 1);
     await page.getByRole("button", { name: "收起文件工作区" }).click();

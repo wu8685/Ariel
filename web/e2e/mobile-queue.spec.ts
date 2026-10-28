@@ -49,7 +49,8 @@ async function openQueueFixture(page: Page, options: { queue?: typeof initialQue
   await page.getByRole("button", { name: "展开项目 fixture，/tmp/fixture" }).click();
   await page.getByText("UI 视觉验收 fixture").click();
   await page.getByLabel("排队的后续输入").waitFor();
-  await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
+  if((page.viewportSize()?.width||0)>=1200)await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);
+  else await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
   await page.waitForTimeout(250);
   return reorderRequests;
 }

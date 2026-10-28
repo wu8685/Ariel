@@ -81,8 +81,9 @@ test("mobile opens a changed file and adds an exact quote to the next message", 
 	await page.getByRole("button",{name:`查看原文：${filePath}`}).click();
 	const panel=page.getByRole("dialog",{name:`文件 ${filePath}`});
 	const box=await panel.boundingBox();
-	expect(box?.width).toBe(1280);
-	expect(box?.x).toBe(0);
+	expect(box?.width).toBeCloseTo((1280-280)*.56,1);
+	expect(box?.x).toBe(280);
+	await expect(page.getByRole("textbox",{name:"发送消息"})).toBeVisible();
 });
 
 test("a rejected optional file summary never interrupts opening the conversation", async ({ page }) => {

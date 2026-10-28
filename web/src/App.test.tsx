@@ -53,12 +53,19 @@ afterEach(() => {
   cleanup();
   globalThis.WebSocket = originalWebSocket;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
 	 document.querySelector("meta[name='ariel-auth-mode']")?.remove();
 	 document.querySelector("meta[name='ariel-chilling-file-context']")?.remove();
 });
 
 const fixtureThread: Thread = { threadId: "fixture", title: "Fixture", cwd: "/tmp/fixture", updatedAt: "2026-10-04T00:00:00Z", runtime: "idle", turns: [], pendingInteractions: [] };
+
+// Sidebar actions need a visible menu. These unit cases exercise the new dock;
+// drawer opening/closing and inaccessible hidden controls have browser coverage.
+function dockedSidebar(){
+  vi.stubGlobal("matchMedia",vi.fn((query:string)=>({matches:query==="(min-width: 1200px)",addEventListener:vi.fn(),removeEventListener:vi.fn()})));
+}
 
 async function expandProject(cwd: string) {
   const path = normalizeProjectPath(cwd) || "路径未知";
@@ -482,6 +489,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("shows a local unread marker after a batch refresh and clears it only after the selected snapshot renders", async () => {
+    dockedSidebar();
     const background: Thread = { ...fixtureThread, threadId: "background", title: "Background", cwd: fixtureThread.cwd };
     const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread, background]);
     const backgroundRow = document.querySelector<HTMLElement>('.thread-row[data-thread-id="background"]')!;
@@ -507,6 +515,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("keeps a project unread marker until every unread session in that project is viewed", async () => {
+    dockedSidebar();
     const alphaOne: Thread = { ...fixtureThread, threadId: "alpha-one", title: "Alpha one", cwd: "/work/alpha" };
     const alphaTwo: Thread = { ...fixtureThread, threadId: "alpha-two", title: "Alpha two", cwd: "/work/alpha/" };
     const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread, alphaOne, alphaTwo]);
@@ -570,6 +579,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("renames a thread from the context menu without replacing the transcript or draft", async () => {
+    dockedSidebar();
     const withMessage: Thread = { ...fixtureThread, turns: [{ turnId: "turn", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "保留的正文" }] }] };
     const { socket, requests } = await openFixture(withMessage, false, false, [withMessage], false, true);
     fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "未发送草稿" } });
@@ -598,6 +608,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("pins and unpins through one verified metadata mutation", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture(fixtureThread, false, false, [fixtureThread], false, true);
     const openMenu = () => fireEvent.contextMenu(document.querySelector<HTMLElement>('.thread-row[data-thread-id="fixture"]')!, { clientX: 120, clientY: 180 });
     openMenu();
@@ -649,6 +660,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("searches all native sessions with a debounced query, shows snippets, pages, and restores recents", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "Ariel" } });
     expect(requests("thread.list")).toHaveLength(1);
@@ -672,6 +684,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("groups sessions by project and keeps every project collapsed until independently expanded", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "project" } });
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
@@ -711,6 +724,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("shows native pinned sessions before projects without duplicating them in project groups", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "pin" } });
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
@@ -740,6 +754,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("creates only a local draft, then bootstraps exactly once on the first send", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
     expect(screen.getByRole("dialog", { name: "新建会话" })).toBeTruthy();
@@ -768,6 +783,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("sends selected draft settings with the first bootstrap and never writes another thread",async()=>{
+    dockedSidebar();
     const {socket,requests}=await openFixture(fixtureThread,false,true);
     await waitFor(()=>expect(requests("model.catalog.read")).toHaveLength(1));
     await act(async()=>socket.message({type:"response",v:1,requestId:requests("model.catalog.read")[0].requestId,outcome:"accepted",data:{agentEpoch:"agent-epoch",settingsSupported:true,catalog:{models:[{id:"draft-model",name:"Draft Model",description:"",efforts:[{id:"low",description:""},{id:"high",description:""}],defaultEffort:"low",tiers:[],defaultTier:null,inputModalities:["text"],isDefault:true}]}}}));
@@ -778,6 +794,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("keeps the local draft after an uncertain bootstrap and never retries automatically", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture(fixtureThread, false, true);
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
     fireEvent.change(screen.getByRole("textbox", { name: "项目目录" }), { target: { value: "/work/new-project" } });
@@ -798,6 +815,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("isolates stale search responses and keeps search errors local to the sidebar", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture();
     const search = screen.getByRole("searchbox", { name: "搜索会话" });
     fireEvent.change(search, { target: { value: "first" } });
@@ -817,6 +835,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("refreshes the list when edited input trims to the same query", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: " " } });
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));
@@ -826,6 +845,7 @@ describe("Ariel app interactions", () => {
   });
 
   it("keeps a search snippet visible when the selected session receives a live update", async () => {
+    dockedSidebar();
     const { socket, requests } = await openFixture();
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), { target: { value: "Ariel" } });
     await waitFor(() => expect(requests("thread.list")).toHaveLength(2));

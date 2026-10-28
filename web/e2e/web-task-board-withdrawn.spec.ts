@@ -23,7 +23,7 @@ async function openConversationOnlyWeb(page: Page) {
     });
   });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "打开会话列表", exact: false })).toBeVisible();
+  await expect(page.locator('.mobile-list[aria-controls="session-sidebar"]')).toBeVisible();
   await expect.poll(() => requests.some(request => request.method === "thread.list")).toBe(true);
   return requests;
 }

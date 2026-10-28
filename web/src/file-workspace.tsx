@@ -433,6 +433,7 @@ export function FileWorkspace({
   canLoad = true,
   persistenceWarning = "",
   onReturnFocus,
+  suspended = false,
 }: {
   model: FileWorkspaceModel;
   request: FileRequest;
@@ -444,6 +445,7 @@ export function FileWorkspace({
   canLoad?: boolean;
   persistenceWarning?: string;
   onReturnFocus?: () => void;
+  suspended?: boolean;
 }) {
   const revision = useFileWorkspace(model);
   const [all, setAll] = useState(false),
@@ -525,6 +527,8 @@ export function FileWorkspace({
       className="file-workspace"
       role="region"
       aria-label="文件工作区"
+      aria-hidden={suspended || undefined}
+      inert={suspended}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();

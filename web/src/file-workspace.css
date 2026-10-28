@@ -9,6 +9,51 @@
   visibility: hidden;
   pointer-events: none;
 }
+.sidebar[aria-hidden="true"] { visibility: hidden; }
+/* Native viewport CSS changes before React receives the media event. Never
+   let a stale wide snapshot reserve 280px inside an already narrow viewport. */
+@media (min-width: 1200px) {
+  .workspace.wide-layout { display: grid; grid-template-columns: minmax(0,1fr); }
+  .workspace.wide-layout.sidebar-visible { grid-template-columns: 280px minmax(0,1fr); }
+  .workspace.wide-layout > .sidebar {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    width: 280px;
+    height: 100%;
+    transform: none;
+    transition: none;
+    box-shadow: none;
+  }
+  .workspace.wide-layout > .sidebar:not(.open) { display: none; }
+  .wide-layout .sidebar-toolbar { padding-inline: 8px; }
+  .wide-layout .sidebar-toolbar .brand { gap: 4px; font-size: 15px; }
+  .wide-layout .sidebar-toolbar .mobile-close { display: none; }
+  .wide-layout .conversation-layout.files-expanded {
+    display: grid;
+    grid-template-columns: minmax(480px,56fr) minmax(400px,44fr);
+    grid-template-rows: minmax(0,1fr);
+  }
+  .wide-layout .conversation-layout.files-expanded > .conversation {
+    grid-column: 2;
+    grid-row: 1;
+    visibility: visible;
+    pointer-events: auto;
+    border-left: 1px solid var(--color-border);
+  }
+  .wide-layout .conversation-layout.files-expanded > .file-workspace {
+    position: relative;
+    inset: auto;
+    grid-column: 1;
+    grid-row: 1;
+  }
+}
+/* Mark composition before resize, so native CSS cannot hide/blur the input
+   during the frame before React commits its new breakpoint state. */
+@media not all and (min-width: 1200px) {
+  .conversation-layout.ime-composing > .conversation { visibility: visible; pointer-events: auto; }
+  .conversation-layout.ime-composing > .file-workspace { visibility: hidden; pointer-events: none; }
+}
 .file-workspace {
   position: absolute;
   inset: 0;
