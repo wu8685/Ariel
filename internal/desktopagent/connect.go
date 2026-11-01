@@ -16,6 +16,10 @@ import (
 const largeFollowerReservationBytes int64 = 64 << 20
 const defaultLargeFollowerBudgetBytes int64 = 512 << 20
 
+// Separate from state reservations: charge actual queued bytes, preserving the
+// old eight × 64 MiB maximum backlog across production large followers.
+var largeFollowerEventBudget = desktopipc.NewEventByteBudget(512 << 20)
+
 var largeFollowerBudget = struct {
 	sync.Mutex
 	used  int64
@@ -113,7 +117,9 @@ func productionLargeIPCOptions(threadID string) desktopipc.Options {
 	opts := productionIPCOptions(threadID)
 	opts.MaxFrameBytes = 64 << 20
 	opts.MaxWireFrameBytes = 256 << 20
-	opts.MaxEventBytes = 64 << 20
+	opts.MaxEvents = 1024
+	opts.MaxEventBytes = 128 << 20
+	opts.EventBudget = largeFollowerEventBudget
 	return opts
 }
 
@@ -293,5 +299,9 @@ func openFollower(ctx context.Context, socket, threadID, cwd string, opts deskto
 }
 
 func productionIPCOptions(threadID string) desktopipc.Options {
-	return desktopipc.Options{ThreadID: threadID, ClientType: "ariel-desktop-agent", RequestTimeout: 30 * time.Second}
+	return desktopipc.Options{ThreadID: threadID, ClientType: "ariel-desktop-agent", RequestTimeout: 30 * time.Second, OnEventOverload: logIPCEventOverload}
+}
+
+func logIPCEventOverload(p desktopipc.EventQueuePressure) {
+	logPhase("ipc-event-overload", "", "reason", p.Reason, "queuedEvents", p.QueuedEvents, "queuedBytes", p.QueuedBytes, "incomingBytes", p.IncomingBytes, "maxEvents", p.MaxEvents, "maxEventBytes", p.MaxEventBytes, "sharedBytes", p.SharedBytes, "maxSharedBytes", p.MaxSharedBytes)
 }

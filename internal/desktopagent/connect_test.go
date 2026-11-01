@@ -54,8 +54,14 @@ func TestOpenFollowerRejectsMissingSocketAndInvalidThreadBeforeDial(t *testing.T
 func TestLargeFollowerHas64MiBBoundAndProcessByteBudget(t *testing.T) {
 	regular := productionIPCOptions("thread")
 	large := productionLargeIPCOptions("thread")
-	if regular.MaxFrameBytes != 0 || large.MaxFrameBytes != 64<<20 || large.MaxWireFrameBytes != 256<<20 || large.MaxEventBytes != 64<<20 {
+	if regular.MaxFrameBytes != 0 || large.MaxFrameBytes != 64<<20 || large.MaxWireFrameBytes != 256<<20 || large.MaxEvents != 1024 || large.MaxEventBytes != 128<<20 {
 		t.Fatalf("follower options: ordinary=%+v large=%+v", regular, large)
+	}
+	if regular.EventBudget != nil || large.EventBudget == nil || large.EventBudget != productionLargeIPCOptions("other-thread").EventBudget {
+		t.Fatal("large followers must share a pool without opting ordinary clients in")
+	}
+	if used, limit := large.EventBudget.Usage(); used != 0 || limit != 512<<20 {
+		t.Fatalf("production queue budget=%d/%d", used, limit)
 	}
 	resetLargeFollowerBudgetForTest()
 	releases := make([]func(), 0, 8)

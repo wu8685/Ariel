@@ -92,5 +92,9 @@ Codex 文件能力现已内置于 Ariel Desktop Agent，不需要安装或运行
 | 手机无法打开页面 | 检查脚本报告的监听 IP、同一可信局域网、防火墙和 AP 隔离；不要为了排障关闭整机防火墙。 |
 | 切换局域网后旧地址失效 | 运行 `./scripts/ariel.sh restart-local`；它只接受默认网卡上的 RFC1918 IPv4。新 Origin 需重新输入原 PIN。 |
 | 页面打开但没有设备 | 先看 `status` 是否显示 Agent 握手；若已握手，刷新页面并检查是否选择了正确的稳定设备 ID。 |
+| 长会话反复“重新连接”，日志有 `OVERLOADED` | 检查 `phase=ipc-event-overload` 的脱敏计数；不能仅凭此错误推断网络故障。新 Agent 的 large follower 队列为 1024 条／128 MiB，共享实际排队预算为 512 MiB；持续消费落后仍可能超限，不通过重复发送消息恢复。 |
+| `HISTORY_TOO_LARGE` | 单 reduced frame／reducer 的 64 MiB 上限仍有效；这与事件队列积压不同，单纯扩大队列不能解决。保留只读历史并收集不含正文的容量信息。 |
+
+`ipc-event-overload` 中 `reason=event_count` 表示单连接排队条数已满，`queue_bytes` 表示单连接排队字节已满，`shared_bytes` 表示跨 large follower 的共享字节池不足。日志同时给出 queued／incoming／max 数值，不含消息正文、原始 thread／owner ID 或 socket 路径。不要把这个队列字节池解释为 Agent RSS 限额；实际内存还包含正在处理的帧、owner state 和解码副本。设计与测试边界见 [0128](../specs/0128-large-ipc-event-buffer-pressure.md)。
 
 `ariel.sh` 本身不安装 launchd 服务；仅用脚本启动时，Mac 重启后需再次执行 `up`。已由 launchd 托管的 Agent 应通过对应服务更新，不能混用脚本接管。脚本也不自动部署公网 TLS 或外部 Relay。
