@@ -75,11 +75,9 @@ func (o *observationState) apply(body json.RawMessage) error {
 	} else {
 		o.summary.PatchBatches++
 	}
-	state, revision, _ := o.reducer.Snapshot()
-	o.summary.Revision = revision
-	o.summary.StateBytes = len(state)
-	var fields map[string]json.RawMessage
-	json.Unmarshal(state, &fields)
+	o.summary.Revision = o.reducer.revision
+	o.summary.StateBytes = o.reducer.stateBytes
+	fields := o.reducer.state
 	o.summary.StateFields = nil
 	for k := range fields {
 		o.summary.StateFields = append(o.summary.StateFields, k)
@@ -88,8 +86,7 @@ func (o *observationState) apply(body json.RawMessage) error {
 	o.summary.InteractionStateKnown = false
 	o.summary.PendingRequestCount = 0
 	if requests, ok := fields["requests"]; ok {
-		var list []json.RawMessage
-		if json.Unmarshal(requests, &list) == nil && list != nil {
+		if list, ok := requests.([]any); ok && list != nil {
 			o.summary.InteractionStateKnown = true
 			o.summary.PendingRequestCount = len(list)
 		}

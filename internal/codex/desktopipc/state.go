@@ -13,10 +13,14 @@ var ErrResyncRequired = errors.New("IPC state invalid; fresh snapshot required")
 // Reducer is confined to a subscription's ordered event loop. Any failed change
 // invalidates the entire view; a later snapshot can establish a new baseline.
 type Reducer struct {
-	state             json.RawMessage
-	executionMetadata json.RawMessage
-	revision          int64
-	limit             int
+	state               map[string]any
+	stateBytes          int
+	sourceSnapshotBytes int
+	recent              bool
+	pinned              map[string]int
+	executionMetadata   json.RawMessage
+	revision            int64
+	limit               int
 }
 
 func NewReducer(limit int) *Reducer {
@@ -27,7 +31,18 @@ func NewReducer(limit int) *Reducer {
 }
 
 func (r *Reducer) Snapshot() (json.RawMessage, int64, bool) {
-	return bytes.Clone(r.state), r.revision, r.state != nil
+	if r.state == nil {
+		return nil, r.revision, false
+	}
+	// Export only on demand. Each caller owns its result; no second encoded
+	// copy of the entire state is kept resident.
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if encoder.Encode(r.state) != nil {
+		return nil, r.revision, false
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), r.revision, true
 }
 
 // ExecutionMetadata is a bounded scalar projection prepared while Apply already
@@ -43,6 +58,8 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 	defer func() {
 		if err != nil {
 			r.state = nil
+			r.stateBytes = 0
+			r.executionMetadata = nil
 			r.revision = 0
 		}
 	}()
@@ -75,6 +92,7 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 			return fmt.Errorf("%w: snapshot revision regressed", ErrResyncRequired)
 		}
 		state, err = decodeValue(change.State)
+		r.sourceSnapshotBytes = len(change.State)
 	case "patches":
 		if r.state == nil {
 			return fmt.Errorf("%w: patch arrived before projected snapshot", ErrResyncRequired)
@@ -82,10 +100,7 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 		if change.Patches == nil || change.BaseRevision == nil || *change.BaseRevision != r.revision || *change.Revision <= r.revision {
 			return fmt.Errorf("%w: projected patch revision is invalid", ErrResyncRequired)
 		}
-		state, err = decodeValue(r.state)
-		if err != nil {
-			return fmt.Errorf("%w: previous projected state cannot be decoded", ErrResyncRequired)
-		}
+		state = r.state
 		for _, p := range change.Patches {
 			var path []any
 			if len(p.Path) == 0 || json.Unmarshal(p.Path, &path) != nil || path == nil {
@@ -97,6 +112,18 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 				return fmt.Errorf("%w: projected patch path cannot be decoded", ErrResyncRequired)
 			}
 			path = decoded.([]any)
+			for _, component := range path {
+				switch part := component.(type) {
+				case string:
+				case json.Number:
+					index, e := strconv.Atoi(string(part))
+					if e != nil || index < 0 {
+						return fmt.Errorf("%w: projected patch index is invalid", ErrResyncRequired)
+					}
+				default:
+					return fmt.Errorf("%w: projected patch component is invalid", ErrResyncRequired)
+				}
+			}
 			var value any
 			if p.Op == "add" || p.Op == "replace" {
 				if len(p.Value) == 0 {
@@ -120,24 +147,22 @@ func (r *Reducer) Apply(body json.RawMessage) (err error) {
 	if err != nil {
 		return fmt.Errorf("%w: projected snapshot value cannot be decoded", ErrResyncRequired)
 	}
-	if _, ok := state.(map[string]any); !ok {
+	root, ok := state.(map[string]any)
+	if !ok {
 		return fmt.Errorf("%w: projected snapshot root is not an object", ErrResyncRequired)
 	}
-	// This state travels as JSON, never as an inline HTML script. Escaping
-	// <, > and & can multiply code/tool text and reject a valid native frame
-	// solely because normalization made it larger than the resident limit.
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(state); err != nil {
-		return fmt.Errorf("%w: projected snapshot cannot be encoded", ErrResyncRequired)
+	if r.recent {
+		if err := retireHistoricalBodies(root, r.pinned); err != nil {
+			return err
+		}
 	}
-	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
-	if len(encoded) > r.limit {
-		return fmt.Errorf("%w: normalized snapshot bytes %d exceed %d: %w", ErrResyncRequired, len(encoded), r.limit, ErrFrameTooLarge)
+	size := encodedValueSize(root)
+	if size > r.limit {
+		return fmt.Errorf("%w: normalized snapshot bytes %d exceed %d: %w", ErrResyncRequired, size, r.limit, ErrFrameTooLarge)
 	}
-	r.state = encoded
-	r.executionMetadata = projectExecutionMetadata(state.(map[string]any))
+	r.state = root
+	r.stateBytes = size
+	r.executionMetadata = projectExecutionMetadata(root)
 	r.revision = *change.Revision
 	return nil
 }
@@ -157,6 +182,9 @@ func decodeValue(b []byte) (any, error) {
 }
 
 func applyPatch(node any, path []any, op string, value any) (any, error) {
+	if _, retired := node.(retiredBody); retired {
+		return node, nil
+	}
 	if node == "__ARIEL_LAZY_OMITTED__" {
 		// Detail-only patches below a projected-away payload do not change the
 		// resident owner summary. Advancing the revision preserves ordering.
@@ -179,6 +207,9 @@ func applyPatch(node any, path []any, op string, value any) (any, error) {
 		if last {
 			if op != "add" && !exists {
 				return nil, ErrResyncRequired
+			}
+			if _, retired := child.(retiredBody); retired && op != "remove" {
+				return n, nil
 			}
 			if op == "remove" {
 				delete(n, key)
@@ -216,7 +247,9 @@ func applyPatch(node any, path []any, op string, value any) (any, error) {
 		}
 		if last {
 			if op == "remove" {
-				n = append(n[:i], n[i+1:]...)
+				copy(n[i:], n[i+1:])
+				n[len(n)-1] = nil
+				n = n[:len(n)-1]
 			} else {
 				n[i] = value
 			}

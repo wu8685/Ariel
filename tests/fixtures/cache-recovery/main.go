@@ -174,6 +174,14 @@ func (h *history) action(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.wire != nil {
 		action := r.URL.Query().Get("action")
+		if action == "fault" {
+			if err := h.wire.InvalidateWithCompletedState(); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if action != "stream" && action != "complete" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -232,6 +240,7 @@ func main() {
 	dist := flag.String("dist", "web/dist", "built Web assets")
 	streamInterval := flag.Duration("stream-interval", 20*time.Millisecond, "snapshot cadence; 0 tests the production default")
 	nativeWire := flag.Bool("native-wire", false, "use an isolated large-frame native Unix peer and the production follower")
+	recentRecovery := flag.Bool("recent-recovery", false, "include 50 MiB of old native history in the isolated peer")
 	flag.Parse()
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
@@ -244,7 +253,11 @@ func main() {
 	h := &history{}
 	guard := 100 * time.Millisecond
 	if *nativeWire {
-		h.wire, err = testfixture.NewLargeOwner()
+		oldBytes := 0
+		if *recentRecovery {
+			oldBytes = 50 << 20
+		}
+		h.wire, err = testfixture.NewLargeOwnerWithHistory(oldBytes)
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -79,6 +79,12 @@ type agent struct {
 	cacheSendMu             sync.Mutex
 	cachePending            map[string]cacheOutbound
 	cacheWake               chan struct{}
+	cacheDemands            map[string]*cacheDemand
+	cacheContext            context.Context
+	cacheClosed             bool
+	cacheRetryWG            sync.WaitGroup
+	cacheAfterFunc          func(time.Duration, func()) cacheRetryTimer
+	cacheRetryJitter        func(time.Duration) time.Duration
 }
 
 type cacheOutbound struct {
@@ -88,6 +94,7 @@ type cacheOutbound struct {
 }
 
 type cacheSubscription struct {
+	progress        func() (string, int64, bool)
 	subscriptionID  string
 	streamID        string
 	runtime         string
@@ -276,6 +283,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	defer a.releaseSettingsSubscriptions()
 	a.tasks = newTaskRuntime(a, cfg)
 	requestCtx, cancelRequests := context.WithCancel(ctx)
+	a.cacheContext = requestCtx
 	var requests sync.WaitGroup
 	var cacheSender sync.WaitGroup
 	cacheSender.Add(1)
@@ -446,6 +454,11 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 
 func (a *agent) releaseCacheSubscriptions() {
 	a.cacheMu.Lock()
+	a.cacheClosed = true
+	for _, demand := range a.cacheDemands {
+		demand.stop()
+	}
+	a.cacheDemands = nil
 	ids := make([]string, 0, len(a.cacheSubs))
 	for _, sub := range a.cacheSubs {
 		if sub.publishTimer != nil {
@@ -460,6 +473,7 @@ func (a *agent) releaseCacheSubscriptions() {
 	}
 	a.cacheSubs = map[string]*cacheSubscription{}
 	a.cacheMu.Unlock()
+	a.cacheRetryWG.Wait()
 	for _, id := range ids {
 		a.service.Unsubscribe(id)
 	}
@@ -806,11 +820,15 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	a.reply(ctx, id, method, data, err)
 }
 
-func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) error {
+func (a *agent) touchCacheNative(ctx context.Context, threadID string, watching bool) error {
 	if threadID == "" {
 		return errors.New("INVALID_ARGUMENT")
 	}
 	a.cacheMu.Lock()
+	if a.cacheClosed || ctx.Err() != nil {
+		a.cacheMu.Unlock()
+		return context.Canceled
+	}
 	if existing := a.cacheSubs[threadID]; existing != nil {
 		existing.lastTouched = time.Now()
 		if watching {
@@ -852,9 +870,10 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 			thread, _ := event["thread"].(map[string]any)
 			seq, _ := event["seq"].(int)
 			if thread != nil {
-				a.queueCacheSnapshot(threadID, state, int64(seq), thread)
-				runtime, _ := thread["runtime"].(string)
-				a.observeCacheRecoveryState(threadID, state, runtime)
+				if a.queueCacheSnapshot(threadID, state, int64(seq), thread) {
+					runtime, _ := thread["runtime"].(string)
+					a.observeCacheRecoveryState(threadID, state, runtime)
+				}
 			}
 			return
 		}
@@ -876,26 +895,45 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	if err == nil {
 		subID, nativeStreamID, thread, activate, err = a.service.SubscribeWithMode(loadCtx, threadID, "", emit)
 	}
-	if err != nil && requestErrorCode("thread.cache.touch", err) == "OVERLOADED" && a.evictOneCacheFollower(threadID) {
+	var eventOverflow *desktopipc.EventQueueOverflow
+	if err != nil && requestErrorCode("thread.cache.touch", err) == "OVERLOADED" && !errors.As(err, &eventOverflow) && a.evictOneCacheFollower(threadID) {
 		subID, nativeStreamID, thread, activate, err = a.service.SubscribeWithMode(loadCtx, threadID, "", emit)
 	}
 	if err != nil {
+		a.cachePublishMu.Lock()
 		a.cacheMu.Lock()
-		delete(a.cacheSubs, threadID)
+		current := a.cacheSubs[threadID] == state && !a.cacheClosed
+		if current {
+			delete(a.cacheSubs, threadID)
+		}
 		a.cacheMu.Unlock()
 		code := requestErrorCode("thread.cache.touch", err)
-		if code == "OVERLOADED" {
+		var queueOverflow *desktopipc.EventQueueOverflow
+		if code == "OVERLOADED" && !errors.As(err, &queueOverflow) {
 			code = "AGENT_CAPACITY"
 		}
-		_ = a.send(context.Background(), map[string]any{"type": "event", "v": 1, "event": "thread.cache.status", "deviceId": a.deviceID, "threadId": threadID, "agentEpoch": a.agentEpoch, "cacheStreamId": placeholder, "freshness": "error", "reason": code})
+		if current {
+			a.sendCacheStatus(context.Background(), threadID, placeholder, "error", code)
+		}
+		a.cachePublishMu.Unlock()
 		if code == "AGENT_CAPACITY" {
 			return errors.New("AGENT_CAPACITY")
 		}
 		return err
 	}
 	streamID = nativeStreamID
+	progress := a.service.cacheProgressSource(threadID)
 	a.cacheMu.Lock()
+	if a.cacheClosed || a.cacheSubs[threadID] != state || ctx.Err() != nil {
+		if a.cacheSubs[threadID] == state {
+			delete(a.cacheSubs, threadID)
+		}
+		a.cacheMu.Unlock()
+		a.service.Unsubscribe(subID)
+		return context.Canceled
+	}
 	state.subscriptionID = subID
+	state.progress = progress
 	state.streamID = streamID
 	state.runtime, _ = thread["runtime"].(string)
 	state.structure = cacheStructure(thread)
@@ -904,7 +942,9 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 	if err := a.publishCacheSnapshot(ctx, threadID, streamID, 1, thread); err != nil {
 		a.service.Unsubscribe(subID)
 		a.cacheMu.Lock()
-		delete(a.cacheSubs, threadID)
+		if a.cacheSubs[threadID] == state {
+			delete(a.cacheSubs, threadID)
+		}
 		a.cacheMu.Unlock()
 		return err
 	}
@@ -913,6 +953,7 @@ func (a *agent) touchCache(ctx context.Context, threadID string, watching bool) 
 		state.lastPublished = time.Now()
 	}
 	a.cacheMu.Unlock()
+	a.observeCacheProgress(threadID, state, thread)
 	activate()
 	a.armCacheRecoveryGuard(threadID, state)
 	return nil
@@ -1023,6 +1064,7 @@ func (a *agent) invalidateCacheSubscription(threadID string, state *cacheSubscri
 	streamID := state.streamID
 	a.cacheMu.Unlock()
 	a.sendCacheStatus(context.Background(), threadID, streamID, "error", code)
+	a.scheduleCacheRecovery(threadID, code)
 }
 
 func cacheStructure(thread map[string]any) string {
@@ -1066,16 +1108,17 @@ func cacheMapSlice(value any) []map[string]any {
 	}
 }
 
-func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, seq int64, thread map[string]any) {
+func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, seq int64, thread map[string]any) bool {
 	now := time.Now()
 	runtime, _ := thread["runtime"].(string)
 	structure := cacheStructure(thread)
 	a.cacheMu.Lock()
 	if a.cacheSubs[threadID] != state || seq <= state.latestSeq {
 		a.cacheMu.Unlock()
-		return
+		return false
 	}
 	state.latestSeq = seq
+	a.observeCacheProgressLocked(threadID, state, thread)
 	state.recoveryFailed = false
 	immediate := runtime != state.runtime || structure != state.structure || state.lastPublished.IsZero() || now.Sub(state.lastPublished) >= a.cachePublishInterval
 	state.runtime = runtime
@@ -1091,7 +1134,7 @@ func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, se
 		streamID := state.streamID
 		a.enqueueCacheSnapshot(threadID, streamID, seq, thread)
 		a.cacheMu.Unlock()
-		return
+		return true
 	}
 	state.pendingSeq = seq
 	state.pendingThread = thread
@@ -1100,6 +1143,7 @@ func (a *agent) queueCacheSnapshot(threadID string, state *cacheSubscription, se
 		state.publishTimer = time.AfterFunc(delay, func() { a.flushCacheSnapshot(threadID, state) })
 	}
 	a.cacheMu.Unlock()
+	return true
 }
 
 func (a *agent) flushCacheSnapshot(threadID string, state *cacheSubscription) {
@@ -1176,6 +1220,10 @@ func (a *agent) evictOneCacheFollower(exclude string) bool {
 		return false
 	}
 	delete(a.cacheSubs, victimID)
+	if demand := a.cacheDemands[victimID]; demand != nil {
+		demand.stop()
+		delete(a.cacheDemands, victimID)
+	}
 	if victim.publishTimer != nil {
 		victim.publishTimer.Stop()
 	}
@@ -1333,7 +1381,7 @@ func (a *agent) reply(ctx context.Context, id, method string, data map[string]an
 			code = "OUTCOME_UNKNOWN"
 		}
 		var callErr *desktopipc.CallError
-		if errors.As(err, &callErr) {
+		if errors.As(err, &callErr) && !isReadRequest(method) {
 			outcome = callErr.Outcome
 			if outcome == "unknown" {
 				code = "OUTCOME_UNKNOWN"
@@ -1391,6 +1439,8 @@ func isReadRequest(method string) bool {
 		return true
 	}
 	switch method {
+	case "thread.cache.touch", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote":
+		return true
 	case "model.catalog.read", "thread.settings.read", "thread.settings.watch", "thread.settings.unwatch":
 		return true
 	case "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read":

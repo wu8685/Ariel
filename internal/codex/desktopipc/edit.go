@@ -170,6 +170,7 @@ func verifyEdited(before, after json.RawMessage, cwd string, target EditTarget, 
 func (f *Follower) EditLatest(ctx context.Context, turnID, itemID, fingerprint, text string) (string, error) {
 	f.startMu.Lock()
 	defer f.startMu.Unlock()
+	defer f.pinHistoryForMutation()()
 	before, err := f.Current()
 	if err != nil {
 		return "", err

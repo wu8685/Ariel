@@ -33,6 +33,7 @@ func Follow(ctx context.Context, c *Client, threadID, owner, cwd string) (*Follo
 	if err := c.Broadcast(ctx, "thread-stream-following-changed", 1, map[string]any{"hostId": "local", "conversationId": threadID, "following": true}, []string{owner}); err != nil {
 		return nil, err
 	}
+	f.o.reducer.recent = true
 	go f.consume()
 	if _, err := f.Refresh(ctx); err != nil {
 		f.Close()
@@ -86,12 +87,33 @@ func (f *Follower) Updates() <-chan struct{} { return f.updates }
 func (f *Follower) Done() <-chan struct{}    { return f.c.Done() }
 func (f *Follower) Owner() string            { return f.o.owner }
 
-// StateBytes reports the size of the latest owner state frame. It powers
-// pipeline observability (spec 0086) without exposing content.
+func (f *Follower) Progress() (string, int64) {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.o.owner, f.o.summary.Revision
+}
+
+func (f *Follower) Err() error {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	return f.c.Err()
+}
+
+// StateBytes reports the encoded size of the retained owner projection, not
+// heap RSS, wire bytes, or the original snapshot before historical retirement.
 func (f *Follower) StateBytes() int {
 	f.stateMu.Lock()
 	defer f.stateMu.Unlock()
 	return f.o.summary.StateBytes
+}
+
+func (f *Follower) SourceSnapshotBytes() int {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.o.reducer.sourceSnapshotBytes
 }
 
 func (f *Follower) Current() (json.RawMessage, error) {
@@ -99,6 +121,9 @@ func (f *Follower) Current() (json.RawMessage, error) {
 	defer f.stateMu.Unlock()
 	if f.err != nil {
 		return nil, f.err
+	}
+	if err := f.c.Err(); err != nil {
+		return nil, err
 	}
 	state, _, ok := f.o.reducer.Snapshot()
 	if !ok {
@@ -185,6 +210,7 @@ func (f *Follower) Start(ctx context.Context, clientMessageID, text string) (str
 func (f *Follower) StartWithImages(ctx context.Context, clientMessageID, text string, images []string) (string, error) {
 	f.startMu.Lock()
 	defer f.startMu.Unlock()
+	defer f.pinHistoryForMutation()()
 	state, err := f.Current()
 	if err != nil {
 		return "", err
@@ -195,6 +221,7 @@ func (f *Follower) StartWithImages(ctx context.Context, clientMessageID, text st
 func (f *Follower) Interrupt(ctx context.Context, expectedTurnID string) error {
 	f.opMu.Lock()
 	defer f.opMu.Unlock()
+	defer f.pinHistoryForMutation()()
 	state, err := f.refreshLocked(ctx)
 	if err != nil {
 		return err
@@ -205,6 +232,7 @@ func (f *Follower) Interrupt(ctx context.Context, expectedTurnID string) error {
 func (f *Follower) Steer(ctx context.Context, expectedTurnID, queuedMessageID, clientMessageID, text string, images []string) error {
 	f.steerMu.Lock()
 	defer f.steerMu.Unlock()
+	defer f.pinHistoryForMutation()()
 	state, err := f.Refresh(ctx)
 	if err != nil {
 		return err
@@ -233,6 +261,7 @@ func (f *Follower) Steer(ctx context.Context, expectedTurnID, queuedMessageID, c
 func (f *Follower) Respond(ctx context.Context, interactionID, decision string, answers map[string][]string) error {
 	f.respondMu.Lock()
 	defer f.respondMu.Unlock()
+	defer f.pinHistoryForMutation()()
 	state, err := f.Refresh(ctx)
 	if err != nil {
 		return err

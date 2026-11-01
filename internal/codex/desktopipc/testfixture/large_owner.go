@@ -31,6 +31,7 @@ type Stats struct {
 	Patches     int `json:"patches"`
 	Unexpected  int `json:"unexpected"`
 	WireBytes   int `json:"wireBytes"`
+	Faults      int `json:"faults"`
 }
 
 type peer struct {
@@ -40,17 +41,24 @@ type peer struct {
 }
 
 type LargeOwner struct {
-	Path     string
-	dir      string
-	listener net.Listener
-	mu       sync.Mutex
-	peers    map[*peer]bool
-	stats    Stats
-	wg       sync.WaitGroup
-	accepted chan struct{}
+	Path                  string
+	dir                   string
+	listener              net.Listener
+	mu                    sync.Mutex
+	peers                 map[*peer]bool
+	stats                 Stats
+	wg                    sync.WaitGroup
+	accepted              chan struct{}
+	historyBytes          int
+	text, status, runtime string
+	revision              int
 }
 
 func NewLargeOwner() (*LargeOwner, error) {
+	return NewLargeOwnerWithHistory(0)
+}
+
+func NewLargeOwnerWithHistory(historyBytes int) (*LargeOwner, error) {
 	// Keep the Unix path short on macOS, including under a long test tempdir.
 	dir, err := os.MkdirTemp("", "aw-")
 	if err != nil {
@@ -62,7 +70,7 @@ func NewLargeOwner() (*LargeOwner, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	o := &LargeOwner{Path: path, dir: dir, listener: listener, peers: map[*peer]bool{}, accepted: make(chan struct{})}
+	o := &LargeOwner{Path: path, dir: dir, listener: listener, peers: map[*peer]bool{}, accepted: make(chan struct{}), historyBytes: historyBytes, text: InitialText, status: "completed", runtime: "idle", revision: 1}
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
@@ -114,20 +122,26 @@ func event(change any) json.RawMessage {
 		"sourceClientId": "isolated-owner", "params": map[string]any{"hostId": "local", "conversationId": ThreadID, "change": change}})
 }
 
-func snapshot() json.RawMessage {
+func snapshot(historyBytes int, text, status, runtime string, revision int) json.RawMessage {
 	// RawMessage fixes type-before-result order as emitted by native tool items.
 	tool := append([]byte(`{"type":"mcpToolCall","id":"native-tool","server":"fixture","tool":"large","status":"completed","result":{"type":42,"content":"`), strings.Repeat("<>&", (10<<20)/3)...)
 	tool = append(tool, []byte(`"}}`)...)
 	image := map[string]any{"type": "image", "url": "data:image/png;base64," + strings.Repeat("A", 1<<20)}
-	state := map[string]any{"cwd": CWD, "requests": []any{}, "threadRuntimeStatus": map[string]any{"type": "idle"},
+	state := map[string]any{"cwd": CWD, "requests": []any{}, "threadRuntimeStatus": map[string]any{"type": runtime},
 		"latestThreadSettings": map[string]any{"approvalPolicy": "on-request", "sandboxPolicy": map[string]any{"type": "dangerFullAccess"}},
-		"fixtureUnknown":       UnknownText(), "turns": []any{map[string]any{"turnId": "native-turn", "status": "completed", "items": []any{
+		"fixtureUnknown":       UnknownText(), "turns": []any{map[string]any{"turnId": "native-turn", "status": status, "items": []any{
 			map[string]any{"type": "userMessage", "id": "native-user", "content": []any{map[string]any{"type": "text", "text": "隔离大帧回归"}, image}},
-			map[string]any{"type": "agentMessage", "id": "native-reply", "text": InitialText}, json.RawMessage(tool),
+			map[string]any{"type": "agentMessage", "id": "native-reply", "text": text}, json.RawMessage(tool),
 		}}}}
 	// Retained JSON schema metadata is not a native discriminated union.
 	state["fixtureSchema"] = map[string]any{"type": []any{"string", "null"}}
-	return event(map[string]any{"type": "snapshot", "revision": 1, "conversationState": state})
+	if historyBytes > 0 {
+		state["turns"] = append([]any{
+			map[string]any{"turnId": "retired-turn", "status": "completed", "items": []any{map[string]any{"id": "retired-item", "type": "agentMessage", "text": strings.Repeat("historical-body-", historyBytes/16)}}},
+			map[string]any{"turnId": "previous-turn", "status": "completed", "items": []any{}},
+		}, state["turns"].([]any)...)
+	}
+	return event(map[string]any{"type": "snapshot", "revision": revision, "conversationState": state})
 }
 
 func (o *LargeOwner) serve(p *peer) {
@@ -164,13 +178,16 @@ func (o *LargeOwner) serve(p *peer) {
 		err = desktopipc.WriteFrame(p.conn, literalJSON(map[string]any{"type": "response", "requestId": req.RequestID,
 			"resultType": kind, "handledByClientId": "isolated-owner", "result": result}), desktopipc.DefaultMaxFrameBytes)
 		if err == nil && req.Method == "thread-follower-load-complete-history" {
-			snapshot := snapshot()
+			o.mu.Lock()
+			text, status, runtime, revision := o.text, o.status, o.runtime, o.revision
+			o.mu.Unlock()
+			snapshot := snapshot(o.historyBytes, text, status, runtime, revision)
 			o.mu.Lock()
 			o.stats.Loads++
 			o.stats.WireBytes = len(snapshot)
 			o.mu.Unlock()
 			err = desktopipc.WriteFrame(p.conn, snapshot, 256<<20)
-			p.revision = 1
+			p.revision = revision
 		}
 		p.mu.Unlock()
 		if err != nil {
@@ -186,6 +203,8 @@ func (o *LargeOwner) Advance(complete bool) error {
 		text, status, runtime = CompletedText, "completed", "idle"
 	}
 	o.mu.Lock()
+	o.text, o.status, o.runtime = text, status, runtime
+	o.revision++
 	peers := make([]*peer, 0, len(o.peers))
 	for p := range o.peers {
 		peers = append(peers, p)
@@ -195,10 +214,14 @@ func (o *LargeOwner) Advance(complete bool) error {
 	for _, p := range peers {
 		p.mu.Lock()
 		if p.revision > 0 {
+			turnIndex := 0
+			if o.historyBytes > 0 {
+				turnIndex = 2
+			}
 			change := map[string]any{"type": "patches", "baseRevision": p.revision, "revision": p.revision + 1,
 				"patches": []any{
-					map[string]any{"op": "replace", "path": []any{"turns", 0, "items", 1, "text"}, "value": text},
-					map[string]any{"op": "replace", "path": []any{"turns", 0, "status"}, "value": status},
+					map[string]any{"op": "replace", "path": []any{"turns", turnIndex, "items", 1, "text"}, "value": text},
+					map[string]any{"op": "replace", "path": []any{"turns", turnIndex, "status"}, "value": status},
 					map[string]any{"op": "replace", "path": []any{"threadRuntimeStatus", "type"}, "value": runtime},
 				}}
 			if err := desktopipc.WriteFrame(p.conn, event(change), desktopipc.DefaultMaxFrameBytes); err == nil {
@@ -214,5 +237,34 @@ func (o *LargeOwner) Advance(complete bool) error {
 	o.mu.Lock()
 	o.stats.Patches += sent
 	o.mu.Unlock()
+	return nil
+}
+
+// An actual native continuity failure. The next cold snapshot is terminal;
+// neither the Agent↔Relay transport nor any Web socket is touched.
+func (o *LargeOwner) InvalidateWithCompletedState() error {
+	o.mu.Lock()
+	o.text, o.status, o.runtime = CompletedText, "completed", "idle"
+	o.revision++
+	peers := []*peer{}
+	for p := range o.peers {
+		peers = append(peers, p)
+	}
+	o.stats.Faults++
+	o.mu.Unlock()
+	sent := false
+	for _, p := range peers {
+		p.mu.Lock()
+		if p.revision > 0 {
+			err := desktopipc.WriteFrame(p.conn, event(map[string]any{"type": "patches", "baseRevision": p.revision + 1, "revision": p.revision + 2, "patches": []any{}}), desktopipc.DefaultMaxFrameBytes)
+			if err == nil {
+				sent = true
+			}
+		}
+		p.mu.Unlock()
+	}
+	if !sent {
+		return errors.New("no loaded native follower")
+	}
 	return nil
 }

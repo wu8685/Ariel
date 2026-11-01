@@ -61,6 +61,12 @@ Relay 默认 cache soft budget 512 MiB，`GOMEMLIMIT=768MiB`，容器 hard limit
 
 Desktop Agent 的 production large IPC follower 允许排队 1024 条／128 MiB 事件，所有此类 follower 共用 512 MiB 实际排队字节池，出队或关闭即释放；普通 follower 默认值不变。该池与现有 owner state reservation 分开，既不是 RSS 上限，也不受 Relay 容器限额保护。单 reduced frame／reducer 仍为 64 MiB、wire 仍为 256 MiB；超载明确失败，不丢弃中间 patch 或自动重放变更，见 [0128](../specs/0128-large-ipc-event-buffer-pressure.md)。
 
+依据 [0129](../specs/0129-recent-native-state-and-follower-self-recovery.md)，production follower 在 Agent 内回收窗口外已结束 turn 的已知正文 payload，保留最近两个 turn、active／pending interaction／正在核对写结果的必要内容，以及旧 turn 的身份、顺序和原生路径骨架。未知 metadata 不盲目剔除，Codex 原始记录不变；旧正文仍通过现有只读分页／文件接口按需取得。reducer 常驻已解码结构，连续 patch 不再重新解码和编码整份旧正文；需要导出时才生成独立 JSON。
+
+Relay transport 正常但单个 native follower 已失效时，Agent 按会话保留关注需求，复用既有 load 门禁退避重建；只有新合法 snapshot 才恢复 cache freshness。连续三次无 revision／终态进展的重建会熔断，确定性容量或协议错误不会反复整份重传。健康 follower 不新增轮询，旧 timer／旧 stream 不影响新实例，任何 mutation 都不自动重放。
+
+这个回收发生在接收合法 projected snapshot **之后**：首次 projected frame 超过 64 MiB 仍明确拒绝，不声称 native 已提供最近两 turn／字段选择接口。`follower-initialize` 日志中 `frameBytes` 表示回收前 projected snapshot 大小，`residentStateBytes` 表示回收后 JSON 大小；两者都不是原始 wire 字节数或实际 RSS。
+
 文件 Tab 的刷新恢复使用当前浏览器标签页的 `sessionStorage`，仅存来源 descriptor、模式、滚动、版本指纹和选区 offsets，1 MiB／7 天有界；不保存文件原文、Diff、引用片段、图片或凭据。恢复先核对认证、设备 epoch 和 capability，再沿既有 Agent 只读链路按需读取激活文件；正文与 Diff 仍共用 8 MiB／10 项内存 LRU。该记录不是来源授权或 mutation receipt，不新增连接、后台轮询或 Chilling 依赖，详见 [0123](../specs/0123-file-reading-refresh-restore.md)。
 
 ## 认证边界
