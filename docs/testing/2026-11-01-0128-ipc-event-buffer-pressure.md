@@ -51,3 +51,9 @@ npm run test:ui
 - Web 371 单测、production build、完整 Chromium 154 项通过。其中真实隔离 Unix IPC → Agent → Relay → Chromium 用例确认初次正文、后续回复、completed／idle、发送门禁和草稿保留，无额外 attach／history load／mutation。此浏览器用例本身不是暂停大帧队列压力测试；字节积压由上面的独立真实 IPC 测试覆盖。
 - 无新增 native API、UI、轮询、自动重放、持久会话数据或 Chilling 依赖；文档、构建产物和测试不代表任何服务已更新。
 - 本轮仅提交／push 修复 PR，不打 tag、不合并发布、不重启本机／公网服务或其他 Mac。目标 Mac 的实际吞吐、峰值和断线频率仍为 `unverified`，需要升级其 Desktop Agent 后只读复验；如果持续超载，仍应看到明确错误，不能承诺单纯加缓冲能解决所有慢消费。
+
+## 后续发布预检（2026-11-01）
+
+用户随后明确要求部署。部署前先确认公网仍为 v0.13.1、Docker healthy、1 GiB／只读 rootfs，以及本机 launchd 身份与关闭看板的参数不变；旧实例未被预检重启。
+
+新代码对本机当前会话执行生产 `OpenFollower` 的真实只读接入，约 10.28 秒完成 small → large 过程；完整 owner state 为 66,563,636 bytes，规范化 recent view 为两个 turn，大小校验通过。只在内存检查，不保存／上传正文或真实 ID，不做 native mutation。它证明此次检查时该会话可冷接入，不能证明此前 #64 的唯一原因，也不能替代另一台 Mac 的验证。后续合并、tag 与双端更新由本次部署授权执行；实际完成状态以发布验收为准，不从本节预检推定。
