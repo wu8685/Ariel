@@ -67,4 +67,6 @@ npm run test:ui -- e2e/native-recent-recovery.spec.ts --workers=1
 
 Go 全量／vet、命令构建与 Linux amd64 Relay 构建、Web 371 项单测、production build、156 项真实 Chromium 均通过。关键包组合 race：IPC 43.261 秒、Relay 3.589 秒、Agent 177.367 秒通过；最后取消分支修正后，又以最终源码跑完整 Agent race（154.916 秒）及缓存／恢复专项 race 20 次（23.891 秒）通过，完整 JSON 日志无 DATA RACE／失败事件。最终 Chromium 全量复跑仍为 156 项通过。
 
-尚未打 tag、重启本机 Agent 或替换公网容器。代码 push／PR 与发布必须分别记录，不把本规格的阶段性通过写成目标会话故障已排尽。
+用户已授权发布本次修复，计划版本 v0.13.3；README 先更新，再合并、打 tag／push，最后更新本机 launchd Agent 与公网 Docker Relay/Web。发布前再跑回收／自动恢复的真实 Unix IPC→Agent→Relay→Chromium 用例，部署后核验容器 health、公开资源、PID／ready marker、连接及缓存发布；实际部署结果写入对应 GitHub Release，不将计划当作已完成。
+
+另一台 Mac 未提供访问方式，不能由公网部署代替其 Agent 更新。当前超限业务会话的 #64 仍保持开放，不把本规格的阶段性通过写成目标会话故障已排尽；本次不合入未完成的异步回答或 SVG 分支。
