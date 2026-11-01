@@ -59,6 +59,8 @@ Agent transport 断线后独立重连，保留可继续使用的 Codex Service �
 
 Relay 默认 cache soft budget 512 MiB，`GOMEMLIMIT=768MiB`，容器 hard limit 1 GiB；不设置固定会话数上限。压力下先淘汰无 watcher 的 LRU 或返回 capacity error，不能把 OOM 当作正常淘汰机制。文件正文、Diff、目录和 Markdown 图片不进入双 turn hot cache；具体文件与资源限额见[文件配置](../operations/file-context.md)。
 
+Desktop Agent 的 production large IPC follower 允许排队 1024 条／128 MiB 事件，所有此类 follower 共用 512 MiB 实际排队字节池，出队或关闭即释放；普通 follower 默认值不变。该池与现有 owner state reservation 分开，既不是 RSS 上限，也不受 Relay 容器限额保护。单 reduced frame／reducer 仍为 64 MiB、wire 仍为 256 MiB；超载明确失败，不丢弃中间 patch 或自动重放变更，见 [0128](../specs/0128-large-ipc-event-buffer-pressure.md)。
+
 文件 Tab 的刷新恢复使用当前浏览器标签页的 `sessionStorage`，仅存来源 descriptor、模式、滚动、版本指纹和选区 offsets，1 MiB／7 天有界；不保存文件原文、Diff、引用片段、图片或凭据。恢复先核对认证、设备 epoch 和 capability，再沿既有 Agent 只读链路按需读取激活文件；正文与 Diff 仍共用 8 MiB／10 项内存 LRU。该记录不是来源授权或 mutation receipt，不新增连接、后台轮询或 Chilling 依赖，详见 [0123](../specs/0123-file-reading-refresh-restore.md)。
 
 ## 认证边界

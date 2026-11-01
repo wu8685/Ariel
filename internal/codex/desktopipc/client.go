@@ -25,6 +25,8 @@ type Options struct {
 	MaxPending        int
 	MaxEvents         int
 	MaxEventBytes     int
+	EventBudget       *EventByteBudget
+	OnEventOverload   func(EventQueuePressure)
 	ThreadID          string
 	RequestTimeout    time.Duration
 }
@@ -106,6 +108,7 @@ func (c *Client) NextEvent() (json.RawMessage, bool) {
 	c.events[0] = nil
 	c.events = c.events[1:]
 	c.eventBytes -= len(body)
+	c.opts.EventBudget.release(len(body))
 	if len(c.events) > 0 {
 		select {
 		case c.eventsReady <- struct{}{}:
@@ -119,14 +122,21 @@ func (c *Client) Close() error { c.fail(ErrClosed); return nil }
 
 func (c *Client) fail(err error) {
 	c.mu.Lock()
+	c.failLocked(err)
+	c.mu.Unlock()
+}
+
+// failLocked atomically invalidates and releases this client's entire queue.
+// In particular Close cannot race an already-read frame into a new charge.
+func (c *Client) failLocked(err error) {
 	if c.err == nil {
 		c.err = err
+		c.opts.EventBudget.release(c.eventBytes)
 		c.events = nil
 		c.eventBytes = 0
 		close(c.done)
 		c.conn.Close()
 	}
-	c.mu.Unlock()
 }
 
 // Initialize registers as an honest probe, never as an execution owner.
@@ -306,19 +316,9 @@ func (c *Client) readLoop() {
 			if !c.wantsEvent(body) {
 				continue
 			}
-			c.mu.Lock()
-			if len(c.events) >= c.opts.MaxEvents || len(body) > c.opts.MaxEventBytes-c.eventBytes {
-				c.mu.Unlock()
-				c.fail(ErrOverloaded)
+			if !c.enqueueEvent(body) {
 				return
 			}
-			c.events = append(c.events, body)
-			c.eventBytes += len(body)
-			select {
-			case c.eventsReady <- struct{}{}:
-			default:
-			}
-			c.mu.Unlock()
 		default:
 			c.fail(ErrProtocol)
 			return

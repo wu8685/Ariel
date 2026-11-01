@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 )
 
 // Issue #5: the cold-subscribe pipeline needs structured per-phase timing so
@@ -97,5 +99,29 @@ func TestThreadDigestIsIrreversibleAndStable(t *testing.T) {
 	}
 	if strings.Contains(a, "thread") || len(a) != 16 {
 		t.Fatalf("digest must be a short opaque hex prefix: %q", a)
+	}
+}
+
+func TestIPCEventPressureLogsOnlyBoundedCapacityFields(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	opts := productionLargeIPCOptions("private-thread-do-not-log")
+	opts.OnEventOverload(desktopipc.EventQueuePressure{Reason: "queue_bytes", QueuedEvents: 2, QueuedBytes: 80 << 20, IncomingBytes: 50 << 20, MaxEvents: 1024, MaxEventBytes: 128 << 20, SharedBytes: 80 << 20, MaxSharedBytes: 512 << 20})
+	if capture.leaks("private-thread-do-not-log") {
+		t.Fatal("raw thread leaked")
+	}
+	attrs := map[string]slog.Value{}
+	capture.mu.Lock()
+	for _, record := range capture.records {
+		fields := map[string]slog.Value{}
+		record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
+		if fields["phase"].String() == "ipc-event-overload" && fields["incomingBytes"].Kind() == slog.KindInt64 && fields["incomingBytes"].Int64() == 50<<20 {
+			attrs = fields
+		}
+	}
+	capture.mu.Unlock()
+	if attrs["phase"].String() != "ipc-event-overload" || attrs["reason"].String() != "queue_bytes" || attrs["queuedBytes"].Int64() != 80<<20 || attrs["maxSharedBytes"].Int64() != 512<<20 {
+		t.Fatalf("missing safe capacity fields: %v", attrs)
 	}
 }
