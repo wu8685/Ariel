@@ -213,6 +213,20 @@ func (l *leasedLive) Close() error {
 	return err
 }
 
+func (l *leasedLive) Err() error {
+	if source, ok := l.Live.(interface{ Err() error }); ok {
+		return source.Err()
+	}
+	return desktopipc.ErrResyncRequired
+}
+
+func (l *leasedLive) Progress() (string, int64) {
+	if source, ok := l.Live.(interface{ Progress() (string, int64) }); ok {
+		return source.Progress()
+	}
+	return "", 0
+}
+
 func openFollowerWithFallback(threadID string, open func(bool) (Live, error)) (Live, error) {
 	attempt := rand.Text()
 	if !frameHintPrefersLarge(threadID) {
@@ -284,7 +298,7 @@ func openFollower(ctx context.Context, socket, threadID, cwd string, opts deskto
 			follower, err = desktopipc.Follow(ctx, client, id, owner, expectedCWD)
 			attrs := []any{"durationMs", millisSince(followStart), "ok", err == nil}
 			if err == nil {
-				attrs = append(attrs, "frameBytes", follower.StateBytes())
+				attrs = append(attrs, "frameBytes", follower.SourceSnapshotBytes(), "residentStateBytes", follower.StateBytes())
 			}
 			logPhase("follower-initialize", id, attrs...)
 			return err

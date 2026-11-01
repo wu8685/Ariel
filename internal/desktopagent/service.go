@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -142,7 +143,23 @@ type threadController struct {
 	settingsLast       modelsettings.Values
 	settingsKnown      bool
 	bootstrapSettings  *modelsettings.Values
+	cacheProgress      atomic.Pointer[nativeCacheProgress]
 }
+
+type nativeCacheProgress struct {
+	owner    string
+	revision int64
+}
+
+func recordNativeCacheProgress(c *threadController, live Live) {
+	if source, ok := live.(interface{ Progress() (string, int64) }); ok {
+		owner, revision := source.Progress()
+		c.cacheProgress.Store(&nativeCacheProgress{owner, revision})
+	} else {
+		c.cacheProgress.Store(nil)
+	}
+}
+
 type Service struct {
 	editEnabled      bool
 	models           ModelReader
@@ -551,6 +568,7 @@ func (s *Service) BootstrapThreadWithSettings(ctx context.Context, cwd, messageI
 		c.bootstrapSettings = &intent
 	}
 	setControllerLiveLocked(c, live)
+	recordNativeCacheProgress(c, live)
 	c.current = nil
 	c.mu.Unlock()
 	s.rememberThread(result.ThreadID)
@@ -1249,6 +1267,7 @@ func (s *Service) ensureLive(ctx context.Context, c *threadController) error {
 		return err
 	}
 	setControllerLiveLocked(c, live)
+	recordNativeCacheProgress(c, live)
 	c.current = nil
 	c.title = title
 	c.cwd = cwd
@@ -1338,7 +1357,7 @@ func (s *Service) pump(c *threadController, live Live) {
 					}
 					continue
 				}
-				code := "RESYNC_REQUIRED"
+				code := requestErrorCode("thread.cache.touch", err)
 				if len(raw) > 0 {
 					code = "NATIVE_STATE_UNCERTAIN"
 				}
@@ -1365,6 +1384,7 @@ func (s *Service) pump(c *threadController, live Live) {
 				c.mu.Unlock()
 				return
 			}
+			recordNativeCacheProgress(c, live)
 			if tooLarge {
 				c.current = nil
 			} else {
@@ -1408,12 +1428,33 @@ func (s *Service) pump(c *threadController, live Live) {
 				delivery.emit(delivery.event)
 			}
 		case <-live.Done():
-			s.invalidateLive(c, live, "RESYNC_REQUIRED")
+			code := "RESYNC_REQUIRED"
+			if failed, ok := live.(interface{ Err() error }); ok {
+				if err := failed.Err(); err != nil {
+					code = requestErrorCode("thread.cache.touch", err)
+				}
+			}
+			s.invalidateLive(c, live, code)
 			return
 		case <-placeholderDeadline:
 			s.invalidateLive(c, live, "NATIVE_STATE_UNCERTAIN")
 			return
 		}
+	}
+}
+
+func (s *Service) cacheProgressSource(id string) func() (string, int64, bool) {
+	s.mu.Lock()
+	c := s.threads[id]
+	s.mu.Unlock()
+	return func() (string, int64, bool) {
+		if c == nil {
+			return "", 0, false
+		}
+		if progress := c.cacheProgress.Load(); progress != nil {
+			return progress.owner, progress.revision, progress.owner != ""
+		}
+		return "", 0, false
 	}
 }
 
@@ -1428,6 +1469,7 @@ func (s *Service) invalidateLive(c *threadController, live Live, code string) {
 		return
 	}
 	c.live = nil
+	c.cacheProgress.Store(nil)
 	c.current = nil
 	stopWarmRetireLocked(c)
 	out := make([]delivery, 0, len(c.subs))

@@ -97,4 +97,8 @@ Codex 文件能力现已内置于 Ariel Desktop Agent，不需要安装或运行
 
 `ipc-event-overload` 中 `reason=event_count` 表示单连接排队条数已满，`queue_bytes` 表示单连接排队字节已满，`shared_bytes` 表示跨 large follower 的共享字节池不足。日志同时给出 queued／incoming／max 数值，不含消息正文、原始 thread／owner ID 或 socket 路径。不要把这个队列字节池解释为 Agent RSS 限额；实际内存还包含正在处理的帧、owner state 和解码副本。设计与测试边界见 [0128](../specs/0128-large-ipc-event-buffer-pressure.md)。
 
+0129 增加窗口外旧正文回收和单会话 follower 自恢复。仍被关注的会话遇到临时 native 失效时，无需刷新网页，Agent 会退避重建；`phase=cache-follower-retry` 只记录脱敏尝试与分类。连续三次无进展后停止自动重建，用户可显式重新连接；不要重发结果不确定的消息。只有新有效 snapshot／后续 follower update 能恢复操作，不以 WebSocket 连通或成功 RPC receipt 代替状态证明。
+
+若失败为 `HISTORY_TOO_LARGE`／`projected output exceeds 67108864`，说明 projected frame 在进入历史回收前已超限；0129 不解决这一层，也不会自动循环重传。请区分记录文件、wire frame、队列积压和回收后状态的字节数，不应仅更新 Relay 或反复重新登录来处理 Agent 接收侧问题。
+
 `ariel.sh` 本身不安装 launchd 服务；仅用脚本启动时，Mac 重启后需再次执行 `up`。已由 launchd 托管的 Agent 应通过对应服务更新，不能混用脚本接管。脚本也不自动部署公网 TLS 或外部 Relay。

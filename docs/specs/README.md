@@ -129,6 +129,7 @@
 | 0123 | [刷新恢复文件阅读现场](0123-file-reading-refresh-restore.md) | Implemented（Web 349／Chromium 125；纳入 v0.12.2） | 当前标签页仅保存有界元信息；核验认证／设备／版本后按需恢复 Tab、模式、位置与最小化 |
 | 0127 | [宽屏文件／主会话分屏与常驻会话菜单](0127-wide-screen-file-chat-layout.md) | Implemented（Web 368／Chromium 152／build／Go 已验） | ≥1200px 左菜单／中文件／右主会话；窄屏保留独占阅读，保持单连接、文件 Tab 与安全引用 |
 | 0128 | [大会话 IPC 事件积压与有界缓冲](0128-large-ipc-event-buffer-pressure.md) | Approved（2026-11-01 用户确认；目标 Mac 待实测） | large follower 1024 条／128 MiB，共享实际排队预算；不丢 patch，不扩大单状态上限 |
+| 0129 | [大会话旧正文回收与按需订阅自恢复](0129-recent-native-state-and-follower-self-recovery.md) | Implemented（Go／race／371 Web／156 Chromium；未发布） | Agent 回收窗口外正文、减少整份状态复制；被关注 follower 退避重建，保留 revision／owner 与写入门禁；首次入站超限未解决 |
 
 ## 设计基线
 

@@ -101,6 +101,32 @@ func TestCacheNativeFollowerFailureAllowsExplicitPromotion(t *testing.T) {
 	}
 }
 
+func TestCacheNativeFollowerAutomaticallyRecoversWithoutPromotion(t *testing.T) {
+	first := &fakeLive{busy: true, updates: make(chan struct{}, 1), done: make(chan struct{})}
+	second := &fakeLive{updates: make(chan struct{}, 1), done: make(chan struct{})}
+	var attaches atomic.Int32
+	a, peer, ctx := newCacheRecoveryAgent(t, func(context.Context, string, string) (Live, error) {
+		if attaches.Add(1) == 1 {
+			return first, nil
+		}
+		return second, nil
+	})
+	if err := a.touchCache(ctx, "thread", true); err != nil {
+		t.Fatal(err)
+	}
+	initial := readCacheRecoveryEvent(t, ctx, peer)
+	first.Close()
+	failed := readCacheRecoveryEvent(t, ctx, peer)
+	if failed["event"] != "thread.cache.status" {
+		t.Fatal("native failure not reported")
+	}
+	// No touch/promote and no transport disconnect: existing demand must suffice.
+	recovered := readCacheRecoveryEvent(t, ctx, peer)
+	if attaches.Load() != 2 || recovered["event"] != "thread.cache.snapshot" || recovered["cacheStreamId"] == initial["cacheStreamId"] || recovered["thread"].(map[string]any)["runtime"] != "idle" {
+		t.Fatal("did not automatically recover the terminal state")
+	}
+}
+
 type blockedRecoveryLive struct {
 	*fakeLive
 	started chan struct{}
