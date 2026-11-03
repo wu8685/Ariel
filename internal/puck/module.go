@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
+	pucktools "github.com/wu8685/Ariel/internal/puck/tools"
 	"github.com/wu8685/Ariel/internal/relay"
 )
 
@@ -15,12 +19,16 @@ type Orchestrator interface {
 	Devices() []map[string]any
 	Forward(context.Context, relay.Origin, string, string, json.RawMessage) relay.PuckResponse
 	BrainThreads(map[relay.BrainThread]string)
+	BrainEvents() <-chan relay.BrainEvent
 }
 
 type Module struct {
 	store      *Store
 	bridge     Orchestrator
 	supervisor *Supervisor
+	tools      *pucktools.Handler
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
@@ -28,8 +36,12 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute)}
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), cancel: cancel}
+	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
+	m.wg.Add(1)
+	go m.runBrainEvents(ctx)
 	return m, nil
 }
 
@@ -37,7 +49,100 @@ func (m *Module) Close() error {
 	if m == nil || m.store == nil {
 		return nil
 	}
+	m.cancel()
+	m.wg.Wait()
 	return m.store.Close()
+}
+
+func (m *Module) runBrainEvents(ctx context.Context) {
+	defer m.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-m.bridge.BrainEvents():
+			if !ok {
+				return
+			}
+			m.handleBrainEvent(ctx, event)
+		}
+	}
+}
+
+func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
+	if event.Name != "puck.brain.toolCall" {
+		return
+	}
+	var input struct {
+		CallID, Tool string
+		Arguments    json.RawMessage
+	}
+	if json.Unmarshal(event.Payload, &input) != nil || input.CallID == "" || input.Tool == "" {
+		return
+	}
+	result := m.tools.Execute(ctx, pucktools.Call{AssistantID: event.AssistantID, Tool: input.Tool, Arguments: input.Arguments})
+	content, _ := json.Marshal(result)
+	_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: event.AssistantID, Trigger: "tool"}, event.DeviceID, "puck.brain.toolResult", mustJSON(map[string]any{"threadId": event.ThreadID, "callId": input.CallID, "success": result.Success, "contentItems": []map[string]any{{"type": "inputText", "text": string(content)}}, "truncated": result.Truncated}))
+}
+
+type toolOrchestrator struct{ bridge Orchestrator }
+
+func (o toolOrchestrator) Devices() []map[string]any { return o.bridge.Devices() }
+func (o toolOrchestrator) Forward(ctx context.Context, origin pucktools.Origin, device, method string, params json.RawMessage) pucktools.Result {
+	result := o.bridge.Forward(ctx, relay.Origin{Kind: origin.Kind, AssistantID: origin.AssistantID, Trigger: origin.Trigger}, device, method, params)
+	out := pucktools.Result{Outcome: result.Outcome, Data: result.Data}
+	if result.Error != nil {
+		out.Code, out.Message = result.Error.Code, result.Error.Message
+	}
+	return out
+}
+
+type toolBackend struct{ module *Module }
+
+func (b toolBackend) Authorize(ctx context.Context, assistantID string, action pucktools.Action) (string, error) {
+	var arguments struct {
+		DeviceID, CWD, Prompt string
+		RiskTags              []string
+	}
+	_ = json.Unmarshal(action.Arguments, &arguments)
+	a, err := b.module.store.Assistant(ctx, assistantID)
+	if err != nil {
+		return "", err
+	}
+	allowed := map[string][]string{}
+	_ = json.Unmarshal([]byte(a.AllowedScope), &allowed)
+	enforceable := false
+	for _, device := range b.module.bridge.Devices() {
+		if device["deviceId"] == arguments.DeviceID {
+			caps, _ := device["capabilities"].(map[string]bool)
+			enforceable = caps["executionPolicy"]
+		}
+	}
+	decision := EvaluatePolicy(PolicyInput{Tool: action.Tool, DeviceID: arguments.DeviceID, CWD: arguments.CWD, Prompt: arguments.Prompt, RiskTags: arguments.RiskTags, AllowedScope: allowed, ExecutionPolicyEnforceable: enforceable, AssistantWorkspaceRoot: "/agent-managed/puck/" + assistantID})
+	if decision.DeniedCode != "" {
+		return "", errors.New(decision.DeniedCode)
+	}
+	if !decision.RequiresAuthorization {
+		return "", nil
+	}
+	auth, err := NewAuthorizationService(b.module.store).Request(ctx, assistantID, FrozenAction{Tool: action.Tool, Arguments: action.Arguments}, decision.Rules, 30*time.Minute)
+	if err != nil {
+		return "", err
+	}
+	card, _ := json.Marshal(map[string]any{"authorizationId": auth.ID, "rules": decision.Rules, "actionHash": auth.ActionHash})
+	_ = b.module.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: assistantID, Role: "assistant", Kind: "authorization", Text: "这个操作需要你确认后才能继续。", CardJSON: string(card)})
+	return auth.ID, pucktools.ErrAuthorizationRequired
+}
+func (b toolBackend) SaveTask(ctx context.Context, task pucktools.Task) error {
+	return b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, CreatedBy: "puck"})
+}
+func (b toolBackend) Task(ctx context.Context, assistantID, taskID string) (pucktools.Task, error) {
+	task, err := b.module.store.Task(ctx, assistantID, taskID)
+	return pucktools.Task{ID: task.ID, AssistantID: task.AssistantID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, LastTurnID: task.LastTurnID}, err
+}
+func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
+	kind := strings.TrimPrefix(event.Kind, "post_")
+	return b.module.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: string(event.Payload), CardJSON: string(event.Payload)})
 }
 
 func (m *Module) Handle(ctx context.Context, method string, params json.RawMessage) relay.PuckResponse {

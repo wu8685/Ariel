@@ -3,16 +3,22 @@ package puck
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wu8685/Ariel/internal/relay"
 )
 
 type fakeModuleBridge struct {
+	mu             sync.Mutex
 	calls          []string
 	brains         map[relay.BrainThread]string
 	ensureFailures int
 	ensureThreads  []string
+	events         chan relay.BrainEvent
+	params         []json.RawMessage
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
@@ -20,7 +26,10 @@ func (f *fakeModuleBridge) Devices() []map[string]any {
 }
 func (f *fakeModuleBridge) BrainThreads(v map[relay.BrainThread]string) { f.brains = v }
 func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, method string, params json.RawMessage) relay.PuckResponse {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, method)
+	f.params = append(f.params, append(json.RawMessage(nil), params...))
 	if method == "puck.brain.ensure" {
 		if f.ensureFailures > 0 {
 			f.ensureFailures--
@@ -36,6 +45,23 @@ func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, 
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
 	return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
+}
+
+func (f *fakeModuleBridge) hasToolResult(callID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, method := range f.calls {
+		if method == "puck.brain.toolResult" && strings.Contains(string(f.params[i]), `"callId":"`+callID+`"`) {
+			return true
+		}
+	}
+	return false
+}
+func (f *fakeModuleBridge) BrainEvents() <-chan relay.BrainEvent {
+	if f.events == nil {
+		f.events = make(chan relay.BrainEvent, 4)
+	}
+	return f.events
 }
 
 func TestModuleRetriesProvisioningWithoutCreatingAnotherAssistant(t *testing.T) {
@@ -63,6 +89,26 @@ func TestModuleRetriesProvisioningWithoutCreatingAnotherAssistant(t *testing.T) 
 	if got := len(listed.Data["assistants"].([]map[string]any)); got != 1 {
 		t.Fatalf("assistant count=%d", got)
 	}
+}
+
+func TestModuleExecutesTrustedBrainToolCallAndReturnsResult(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-a","tool":"list_devices","arguments":{}}`)}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if bridge.hasToolResult("call-a") {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("tool result was not returned")
 }
 
 func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {
