@@ -3,6 +3,7 @@ package puck
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -352,13 +353,16 @@ func TestModuleUpdatesAvatar(t *testing.T) {
 	defer module.Close()
 	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
-	updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": "cloud", "color": "#7c6ff2"}}))
-	if updated.Error != nil {
-		t.Fatalf("update=%+v", updated)
-	}
-	avatar := updated.Data["assistant"].(map[string]any)["avatar"]
-	if avatar != `{"color":"#7c6ff2","shape":"cloud"}` {
-		t.Fatalf("avatar=%v", avatar)
+	shapes := []string{"circle", "cloud", "tilted_square", "four_star", "clover", "heart", "flower", "drop", "capsule", "triangle", "tilted_rect", "burst", "hexagon", "pumpkin"}
+	for _, shape := range shapes {
+		updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": shape, "color": "#ff2f92"}}))
+		if updated.Error != nil {
+			t.Fatalf("shape=%s update=%+v", shape, updated)
+		}
+		avatar := updated.Data["assistant"].(map[string]any)["avatar"]
+		if avatar != fmt.Sprintf(`{"color":"#ff2f92","shape":"%s"}`, shape) {
+			t.Fatalf("shape=%s avatar=%v", shape, avatar)
+		}
 	}
 }
 

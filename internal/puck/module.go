@@ -725,7 +725,7 @@ func brainInstructions(id, name, description string) string {
 func validateAvatar(value map[string]any) (string, error) {
 	shape, _ := value["shape"].(string)
 	color, _ := value["color"].(string)
-	if !slices.Contains([]string{"blob", "cloud", "star", "triangle"}, shape) {
+	if !slices.Contains([]string{"circle", "cloud", "tilted_square", "four_star", "clover", "heart", "flower", "drop", "capsule", "triangle", "tilted_rect", "burst", "hexagon", "pumpkin"}, shape) {
 		return "", errors.New("invalid avatar shape")
 	}
 	if len(color) != 7 || color[0] != '#' {
