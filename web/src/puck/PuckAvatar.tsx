@@ -44,7 +44,9 @@ function shapePath(shape: AvatarShape) {
 
 export function PuckAvatar({ assistantId, name, state = "idle", design, size = "medium", attention = false }: { assistantId: string; name: string; state?: PuckState; design?: AvatarDesign; size?: "small" | "medium" | "large"; attention?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
+  const hoverTimer = useRef<number | undefined>(undefined);
   const [reacting, setReacting] = useState(false);
+  const [blinking, setBlinking] = useState(false);
   const [hidden, setHidden] = useState(() => typeof document !== "undefined" && document.hidden);
   const avatar = design || deriveAvatar(assistantId);
   const expression = expressionForState(state);
@@ -53,6 +55,20 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
+  useEffect(() => {
+    if (hidden) return;
+    let cancelled = false;
+    let blinkTimer: number | undefined;
+    let closeTimer: number | undefined;
+    const schedule = () => { blinkTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      setBlinking(true);
+      closeTimer = window.setTimeout(() => { setBlinking(false); schedule(); }, 140);
+    }, 2200 + Math.random() * 4800); };
+    schedule();
+    return () => { cancelled = true; if (blinkTimer) window.clearTimeout(blinkTimer); if (closeTimer) window.clearTimeout(closeTimer); };
+  }, [hidden]);
+  useEffect(() => () => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); }, []);
   function follow(event: PointerEvent<HTMLDivElement>) {
     if (event.pointerType === "touch" || !root.current) return;
     const box = root.current.getBoundingClientRect();
@@ -66,8 +82,8 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     window.setTimeout(() => setReacting(false), 420);
   }
   return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
-    data-expression={expression} data-reacting={reacting ? "true" : "false"} data-paused={hidden ? "true" : "false"}
-    style={{ "--puck-avatar-color": avatar.color } as CSSProperties} onPointerMove={follow} onPointerLeave={() => { root.current?.style.removeProperty("--puck-eye-x"); root.current?.style.removeProperty("--puck-eye-y"); }} onPointerDown={react} onDragStart={event => event.preventDefault()}>
+    data-expression={expression} data-reacting={reacting ? "true" : "false"} data-blinking={blinking ? "true" : "false"} data-paused={hidden ? "true" : "false"}
+    style={{ "--puck-avatar-color": avatar.color } as CSSProperties} onPointerEnter={() => { if (!hoverTimer.current) hoverTimer.current = window.setTimeout(() => { hoverTimer.current = undefined; react(); }, 80 + Math.random() * 180); }} onPointerMove={follow} onPointerLeave={() => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined; root.current?.style.removeProperty("--puck-eye-x"); root.current?.style.removeProperty("--puck-eye-y"); }} onPointerDown={react} onDragStart={event => event.preventDefault()}>
     <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false"><g className="puck-avatar-body">{shapePath(avatar.shape)}</g><g className="puck-avatar-eyes"><ellipse cx="40" cy="50" rx="5" ry="8"/><ellipse cx="61" cy="50" rx="5" ry="8"/></g></svg>
     {attention && <span className="puck-avatar-badge" aria-hidden="true" />}
   </div>;

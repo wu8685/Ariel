@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveAvatar, expressionForState, PuckAvatar } from "./PuckAvatar";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("PuckAvatar", () => {
   it("derives a stable shape and color from the assistant id", () => {
@@ -29,5 +29,17 @@ describe("PuckAvatar", () => {
     expect(avatar.querySelector(".puck-avatar-badge")).toBeTruthy();
     fireEvent.pointerDown(avatar);
     expect(avatar.getAttribute("data-reacting")).toBe("true");
+  });
+
+  it("schedules a non-periodic blink while visible", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    render(<PuckAvatar assistantId="assistant-a" name="小帕" />);
+    const avatar = screen.getByRole("img", { name: "小帕，空闲" });
+    expect(avatar.getAttribute("data-blinking")).toBe("false");
+    await act(() => vi.advanceTimersByTimeAsync(2200));
+    expect(avatar.getAttribute("data-blinking")).toBe("true");
+    await act(() => vi.advanceTimersByTimeAsync(140));
+    expect(avatar.getAttribute("data-blinking")).toBe("false");
   });
 });
