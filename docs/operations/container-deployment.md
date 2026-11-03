@@ -57,6 +57,19 @@ docker run -d \
 
 Relay 的双 turn hot cache 默认使用 512 MiB soft budget，单 entry 上限 8 MiB；可分别通过 `ARIEL_CACHE_MAX_BYTES` 和 `ARIEL_CACHE_ENTRY_MAX_BYTES`（十进制 bytes）调整。`GOMEMLIMIT=768MiB` 给连接、索引和 GC 保留空间，Docker `--memory 1g` 只作为最后的进程隔离边界。容量压力应由 cache eviction 或 `CACHE_CAPACITY` 处理，不能把 OOM 当成正常淘汰机制。
 
+## 可选启用 Puck
+
+Puck 默认关闭，只能用于 Passkey + HTTPS 部署。启用时设置 `ARIEL_PUCK_ENABLED=true` 与 `ARIEL_PUCK_DATA_DIR=/data/puck`；`/data/puck/` 与 `/data/auth.json` 共用持久卷，但目录与数据库权限独立。开启后将 `GOMEMLIMIT` 调为 `896MiB`、容器 memory limit 调为 `1152MiB`，为 Puck 保留默认 128 MiB 预算。
+
+Kubernetes 使用 `deploy/kubernetes/overlays/passkey-puck`；ECS 使用：
+
+```sh
+./scripts/deploy-ecs.sh up --mode passkey --domain ariel.example.com --enable-puck --dry-run
+./scripts/deploy-ecs.sh up --mode passkey --domain ariel.example.com --enable-puck
+```
+
+备份 `/data` 会同时覆盖 Passkey 凭据与 Puck 数据。恢复时应整体恢复到仅一个 Relay writer 可访问的卷；不要单独复制正在写入的 SQLite 文件。PIN 模式和 `scripts/ariel.sh up local` 不提供 Puck，显式设置开关会被拒绝。
+
 不要把真实 token 或连接码写入 Dockerfile、镜像 build args、仓库文件或命令示例。上述 `-e NAME` 形式从当前 shell 传值，不会把值直接写入 shell history；但具有 Docker daemon 管理权限的同机用户仍可能检查容器环境变量。
 
 ## 在桌面宿主机连接 Desktop Agent

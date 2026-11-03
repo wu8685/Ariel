@@ -24,6 +24,8 @@ install_docker="0"
 follow_logs="0"
 log_service="relay"
 file_context="0"
+puck="0"
+dry_run="0"
 
 mode_explicit="0"
 origin_explicit="0"
@@ -36,6 +38,7 @@ image_explicit="0"
 build_explicit="0"
 caddy_image_explicit="0"
 file_context_explicit="0"
+puck_explicit="0"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "$script_dir/.." && pwd -P)"
@@ -78,6 +81,9 @@ Ariel ECS 单机部署器
   --disable-file-context          关闭文件入口（默认）
   --enable-chilling-file-context   兼容旧名，等同 --enable-file-context
   --disable-chilling-file-context  兼容旧名，等同 --disable-file-context
+  --enable-puck        启用 Puck；仅支持 --mode passkey
+  --disable-puck       关闭 Puck（默认）
+  --dry-run            只校验 up 配置并显示资源计划，不写状态或调用 Docker
   --install-docker      Docker 缺失时用系统包管理器安装（需要 root）
   --service NAME        logs 的目标：relay 或 proxy
   --follow              持续跟随日志
@@ -185,6 +191,20 @@ while [[ $# -gt 0 ]]; do
       file_context_explicit="1"
       shift
       ;;
+    --enable-puck)
+      puck="1"
+      puck_explicit="1"
+      shift
+      ;;
+    --disable-puck)
+      puck="0"
+      puck_explicit="1"
+      shift
+      ;;
+    --dry-run)
+      dry_run="1"
+      shift
+      ;;
     --install-docker)
       install_docker="1"
       shift
@@ -238,6 +258,7 @@ stored_relay_image=""
 stored_caddy_image=""
 stored_image_source=""
 stored_file_context=""
+stored_puck=""
 
 load_config() {
   [[ -f "$config_file" ]] || return 1
@@ -255,6 +276,7 @@ load_config() {
       CADDY_IMAGE) stored_caddy_image="$config_value" ;;
       IMAGE_SOURCE) stored_image_source="$config_value" ;;
       FILE_CONTEXT) stored_file_context="$config_value" ;;
+      PUCK) stored_puck="$config_value" ;;
       '') ;;
       *) die "状态配置包含未知字段 $config_key；请人工检查 $config_file。" ;;
     esac
@@ -306,6 +328,9 @@ resolve_config() {
     if [[ "$file_context_explicit" != "1" ]]; then
       file_context="${stored_file_context:-0}"
     fi
+    if [[ "$puck_explicit" != "1" ]]; then
+      puck="${stored_puck:-0}"
+    fi
   else
     [[ "$command_name" == "up" ]] || die "尚未初始化：$config_file。请先运行 up。"
     [[ "$mode_explicit" == "1" ]] || die "首次 up 必须指定 --mode pin 或 --mode passkey。"
@@ -353,6 +378,9 @@ validate_config() {
   validate_image "$caddy_image"
   [[ "$image_source" == "build" || "$image_source" == "pull" ]] || die "镜像来源状态非法。"
   [[ "$file_context" == "0" || "$file_context" == "1" ]] || die "文件上下文开关状态非法。"
+  [[ "$puck" == "0" || "$puck" == "1" ]] || die "Puck 开关状态非法。"
+  [[ "$puck" == "0" || "$mode" == "passkey" ]] || die "Puck 仅支持 Passkey + HTTPS；不能与 --mode pin 一起使用。"
+  [[ "$dry_run" == "0" || "$command_name" == "up" ]] || die "--dry-run 只支持 up。"
 
   if [[ "$mode" == "pin" ]]; then
     [[ "$origin" == http://* ]] || die "PIN Origin 必须使用 http://。"
@@ -375,6 +403,15 @@ validate_config() {
 
 resolve_config
 validate_config
+
+if [[ "$dry_run" == "1" ]]; then
+  if [[ "$puck" == "1" ]]; then
+    printf 'DRY RUN: mode=passkey puck=enabled GOMEMLIMIT=896MiB memory=1152m data=/data/puck\n'
+  else
+    printf 'DRY RUN: mode=%s puck=disabled GOMEMLIMIT=768MiB memory=1g\n' "$mode"
+  fi
+  exit 0
+fi
 
 atomic_write() {
   local target_file="$1"
@@ -401,7 +438,8 @@ save_config() {
     "RELAY_IMAGE=$relay_image" \
     "CADDY_IMAGE=$caddy_image" \
     "IMAGE_SOURCE=$image_source" \
-    "FILE_CONTEXT=$file_context")"
+    "FILE_CONTEXT=$file_context" \
+    "PUCK=$puck")"
   atomic_write "$config_file" "$config_body"$'\n'
 }
 
@@ -511,6 +549,10 @@ write_runtime_env() {
     env_body+=$'\n'"ARIEL_ENABLE_FILE_CONTEXT=true"
     env_body+=$'\n'"ARIEL_ENABLE_CHILLING_FILE_CONTEXT=true"
   fi
+  if [[ "$puck" == "1" ]]; then
+    env_body+=$'\n'"ARIEL_PUCK_ENABLED=true"
+    env_body+=$'\n'"ARIEL_PUCK_DATA_DIR=/data/puck"
+  fi
   atomic_write "$runtime_env_file" "$env_body"$'\n'
 }
 
@@ -618,13 +660,16 @@ remove_managed_network() {
 
 start_relay() {
   remove_managed_container "$relay_container"
+  local memory_limit="1g"
+  local go_memory_limit="768MiB"
+  if [[ "$puck" == "1" ]]; then memory_limit="1152m"; go_memory_limit="896MiB"; fi
   local -a relay_args=(
     run -d
     --name "$relay_container"
     --label "$managed_label"
     --restart unless-stopped
-    --memory 1g
-    --env GOMEMLIMIT=768MiB
+    --memory "$memory_limit"
+    --env "GOMEMLIMIT=$go_memory_limit"
     --env ARIEL_CACHE_MAX_BYTES=536870912
     --env ARIEL_CACHE_ENTRY_MAX_BYTES=8388608
     --env-file "$runtime_env_file"

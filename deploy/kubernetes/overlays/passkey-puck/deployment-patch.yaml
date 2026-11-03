@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ariel-relay
+spec:
+  template:
+    spec:
+      containers:
+        - name: ariel-relay
+          env:
+            - name: GOMEMLIMIT
+              value: 896MiB
+            - name: ARIEL_PUCK_ENABLED
+              value: "true"
+            - name: ARIEL_PUCK_DATA_DIR
+              value: /data/puck
+          resources:
+            limits:
+              memory: 1152Mi

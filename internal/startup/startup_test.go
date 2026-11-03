@@ -38,6 +38,16 @@ func TestParseTwoSetupModesAndRejectUnknownFlags(t *testing.T) {
 	}
 }
 
+func TestLocalModeRejectsPuckEnvironment(t *testing.T) {
+	t.Setenv("ARIEL_PUCK_ENABLED", "1")
+	if err := rejectLocalPuck("local"); err == nil || !strings.Contains(err.Error(), "Passkey + HTTPS") {
+		t.Fatalf("rejectLocalPuck(local)=%v", err)
+	}
+	if err := rejectLocalPuck("agent"); err != nil {
+		t.Fatalf("agent mode=%v", err)
+	}
+}
+
 func TestObsidianTaskSetupPersistsSafeDefaults(t *testing.T) {
 	root := t.TempDir()
 	vault := filepath.Join(root, "vault")

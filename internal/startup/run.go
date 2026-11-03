@@ -76,6 +76,13 @@ func Run(ctx context.Context, root string, args []string, output io.Writer) erro
 	}
 }
 
+func rejectLocalPuck(mode string) error {
+	if mode == "local" && os.Getenv("ARIEL_PUCK_ENABLED") != "" {
+		return errors.New("Puck 仅支持 Passkey + HTTPS；scripts/ariel.sh up local 使用 PIN 模式，拒绝 ARIEL_PUCK_ENABLED")
+	}
+	return nil
+}
+
 func executable(root, name string) string {
 	return filepath.Join(root, ".local", "bin", "ariel-"+name)
 }
@@ -517,6 +524,9 @@ func restartLocalWith(ctx context.Context, root string, output io.Writer, ops re
 }
 
 func up(ctx context.Context, root string, opts options, output io.Writer) error {
+	if err := rejectLocalPuck(opts.mode); err != nil {
+		return err
+	}
 	var cfg config
 	var err error
 	if opts.mode == "" {
@@ -538,6 +548,9 @@ func up(ctx context.Context, root string, opts options, output io.Writer) error 
 		if err != nil {
 			return err
 		}
+	}
+	if err := rejectLocalPuck(cfg.Mode); err != nil {
+		return err
 	}
 	relayRunning, agentRunning, err := managedState(root)
 	if err != nil {

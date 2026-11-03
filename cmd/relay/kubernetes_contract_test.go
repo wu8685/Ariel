@@ -102,6 +102,28 @@ func TestKubernetesPasskeyOverlayPersistsCredentialsBehindTLS(t *testing.T) {
 	}
 }
 
+func TestKubernetesPuckOverlayExtendsPasskeyWithoutChangingPIN(t *testing.T) {
+	kustomization := repositoryFile(t, "deploy/kubernetes/overlays/passkey-puck/kustomization.yaml")
+	if !strings.Contains(kustomization, "../passkey") || !strings.Contains(kustomization, "deployment-patch.yaml") {
+		t.Fatal("Puck overlay must extend the Passkey overlay with a deployment patch")
+	}
+	patch := repositoryFile(t, "deploy/kubernetes/overlays/passkey-puck/deployment-patch.yaml")
+	for _, required := range []string{"ARIEL_PUCK_ENABLED", "ARIEL_PUCK_DATA_DIR", "/data/puck", "896MiB", "1152Mi"} {
+		if !strings.Contains(patch, required) {
+			t.Errorf("Puck deployment patch missing %q", required)
+		}
+	}
+}
+
+func TestECSDeploymentOffersPasskeyOnlyPuckDryRun(t *testing.T) {
+	script := repositoryFile(t, "scripts/deploy-ecs.sh")
+	for _, required := range []string{"--enable-puck", "--dry-run", "ARIEL_PUCK_ENABLED=true", "ARIEL_PUCK_DATA_DIR=/data/puck", "896MiB", "1152m"} {
+		if !strings.Contains(script, required) {
+			t.Errorf("ECS deployment script missing %q", required)
+		}
+	}
+}
+
 func TestKubernetesManifestsNeverPersistSecretObjects(t *testing.T) {
 	root := filepath.Join(repositoryRoot(t), "deploy", "kubernetes")
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
