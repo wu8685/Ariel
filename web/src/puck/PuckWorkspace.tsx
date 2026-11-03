@@ -91,6 +91,11 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
     {!terminal && <div className="puck-card-actions puck-options">{arrayData<string>(data.options).map(option => <button className="puck-chip" key={option} type="button" disabled={submitting} onClick={()=>onAction("question",data,option)}>{option}</button>)}</div>}
     {data.answer != null && <p className="puck-card-result"><span aria-hidden="true">✓</span> 你选择了 <strong>{String(data.answer)}</strong></p>}
   </section>;
+  const expiresAt = data.expiresAt ? new Date(String(data.expiresAt)).getTime() : Number.POSITIVE_INFINITY;
+  const expired = message.kind === "authorization" && Number.isFinite(expiresAt) && expiresAt <= Date.now();
+  if (message.kind === "authorization" && expired && !terminal) return <section className="puck-card puck-authorization-card terminal compact" role="group" aria-label="授权卡片">
+    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">◇</span><strong>授权已过期</strong><span className="puck-card-result">已过期</span></div>
+  </section>;
   if (message.kind === "authorization") return <section className={`puck-card puck-authorization-card${terminal ? " terminal" : ""}`} role="group" aria-label="授权卡片">
     <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">◇</span><strong>{terminal ? "授权已处理" : "需要授权"}</strong></div>
     <p>{message.text}</p>
@@ -275,7 +280,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </article>;
       })}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
-      {selected && <footer><div className="puck-composer"><textarea aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><span aria-hidden="true">↑</span></button></div></footer>}
+      {selected && <footer><div className="puck-composer"><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><span aria-hidden="true">↑</span></button></div></footer>}
     </section>
 
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>

@@ -121,6 +121,18 @@ describe("PuckWorkspace", () => {
 		expect(view.container.querySelector(".puck-info .puck-avatar-large .puck-avatar-badge")).toBeNull();
 	});
 
+	it("collapses an expired pending authorization into a result without decision buttons", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [
+				{ id: "z", role: "assistant", kind: "authorization", text: "运行测试", cardJSON: JSON.stringify({ authorizationId: "expired", cardState: "pending", expiresAt: "2020-01-01T00:00:00Z" }) },
+			] }) : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		expect(await screen.findByText("已过期")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "仅这一次允许" })).toBeNull();
+	});
+
   it("uses puck.watch events for durable conversation updates and unwatches on cleanup", async () => {
     let listener: ((event: Record<string, unknown>) => void) | undefined;
     const subscribeEvents = vi.fn((next: (event: Record<string, unknown>) => void) => { listener = next; return vi.fn(); });

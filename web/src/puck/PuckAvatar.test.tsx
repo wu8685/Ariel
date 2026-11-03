@@ -2,8 +2,11 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { avatarColors, avatarShapes, deriveAvatar, expressionForState, PuckAvatar } from "./PuckAvatar";
+import { resetAvatarMotionSchedulerForTests } from "./PuckAvatarScheduler";
+import avatarSource from "./PuckAvatar.tsx?raw";
+import avatarStyle from "./puck.css?raw";
 
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); resetAvatarMotionSchedulerForTests(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("PuckAvatar", () => {
   it("derives a stable shape and color from the assistant id", () => {
@@ -37,6 +40,14 @@ describe("PuckAvatar", () => {
 		}
 	});
 
+	it("renders stationary white eye masks with independently translated dark pupils", () => {
+		const { container } = render(<PuckAvatar assistantId="assistant-eyes" name="眼睛测试" animated={false}/>);
+		expect(container.querySelectorAll(".puck-avatar-eye-white")).toHaveLength(2);
+		expect(container.querySelectorAll(".puck-avatar-pupil")).toHaveLength(2);
+		expect(container.querySelectorAll("clipPath")).toHaveLength(2);
+		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();
+	});
+
   it("is accessible, non-draggable and reacts to touch", () => {
     render(<PuckAvatar assistantId="assistant-a" name="小帕" state="waiting_user" size="large" attention />);
     const avatar = screen.getByRole("img", { name: "小帕，等待你的回复" });
@@ -50,7 +61,6 @@ describe("PuckAvatar", () => {
 		expect(avatar.querySelector(".puck-avatar-mouth")).toBeNull();
 		expect(avatar.querySelector(".puck-avatar-brows")).toBeNull();
     fireEvent.pointerDown(avatar);
-    expect(avatar.getAttribute("data-reacting")).toBe("true");
 		expect(avatar.querySelectorAll(".puck-avatar-sparkle")).toHaveLength(5);
 		expect(avatar.querySelector(".puck-avatar-particle")).toBeNull();
   });
@@ -64,75 +74,22 @@ describe("PuckAvatar", () => {
 		}
 	});
 
-	it("clears its playful sparkles and suppresses non-blink motion when reduced motion is requested", async () => {
+	it("does not re-render while the shared scheduler changes gaze and blink phases", async () => {
 		vi.useFakeTimers();
-		const normal = render(<PuckAvatar assistantId="assistant-a" name="小帕" />);
-		const avatar = normal.getByRole("img", { name: "小帕，空闲" });
-		fireEvent.pointerDown(avatar);
-		expect(avatar.querySelector(".puck-avatar-sparkles")).toBeTruthy();
-		await act(() => vi.advanceTimersByTimeAsync(420));
-		expect(avatar.querySelector(".puck-avatar-sparkles")).toBeNull();
-		normal.unmount();
-
-		vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
-		render(<PuckAvatar assistantId="assistant-b" name="小精灵" />);
-		const reduced = screen.getByRole("img", { name: "小精灵，空闲" });
-		fireEvent.pointerDown(reduced);
-		expect(reduced.getAttribute("data-reacting")).toBe("false");
-		expect(reduced.querySelector(".puck-avatar-sparkles")).toBeNull();
+		let renders = 0;
+		function CountedAvatar() { renders += 1; return <PuckAvatar assistantId="assistant-counted" name="计数测试"/>; }
+		render(<CountedAvatar/>);
+		const initialRenders = renders;
+		await act(() => vi.advanceTimersByTimeAsync(20_000));
+		expect(renders).toBe(initialRenders);
+		const avatar = screen.getByRole("img", { name: "计数测试，空闲" });
+		expect(Number(avatar.getAttribute("data-motion-count"))).toBeGreaterThan(0);
 	});
 
-  it("schedules random blink, double-blink, head tilt and eye look with staggered phases", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const view = render(<><PuckAvatar assistantId="assistant-a" name="小帕" /><PuckAvatar assistantId="assistant-a" name="小帕二号" /></>);
-    const avatar = screen.getByRole("img", { name: "小帕，空闲" });
-    const peer = screen.getByRole("img", { name: "小帕二号，空闲" });
-    expect(avatar.getAttribute("data-motion-phase")).not.toBe(peer.getAttribute("data-motion-phase"));
-    const blinkDelay = Number(avatar.getAttribute("data-blink-delay"));
-    expect(avatar.getAttribute("data-blinking")).toBe("false");
-    await act(() => vi.advanceTimersByTimeAsync(blinkDelay));
-    expect(avatar.getAttribute("data-blinking")).toBe("true");
-    await act(() => vi.advanceTimersByTimeAsync(230));
-    expect(Number(avatar.getAttribute("data-blink-count"))).toBeGreaterThanOrEqual(2);
-    view.unmount();
-
-    const tiltView = render(<PuckAvatar assistantId="assistant-tilt" name="歪头测试" />);
-    const tilting = screen.getByRole("img", { name: "歪头测试，空闲" });
-    await act(() => vi.advanceTimersByTimeAsync(Number(tilting.getAttribute("data-tilt-delay"))));
-    expect(tilting.getAttribute("data-tilting")).toBe("true");
-    tiltView.unmount();
-
-    render(<PuckAvatar assistantId="assistant-look" name="视线测试" />);
-    const looking = screen.getByRole("img", { name: "视线测试，空闲" });
-    await act(() => vi.advanceTimersByTimeAsync(Number(looking.getAttribute("data-look-delay"))));
-    expect(looking.getAttribute("data-looking")).not.toBe("0");
-  });
-
-	it("keeps only blinking autonomous motion in reduced-motion mode", async () => {
-		vi.useFakeTimers();
-		vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
-		render(<PuckAvatar assistantId="assistant-reduced" name="低动态" />);
-		const avatar = screen.getByRole("img", { name: "低动态，空闲" });
-		await act(() => vi.advanceTimersByTimeAsync(20_000));
-		expect(Number(avatar.getAttribute("data-blink-count"))).toBeGreaterThan(0);
-		expect(avatar.getAttribute("data-tilting")).toBe("false");
-		expect(avatar.getAttribute("data-looking")).toBe("0");
-	});
-
-	it("pauses autonomous timers while the tab is hidden", async () => {
-		vi.useFakeTimers();
-		let hidden = false;
-		vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
-		render(<PuckAvatar assistantId="assistant-hidden" name="隐藏测试" />);
-		const avatar = screen.getByRole("img", { name: "隐藏测试，空闲" });
-		hidden = true;
-		fireEvent(document, new Event("visibilitychange"));
-		expect(avatar.getAttribute("data-paused")).toBe("true");
-		const blinkCount = avatar.getAttribute("data-blink-count");
-		await act(() => vi.advanceTimersByTimeAsync(20_000));
-		expect(avatar.getAttribute("data-blink-count")).toBe(blinkCount);
-		expect(avatar.getAttribute("data-tilting")).toBe("false");
-		expect(avatar.getAttribute("data-looking")).toBe("0");
+	it("contains no per-avatar timer loop, React motion state, infinite body animation or permanent will-change", () => {
+		expect(avatarSource).not.toMatch(/\buseState\b|requestAnimationFrame|setInterval|setTimeout/);
+		expect(avatarStyle).not.toMatch(/\.puck-workspace \.puck-avatar svg[^}]*animation:/s);
+		expect(avatarStyle).not.toMatch(/\.puck-workspace \.puck-avatar-body[^}]*animation:/s);
+		expect(avatarStyle).not.toMatch(/will-change/);
 	});
 });

@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { registerAvatarMotion, type BlinkPhase, type GazeDirection } from "./PuckAvatarScheduler";
 
 export type AvatarShape = "circle" | "cloud" | "tilted_square" | "four_star" | "clover" | "heart" | "flower" | "drop" | "capsule" | "triangle" | "tilted_rect" | "burst" | "hexagon" | "pumpkin";
 export type PuckState = "idle" | "thinking" | "working" | "waiting_user" | "awaiting_authorization" | "attention" | "error" | "done" | string;
@@ -66,111 +67,92 @@ function shapePath(shape: AvatarShape): ReactNode {
   }
 }
 
-function motionDelays(assistantId: string, instanceId: string) {
-  const phase = hash(`${assistantId}:${instanceId}`);
-  return { phase, blink: 2000 + phase % 4001, tilt: 6000 + (phase >>> 5) % 9001, look: 3500 + (phase >>> 11) % 5501 };
-}
-
 export function PuckAvatar({ assistantId, name, state = "idle", design, size = "medium", attention = false, animated = true }: { assistantId: string; name: string; state?: PuckState; design?: AvatarDesign; size?: "small" | "medium" | "large"; attention?: boolean; animated?: boolean }) {
-  const instanceId = useId();
-  const delays = useMemo(() => motionDelays(assistantId, instanceId), [assistantId, instanceId]);
+  const instanceId = useId().replaceAll(":", "");
   const root = useRef<HTMLDivElement>(null);
-  const hoverTimer = useRef<number | undefined>(undefined);
-  const reactionTimer = useRef<number | undefined>(undefined);
-  const [reacting, setReacting] = useState(false);
-  const [blinking, setBlinking] = useState(false);
-  const [blinkCount, setBlinkCount] = useState(0);
-  const [tilting, setTilting] = useState(false);
-  const [tiltDirection, setTiltDirection] = useState(1);
-  const [looking, setLooking] = useState<-1 | 0 | 1>(0);
-  const [hidden, setHidden] = useState(() => typeof document !== "undefined" && document.hidden);
-  const [reducedMotion, setReducedMotion] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const avatar = design || deriveAvatar(assistantId);
+  const reducedMotion = useRef(false);
+  const avatar = useMemo(() => design || deriveAvatar(assistantId), [assistantId, design]);
   const expression = expressionForState(state);
 
   useEffect(() => {
-    const update = () => setHidden(document.hidden);
-    document.addEventListener("visibilitychange", update);
-    return () => document.removeEventListener("visibilitychange", update);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReducedMotion(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  useEffect(() => {
-    if (hidden || !animated) return;
-    const timers = new Set<number>();
-    let cancelled = false;
-    const later = (callback: () => void, delay: number) => { const timer = window.setTimeout(() => { timers.delete(timer); if (!cancelled) callback(); }, delay); timers.add(timer); };
-    const schedule = (delay = 2000 + Math.random() * 4000) => later(() => {
-      setBlinking(true); setBlinkCount(count => count + 1);
-      later(() => {
-        setBlinking(false);
-        if (Math.random() < 0.22) later(() => { setBlinking(true); setBlinkCount(count => count + 1); later(() => { setBlinking(false); schedule(); }, 110); }, 110);
-        else schedule();
-      }, 110);
-    }, delay);
-    schedule(delays.blink);
-    return () => { cancelled = true; timers.forEach(timer => window.clearTimeout(timer)); };
-  }, [animated, delays.blink, hidden]);
-
-  useEffect(() => {
-    if (hidden || reducedMotion || !animated) { setTilting(false); return; }
-    const timers = new Set<number>(); let cancelled = false;
-    const later = (callback: () => void, delay: number) => { const timer = window.setTimeout(() => { timers.delete(timer); if (!cancelled) callback(); }, delay); timers.add(timer); };
-    const schedule = (delay = 6000 + Math.random() * 9000) => later(() => { setTiltDirection(Math.random() < 0.5 ? -1 : 1); setTilting(true); later(() => { setTilting(false); schedule(); }, 720); }, delay);
-    schedule(delays.tilt);
-    return () => { cancelled = true; timers.forEach(timer => window.clearTimeout(timer)); };
-  }, [animated, delays.tilt, hidden, reducedMotion]);
-
-  useEffect(() => {
-    if (hidden || reducedMotion || !animated) { setLooking(0); return; }
-    const timers = new Set<number>(); let cancelled = false;
-    const later = (callback: () => void, delay: number) => { const timer = window.setTimeout(() => { timers.delete(timer); if (!cancelled) callback(); }, delay); timers.add(timer); };
-    const schedule = (delay = 3500 + Math.random() * 5500) => later(() => { setLooking(Math.random() < 0.5 ? -1 : 1); later(() => { setLooking(0); schedule(); }, 620); }, delay);
-    schedule(delays.look);
-    return () => { cancelled = true; timers.forEach(timer => window.clearTimeout(timer)); };
-  }, [animated, delays.look, hidden, reducedMotion]);
-
-  useEffect(() => () => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); if (reactionTimer.current) window.clearTimeout(reactionTimer.current); }, []);
-  useEffect(() => { if (!reducedMotion) return; setReacting(false); if (reactionTimer.current) window.clearTimeout(reactionTimer.current); reactionTimer.current = undefined; }, [reducedMotion]);
+    if (!animated || !root.current) return;
+    const element = root.current;
+    const countMotion = () => element.dataset.motionCount = String(Number(element.dataset.motionCount || 0) + 1);
+    const target = {
+      setBlinkPhase(phase: BlinkPhase) { element.dataset.blinkPhase = phase; countMotion(); },
+      setGaze(direction: GazeDirection) {
+        element.dataset.gaze = direction.name;
+        element.style.setProperty("--puck-eye-x", `${direction.x * 4.4}px`);
+        element.style.setProperty("--puck-eye-y", `${direction.y * 5.2}px`);
+        countMotion();
+      },
+    };
+    const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-reduced-motion: reduce)") : undefined;
+    reducedMotion.current = media?.matches ?? false;
+    element.dataset.reducedMotion = String(reducedMotion.current);
+    const registration = registerAvatarMotion(`${assistantId}:${instanceId}`, target, { reducedMotion: reducedMotion.current });
+    const mediaChanged = () => {
+      reducedMotion.current = media?.matches ?? false;
+      element.dataset.reducedMotion = String(reducedMotion.current);
+      registration.setReducedMotion(reducedMotion.current);
+    };
+    media?.addEventListener("change", mediaChanged);
+    const observer = typeof IntersectionObserver === "function" ? new IntersectionObserver(records => {
+      const record = records[0];
+      if (record) registration.setVisible(record.isIntersecting);
+    }) : undefined;
+    observer?.observe(element);
+    return () => {
+      observer?.disconnect();
+      media?.removeEventListener("change", mediaChanged);
+      registration.unregister();
+    };
+  }, [animated, assistantId, instanceId]);
 
   function follow(event: PointerEvent<HTMLDivElement>) {
-    if (reducedMotion || event.pointerType === "touch" || !root.current) return;
+    if (reducedMotion.current || event.pointerType === "touch" || !root.current) return;
     const box = root.current.getBoundingClientRect();
     const x = Math.max(-1, Math.min(1, (event.clientX - box.left) / box.width * 2 - 1));
     const y = Math.max(-1, Math.min(1, (event.clientY - box.top) / box.height * 2 - 1));
-    root.current.style.setProperty("--puck-eye-x", `${x * 2.2}px`); root.current.style.setProperty("--puck-eye-y", `${y * 1.7}px`);
+    root.current.style.setProperty("--puck-eye-x", `${x * 4.4}px`); root.current.style.setProperty("--puck-eye-y", `${y * 5.2}px`);
   }
 
   function react() {
-    if (reducedMotion) return;
-    if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
-    setReacting(true);
-    reactionTimer.current = window.setTimeout(() => { setReacting(false); reactionTimer.current = undefined; }, 420);
+    const element = root.current;
+    if (!element || reducedMotion.current) return;
+    element.dataset.reacting = "true";
+    const animations = Array.from(element.querySelectorAll<HTMLElement>(".puck-avatar-sparkle")).flatMap((sparkle, index) => typeof sparkle.animate === "function" ? [sparkle.animate([
+      { opacity: 0, transform: "translate(-50%, -50%) scale(.2)" },
+      { opacity: 1, offset: .28, transform: `translate(calc(-50% + ${index % 2 ? 16 : -16}px), calc(-50% - ${12 + index * 2}px)) scale(1)` },
+      { opacity: 0, transform: `translate(calc(-50% + ${index % 2 ? 22 : -22}px), calc(-50% - ${18 + index * 3}px)) scale(.4)` },
+    ], { duration: 420, easing: "ease-out" })] : []);
+    const winkTarget = element.querySelector<SVGGElement>(".puck-avatar-eye-left");
+    const wink = winkTarget && typeof winkTarget.animate === "function" ? winkTarget.animate([
+      { transform: "rotate(-8deg) scaleY(1)" }, { transform: "rotate(-8deg) scaleY(.05)", offset: .45 }, { transform: "rotate(-8deg) scaleY(1)" },
+    ], { duration: 300, easing: "ease-out" }) : undefined;
+    if (wink) animations.push(wink);
+    if (animations.length === 0) { element.dataset.reacting = "false"; return; }
+    void Promise.allSettled(animations.map(animation => animation.finished)).then(() => { if (root.current === element) element.dataset.reacting = "false"; });
   }
 
-  const style = { "--puck-avatar-color": avatar.color, "--puck-auto-eye-x": `${looking * 1.9}px`, "--puck-tilt-angle": `${tiltDirection * 4}deg`, "--puck-tilt-x": `${tiltDirection * 1.3}px` } as CSSProperties;
+  const style = { "--puck-avatar-color": avatar.color, "--puck-eye-x": "0px", "--puck-eye-y": "0px" } as CSSProperties;
+  const leftClip = `${instanceId}-puck-left-eye`;
+  const rightClip = `${instanceId}-puck-right-eye`;
 
   return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
-    data-expression={expression} data-shape={avatar.shape} data-reacting={reacting ? "true" : "false"} data-blinking={blinking ? "true" : "false"} data-blink-count={blinkCount}
-    data-tilting={tilting ? "true" : "false"} data-looking={looking} data-paused={hidden ? "true" : "false"} data-reduced-motion={reducedMotion ? "true" : "false"}
-    data-motion-phase={delays.phase} data-blink-delay={delays.blink} data-tilt-delay={delays.tilt} data-look-delay={delays.look}
-    style={style} onPointerEnter={() => { if (!hoverTimer.current) hoverTimer.current = window.setTimeout(() => { hoverTimer.current = undefined; react(); }, 80 + Math.random() * 180); }}
-    onPointerMove={follow} onPointerLeave={() => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined; root.current?.style.removeProperty("--puck-eye-x"); root.current?.style.removeProperty("--puck-eye-y"); }}
+    data-expression={expression} data-shape={avatar.shape} data-reacting="false" data-blink-phase="open" data-gaze="center" data-motion-count="0"
+    style={style} onPointerMove={follow} onPointerLeave={() => { root.current?.style.setProperty("--puck-eye-x", "0px"); root.current?.style.setProperty("--puck-eye-y", "0px"); }}
     onPointerDown={react} onDragStart={event => event.preventDefault()}>
     <span className="puck-avatar-motion"><svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+      <defs><clipPath id={leftClip}><ellipse cx="40" cy="55" rx="7" ry="9"/></clipPath><clipPath id={rightClip}><ellipse cx="61" cy="55" rx="7" ry="9"/></clipPath></defs>
       <g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M39 37C36 29 36 20 40 13c3 8 5 16 5 24Z"/><path className="puck-avatar-ear" d="M61 37c3-8 3-17-1-24-3 8-5 16-5 24Z"/></g>
       <g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
-      <g className="puck-avatar-eyes"><ellipse className="puck-avatar-eye" cx="40" cy="55" rx="4.6" ry="8"/><ellipse className="puck-avatar-eye" cx="61" cy="55" rx="4.6" ry="8"/></g>
+      <g className="puck-avatar-eyes">
+        <g className="puck-avatar-eye puck-avatar-eye-left"><ellipse className="puck-avatar-eye-white" cx="40" cy="55" rx="7" ry="9"/><g clipPath={`url(#${leftClip})`}><ellipse className="puck-avatar-pupil" cx="40" cy="55" rx="4.6" ry="7.6"/></g><path className="puck-avatar-closed-line" d="M33 55h14"/></g>
+        <g className="puck-avatar-eye puck-avatar-eye-right"><ellipse className="puck-avatar-eye-white" cx="61" cy="55" rx="7" ry="9"/><g clipPath={`url(#${rightClip})`}><ellipse className="puck-avatar-pupil" cx="61" cy="55" rx="4.6" ry="7.6"/></g><path className="puck-avatar-closed-line" d="M54 55h14"/></g>
+      </g>
     </svg></span>
-    {reacting && <span className="puck-avatar-sparkles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-sparkle" key={index}/>)}</span>}
+    <span className="puck-avatar-sparkles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-sparkle" key={index}/>)}</span>
     {attention && <span className="puck-avatar-badge" aria-hidden="true" />}
   </div>;
 }

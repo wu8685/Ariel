@@ -326,6 +326,7 @@
 .puck-workspace .puck-message.user { justify-content: flex-end; }
 .puck-workspace .puck-message-content { min-width: 0; }
 .puck-workspace .puck-message.assistant .puck-message-content {
+  width: calc(100% - var(--puck-avatar-msg) - var(--puck-space-3));
   max-width: calc(100% - var(--puck-avatar-msg) - var(--puck-space-3));
   padding: 0;
   border: 0;
@@ -464,6 +465,8 @@
   line-height: var(--puck-leading-secondary);
 }
 .puck-workspace .puck-card-result strong { color: var(--color-text); font-weight: var(--puck-weight-medium); }
+.puck-workspace .puck-card.compact { padding-block: var(--puck-space-2); }
+.puck-workspace .puck-card.compact .puck-card-result { margin: 0; white-space: nowrap; }
 .puck-workspace .puck-question-card.terminal .puck-card-title { color: var(--color-muted); }
 .puck-workspace .puck-authorization-card:not(.terminal) { border-color: rgba(255, 159, 10, .32); }
 .puck-workspace .puck-authorization-card .puck-card-icon { color: var(--color-warning); }
@@ -552,7 +555,7 @@
   min-height: var(--puck-composer-height);
   box-sizing: border-box;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   margin: 0 auto;
   border: var(--puck-border) solid var(--color-border);
   border-radius: calc(var(--puck-composer-height) / 2);
@@ -560,6 +563,7 @@
 }
 .puck-workspace .puck-composer:focus-within { border-color: rgba(255, 255, 255, .24); }
 .puck-workspace .puck-composer textarea {
+  field-sizing: content;
   min-width: 0;
   min-height: calc(var(--puck-composer-height) - var(--puck-ring));
   max-height: calc(var(--puck-composer-height) * 4);
@@ -579,7 +583,8 @@
 .puck-workspace .puck-send {
   position: absolute;
   right: calc(var(--puck-space-1) + var(--puck-space-1) / 2);
-  bottom: calc(var(--puck-space-1) + var(--puck-space-1) / 2);
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--puck-on-action);
   font-size: var(--puck-space-4);
 }
@@ -752,11 +757,10 @@
 .puck-workspace .puck-info-status[data-state="error"] i { background: #ff453a; }
 .puck-workspace .puck-info-empty { margin: var(--puck-space-4); color: var(--color-muted); }
 
-/* Only layout sizes changed here; SVG paths, eyes and autonomous motion stay unchanged. */
+/* Avatar silhouettes stay fixed; the compositor only translates pupils and scales eyes for blinks. */
 .puck-workspace .puck-avatar {
   --puck-eye-x: 0px;
   --puck-eye-y: 0px;
-  --puck-auto-eye-x: 0px;
   position: relative;
   flex: none;
   width: var(--puck-avatar-header);
@@ -771,28 +775,32 @@
   height: var(--puck-avatar-msg);
   margin-top: calc(var(--puck-border) * -1);
 }
-.puck-workspace .puck-avatar-motion { display:block; width:100%; height:100%; transform:translate(0,0) rotate(0); transform-origin:50% 62%; transition:transform .32s cubic-bezier(.2,.8,.2,1); }
-.puck-workspace .puck-avatar[data-tilting="true"] .puck-avatar-motion { transform:translate(var(--puck-tilt-x),-1px) rotate(var(--puck-tilt-angle)); }
-.puck-workspace .puck-avatar svg { width:100%; height:100%; overflow:visible; filter:drop-shadow(0 4px 8px #0003); animation:puck-breathe 4.8s ease-in-out infinite; }
+.puck-workspace .puck-avatar-motion { display:block; width:100%; height:100%; }
+.puck-workspace .puck-avatar svg { width:100%; height:100%; overflow:visible; filter:drop-shadow(0 4px 8px #0003); }
 .puck-workspace .puck-avatar-body { fill:var(--puck-avatar-color); transform-origin:center; }
 .puck-workspace .puck-avatar-stem { filter:brightness(.58); }
 .puck-workspace .puck-avatar-ears { fill:var(--puck-avatar-color); filter:brightness(.72); }
-.puck-workspace .puck-avatar-eyes { fill:#172023; transform:translate(calc(var(--puck-eye-x) + var(--puck-auto-eye-x)),var(--puck-eye-y)); transition:transform 100ms ease; transform-origin:center; }
-.puck-workspace .puck-avatar-eye:first-child { transform:rotate(-10deg); transform-origin:40px 55px; }
-.puck-workspace .puck-avatar-eye:last-child { transform:rotate(9deg); transform-origin:61px 55px; }
-.puck-workspace .puck-avatar[data-expression="searching"] svg { animation:puck-work 1.8s ease-in-out infinite; }
-.puck-workspace .puck-avatar[data-expression="searching"] .puck-avatar-eyes { animation:puck-look 2.2s ease-in-out infinite; }
-.puck-workspace .puck-avatar[data-expression="waiting"] svg { animation:puck-bounce 2.4s ease-in-out infinite; }
-.puck-workspace .puck-avatar[data-expression="waiting"] .puck-avatar-eyes { transform:translate(2px,1px); }
-.puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-eye:first-child { transform:rotate(18deg); }
-.puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-eye:last-child { transform:rotate(-18deg); }
-.puck-workspace .puck-avatar[data-expression="happy"] .puck-avatar-eyes ellipse { ry:2.5px; }
-.puck-workspace .puck-avatar[data-reacting="true"] svg { animation:puck-squish .42s ease; }
-.puck-workspace .puck-avatar[data-reacting="true"] .puck-avatar-eyes ellipse:first-child { ry:2px; }
-.puck-workspace .puck-avatar[data-blinking="true"] .puck-avatar-eyes { transform:translate(calc(var(--puck-eye-x) + var(--puck-auto-eye-x)),var(--puck-eye-y)) scaleY(.08); }
-.puck-workspace .puck-avatar[data-paused="true"] svg,
-.puck-workspace .puck-avatar[data-paused="true"] .puck-avatar-eyes,
-.puck-workspace .puck-avatar[data-paused="true"] .puck-avatar-motion { animation-play-state:paused; transition:none; }
+.puck-workspace .puck-avatar-eye { transform-box: view-box; transition: transform 100ms ease-in; }
+.puck-workspace .puck-avatar-eye-left { transform: rotate(-8deg); transform-origin:40px 55px; }
+.puck-workspace .puck-avatar-eye-right { transform: rotate(7deg); transform-origin:61px 55px; }
+.puck-workspace .puck-avatar-eye-white { fill:#f7f7f3; }
+.puck-workspace .puck-avatar-pupil {
+  fill:#172023;
+  transform:translate(var(--puck-eye-x),var(--puck-eye-y));
+  transition:transform 190ms cubic-bezier(.16,.88,.28,1.08);
+}
+.puck-workspace .puck-avatar-closed-line { fill:none; stroke:#172023; stroke-width:2.6; stroke-linecap:round; vector-effect:non-scaling-stroke; opacity:0; }
+.puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-eye-left { transform:rotate(14deg); }
+.puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-eye-right { transform:rotate(-14deg); }
+.puck-workspace .puck-avatar[data-expression="happy"] .puck-avatar-eye { transform:scaleY(.45); }
+.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye,
+.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye { transform:rotate(var(--puck-eye-angle, 0deg)) scaleY(.04); }
+.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-left,
+.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-left { --puck-eye-angle:-8deg; }
+.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-right,
+.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-right { --puck-eye-angle:7deg; }
+.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-closed-line { opacity:1; }
+.puck-workspace .puck-avatar[data-blink-phase="opening"] .puck-avatar-eye { transition-timing-function:ease-out; }
 .puck-workspace .puck-avatar-badge {
   position: absolute;
   top: 0;
@@ -805,22 +813,12 @@
   background: #0a84ff;
 }
 .puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-badge { background: #ff453a; }
-@keyframes puck-breathe { 0%,100%{transform:scale(1)} 50%{transform:scale(1.035)} }
-@keyframes puck-look { 0%,100%{transform:translate(-2px,0)} 50%{transform:translate(2px,1px)} }
-@keyframes puck-work { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
-@keyframes puck-bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
-@keyframes puck-squish { 0%,100%{transform:scale(1)} 45%{transform:scale(1.12,.82)} }
-.puck-workspace .puck-avatar .puck-avatar-eyes { animation:none; }
-@media(prefers-reduced-motion:no-preference) {
-  .puck-workspace .puck-avatar[data-expression="searching"] .puck-avatar-eyes { animation:puck-look 2.2s ease-in-out infinite; }
-}
 .puck-workspace .puck-avatar-sparkles { position:absolute; inset:0; z-index:2; pointer-events:none; }
-.puck-workspace .puck-avatar-sparkle { --puck-sparkle-x:0px; --puck-sparkle-y:-18px; position:absolute; left:50%; top:44%; width:6px; height:6px; background:#fff; clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%); opacity:0; animation:puck-sparkle .42s ease-out both; }
-.puck-workspace .puck-avatar-sparkle:nth-child(2) { --puck-sparkle-x:18px; --puck-sparkle-y:-8px; background:#7ee7ff; animation-delay:20ms; }
-.puck-workspace .puck-avatar-sparkle:nth-child(3) { --puck-sparkle-x:17px; --puck-sparkle-y:12px; background:#ffd76a; animation-delay:40ms; }
-.puck-workspace .puck-avatar-sparkle:nth-child(4) { --puck-sparkle-x:-17px; --puck-sparkle-y:10px; background:#fff; animation-delay:30ms; }
-.puck-workspace .puck-avatar-sparkle:nth-child(5) { --puck-sparkle-x:-18px; --puck-sparkle-y:-9px; background:#caa8ff; animation-delay:10ms; }
-@keyframes puck-sparkle { 0% { opacity:0; transform:translate(-50%,-50%) scale(.2) rotate(0deg); } 28% { opacity:1; } 100% { opacity:0; transform:translate(calc(-50% + var(--puck-sparkle-x)),calc(-50% + var(--puck-sparkle-y))) scale(1) rotate(135deg); } }
+.puck-workspace .puck-avatar-sparkle { position:absolute; left:50%; top:44%; width:6px; height:6px; background:#fff; clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%); opacity:0; }
+.puck-workspace .puck-avatar-sparkle:nth-child(2) { background:#7ee7ff; }
+.puck-workspace .puck-avatar-sparkle:nth-child(3) { background:#ffd76a; }
+.puck-workspace .puck-avatar-sparkle:nth-child(4) { background:#fff; }
+.puck-workspace .puck-avatar-sparkle:nth-child(5) { background:#caa8ff; }
 
 .puck-dialog-backdrop {
   position: fixed;
@@ -932,11 +930,5 @@
 @media(prefers-reduced-motion:reduce) {
   .puck-workspace .puck-thinking-dots i,
   .puck-workspace .puck-state i { animation: none; }
-  .puck-workspace .puck-avatar svg,
-  .puck-workspace .puck-avatar[data-expression] svg { animation:none; }
-  .puck-workspace .puck-avatar .puck-avatar-eyes,
-  .puck-workspace .puck-avatar[data-expression] .puck-avatar-eyes,
-  .puck-workspace .puck-avatar-motion { animation:none; transition:none; }
   .puck-workspace .puck-avatar-sparkles { display:none; }
-  .puck-workspace .puck-avatar[data-reacting="true"] svg { animation:none; }
 }
