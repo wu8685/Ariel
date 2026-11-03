@@ -220,6 +220,19 @@ func TestModuleCreateMessageHistoryAndDelete(t *testing.T) {
 	if message.Error != nil || message.Data["state"] != "processing" {
 		t.Fatalf("message=%+v", message)
 	}
+	bridge.mu.Lock()
+	var forwarded struct {
+		ClientMessageID string `json:"clientMessageId"`
+	}
+	for i, method := range bridge.calls {
+		if method == "puck.brain.turn.start" {
+			_ = json.Unmarshal(bridge.params[i], &forwarded)
+		}
+	}
+	bridge.mu.Unlock()
+	if forwarded.ClientMessageID != "00000000-0000-4000-8000-000000000130" {
+		t.Fatalf("brain clientMessageId=%q", forwarded.ClientMessageID)
+	}
 	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id}))
 	if history.Error != nil || len(history.Data["messages"].([]Message)) != 1 {
 		t.Fatalf("history=%+v", history)

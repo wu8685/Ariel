@@ -405,8 +405,7 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text}); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	turnMessageID := newUUID()
-	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": turnMessageID, "text": brainEnvelope(a.ID, input.Text), "model": a.BrainModel, "effort": a.BrainReasoning}))
+	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a.ID, input.Text), "model": a.BrainModel, "effort": a.BrainReasoning}))
 	if result.Error != nil {
 		return result
 	}
