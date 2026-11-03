@@ -4,8 +4,13 @@ export type AvatarShape = "blob" | "cloud" | "star" | "triangle";
 export type PuckState = "idle" | "thinking" | "working" | "waiting_user" | "awaiting_authorization" | "attention" | "error" | "done" | string;
 export type AvatarDesign = { shape: AvatarShape; color: string };
 
-const shapes: AvatarShape[] = ["blob", "cloud", "star", "triangle"];
-const colors = ["#7c6ff2", "#ef8354", "#55b8a9", "#e05c92", "#e4b647", "#62a8e5", "#8fb85a"];
+export const avatarShapes: ReadonlyArray<{ value: AvatarShape; label: string }> = [
+	{ value: "blob", label: "圆团" }, { value: "cloud", label: "云朵" }, { value: "star", label: "星形" }, { value: "triangle", label: "圆角三角" },
+];
+export const avatarColors: ReadonlyArray<{ value: string; label: string }> = [
+	{ value: "#1687ff", label: "亮蓝" }, { value: "#ff2d8d", label: "亮洋红" }, { value: "#ff3b30", label: "正红" }, { value: "#16c784", label: "鲜绿" },
+	{ value: "#ff7a00", label: "亮橙" }, { value: "#ffd60a", label: "亮黄" }, { value: "#9b5cff", label: "亮紫" },
+];
 
 function hash(value: string): number {
   let result = 2166136261;
@@ -15,7 +20,7 @@ function hash(value: string): number {
 
 export function deriveAvatar(assistantId: string): AvatarDesign {
   const value = hash(assistantId || "puck");
-  return { shape: shapes[value % shapes.length], color: colors[(value >>> 8) % colors.length] };
+  return { shape: avatarShapes[value % avatarShapes.length].value, color: avatarColors[(value >>> 8) % avatarColors.length].value };
 }
 
 export function expressionForState(state: PuckState): "calm" | "searching" | "waiting" | "worried" | "happy" {
@@ -103,13 +108,12 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
 		reactionTimer.current = window.setTimeout(() => { setReacting(false); reactionTimer.current = undefined; }, 420);
   }
   return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
-    data-expression={expression} data-reacting={reacting ? "true" : "false"} data-blinking={blinking ? "true" : "false"} data-paused={hidden ? "true" : "false"} data-reduced-motion={reducedMotion ? "true" : "false"}
+    data-expression={expression} data-shape={avatar.shape} data-reacting={reacting ? "true" : "false"} data-blinking={blinking ? "true" : "false"} data-paused={hidden ? "true" : "false"} data-reduced-motion={reducedMotion ? "true" : "false"}
     style={{ "--puck-avatar-color": avatar.color } as CSSProperties} onPointerEnter={() => { if (!hoverTimer.current) hoverTimer.current = window.setTimeout(() => { hoverTimer.current = undefined; react(); }, 80 + Math.random() * 180); }} onPointerMove={follow} onPointerLeave={() => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined; root.current?.style.removeProperty("--puck-eye-x"); root.current?.style.removeProperty("--puck-eye-y"); }} onPointerDown={react} onDragStart={event => event.preventDefault()}>
 		<svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-			<g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M34 37c-7-4-13-12-12-20 9 3 15 9 18 18Z"/><path className="puck-avatar-ear" d="M66 37c7-4 13-12 12-20-9 3-15 9-18 18Z"/></g>
+			<g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M35 39C25 34 16 23 15 8c13 5 22 15 27 29Z"/><path className="puck-avatar-ear" d="M65 39c10-5 19-16 20-31-13 5-22 15-27 29Z"/></g>
 			<g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
 			<g className="puck-avatar-crown"><path className="puck-avatar-leaf" d="M45 25c-9-1-15-7-17-15 10 0 17 5 20 13Z"/><path className="puck-avatar-leaf" d="M54 23c3-9 10-14 19-14-2 9-8 15-17 17Z"/><circle className="puck-avatar-flower" cx="51" cy="20" r="3.5"/></g>
-			<g className="puck-avatar-brows"><path d="M34 40c4-3 9-4 13-1"/><path d="M55 38c5-2 10-1 14 3"/></g>
 			<g className="puck-avatar-eyes"><ellipse cx="40" cy="52" rx="5" ry="8"/><ellipse cx="61" cy="52" rx="5" ry="8"/></g>
 		</svg>
 		{reacting && <span className="puck-avatar-particles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-particle" key={index}/>)}</span>}

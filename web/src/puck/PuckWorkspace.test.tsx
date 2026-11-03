@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PuckWorkspace } from "./PuckWorkspace";
 
@@ -106,4 +106,38 @@ describe("PuckWorkspace", () => {
     await act(async () => undefined);
     expect(request).toHaveBeenCalledWith("puck.unwatch", "relay", { watchId: "watch-a" });
   });
+
+	it("renders direct accessible avatar choices and persists click and keyboard selection", async () => {
+		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "blob", color: "#9b5cff" }) };
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [assistant] });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.update") {
+				assistant = { ...assistant, avatar: JSON.stringify(params.avatar) };
+				return accepted({ assistant });
+			}
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("小帕");
+		const shapes = screen.getByRole("radiogroup", { name: "头像形状" });
+		const colors = screen.getByRole("radiogroup", { name: "头像颜色" });
+		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(4);
+		expect(colors.querySelectorAll('[role="radio"]')).toHaveLength(7);
+		expect(screen.getByRole("radio", { name: "圆团" }).getAttribute("aria-checked")).toBe("true");
+		expect(screen.getByRole("radio", { name: "亮紫" }).getAttribute("aria-checked")).toBe("true");
+		expect(screen.queryByRole("combobox", { name: "头像形状" })).toBeNull();
+		expect(screen.queryByLabelText("头像颜色", { selector: 'input[type="color"]' })).toBeNull();
+
+		fireEvent.click(screen.getByRole("radio", { name: "星形" }));
+		await waitFor(() => expect(screen.getByRole("radio", { name: "星形" }).getAttribute("aria-checked")).toBe("true"));
+		expect(document.querySelector(".puck-avatar-large")?.getAttribute("data-shape")).toBe("star");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "star", color: "#9b5cff" } });
+		fireEvent.keyDown(screen.getByRole("radio", { name: "星形" }), { key: "ArrowRight" });
+		await waitFor(() => expect(screen.getByRole("radio", { name: "圆角三角" }).getAttribute("aria-checked")).toBe("true"));
+		fireEvent.click(screen.getByRole("radio", { name: "亮蓝" }));
+		await waitFor(() => expect(screen.getByRole("radio", { name: "亮蓝" }).getAttribute("aria-checked")).toBe("true"));
+		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#1687ff");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "triangle", color: "#1687ff" } });
+	});
 });

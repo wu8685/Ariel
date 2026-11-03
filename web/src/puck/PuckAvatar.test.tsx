@@ -29,11 +29,20 @@ describe("PuckAvatar", () => {
     expect(avatar.querySelector(".puck-avatar-badge")).toBeTruthy();
 		expect(avatar.querySelectorAll(".puck-avatar-ear")).toHaveLength(2);
 		expect(avatar.querySelectorAll(".puck-avatar-leaf")).toHaveLength(2);
-		expect(avatar.querySelector(".puck-avatar-brows")).toBeTruthy();
+		expect(avatar.querySelector(".puck-avatar-brows")).toBeNull();
     fireEvent.pointerDown(avatar);
     expect(avatar.getAttribute("data-reacting")).toBe("true");
 		expect(avatar.querySelectorAll(".puck-avatar-particle")).toHaveLength(5);
   });
+
+	it("never renders eyebrows for any state", () => {
+		const states = ["idle", "working", "waiting_user", "awaiting_authorization", "attention", "error", "done"];
+		const { rerender, container } = render(<PuckAvatar assistantId="assistant-a" name="小帕" state={states[0]} />);
+		for (const state of states) {
+			rerender(<PuckAvatar assistantId="assistant-a" name="小帕" state={state} />);
+			expect(container.querySelector(".puck-avatar-brows")).toBeNull();
+		}
+	});
 
 	it("clears its playful particles and suppresses motion when reduced motion is requested", async () => {
 		vi.useFakeTimers();
