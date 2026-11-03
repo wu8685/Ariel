@@ -50,9 +50,14 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
       await expect(page.getByRole("group", { name: "授权卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "任务卡片" })).toContainText("进行中");
       await expect(page.getByRole("button", { name: "打开会话" })).toBeVisible();
-      const avatar = page.getByRole("img", { name: /小帕，等待你的授权/ }).first();
+			const avatar = page.locator(".puck-conversation > header .puck-avatar");
       await expect(avatar).toHaveAttribute("data-expression", "waiting");
+			await expect(avatar.locator(".puck-avatar-ear")).toHaveCount(2);
+			await expect(avatar.locator(".puck-avatar-leaf")).toHaveCount(2);
       await expect(avatar.locator("svg")).toHaveCSS("animation-name", "none");
+			await avatar.click();
+			await expect(avatar).toHaveAttribute("data-reacting", "false");
+			await expect(avatar.locator(".puck-avatar-particles")).toHaveCount(0);
       await page.getByRole("button", { name: "Go" }).click();
       await expect(page.getByRole("group", { name: "问题卡片" })).toContainText("已回答");
       await expect(page.getByRole("button", { name: "Go" })).toBeDisabled();
@@ -69,3 +74,21 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
     });
   });
 }
+
+test.describe("Puck forest-sprite avatar interaction", () => {
+	test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false, colorScheme: "dark", reducedMotion: "no-preference" });
+	test("follows the pointer and clears playful petals after click", async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
+		await openPuck(page);
+		const avatar = page.locator(".puck-conversation > header .puck-avatar");
+		const box = await avatar.boundingBox();
+		expect(box).toBeTruthy();
+		await page.mouse.move(box!.x + box!.width - 2, box!.y + box!.height / 2);
+		await expect(avatar).not.toHaveCSS("--puck-eye-x", "0px");
+		await avatar.click();
+		await expect(avatar.locator(".puck-avatar-particles")).toBeVisible();
+		await page.mouse.move(1000, 800);
+		await expect(avatar.locator(".puck-avatar-particles")).toHaveCount(0, { timeout: 1000 });
+		await expect(avatar).toHaveAttribute("draggable", "false");
+	});
+});

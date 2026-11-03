@@ -45,9 +45,11 @@ function shapePath(shape: AvatarShape) {
 export function PuckAvatar({ assistantId, name, state = "idle", design, size = "medium", attention = false }: { assistantId: string; name: string; state?: PuckState; design?: AvatarDesign; size?: "small" | "medium" | "large"; attention?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<number | undefined>(undefined);
+	const reactionTimer = useRef<number | undefined>(undefined);
   const [reacting, setReacting] = useState(false);
   const [blinking, setBlinking] = useState(false);
   const [hidden, setHidden] = useState(() => typeof document !== "undefined" && document.hidden);
+	const [reducedMotion, setReducedMotion] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const avatar = design || deriveAvatar(assistantId);
   const expression = expressionForState(state);
   useEffect(() => {
@@ -55,6 +57,14 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return;
+		const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const update = () => setReducedMotion(media.matches);
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
   useEffect(() => {
     if (hidden) return;
     let cancelled = false;
@@ -68,9 +78,18 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     schedule();
     return () => { cancelled = true; if (blinkTimer) window.clearTimeout(blinkTimer); if (closeTimer) window.clearTimeout(closeTimer); };
   }, [hidden]);
-  useEffect(() => () => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); }, []);
+  useEffect(() => () => {
+		if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+		if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
+	}, []);
+	useEffect(() => {
+		if (!reducedMotion) return;
+		setReacting(false);
+		if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
+		reactionTimer.current = undefined;
+	}, [reducedMotion]);
   function follow(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerType === "touch" || !root.current) return;
+    if (reducedMotion || event.pointerType === "touch" || !root.current) return;
     const box = root.current.getBoundingClientRect();
     const x = Math.max(-1, Math.min(1, (event.clientX - box.left) / box.width * 2 - 1));
     const y = Math.max(-1, Math.min(1, (event.clientY - box.top) / box.height * 2 - 1));
@@ -78,13 +97,22 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     root.current.style.setProperty("--puck-eye-y", `${y * 1.7}px`);
   }
   function react() {
+		if (reducedMotion) return;
+		if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
     setReacting(true);
-    window.setTimeout(() => setReacting(false), 420);
+		reactionTimer.current = window.setTimeout(() => { setReacting(false); reactionTimer.current = undefined; }, 420);
   }
   return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
-    data-expression={expression} data-reacting={reacting ? "true" : "false"} data-blinking={blinking ? "true" : "false"} data-paused={hidden ? "true" : "false"}
+    data-expression={expression} data-reacting={reacting ? "true" : "false"} data-blinking={blinking ? "true" : "false"} data-paused={hidden ? "true" : "false"} data-reduced-motion={reducedMotion ? "true" : "false"}
     style={{ "--puck-avatar-color": avatar.color } as CSSProperties} onPointerEnter={() => { if (!hoverTimer.current) hoverTimer.current = window.setTimeout(() => { hoverTimer.current = undefined; react(); }, 80 + Math.random() * 180); }} onPointerMove={follow} onPointerLeave={() => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined; root.current?.style.removeProperty("--puck-eye-x"); root.current?.style.removeProperty("--puck-eye-y"); }} onPointerDown={react} onDragStart={event => event.preventDefault()}>
-    <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false"><g className="puck-avatar-body">{shapePath(avatar.shape)}</g><g className="puck-avatar-eyes"><ellipse cx="40" cy="50" rx="5" ry="8"/><ellipse cx="61" cy="50" rx="5" ry="8"/></g></svg>
+		<svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+			<g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M34 37c-7-4-13-12-12-20 9 3 15 9 18 18Z"/><path className="puck-avatar-ear" d="M66 37c7-4 13-12 12-20-9 3-15 9-18 18Z"/></g>
+			<g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
+			<g className="puck-avatar-crown"><path className="puck-avatar-leaf" d="M45 25c-9-1-15-7-17-15 10 0 17 5 20 13Z"/><path className="puck-avatar-leaf" d="M54 23c3-9 10-14 19-14-2 9-8 15-17 17Z"/><circle className="puck-avatar-flower" cx="51" cy="20" r="3.5"/></g>
+			<g className="puck-avatar-brows"><path d="M34 40c4-3 9-4 13-1"/><path d="M55 38c5-2 10-1 14 3"/></g>
+			<g className="puck-avatar-eyes"><ellipse cx="40" cy="52" rx="5" ry="8"/><ellipse cx="61" cy="52" rx="5" ry="8"/></g>
+		</svg>
+		{reacting && <span className="puck-avatar-particles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-particle" key={index}/>)}</span>}
     {attention && <span className="puck-avatar-badge" aria-hidden="true" />}
   </div>;
 }
