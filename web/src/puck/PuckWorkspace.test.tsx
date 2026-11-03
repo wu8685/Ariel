@@ -42,17 +42,20 @@ describe("PuckWorkspace", () => {
     const messages = [
       { id: "q", role: "assistant", kind: "question", text: "部署到哪里？", cardJSON: JSON.stringify({ options: ["测试", "生产"] }) },
       { id: "z", role: "assistant", kind: "authorization", text: "需要授权", cardJSON: JSON.stringify({ risk: "会写入文件" }) },
-      { id: "t", role: "assistant", kind: "task", text: "运行测试", cardJSON: JSON.stringify({ status: "running" }) },
+      { id: "t", role: "assistant", kind: "task", text: "运行测试", cardJSON: JSON.stringify({ status: "running", deviceId: "exec-a", threadId: "thread-a" }) },
     ];
     const request = vi.fn(async (method: string) => method === "puck.list"
       ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
       : method === "puck.history" ? accepted({ messages }) : accepted({ summary: "已请求停止 1 项" }));
-    render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    const onOpenThread = vi.fn();
+    render(<PuckWorkspace request={request} state="ready" devices={[]} onOpenThread={onOpenThread} />);
     expect(await screen.findByRole("group", { name: "问题卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "授权卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "任务卡片" })).toBeTruthy();
 	await act(async () => { fireEvent.click(screen.getByRole("button", { name: "停止全部工作" })); });
     expect(await screen.findByText("已请求停止 1 项")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "打开会话" }));
+    expect(onOpenThread).toHaveBeenCalledWith("exec-a", "thread-a");
   });
 
   it("explains unavailable deployment prerequisites", async () => {

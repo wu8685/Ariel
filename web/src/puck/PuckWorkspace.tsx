@@ -37,11 +37,11 @@ function Card({ message, onAction }: { message: Message; onAction: (kind:string,
   const data = cardData(message);
   if (message.kind === "question") return <section className="puck-card question" role="group" aria-label="问题卡片"><strong>需要你决定</strong><p>{message.text}</p><div className="puck-options">{arrayData<string>(data.options).map(option => <button key={option} type="button" onClick={()=>onAction("question",data,option)}>{option}</button>)}</div></section>;
   if (message.kind === "authorization") return <section className="puck-card authorization" role="group" aria-label="授权卡片"><strong>需要授权</strong><p>{message.text}</p>{data.risk != null && <small>风险：{String(data.risk)}</small>}<div><button type="button" onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="primary" type="button" onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div></section>;
-  if (message.kind === "task") return <section className="puck-card task" role="group" aria-label="任务卡片"><strong>{message.text}</strong><span className="puck-state">{data.status === "running" ? "进行中" : String(data.status || "待处理")}</span><details><summary>查看工作过程</summary><p>执行细节按需展开，不在对话中刷屏。</p></details></section>;
+  if (message.kind === "task") return <section className="puck-card task" role="group" aria-label="任务卡片"><strong>{message.text}</strong><span className="puck-state">{data.status === "running" ? "进行中" : String(data.status || "待处理")}</span><details><summary>查看工作过程</summary><p>执行细节按需展开，不在对话中刷屏。</p></details>{Boolean(data.deviceId && data.threadId) && <button type="button" onClick={()=>onAction("task",data,"open")}>打开会话</button>}</section>;
   return null;
 }
 
-export function PuckWorkspace({ request, state, reason, devices, onBack }: { request: Request; state: "ready" | "unavailable" | "disabled"; reason?: string; devices: Device[]; onBack?: () => void }) {
+export function PuckWorkspace({ request, state, reason, devices, onBack, onOpenThread }: { request: Request; state: "ready" | "unavailable" | "disabled"; reason?: string; devices: Device[]; onBack?: () => void; onOpenThread?: (deviceId: string, threadId: string) => void }) {
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [selectedID, setSelectedID] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -106,6 +106,10 @@ export function PuckWorkspace({ request, state, reason, devices, onBack }: { req
   }
 	async function respondCard(kind:string,data:Record<string,unknown>,value:string) {
 		if (!selected) return;
+		if (kind === "task") {
+			onOpenThread?.(String(data.deviceId || ""), String(data.threadId || ""));
+			return;
+		}
 		const response = kind === "authorization"
 			? await request("puck.authorization.decide","relay",{assistantId:selected.assistantId,authorizationId:String(data.authorizationId||""),decision:value})
 			: await request("puck.question.answer","relay",{assistantId:selected.assistantId,questionId:String(data.questionId||""),answer:value});

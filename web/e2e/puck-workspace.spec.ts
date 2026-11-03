@@ -4,7 +4,9 @@ const token = `s_${"b".repeat(64)}`;
 const assistants = [{ assistantId: "puck-one", name: "小帕", description: "负责日常开发协助", brainDeviceId: "brain-a", status: "ready" }];
 const messages = [
   { id: "hello", role: "assistant", kind: "text", text: "晚上好。测试已经开始，我会在有结果时告诉你。", createdAt: "2026-11-03T12:00:00Z" },
-  { id: "task", role: "assistant", kind: "task", text: "运行 Ariel 测试", cardJSON: JSON.stringify({ status: "running" }), createdAt: "2026-11-03T12:00:02Z" },
+  { id: "question", role: "assistant", kind: "question", text: "先运行哪组测试？", cardJSON: JSON.stringify({ questionId: "question-a", options: ["Go", "Web"] }), createdAt: "2026-11-03T12:00:01Z" },
+  { id: "authorization", role: "assistant", kind: "authorization", text: "这次操作需要你的确认。", cardJSON: JSON.stringify({ authorizationId: "authorization-a", risk: "目标主机无法证明审批策略" }), createdAt: "2026-11-03T12:00:02Z" },
+  { id: "task", role: "assistant", kind: "task", text: "运行 Ariel 测试", cardJSON: JSON.stringify({ status: "running", deviceId: "brain-a", threadId: "thread-a" }), createdAt: "2026-11-03T12:00:03Z" },
 ];
 
 async function openPuck(page: Page) {
@@ -37,7 +39,10 @@ for (const width of [320, 390, 1280]) {
     test("keeps the conversation usable without horizontal overflow", async ({ page }) => {
       await openPuck(page);
       expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await expect(page.getByRole("group", { name: "问题卡片" })).toBeVisible();
+      await expect(page.getByRole("group", { name: "授权卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "任务卡片" })).toContainText("进行中");
+      await expect(page.getByRole("button", { name: "打开会话" })).toBeVisible();
       if (width < 700) {
         await page.getByRole("button", { name: "打开助理列表" }).click();
         await expect(page.locator(".puck-assistants")).toHaveClass(/mobile-open/);
