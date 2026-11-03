@@ -28,6 +28,8 @@ type config struct {
 	tasksEnabled, tasksManagerOnly                                      bool
 	taskEndpoint, obsidianTaskVault                                     string
 	taskRoots, taskManagers                                             []string
+	puckBrain                                                           bool
+	puckRoot                                                            string
 }
 
 type reconnectBackoff struct{ next time.Duration }
@@ -137,6 +139,8 @@ func main() {
 	obsidianTaskVault := flag.String("obsidian-task-vault", os.Getenv("ARIEL_OBSIDIAN_TASK_VAULT"), "absolute Obsidian vault path used as the task source")
 	taskRoots := flag.String("task-allowed-roots", os.Getenv("ARIEL_TASK_ALLOWED_ROOTS"), "comma-separated absolute task execution roots")
 	taskManagers := flag.String("task-allowed-managers", os.Getenv("ARIEL_TASK_ALLOWED_MANAGERS"), "comma-separated authorized manager device IDs")
+	puckBrain := flag.Bool("enable-puck-brain", os.Getenv("ARIEL_PUCK_BRAIN_ENABLED") == "1" || strings.EqualFold(os.Getenv("ARIEL_PUCK_BRAIN_ENABLED"), "true"), "allow this Desktop Agent to host Puck brain threads")
+	puckRoot := flag.String("puck-root", os.Getenv("ARIEL_PUCK_ROOT"), "private Puck brain workspace root (default ~/.ariel/puck)")
 	flag.Parse()
 	fileEnabled, fileFlagErr := fileFlags.Enabled()
 	if fileFlagErr != nil {
@@ -165,6 +169,7 @@ func main() {
 		log.Fatal(err)
 	}
 	cfg.chillingEnabled, cfg.chillingEndpoint = fileEnabled, *chillingEndpoint
+	cfg.puckBrain, cfg.puckRoot = *puckBrain, *puckRoot
 	cfg, err = configureTasks(cfg, *enableTasks, *managerOnly, *taskEndpoint, *obsidianTaskVault, *taskRoots, *taskManagers)
 	if err != nil {
 		log.Fatal(err)
@@ -198,6 +203,10 @@ func main() {
 		}
 		if profileStatus == probe.IPCProfileUnverified {
 			log.Printf("compatibility warning: Desktop %s / Codex %s is above the minimum profile and has not been verified version-by-version; incompatible IPC operations will fail", desktopVersion, cliVersion)
+		}
+		if cfg.puckBrain && profileStatus != probe.IPCProfileVerified {
+			cfg.puckBrain = false
+			log.Print("Puck brain disabled: this Codex/Desktop version has not passed the isolated Puck compatibility gate")
 		}
 		taskExecutionCheck = taskExecutionCheckForProfile(cfg.tasksEnabled, cfg.tasksManagerOnly, profileStatus)
 		if taskExecutionCheck != nil {
@@ -234,7 +243,7 @@ func main() {
 			backoff.connected()
 			return nil
 		}
-		err := desktopagent.Run(ctx, desktopagent.Config{DisableExecutionSettings: *disableExecutionSettings, URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, FileContextEnabled: cfg.chillingEnabled, WorkspaceBrowserEnabled: *workspaceBrowser, DocumentAssetsEnabled: *documentAssets, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady})
+		err := desktopagent.Run(ctx, desktopagent.Config{DisableExecutionSettings: *disableExecutionSettings, URL: cfg.url, Token: cfg.token, DeviceID: cfg.deviceID, DeviceName: cfg.deviceName, Binary: binary, Socket: cfg.socket, FileContextEnabled: cfg.chillingEnabled, WorkspaceBrowserEnabled: *workspaceBrowser, DocumentAssetsEnabled: *documentAssets, TasksEnabled: cfg.tasksEnabled, TasksManagerOnly: cfg.tasksManagerOnly, TaskEndpoint: cfg.taskEndpoint, TaskBackend: taskBackend, TaskAllowedRoots: cfg.taskRoots, TaskAllowedManagers: cfg.taskManagers, TaskExecutionCheck: taskExecutionCheck, CachePrewarmRecent: true, OnReady: onReady, OnNotReady: clearReady, PuckBrain: cfg.puckBrain, PuckRoot: cfg.puckRoot})
 		if ctx.Err() != nil {
 			break
 		}

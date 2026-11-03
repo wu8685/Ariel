@@ -46,6 +46,8 @@ type Config struct {
 	FileContext                                                        FileContext
 	OnReady                                                            func() error
 	OnNotReady                                                         func()
+	PuckBrain                                                          bool
+	PuckRoot                                                           string
 }
 type FileContext interface {
 	Ready() bool
@@ -85,6 +87,7 @@ type agent struct {
 	cacheRetryWG            sync.WaitGroup
 	cacheAfterFunc          func(time.Duration, func()) cacheRetryTimer
 	cacheRetryJitter        func(time.Duration) time.Duration
+	brain                   *BrainHost
 }
 
 type cacheOutbound struct {
@@ -158,6 +161,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	check := func(ctx context.Context) error { return checkDesktop(ctx, cfg.Socket) }
 	if err := check(ctx); err != nil {
+		if cfg.PuckBrain {
+			return RunWithService(ctx, cfg, nil)
+		}
 		return err
 	}
 	cwd := cfg.CWD
@@ -249,7 +255,7 @@ func runTransportLoop(ctx context.Context, cfg Config, service *Service) error {
 }
 
 func RunWithService(ctx context.Context, cfg Config, service *Service) error {
-	if cfg.URL == "" || cfg.Token == "" || cfg.DeviceID == "" || cfg.DeviceName == "" || (service == nil && !(cfg.TasksEnabled && cfg.TasksManagerOnly)) {
+	if cfg.URL == "" || cfg.Token == "" || cfg.DeviceID == "" || cfg.DeviceName == "" || (service == nil && !(cfg.TasksEnabled && cfg.TasksManagerOnly) && !cfg.PuckBrain) {
 		return errors.New("invalid Desktop Agent configuration")
 	}
 	conn, _, err := websocket.Dial(ctx, cfg.URL, nil)
@@ -279,6 +285,10 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		cacheRecoveryGuardDelay = defaultCacheRecoveryGuardDelay
 	}
 	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheRecoveryGuardDelay: cacheRecoveryGuardDelay, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1), cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
+	if cfg.PuckBrain {
+		a.brain = NewBrainHost(BrainHostConfig{Enabled: true, Binary: cfg.Binary, Root: cfg.PuckRoot, Emit: a.emitBrainEvent})
+		defer a.brain.Close()
+	}
 	defer a.releaseCacheSubscriptions()
 	defer a.releaseSettingsSubscriptions()
 	a.tasks = newTaskRuntime(a, cfg)
@@ -314,6 +324,10 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	messageReferences := fileContextReady && cfg.FileContext.MessageReferences()
 	workspaceBrowser := fileContextReady && cfg.FileContext.WorkspaceBrowser()
 	capabilities := map[string]bool{"autoLoad": service != nil, "codexReady": service != nil, "history": service != nil, "send": service != nil, "interrupt": service != nil, "interaction": service != nil, "chillingFileContext": fileContextReady, "chillingMessageReferences": messageReferences}
+	if a.brain != nil {
+		capabilities["puckBrain"] = true
+		capabilities["puckBrainReady"] = a.brain.Ready()
+	}
 	capabilities["chillingWorkspaceBrowser"] = workspaceBrowser
 	if service != nil {
 		capabilities["turnEditing"] = service.EditEnabled()
@@ -532,6 +546,10 @@ func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration
 }
 
 func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage, puckOrigin bool) {
+	if strings.HasPrefix(method, "puck.brain.") {
+		a.handleBrain(ctx, id, method, raw, puckOrigin)
+		return
+	}
 	if method == "turn.edit" || method == "turn.edit.read" {
 		a.handleEditing(ctx, id, method, raw)
 		return
@@ -592,6 +610,10 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	}
 	if !fileSelectionsMatchThread(p.ThreadID, p.FileContexts) {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
+		return
+	}
+	if a.brain != nil && a.brain.IsBrainThread(p.ThreadID) {
+		a.reply(ctx, id, method, nil, errors.New("PUCK_SELF_TARGET"))
 		return
 	}
 	var data map[string]any
@@ -664,6 +686,16 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 			list, cursor, err = a.service.Search(listCtx, p.SearchTerm, p.Limit, p.Cursor)
 		} else {
 			list, cursor, err = a.service.List(listCtx, p.Limit, p.Cursor)
+		}
+		if a.brain != nil {
+			filtered := list[:0]
+			for _, thread := range list {
+				threadID, _ := thread["threadId"].(string)
+				if !a.brain.IsBrainThread(threadID) {
+					filtered = append(filtered, thread)
+				}
+			}
+			list = filtered
 		}
 		attrs := []any{"durationMs", millisSince(listStarted), "ok", err == nil, "count", len(list), "search", p.SearchTerm != "", "paged", p.Cursor != ""}
 		if err != nil {

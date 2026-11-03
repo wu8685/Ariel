@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -254,7 +255,22 @@ type InteractiveProcess struct {
 
 func StartInteractive(ctx context.Context, binary, cwd string) (*InteractiveProcess, error) {
 	cmd := exec.CommandContext(ctx, binary, "app-server", "--listen", "stdio://")
+	return startInteractiveCommand(ctx, cmd, cwd)
+}
+
+func StartBrainInteractive(ctx context.Context, binary, cwd string) (*InteractiveProcess, error) {
+	args := []string{"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "view_image", "--disable", "image_generation", "--disable", "goals", "--disable", "browser_use", "--disable", "computer_use", "--disable", "in_app_browser", "--disable", "sleep_tool", "--disable", "multi_agent", "--disable", "apps", "--disable", "plugins", "--disable", "tool_suggest", "--disable", "skill_search", "app-server", "--listen", "stdio://"}
+	cmd := exec.CommandContext(ctx, binary, args...)
+	return startInteractiveCommand(ctx, cmd, cwd)
+}
+
+func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*InteractiveProcess, error) {
 	cmd.Dir = cwd
+	for _, value := range os.Environ() {
+		if utf8.ValidString(value) {
+			cmd.Env = append(cmd.Env, value)
+		}
+	}
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
