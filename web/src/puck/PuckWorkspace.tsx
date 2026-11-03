@@ -18,6 +18,18 @@ function normalizeMessage(value: Record<string, unknown>): Message {
     cardJSON: String(value.cardJSON ?? value.CardJSON ?? ""), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""),
   };
 }
+function mergeHistory(current: Message[], durable: Message[]): Message[] {
+  if (durable.length === 0) return current;
+  const durableIDs = new Set(durable.map(message => message.id));
+  const pending = current.filter(message => {
+    if (durableIDs.has(message.id)) return false;
+    if (message.kind === "processing" || message.kind === "acknowledged") {
+      return !durableIDs.has(message.id.replace(/-processing$/, ""));
+    }
+    return message.role === "user" || message.kind === "error";
+  });
+  return [...durable, ...pending];
+}
 function cardData(message: Message): Record<string, unknown> {
   try { return message.cardJSON ? JSON.parse(message.cardJSON) as Record<string, unknown> : {}; } catch { return {}; }
 }
@@ -53,7 +65,10 @@ export function PuckWorkspace({ request, state, reason, devices, onBack }: { req
     if (!selectedID) { setMessages([]); return; }
     let active = true;
     void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
-      if (active && response.outcome === "accepted") setMessages(arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage));
+      if (active && response.outcome === "accepted") {
+        const durable = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
+        setMessages(current => mergeHistory(current, durable));
+      }
     });
     return () => { active = false; };
   }, [selectedID]);
@@ -62,7 +77,7 @@ export function PuckWorkspace({ request, state, reason, devices, onBack }: { req
 		const timer = window.setInterval(() => { void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
 			if (response.outcome !== "accepted") return;
 			const durable = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
-			setMessages(current => durable.length ? [...durable, ...current.filter(message => message.kind === "processing" || message.kind === "acknowledged").filter(local => !durable.some(saved => saved.id === local.id.replace(/-processing$/, "")))] : current);
+			setMessages(current => mergeHistory(current, durable));
 		}); }, 2000);
 		return () => window.clearInterval(timer);
 	}, [selectedID]);

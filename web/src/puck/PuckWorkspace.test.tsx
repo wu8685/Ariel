@@ -9,6 +9,7 @@ afterEach(cleanup);
 describe("PuckWorkspace", () => {
   it("creates an assistant and shows an immediate processing bubble when sending", async () => {
     let assistants: Record<string, unknown>[] = [];
+    let resolveHistory: (() => void) | undefined;
     const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
       if (method === "puck.list") return accepted({ assistants });
       if (method === "puck.create") {
@@ -16,7 +17,9 @@ describe("PuckWorkspace", () => {
         assistants = [assistant];
         return accepted({ assistant });
       }
-      if (method === "puck.history") return accepted({ messages: [] });
+      if (method === "puck.history") return new Promise<ReturnType<typeof accepted>>(resolve => {
+        resolveHistory = () => resolve(accepted({ messages: [] }));
+      });
       if (method === "puck.message.send") return accepted({ state: "processing" });
       return accepted({});
     });
@@ -30,6 +33,9 @@ describe("PuckWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("正在处理…")).toBeTruthy();
     expect(screen.getByText("检查测试")).toBeTruthy();
+    await act(async () => { resolveHistory?.(); });
+    expect(screen.getByText("检查测试")).toBeTruthy();
+    expect(screen.getByText("正在处理…")).toBeTruthy();
   });
 
   it("renders question, authorization and task cards and can stop work", async () => {
