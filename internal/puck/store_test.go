@@ -68,3 +68,34 @@ func TestStoreRejectsDatabaseFromNewerSchema(t *testing.T) {
 		t.Fatal("newer schema accepted")
 	}
 }
+
+func TestStorePersistsAvatarAndUpdatesCardInPlace(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	a := Assistant{ID: "assistant-a", Name: "Puck", Avatar: `{"shape":"cloud","color":"#7c6ff2"}`, BrainDeviceID: "brain-a", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}
+	if err := store.CreateAssistant(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	a.Avatar = `{"shape":"star","color":"#ef8354"}`
+	if err := store.UpdateAssistant(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, Message{ID: "card-a", AssistantID: a.ID, Role: "assistant", Kind: "question", Text: "选择？", CardJSON: `{"cardState":"pending"}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateMessageCard(ctx, a.ID, "card-a", `{"cardState":"answered","answer":"A"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Assistant(ctx, a.ID)
+	if err != nil || got.Avatar != a.Avatar {
+		t.Fatalf("assistant=%+v err=%v", got, err)
+	}
+	messages, err := store.Messages(ctx, a.ID, 10)
+	if err != nil || len(messages) != 1 || messages[0].CardJSON != `{"cardState":"answered","answer":"A"}` {
+		t.Fatalf("messages=%+v err=%v", messages, err)
+	}
+}

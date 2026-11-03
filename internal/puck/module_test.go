@@ -3,6 +3,7 @@ package puck
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -168,9 +169,35 @@ func TestModuleConsumesAuthorizationAndStopsStartedTask(t *testing.T) {
 	if authorizationID == "" {
 		t.Fatal("authorization card missing")
 	}
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id}))
+	for _, message := range history.Data["messages"].([]Message) {
+		if message.Kind != "authorization" {
+			continue
+		}
+		var card map[string]any
+		_ = json.Unmarshal([]byte(message.CardJSON), &card)
+		for _, key := range []string{"action", "deviceId", "cwd", "expiresAt", "cardState"} {
+			if card[key] == nil || card[key] == "" {
+				t.Errorf("authorization card missing %s: %+v", key, card)
+			}
+		}
+	}
 	decided := module.Handle(context.Background(), "puck.authorization.decide", mustJSON(map[string]any{"assistantId": id, "authorizationId": authorizationID, "decision": "approve_once"}))
 	if decided.Error != nil {
 		t.Fatalf("decide=%+v", decided)
+	}
+	history = module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id}))
+	var authCount int
+	for _, message := range history.Data["messages"].([]Message) {
+		if message.Kind == "authorization" {
+			authCount++
+			if !strings.Contains(message.CardJSON, `"cardState":"consumed"`) {
+				t.Fatalf("authorization card not finalized: %s", message.CardJSON)
+			}
+		}
+	}
+	if authCount != 1 {
+		t.Fatalf("authorization cards=%d", authCount)
 	}
 	stopped := module.Handle(context.Background(), "puck.stop", mustJSON(map[string]any{"assistantId": id}))
 	if stopped.Error != nil || stopped.Data["summary"] != "已请求停止 1 项" {
@@ -265,5 +292,72 @@ func TestModuleCreateMessageHistoryAndDelete(t *testing.T) {
 	}
 	if got := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})); got.Error == nil || got.Error.Code != "PUCK_ASSISTANT_NOT_FOUND" {
 		t.Fatalf("deleted history=%+v", got)
+	}
+}
+
+func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
+	got := brainInstructions("assistant-a", "小帕", "开发助理")
+	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("instructions missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestModulePersistsAcknowledgementAndInterruptsBrainTurn(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	module.ackDelay = time.Millisecond
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "检查测试"}))
+	if result.Error != nil {
+		t.Fatalf("send=%+v", result)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id}))
+		messages := history.Data["messages"].([]Message)
+		if len(messages) == 2 && messages[1].Kind == "acknowledged" {
+			stopped := module.Handle(context.Background(), "puck.stop", mustJSON(map[string]any{"assistantId": id}))
+			if stopped.Error != nil {
+				t.Fatalf("stop=%+v", stopped)
+			}
+			persisted := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+			if persisted[len(persisted)-1].Kind != "stop_summary" {
+				t.Fatalf("messages=%+v", persisted)
+			}
+			bridge.mu.Lock()
+			calls := append([]string(nil), bridge.calls...)
+			bridge.mu.Unlock()
+			if !slices.Contains(calls, "puck.brain.turn.interrupt") {
+				t.Fatalf("calls=%v", calls)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("durable acknowledgement missing")
+}
+
+func TestModuleUpdatesAvatar(t *testing.T) {
+	module, err := NewModule(t.TempDir(), &fakeModuleBridge{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": "cloud", "color": "#7c6ff2"}}))
+	if updated.Error != nil {
+		t.Fatalf("update=%+v", updated)
+	}
+	avatar := updated.Data["assistant"].(map[string]any)["avatar"]
+	if avatar != `{"color":"#7c6ff2","shape":"cloud"}` {
+		t.Fatalf("avatar=%v", avatar)
 	}
 }

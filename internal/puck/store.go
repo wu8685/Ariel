@@ -194,8 +194,8 @@ func (s *Store) SetAssistantBrain(ctx context.Context, assistantID, threadID, st
 }
 
 func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,description=?,persona=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
-		a.Name, a.Description, a.Persona, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), a.Status, nowText(time.Time{}), a.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,persona=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
+		a.Name, a.Avatar, a.Description, a.Persona, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), a.Status, nowText(time.Time{}), a.ID)
 	if err != nil {
 		return err
 	}
@@ -204,6 +204,31 @@ func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+func (s *Store) UpdateMessageCard(ctx context.Context, assistantID, messageID, cardJSON string) error {
+	if len(cardJSON) > 8<<10 {
+		return errors.New("Puck card exceeds storage limit")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE conversation_messages SET card_json=? WHERE assistant_id=? AND id=?`, cardJSON, assistantID, messageID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
+	if len(m.Text) > 64<<10 || len(m.CardJSON) > 8<<10 {
+		return errors.New("Puck message exceeds storage limit")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversation_messages(id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,text=excluded.text,card_json=excluded.card_json,reaction=excluded.reaction,work_summary=excluded.work_summary,brain_turn_id=excluded.brain_turn_id
+		WHERE conversation_messages.assistant_id=excluded.assistant_id`, m.ID, m.AssistantID, m.Role, m.Kind, m.Text, m.CardJSON, m.Reaction, m.WorkSummary, m.BrainTurnID, nowText(m.CreatedAt))
+	return err
 }
 
 func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) error {
