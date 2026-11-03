@@ -76,6 +76,16 @@ func New(orchestrator Orchestrator, backend Backend) *Handler {
 }
 
 func (h *Handler) Execute(ctx context.Context, call Call) ToolResult {
+	return h.execute(ctx, call, false)
+}
+
+// ExecuteAuthorized executes the exact frozen action consumed by the module.
+// Callers must never expose this path directly to a Brain tool call.
+func (h *Handler) ExecuteAuthorized(ctx context.Context, call Call) ToolResult {
+	return h.execute(ctx, call, true)
+}
+
+func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolResult {
 	if call.AssistantID == "" {
 		return ToolResult{Code: "UNAUTHORIZED", Message: "trusted assistant identity is required"}
 	}
@@ -91,7 +101,7 @@ func (h *Handler) Execute(ctx context.Context, call Call) ToolResult {
 	case "read_thread":
 		result = h.forward(ctx, call, "thread.read")
 	case "start_task":
-		result = h.startTask(ctx, call)
+		result = h.startTask(ctx, call, authorized)
 	case "send_turn":
 		result = h.sendTurn(ctx, call)
 	case "interrupt":
@@ -127,7 +137,7 @@ func (h *Handler) forward(ctx context.Context, call Call, method string) ToolRes
 	return fromResult(h.orchestrator.Forward(ctx, origin(call.AssistantID), target, method, mustJSON(arguments)))
 }
 
-func (h *Handler) startTask(ctx context.Context, call Call) ToolResult {
+func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) ToolResult {
 	var input struct {
 		DeviceID, CWD, Goal, Prompt, ClientTaskID string
 		RiskTags                                  []string
@@ -138,11 +148,17 @@ func (h *Handler) startTask(ctx context.Context, call Call) ToolResult {
 	if existing, err := h.backend.Task(ctx, call.AssistantID, input.ClientTaskID); err == nil {
 		return ToolResult{Success: true, Data: taskData(existing)}
 	}
-	if authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, Arguments: call.Arguments}); err != nil {
-		if errors.Is(err, ErrAuthorizationRequired) {
+	if !authorized {
+		authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, Arguments: call.Arguments})
+		if err != nil {
+			if errors.Is(err, ErrAuthorizationRequired) {
+				return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
+			}
+			return toolError("PUCK_UNAVAILABLE", err.Error())
+		}
+		if authorizationID != "" {
 			return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
 		}
-		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	created := h.orchestrator.Forward(ctx, origin(call.AssistantID), input.DeviceID, "thread.create", mustJSON(map[string]any{"cwd": input.CWD}))
 	if created.Outcome != "accepted" {
@@ -156,7 +172,8 @@ func (h *Handler) startTask(ctx context.Context, call Call) ToolResult {
 	if turn.Outcome != "accepted" {
 		return fromResult(turn)
 	}
-	task := Task{ID: input.ClientTaskID, AssistantID: call.AssistantID, DeviceID: input.DeviceID, CWD: input.CWD, NativeThreadID: threadID, Goal: input.Goal, Status: "running"}
+	turnID, _ := turn.Data["turnId"].(string)
+	task := Task{ID: input.ClientTaskID, AssistantID: call.AssistantID, DeviceID: input.DeviceID, CWD: input.CWD, NativeThreadID: threadID, Goal: input.Goal, Status: "running", LastTurnID: turnID}
 	if err := h.backend.SaveTask(ctx, task); err != nil {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
@@ -185,7 +202,7 @@ func (h *Handler) interrupt(ctx context.Context, call Call) ToolResult {
 	if err != nil {
 		return toolError("PUCK_ASSISTANT_NOT_FOUND", "task not found")
 	}
-	return fromResult(h.orchestrator.Forward(ctx, origin(call.AssistantID), task.DeviceID, "turn.interrupt", mustJSON(map[string]any{"threadId": task.NativeThreadID, "turnId": input.TurnID})))
+	return fromResult(h.orchestrator.Forward(ctx, origin(call.AssistantID), task.DeviceID, "turn.interrupt", mustJSON(map[string]any{"threadId": task.NativeThreadID, "expectedTurnId": input.TurnID})))
 }
 
 func (h *Handler) taskStatus(ctx context.Context, call Call) ToolResult {

@@ -262,9 +262,43 @@ func (s *Store) Task(ctx context.Context, assistantID, taskID string) (Task, err
 	return task, err
 }
 
+func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? ORDER BY created_at,task_id`, assistantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tasks []Task
+	for rows.Next() {
+		var task Task
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
+func (s *Store) SetTaskStatus(ctx context.Context, assistantID, taskID, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?,updated_at=? WHERE assistant_id=? AND task_id=?`, status, nowText(time.Time{}), assistantID, taskID)
+	return err
+}
+
 func (s *Store) InsertAuthorization(ctx context.Context, a Authorization) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO authorizations(id,assistant_id,action_json,action_hash,rules_hit,status,expires_at,decided_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, a.ID, a.AssistantID, a.ActionJSON, a.ActionHash, a.RulesHit, a.Status, nowText(a.ExpiresAt), nullTimeText(a.DecidedAt), nowText(time.Time{}))
 	return err
+}
+
+func (s *Store) Authorization(ctx context.Context, assistantID, authorizationID string) (Authorization, error) {
+	var a Authorization
+	var expires string
+	var decided sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id,assistant_id,action_json,action_hash,rules_hit,status,expires_at,decided_at FROM authorizations WHERE assistant_id=? AND id=?`, assistantID, authorizationID).Scan(&a.ID, &a.AssistantID, &a.ActionJSON, &a.ActionHash, &a.RulesHit, &a.Status, &expires, &decided)
+	a.ExpiresAt, _ = time.Parse(time.RFC3339Nano, expires)
+	if decided.Valid {
+		a.DecidedAt, _ = time.Parse(time.RFC3339Nano, decided.String)
+	}
+	return a, err
 }
 
 func (s *Store) Audit(ctx context.Context, entry AuditEntry) error {

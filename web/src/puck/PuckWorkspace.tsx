@@ -21,10 +21,10 @@ function normalizeMessage(value: Record<string, unknown>): Message {
 function cardData(message: Message): Record<string, unknown> {
   try { return message.cardJSON ? JSON.parse(message.cardJSON) as Record<string, unknown> : {}; } catch { return {}; }
 }
-function Card({ message }: { message: Message }) {
+function Card({ message, onAction }: { message: Message; onAction: (kind:string,data:Record<string,unknown>,value:string)=>void }) {
   const data = cardData(message);
-  if (message.kind === "question") return <section className="puck-card question" role="group" aria-label="问题卡片"><strong>需要你决定</strong><p>{message.text}</p><div className="puck-options">{arrayData<string>(data.options).map(option => <button key={option} type="button">{option}</button>)}</div></section>;
-  if (message.kind === "authorization") return <section className="puck-card authorization" role="group" aria-label="授权卡片"><strong>需要授权</strong><p>{message.text}</p>{data.risk != null && <small>风险：{String(data.risk)}</small>}<div><button type="button">拒绝</button><button className="primary" type="button">仅这一次允许</button></div></section>;
+  if (message.kind === "question") return <section className="puck-card question" role="group" aria-label="问题卡片"><strong>需要你决定</strong><p>{message.text}</p><div className="puck-options">{arrayData<string>(data.options).map(option => <button key={option} type="button" onClick={()=>onAction("question",data,option)}>{option}</button>)}</div></section>;
+  if (message.kind === "authorization") return <section className="puck-card authorization" role="group" aria-label="授权卡片"><strong>需要授权</strong><p>{message.text}</p>{data.risk != null && <small>风险：{String(data.risk)}</small>}<div><button type="button" onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="primary" type="button" onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div></section>;
   if (message.kind === "task") return <section className="puck-card task" role="group" aria-label="任务卡片"><strong>{message.text}</strong><span className="puck-state">{data.status === "running" ? "进行中" : String(data.status || "待处理")}</span><details><summary>查看工作过程</summary><p>执行细节按需展开，不在对话中刷屏。</p></details></section>;
   return null;
 }
@@ -89,13 +89,20 @@ export function PuckWorkspace({ request, state, reason, devices, onBack }: { req
     const response = await request("puck.stop", "relay", { assistantId: selected.assistantId });
     setMessages(current => [...current, { id: crypto.randomUUID(), role: "assistant", kind: "text", text: response.outcome === "accepted" ? String(response.data?.summary || "已请求停止") : responseError(response) }]);
   }
+	async function respondCard(kind:string,data:Record<string,unknown>,value:string) {
+		if (!selected) return;
+		const response = kind === "authorization"
+			? await request("puck.authorization.decide","relay",{assistantId:selected.assistantId,authorizationId:String(data.authorizationId||""),decision:value})
+			: await request("puck.question.answer","relay",{assistantId:selected.assistantId,questionId:String(data.questionId||""),answer:value});
+		setMessages(current=>[...current,{id:crypto.randomUUID(),role:"assistant",kind:response.outcome==="accepted"?"text":"error",text:response.outcome==="accepted"?"已记录你的选择。":responseError(response)}]);
+	}
 
   if (state !== "ready") return <main className="puck-unavailable"><button type="button" onClick={onBack}>返回会话</button><div><span className="puck-mark">P</span><h1>Puck 不可用</h1><p>{reason === "PUCK_REQUIRES_PASSKEY_HTTPS" ? "Puck 仅支持 Passkey + HTTPS" : "管理员尚未开启 Puck。"}</p><small>现有 Codex 会话不受影响。</small></div></main>;
   return <main className="puck-workspace">
     {mobilePanel && <button className="puck-panel-backdrop" aria-label="关闭面板" onClick={()=>setMobilePanel("")}/>}<aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}><header><b>Puck</b><button type="button" onClick={() => setCreating(true)} aria-label="新建助理">＋</button></header>{assistants.map(item => <button className={item.assistantId === selectedID ? "active" : ""} key={item.assistantId} onClick={() => { setSelectedID(item.assistantId); setMobilePanel(""); }}><span>{item.name.slice(0, 1)}</span><span><strong>{item.name}</strong><small>{item.status === "ready" ? "在线" : "准备中"}</small></span></button>)}<button className="puck-back" type="button" onClick={onBack}>← Codex 会话</button></aside>
     <section className="puck-conversation">
       <header><button className="puck-mobile-menu" type="button" aria-label="打开助理列表" onClick={()=>setMobilePanel("assistants")}>☰</button><div><strong>{selected?.name || "Puck"}</strong><small>{selected ? "你的个人助理" : "创建一个助理开始"}</small></div>{selected && <div className="puck-header-actions"><button className="puck-mobile-menu" type="button" aria-label="查看助理信息" onClick={()=>setMobilePanel("info")}>ⓘ</button><button type="button" aria-label="停止全部工作" onClick={() => void stop()}>停止</button></div>}</header>
-      <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty"><span className="puck-mark">P</span><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="primary" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button></div> : messages.map(message => <article key={message.id} className={`puck-message ${message.role} ${message.kind}`}><Card message={message}/>{!["question", "authorization", "task"].includes(message.kind) && <p>{message.text}</p>}{message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}</article>)}</div>
+      <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty"><span className="puck-mark">P</span><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="primary" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button></div> : messages.map(message => <article key={message.id} className={`puck-message ${message.role} ${message.kind}`}><Card message={message} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>{!["question", "authorization", "task"].includes(message.kind) && <p>{message.text}</p>}{message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}</article>)}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button onClick={() => setNotice("")}>关闭</button></div>}
       {selected && <footer><textarea aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} placeholder="说说你想做什么…"/><button className="primary" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}>发送</button></footer>}
     </section>

@@ -171,7 +171,11 @@ func (b toolBackend) Authorize(ctx context.Context, assistantID string, action p
 	return auth.ID, pucktools.ErrAuthorizationRequired
 }
 func (b toolBackend) SaveTask(ctx context.Context, task pucktools.Task) error {
-	return b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, CreatedBy: "puck"})
+	if err := b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, CreatedBy: "puck", LastTurnID: task.LastTurnID}); err != nil {
+		return err
+	}
+	card, _ := json.Marshal(map[string]any{"taskId": task.ID, "status": task.Status, "threadId": task.NativeThreadID, "deviceId": task.DeviceID})
+	return b.module.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: task.AssistantID, Role: "assistant", Kind: "task", Text: task.Goal, CardJSON: string(card)})
 }
 func (b toolBackend) Task(ctx context.Context, assistantID, taskID string) (pucktools.Task, error) {
 	task, err := b.module.store.Task(ctx, assistantID, taskID)
@@ -179,7 +183,19 @@ func (b toolBackend) Task(ctx context.Context, assistantID, taskID string) (puck
 }
 func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
 	kind := strings.TrimPrefix(event.Kind, "post_")
-	return b.module.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: string(event.Payload), CardJSON: string(event.Payload)})
+	if kind == "ask_user" {
+		kind = "question"
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(event.Payload, &payload)
+	text, _ := payload["text"].(string)
+	if text == "" {
+		text, _ = payload["question"].(string)
+	}
+	if text == "" {
+		text = string(event.Payload)
+	}
+	return b.module.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(event.Payload)})
 }
 
 func (m *Module) Handle(ctx context.Context, method string, params json.RawMessage) relay.PuckResponse {
@@ -203,6 +219,10 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.history(ctx, params)
 		case "puck.stop":
 			response = m.stop(ctx, params)
+		case "puck.question.answer":
+			response = m.answerQuestion(ctx, params)
+		case "puck.authorization.decide":
+			response = m.decideAuthorization(ctx, params)
 		default:
 			response = moduleError("UNSUPPORTED", "Puck method is not available in P0")
 		}
@@ -421,7 +441,83 @@ func (m *Module) stop(ctx context.Context, raw json.RawMessage) relay.PuckRespon
 	if err != nil {
 		return notFound()
 	}
-	return accepted(map[string]any{"assistantId": a.ID, "results": []any{}, "summary": "没有可确认停止的运行项"})
+	tasks, err := m.store.Tasks(ctx, a.ID)
+	if err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	results := make([]map[string]any, 0)
+	stopped := 0
+	for _, task := range tasks {
+		if task.Status != "running" || task.LastTurnID == "" {
+			continue
+		}
+		result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, task.DeviceID, "turn.interrupt", mustJSON(map[string]any{"threadId": task.NativeThreadID, "expectedTurnId": task.LastTurnID}))
+		state := "unknown"
+		if result.Error == nil {
+			state = "stopped"
+			stopped++
+			_ = m.store.SetTaskStatus(ctx, a.ID, task.ID, "stopped")
+		}
+		results = append(results, map[string]any{"taskId": task.ID, "state": state})
+	}
+	summary := "没有可确认停止的运行项"
+	if stopped > 0 {
+		summary = fmt.Sprintf("已请求停止 %d 项", stopped)
+	}
+	return accepted(map[string]any{"assistantId": a.ID, "results": results, "summary": summary})
+}
+
+func (m *Module) answerQuestion(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
+	var input struct {
+		AssistantID string `json:"assistantId"`
+		QuestionID  string `json:"questionId"`
+		Answer      string `json:"answer"`
+	}
+	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" || input.QuestionID == "" {
+		return moduleError("INVALID_ARGUMENT", "invalid question answer")
+	}
+	a, err := m.store.Assistant(ctx, input.AssistantID)
+	if err != nil {
+		return notFound()
+	}
+	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a.ID, "问题 "+input.QuestionID+" 的回答："+input.Answer)}))
+	if result.Error != nil {
+		return result
+	}
+	return accepted(map[string]any{})
+}
+
+func (m *Module) decideAuthorization(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
+	var input struct {
+		AssistantID     string `json:"assistantId"`
+		AuthorizationID string `json:"authorizationId"`
+		Decision        string `json:"decision"`
+	}
+	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" || input.AuthorizationID == "" {
+		return moduleError("INVALID_ARGUMENT", "invalid authorization decision")
+	}
+	auth, err := m.store.Authorization(ctx, input.AssistantID, input.AuthorizationID)
+	if err != nil {
+		return notFound()
+	}
+	service := NewAuthorizationService(m.store)
+	if err := service.Decide(ctx, input.AssistantID, input.AuthorizationID, input.Decision, auth.ActionHash); err != nil {
+		return moduleError("AUTHORIZATION_INVALID", err.Error())
+	}
+	if input.Decision == "reject" {
+		_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: input.AssistantID, Role: "assistant", Kind: "text", Text: "已拒绝这次操作。"})
+		return accepted(map[string]any{"state": "rejected"})
+	}
+	action, err := service.Consume(ctx, input.AssistantID, input.AuthorizationID)
+	if err != nil {
+		return moduleError("AUTHORIZATION_INVALID", err.Error())
+	}
+	result := m.tools.ExecuteAuthorized(ctx, pucktools.Call{AssistantID: input.AssistantID, Tool: action.Tool, Arguments: action.Arguments})
+	if !result.Success {
+		_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: input.AssistantID, Role: "assistant", Kind: "error", Text: result.Message})
+		return moduleError(result.Code, result.Message)
+	}
+	return accepted(map[string]any{"state": "consumed", "result": result.Data})
 }
 
 func (m *Module) syncBrainThreads(ctx context.Context) {

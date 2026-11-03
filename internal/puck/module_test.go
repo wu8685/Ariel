@@ -44,6 +44,12 @@ func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, 
 	if method == "puck.brain.turn.start" {
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
+	if method == "thread.create" {
+		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"threadId": "exec-thread-a"}}
+	}
+	if method == "turn.start" {
+		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-a"}}
+	}
 	return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
 }
 
@@ -130,6 +136,46 @@ func TestModuleRecordsCompletedBrainMessage(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("completed brain message was not recorded")
+}
+
+func TestModuleConsumesAuthorizationAndStopsStartedTask(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	arguments := `{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run tests","riskTags":[],"clientTaskId":"task-a"}`
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-task","tool":"start_task","arguments":` + arguments + `}`)}
+	var authorizationID string
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id}))
+		for _, message := range history.Data["messages"].([]Message) {
+			if message.Kind == "authorization" {
+				var card map[string]any
+				_ = json.Unmarshal([]byte(message.CardJSON), &card)
+				authorizationID, _ = card["authorizationId"].(string)
+			}
+		}
+		if authorizationID != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if authorizationID == "" {
+		t.Fatal("authorization card missing")
+	}
+	decided := module.Handle(context.Background(), "puck.authorization.decide", mustJSON(map[string]any{"assistantId": id, "authorizationId": authorizationID, "decision": "approve_once"}))
+	if decided.Error != nil {
+		t.Fatalf("decide=%+v", decided)
+	}
+	stopped := module.Handle(context.Background(), "puck.stop", mustJSON(map[string]any{"assistantId": id}))
+	if stopped.Error != nil || stopped.Data["summary"] != "已请求停止 1 项" {
+		t.Fatalf("stop=%+v", stopped)
+	}
 }
 
 func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {
