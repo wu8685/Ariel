@@ -4,9 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"slices"
 	"testing"
 	"time"
 )
+
+func TestBrainAppServerArgsKeepDynamicToolHostAndDisableLocalSurfaces(t *testing.T) {
+	args := brainAppServerArgs()
+	for _, feature := range []string{"shell_tool", "unified_exec", "browser_use_external", "multi_agent", "plugins"} {
+		if !slices.Contains(args, feature) {
+			t.Errorf("missing disabled feature %q in %v", feature, args)
+		}
+	}
+	if slices.Contains(args, "code_mode_host") {
+		t.Fatalf("code_mode_host must remain enabled for dynamicTools: %v", args)
+	}
+}
 
 func TestInteractiveSessionCorrelatesResponsesAndDeliversIncomingFrames(t *testing.T) {
 	client, server := net.Pipe()

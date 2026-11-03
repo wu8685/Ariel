@@ -73,12 +73,20 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 		t.Fatalf("workspace info=%v err=%v", info, err)
 	}
 	start := process.calls[0].params
-	if start["approvalPolicy"] != "never" || start["sandbox"] != "read-only" || start["developerInstructions"] != "guard" || len(start["dynamicTools"].([]any)) == 0 {
+	if start["approvalPolicy"] != "never" || start["approvalsReviewer"] != "user" || start["sandbox"] != "read-only" || start["developerInstructions"] != "guard" || len(start["dynamicTools"].([]any)) == 0 {
 		t.Fatalf("start=%+v", start)
 	}
 	config := start["config"].(map[string]any)
 	if config["features.code_mode_host"] != true || config["tools.shell"] != false {
 		t.Fatalf("config=%+v", config)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	turn := process.calls[1].params
+	policy, _ := turn["sandboxPolicy"].(map[string]any)
+	if turn["clientUserMessageId"] != "client-message-a" || turn["approvalPolicy"] != "never" || policy["type"] != "readOnly" {
+		t.Fatalf("turn=%+v", turn)
 	}
 }
 

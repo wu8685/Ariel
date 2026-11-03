@@ -160,7 +160,11 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 			return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
 		}
 	}
-	created := h.orchestrator.Forward(ctx, origin(call.AssistantID), input.DeviceID, "thread.create", mustJSON(map[string]any{"cwd": input.CWD}))
+	requestOrigin := origin(call.AssistantID)
+	if authorized {
+		requestOrigin.Trigger = "user_decision"
+	}
+	created := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "thread.create", mustJSON(map[string]any{"cwd": input.CWD}))
 	if created.Outcome != "accepted" {
 		return fromResult(created)
 	}
@@ -168,7 +172,7 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	if threadID == "" {
 		threadID = "pending-" + input.ClientTaskID
 	}
-	turn := h.orchestrator.Forward(ctx, origin(call.AssistantID), input.DeviceID, "turn.start", mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
+	turn := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "turn.start", mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
 	if turn.Outcome != "accepted" {
 		return fromResult(turn)
 	}

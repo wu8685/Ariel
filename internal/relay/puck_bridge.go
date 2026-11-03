@@ -331,7 +331,7 @@ func (s *Server) forwardPuck(ctx context.Context, origin Origin, deviceID, metho
 		s.mu.Unlock()
 		return puckRejected("FEATURE_DISABLED", "Puck brain is disabled on target device")
 	}
-	if (method == "thread.create" || method == "turn.start") && !agent.capabilities["executionPolicy"] {
+	if executionPolicyUnenforceable(method, origin, agent.capabilities) {
 		s.mu.Unlock()
 		return puckRejected("EXECUTION_POLICY_UNENFORCEABLE", "target Agent cannot prove on-request execution policy")
 	}
@@ -354,4 +354,8 @@ func (s *Server) forwardPuck(ctx context.Context, origin Origin, deviceID, metho
 		s.finishRoute(relayID, agent, responseError(relayID, "unknown", "OUTCOME_UNKNOWN", "request cancelled"))
 		return puckRejected("OUTCOME_UNKNOWN", "request cancelled")
 	}
+}
+
+func executionPolicyUnenforceable(method string, origin Origin, capabilities map[string]bool) bool {
+	return (method == "thread.create" || method == "turn.start") && !capabilities["executionPolicy"] && origin.Trigger != "user_decision"
 }

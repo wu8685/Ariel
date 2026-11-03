@@ -8,19 +8,35 @@ import (
 )
 
 type fakeOrchestrator struct {
-	calls []string
-	fn    func(string, json.RawMessage) Result
+	calls   []string
+	origins []Origin
+	fn      func(string, json.RawMessage) Result
 }
 
 func (f *fakeOrchestrator) Devices() []map[string]any {
 	return []map[string]any{{"deviceId": "exec-a", "agentOnline": true}}
 }
-func (f *fakeOrchestrator) Forward(_ context.Context, _ Origin, _ string, method string, params json.RawMessage) Result {
+func (f *fakeOrchestrator) Forward(_ context.Context, origin Origin, _ string, method string, params json.RawMessage) Result {
 	f.calls = append(f.calls, method)
+	f.origins = append(f.origins, origin)
 	if f.fn != nil {
 		return f.fn(method, params)
 	}
 	return Result{Outcome: "accepted", Data: map[string]any{}}
+}
+
+func TestAuthorizedTaskCarriesConsumedUserDecisionOrigin(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"task-a"}`)})
+	if !result.Success || len(orchestrator.origins) != 2 {
+		t.Fatalf("result=%+v origins=%+v", result, orchestrator.origins)
+	}
+	for _, origin := range orchestrator.origins {
+		if origin.Trigger != "user_decision" {
+			t.Fatalf("origin=%+v", origin)
+		}
+	}
 }
 
 type fakeBackend struct {

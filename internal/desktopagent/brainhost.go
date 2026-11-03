@@ -138,7 +138,7 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 func brainThreadParams(cwd string, request BrainEnsure) map[string]any {
 	params := map[string]any{
 		"cwd": cwd, "ephemeral": false, "serviceName": "ariel-puck", "threadSource": "chatgpt_hidden",
-		"developerInstructions": request.DeveloperInstructions, "dynamicTools": puckDynamicTools(), "approvalPolicy": "never", "sandbox": "read-only",
+		"developerInstructions": request.DeveloperInstructions, "dynamicTools": puckDynamicTools(), "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "read-only",
 		"config": map[string]any{"features.code_mode_host": true, "tools.shell": false, "tools.unified_exec": false, "web_search": "disabled", "include_apply_patch_tool": false},
 	}
 	if request.Model != "" {

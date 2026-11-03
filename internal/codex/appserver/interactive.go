@@ -259,9 +259,12 @@ func StartInteractive(ctx context.Context, binary, cwd string) (*InteractiveProc
 }
 
 func StartBrainInteractive(ctx context.Context, binary, cwd string) (*InteractiveProcess, error) {
-	args := []string{"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "view_image", "--disable", "image_generation", "--disable", "goals", "--disable", "browser_use", "--disable", "computer_use", "--disable", "in_app_browser", "--disable", "sleep_tool", "--disable", "multi_agent", "--disable", "apps", "--disable", "plugins", "--disable", "tool_suggest", "--disable", "skill_search", "app-server", "--listen", "stdio://"}
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.CommandContext(ctx, binary, brainAppServerArgs()...)
 	return startInteractiveCommand(ctx, cmd, cwd)
+}
+
+func brainAppServerArgs() []string {
+	return []string{"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "view_image", "--disable", "image_generation", "--disable", "goals", "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "computer_use", "--disable", "in_app_browser", "--disable", "sleep_tool", "--disable", "multi_agent", "--disable", "apps", "--disable", "plugins", "--disable", "tool_suggest", "--disable", "skill_search", "app-server", "--listen", "stdio://"}
 }
 
 func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*InteractiveProcess, error) {

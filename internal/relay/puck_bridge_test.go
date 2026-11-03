@@ -83,6 +83,9 @@ func TestPuckBridgeFailsClosedWhenExecutionPolicyIsUnverified(t *testing.T) {
 	if response.Error == nil || response.Error.Code != "EXECUTION_POLICY_UNENFORCEABLE" {
 		t.Fatalf("response=%+v", response)
 	}
+	if executionPolicyUnenforceable("thread.create", Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "user_decision"}, map[string]bool{"executionPolicy": false}) {
+		t.Fatal("consumed user decision must permit the exact one-time action")
+	}
 }
 
 func TestWebCannotCallPuckBrainMethods(t *testing.T) {
