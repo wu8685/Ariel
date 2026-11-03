@@ -40,6 +40,8 @@ type Config struct {
 	CacheEntryMaxBytes  int64
 	CacheWarmGrace      time.Duration
 	CacheFreshness      time.Duration
+	PuckState           string
+	PuckReason          string
 }
 
 const (
@@ -432,6 +434,13 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	defer s.removePeer(p)
 	ack := map[string]any{"type": "hello.ok", "v": 1, "connectionId": p.id, "relayEpoch": s.epoch}
+	if s.cfg.PuckState != "" {
+		status := map[string]any{"state": s.cfg.PuckState}
+		if s.cfg.PuckReason != "" {
+			status["reason"] = s.cfg.PuckReason
+		}
+		ack["puck"] = status
+	}
 	if p.role == "web" && sessionToken != "" {
 		ack["sessionToken"] = sessionToken
 	}
@@ -745,6 +754,14 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 	if p.role != "web" || msg.Type != "request" {
 		return false
 	}
+	if strings.HasPrefix(msg.Method, "puck.") {
+		if s.cfg.PuckState != "ready" {
+			_ = p.send(ctx, responseErrorReason(msg.RequestID, "rejected", "FEATURE_DISABLED", "Puck unavailable", s.cfg.PuckReason))
+		} else {
+			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "PUCK_UNAVAILABLE", "Puck module not attached"))
+		}
+		return true
+	}
 	if strings.HasPrefix(msg.Method, "thread.cache.") {
 		if msg.Method == "thread.cache.touch" {
 			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "UNAUTHORIZED", "cache touch is agent-only"))
@@ -1049,4 +1066,12 @@ func (s *Server) handleAgentEvent(ctx context.Context, agent *peer, body []byte)
 
 func responseError(id, outcome, code, message string) map[string]any {
 	return map[string]any{"type": "response", "v": 1, "requestId": id, "outcome": outcome, "error": map[string]string{"code": code, "message": message}}
+}
+
+func responseErrorReason(id, outcome, code, message, reason string) map[string]any {
+	response := responseError(id, outcome, code, message)
+	if reason != "" {
+		response["error"].(map[string]string)["reason"] = reason
+	}
+	return response
 }

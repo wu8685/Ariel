@@ -33,6 +33,7 @@ type Config struct {
 	CredentialsFile string
 	SessionKey      []byte
 	SetupToken      string
+	PuckStatus      map[string]string
 }
 
 type Manager struct {
@@ -44,6 +45,7 @@ type Manager struct {
 	now          func() time.Time
 	usedMu       sync.Mutex
 	used         map[[32]byte]time.Time
+	puckStatus   map[string]string
 }
 
 type sessionClaims struct {
@@ -88,7 +90,7 @@ func New(cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{publicOrigin: cfg.PublicOrigin, setupToken: cfg.SetupToken, store: store, codec: codec, webauthn: wa, now: time.Now, used: map[[32]byte]time.Time{}}, nil
+	return &Manager{publicOrigin: cfg.PublicOrigin, setupToken: cfg.SetupToken, store: store, codec: codec, webauthn: wa, now: time.Now, used: map[[32]byte]time.Time{}, puckStatus: cloneStringMap(cfg.PuckStatus)}, nil
 }
 
 func (m *Manager) Handler() http.Handler {
@@ -117,9 +119,24 @@ func (m *Manager) status(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not refresh session")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	status := map[string]any{
 		"mode": "passkey", "authenticated": authenticated, "enrollmentRequired": len(m.store.snapshot().Credentials) == 0,
-	})
+	}
+	if m.puckStatus != nil {
+		status["puck"] = m.puckStatus
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	copy := make(map[string]string, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
 }
 
 func (m *Manager) registerOptions(w http.ResponseWriter, r *http.Request) {

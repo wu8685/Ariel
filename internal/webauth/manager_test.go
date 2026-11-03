@@ -64,6 +64,27 @@ func TestStatusAndRegistrationOptionsSecurityBoundary(t *testing.T) {
 	}
 }
 
+func TestStatusReportsConfiguredPuckAvailability(t *testing.T) {
+	m, err := New(Config{
+		PublicOrigin:    "https://ariel.example.com",
+		RPID:            "ariel.example.com",
+		CredentialsFile: filepath.Join(t.TempDir(), "auth.json"),
+		SessionKey:      []byte(strings.Repeat("a", 32)),
+		SetupToken:      strings.Repeat("setup-", 6),
+		PuckStatus:      map[string]string{"state": "unavailable", "reason": "PUCK_DATA_DIR_LOCKED"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := httptest.NewRecorder()
+	m.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	for _, want := range []string{`"puck":{"reason":"PUCK_DATA_DIR_LOCKED","state":"unavailable"}`, `"mode":"passkey"`} {
+		if !strings.Contains(status.Body.String(), want) {
+			t.Fatalf("status %s lacks %s", status.Body.String(), want)
+		}
+	}
+}
+
 func TestAuthenticatedStatusRenewsOnlyALiveSession(t *testing.T) {
 	m := testManager(t)
 	now := time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)

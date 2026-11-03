@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"github.com/wu8685/Ariel/internal/filecontext"
+	"github.com/wu8685/Ariel/internal/puck"
 	"log"
 	"net"
 	"net/http"
@@ -28,6 +30,7 @@ type config struct {
 	origins                                                                               []string
 	enableChillingFileContext                                                             bool
 	enableTasks                                                                           bool
+	puck                                                                                  puck.Availability
 	taskDevices                                                                           map[string]relay.TaskDeviceCredential
 	cacheMaxBytes, cacheEntryMaxBytes                                                     int64
 }
@@ -36,6 +39,8 @@ type configInput struct {
 	token, webPIN, webAuth, origins, publicOrigin, rpID, credentialsFile, sessionKey, setupToken, dist, listen string
 	enableChillingFileContext                                                                                  bool
 	enableTasks                                                                                                bool
+	enablePuck                                                                                                 bool
+	puckDataDir                                                                                                string
 	taskCredentialsFile                                                                                        string
 	cacheMaxBytes, cacheEntryMaxBytes                                                                          string
 }
@@ -136,6 +141,7 @@ func configFromInput(input configInput) (config, error) {
 		return config{}, err
 	}
 	cfg.enableTasks, cfg.taskDevices = input.enableTasks, devices
+	cfg.puck = puck.Evaluate(puck.Config{Enabled: input.enablePuck, WebAuth: cfg.webAuth, PublicOrigin: cfg.publicOrigin, DataDir: input.puckDataDir})
 	return cfg, nil
 }
 
@@ -148,13 +154,13 @@ func buildHandler(cfg config) (http.Handler, error) {
 	var verifier func(*http.Request) bool
 	if cfg.webAuth == relay.WebAuthPasskey {
 		var err error
-		auth, err = webauth.New(webauth.Config{PublicOrigin: cfg.publicOrigin, RPID: cfg.rpID, CredentialsFile: cfg.credentialsFile, SessionKey: cfg.sessionKey, SetupToken: cfg.setupToken})
+		auth, err = webauth.New(webauth.Config{PublicOrigin: cfg.publicOrigin, RPID: cfg.rpID, CredentialsFile: cfg.credentialsFile, SessionKey: cfg.sessionKey, SetupToken: cfg.setupToken, PuckStatus: puckStatus(cfg.puck)})
 		if err != nil {
 			return nil, err
 		}
 		verifier = auth.Authenticated
 	}
-	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, WebAuthMode: cfg.webAuth, WebSessionVerifier: verifier, AllowedOrigins: cfg.origins, TasksEnabled: cfg.enableTasks, TaskDevices: cfg.taskDevices, CacheMaxBytes: cfg.cacheMaxBytes, CacheEntryMaxBytes: cfg.cacheEntryMaxBytes})
+	r, err := relay.New(relay.Config{Token: cfg.token, WebPIN: cfg.webPIN, WebAuthMode: cfg.webAuth, WebSessionVerifier: verifier, AllowedOrigins: cfg.origins, TasksEnabled: cfg.enableTasks, TaskDevices: cfg.taskDevices, CacheMaxBytes: cfg.cacheMaxBytes, CacheEntryMaxBytes: cfg.cacheEntryMaxBytes, PuckState: cfg.puck.State, PuckReason: cfg.puck.Reason})
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +172,18 @@ func buildHandler(cfg config) (http.Handler, error) {
 		mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write([]byte(`{"mode":"pin","authenticated":false,"enrollmentRequired":false}`))
+			_ = json.NewEncoder(w).Encode(map[string]any{"mode": "pin", "authenticated": false, "enrollmentRequired": false, "puck": puckStatus(cfg.puck)})
+		})
+	}
+	if cfg.puck.State == puck.StateReady {
+		mux.HandleFunc("GET /api/puck/status", func(w http.ResponseWriter, req *http.Request) {
+			if verifier == nil || !verifier(req) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write([]byte(`{"state":"ready"}`))
 		})
 	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -194,9 +211,18 @@ func buildHandler(cfg config) (http.Handler, error) {
 	return mux, nil
 }
 
+func puckStatus(availability puck.Availability) map[string]string {
+	status := map[string]string{"state": availability.State}
+	if availability.Reason != "" {
+		status["reason"] = availability.Reason
+	}
+	return status
+}
+
 func main() {
 	fileFlags := filecontext.RegisterFlags(flag.CommandLine, os.LookupEnv)
 	enableTasks := flag.Bool("enable-tasks", os.Getenv("ARIEL_ENABLE_TASKS") == "true", "enable the local Chilling task gateway")
+	enablePuck := flag.Bool("enable-puck", os.Getenv("ARIEL_PUCK_ENABLED") == "1" || strings.EqualFold(os.Getenv("ARIEL_PUCK_ENABLED"), "true"), "enable the Puck personal assistant module")
 	taskCredentials := flag.String("task-agent-credentials", os.Getenv("ARIEL_TASK_AGENT_CREDENTIALS_FILE"), "private per-device task credential file")
 	flag.Parse()
 	fileEnabled, fileFlagErr := fileFlags.Enabled()
@@ -207,10 +233,14 @@ func main() {
 		token: os.Getenv("ARIEL_TOKEN"), webPIN: os.Getenv("ARIEL_WEB_PIN"), webAuth: os.Getenv("ARIEL_WEB_AUTH"), origins: os.Getenv("ARIEL_ORIGINS"),
 		publicOrigin: os.Getenv("ARIEL_PUBLIC_ORIGIN"), rpID: os.Getenv("ARIEL_WEBAUTHN_RP_ID"), credentialsFile: os.Getenv("ARIEL_WEBAUTHN_CREDENTIALS_FILE"),
 		sessionKey: os.Getenv("ARIEL_SESSION_KEY"), setupToken: os.Getenv("ARIEL_PASSKEY_SETUP_TOKEN"), dist: os.Getenv("ARIEL_WEB_DIST"), listen: os.Getenv("ARIEL_LISTEN"), enableChillingFileContext: fileEnabled, enableTasks: *enableTasks, taskCredentialsFile: *taskCredentials,
-		cacheMaxBytes: os.Getenv("ARIEL_CACHE_MAX_BYTES"), cacheEntryMaxBytes: os.Getenv("ARIEL_CACHE_ENTRY_MAX_BYTES"),
+		cacheMaxBytes: os.Getenv("ARIEL_CACHE_MAX_BYTES"), cacheEntryMaxBytes: os.Getenv("ARIEL_CACHE_ENTRY_MAX_BYTES"), enablePuck: *enablePuck, puckDataDir: os.Getenv("ARIEL_PUCK_DATA_DIR"),
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+	defer cfg.puck.Close()
+	if cfg.puck.State == puck.StateUnavailable {
+		log.Printf("WARNING puck disabled: reason=%s detail=%s", cfg.puck.Reason, cfg.puck.Detail)
 	}
 	handler, err := buildHandler(cfg)
 	if err != nil {

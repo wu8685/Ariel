@@ -179,3 +179,101 @@ func TestPasskeyConfigurationIsMutuallyExclusiveAndComplete(t *testing.T) {
 		})
 	}
 }
+
+func TestPuckConfigurationFailsClosedWithoutFailingRelay(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dataParent := t.TempDir()
+	dataDir := filepath.Join(dataParent, "puck")
+	pin, err := configFromInput(configInput{token: "secret", webPIN: "012345", webAuth: "pin", origins: "http://localhost:8080", dist: dir, enablePuck: true, puckDataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.puck.Close()
+	if pin.puck.State != "unavailable" || pin.puck.Reason != "PUCK_REQUIRES_PASSKEY_HTTPS" {
+		t.Fatalf("pin Puck status: %+v", pin.puck)
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatal("PIN mode created Puck data")
+	}
+
+	passkeyInput := configInput{
+		token: "secret", webAuth: "passkey", origins: "https://ariel.example.com", publicOrigin: "https://ariel.example.com", rpID: "ariel.example.com",
+		credentialsFile: filepath.Join(t.TempDir(), "auth.json"), sessionKey: strings.Repeat("00", 32), setupToken: strings.Repeat("s", 32), dist: dir,
+		enablePuck: true, puckDataDir: dataDir,
+	}
+	ready, err := configFromInput(passkeyInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.puck.Close()
+	if ready.puck.State != "ready" || ready.puck.Lock == nil {
+		t.Fatalf("passkey Puck status: %+v", ready.puck)
+	}
+}
+
+func TestPuckHTTPRoutesOnlyExistWhenReady(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>Ariel</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := configFrom("secret", "012345", "http://localhost:8080", dir, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := buildHandler(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRecorder()
+	handler.ServeHTTP(r, httptest.NewRequest("GET", "/api/puck/status", nil))
+	if r.Code != 404 {
+		t.Fatalf("disabled Puck route = %d", r.Code)
+	}
+	for _, path := range []string{"/api/puck/mcp", "/api/puck/brain"} {
+		r = httptest.NewRecorder()
+		handler.ServeHTTP(r, httptest.NewRequest("GET", path, nil))
+		if r.Code != http.StatusNotFound {
+			t.Fatalf("disabled Puck route %s = %d", path, r.Code)
+		}
+	}
+	status := httptest.NewRecorder()
+	handler.ServeHTTP(status, httptest.NewRequest("GET", "/api/auth/status", nil))
+	if !strings.Contains(status.Body.String(), `"puck":{"state":"off"}`) {
+		t.Fatalf("auth status does not declare Puck off: %s", status.Body.String())
+	}
+}
+
+func TestReadyPuckHTTPStatusRequiresPasskeySession(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>Ariel</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := configFromInput(configInput{
+		token: "secret", webAuth: "passkey", origins: "https://ariel.example.com", publicOrigin: "https://ariel.example.com", rpID: "ariel.example.com",
+		credentialsFile: filepath.Join(t.TempDir(), "auth.json"), sessionKey: strings.Repeat("00", 32), setupToken: strings.Repeat("s", 32), dist: dir,
+		enablePuck: true, puckDataDir: filepath.Join(t.TempDir(), "puck"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cfg.puck.Close()
+	handler, err := buildHandler(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := httptest.NewRecorder()
+	handler.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/puck/status", nil))
+	if status.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated ready status = %d", status.Code)
+	}
+	for _, path := range []string{"/api/puck/mcp", "/api/puck/brain"} {
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("P0 forbidden route %s = %d", path, res.Code)
+		}
+	}
+}
