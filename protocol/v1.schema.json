@@ -514,6 +514,7 @@
       "properties": {
         "threadId": { "$ref": "#/$defs/id" }, "interactionId": { "$ref": "#/$defs/id" },
         "decision": { "enum": ["deny", "deny_and_stop", "accept_once", "answer"] },
+        "userDecisionId": { "$ref": "#/$defs/requestId" },
         "answers": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 } }
       }
     },

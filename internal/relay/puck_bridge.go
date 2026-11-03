@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"sync"
 	"time"
@@ -162,6 +163,9 @@ func (b *PuckBridge) Forward(ctx context.Context, origin Origin, deviceID, metho
 	if assistantID, brain := b.assistantFor(deviceID, reference.ThreadID); brain && (!isPuckBrainMethod(method) || assistantID != origin.AssistantID) {
 		return puckRejected("RECURSION_DENIED", "brain thread cannot be used as an execution thread")
 	}
+	if method == "interaction.respond" && !b.server.consumePuckDecision(params) {
+		return puckRejected("UNAUTHORIZED", "interaction response requires a current user decision")
+	}
 	if puckWriteMethod(method) && !b.takeWriteQuota() {
 		return puckRejected("OVERLOADED", "Puck write quota exceeded")
 	}
@@ -172,6 +176,58 @@ func (b *PuckBridge) Forward(ctx context.Context, origin Origin, deviceID, metho
 		return puckRejected("OVERLOADED", "too many Puck requests")
 	}
 	return b.server.forwardPuck(ctx, origin, deviceID, method, params)
+}
+
+func puckDecisionDigest(params json.RawMessage) (string, [32]byte, bool) {
+	var input struct {
+		InteractionID  string         `json:"interactionId"`
+		Decision       string         `json:"decision"`
+		Answers        map[string]any `json:"answers"`
+		UserDecisionID string         `json:"userDecisionId"`
+	}
+	if json.Unmarshal(params, &input) != nil || input.InteractionID == "" || input.Decision == "" {
+		return "", [32]byte{}, false
+	}
+	canonical, _ := json.Marshal(struct {
+		InteractionID string         `json:"interactionId"`
+		Decision      string         `json:"decision"`
+		Answers       map[string]any `json:"answers,omitempty"`
+	}{input.InteractionID, input.Decision, input.Answers})
+	return input.UserDecisionID, sha256.Sum256(canonical), true
+}
+
+func (s *Server) recordPuckDecision(ctx context.Context, web *peer, requestID string, params json.RawMessage) {
+	_, digest, ok := puckDecisionDigest(params)
+	if !ok {
+		_ = web.send(ctx, responseError(requestID, "rejected", "INVALID_ARGUMENT", "invalid user decision"))
+		return
+	}
+	id := newRequestID()
+	s.mu.Lock()
+	now := s.now()
+	for existing, decision := range s.puckDecisions {
+		if !now.Before(decision.expiresAt) {
+			delete(s.puckDecisions, existing)
+		}
+	}
+	s.puckDecisions[id] = puckDecision{digest: digest, expiresAt: now.Add(10 * time.Minute)}
+	s.mu.Unlock()
+	_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": map[string]any{"userDecisionId": id, "expiresAt": now.Add(10 * time.Minute).UTC().Format(time.RFC3339Nano)}})
+}
+
+func (s *Server) consumePuckDecision(params json.RawMessage) bool {
+	id, digest, ok := puckDecisionDigest(params)
+	if !ok || id == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	decision, exists := s.puckDecisions[id]
+	if !exists || !s.now().Before(decision.expiresAt) || decision.digest != digest {
+		return false
+	}
+	delete(s.puckDecisions, id)
+	return true
 }
 
 func (b *PuckBridge) takeWriteQuota() bool {

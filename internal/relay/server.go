@@ -81,10 +81,16 @@ type Server struct {
 	cachePromotionIDs      map[cacheKey]string
 	cachePromotionRequests map[string]cacheKey
 	puckBridge             *PuckBridge
+	puckDecisions          map[string]puckDecision
 }
 
 type pairing struct {
 	creator   *peer
+	expiresAt time.Time
+}
+
+type puckDecision struct {
+	digest    [32]byte
 	expiresAt time.Time
 }
 
@@ -208,7 +214,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.CacheEntryMaxBytes > cfg.CacheMaxBytes {
 		return nil, errors.New("cache entry limit exceeds cache budget")
 	}
-	server := &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}}
+	server := &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}, puckDecisions: map[string]puckDecision{}}
 	if cfg.PuckState == "ready" {
 		server.puckBridge = newPuckBridge(server)
 	}
@@ -776,6 +782,8 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		}
 		if s.cfg.PuckState != "ready" {
 			_ = p.send(ctx, responseErrorReason(msg.RequestID, "rejected", "FEATURE_DISABLED", "Puck unavailable", s.cfg.PuckReason))
+		} else if msg.Method == "puck.decision.record" {
+			s.recordPuckDecision(ctx, p, msg.RequestID, msg.Params)
 		} else {
 			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "PUCK_UNAVAILABLE", "Puck module not attached"))
 		}

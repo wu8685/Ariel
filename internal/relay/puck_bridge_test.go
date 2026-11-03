@@ -131,3 +131,27 @@ func TestPuckBridgeHasIndependentBoundedWriteQuota(t *testing.T) {
 		t.Fatalf("read used write quota: %+v", response)
 	}
 }
+
+func TestPuckInteractionResponseRequiresSingleUseWebDecision(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	web := dialTest(t, server.URL, testOrigin)
+	sendJSON(t, web, webHello())
+	readJSON(t, web)
+	sendJSON(t, web, map[string]any{"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000131", "deviceId": "relay", "method": "puck.decision.record", "params": map[string]any{"interactionId": "interaction-a", "decision": "accept_once"}})
+	recorded := readJSON(t, web)
+	decisionID := recorded["data"].(map[string]any)["userDecisionId"].(string)
+	origin := Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool"}
+	params := json.RawMessage(`{"threadId":"thread-a","interactionId":"interaction-a","decision":"accept_once","userDecisionId":"` + decisionID + `"}`)
+	if response := r.PuckBridge().Forward(context.Background(), origin, "offline", "interaction.respond", params); response.Error == nil || response.Error.Code != "DEVICE_OFFLINE" {
+		t.Fatalf("valid decision: %+v", response)
+	}
+	if response := r.PuckBridge().Forward(context.Background(), origin, "offline", "interaction.respond", params); response.Error == nil || response.Error.Code != "UNAUTHORIZED" {
+		t.Fatalf("replayed decision: %+v", response)
+	}
+	changed := json.RawMessage(`{"threadId":"thread-a","interactionId":"interaction-a","decision":"deny","userDecisionId":"` + decisionID + `"}`)
+	if response := r.PuckBridge().Forward(context.Background(), origin, "offline", "interaction.respond", changed); response.Error == nil || response.Error.Code != "UNAUTHORIZED" {
+		t.Fatalf("changed decision: %+v", response)
+	}
+}
