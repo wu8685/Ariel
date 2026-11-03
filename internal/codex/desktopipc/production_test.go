@@ -87,6 +87,20 @@ func TestProductionStartRejectsBusyBeforeNativeCallAndPreservesMessageID(t *test
 	}
 }
 
+func TestPuckProductionStartCarriesExplicitPolicyOnFollowerTurn(t *testing.T) {
+	owner := &recordingOwner{reply: Reply{Result: json.RawMessage(`{"result":{"turn":{"id":"new-turn"}}}`)}}
+	idle := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[]}`)
+	if _, err := StartProductionTurnWithPolicy(context.Background(), owner, "owner", "thread", "/fixture", idle, "client-id", "hello", PuckExecutionPolicy("/fixture")); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(owner.calls[0].Params)
+	for key, value := range map[string]string{"approvalPolicy": "on-request", "approvalsReviewer": "user", "type": "workspaceWrite"} {
+		if !containsJSON(body, key, value) {
+			t.Fatalf("missing %s=%s: %s", key, value, body)
+		}
+	}
+}
+
 func TestProductionInterruptRejectsStaleTurnBeforeNativeCall(t *testing.T) {
 	owner := &recordingOwner{}
 	state := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"inProgress"},"requests":[],"turns":[{"turnId":"current","status":"inProgress"}]}`)

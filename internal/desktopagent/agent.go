@@ -300,7 +300,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	go func() {
 		defer cacheTouchWorker.Done()
 		for request := range cacheTouches {
-			a.handle(requestCtx, request.id, request.method, request.params)
+			a.handle(requestCtx, request.id, request.method, request.params, false)
 		}
 	}()
 	defer func() {
@@ -412,6 +412,9 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 			RequestID string          `json:"requestId"`
 			Method    string          `json:"method"`
 			Params    json.RawMessage `json:"params"`
+			Origin    struct {
+				Kind string `json:"kind"`
+			} `json:"origin"`
 		}
 		if json.Unmarshal(body, &req) != nil || (req.Type != "request" && !strings.HasPrefix(req.Type, "task.")) {
 			return errors.New("unexpected Relay message")
@@ -443,7 +446,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 				if strings.HasPrefix(req.Type, "task.") {
 					a.tasks.handle(requestCtx, requestBody)
 				} else {
-					a.handle(requestCtx, req.RequestID, req.Method, req.Params)
+					a.handle(requestCtx, req.RequestID, req.Method, req.Params, req.Origin.Kind == "puck")
 				}
 			}(body)
 		default:
@@ -528,7 +531,7 @@ func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration
 	return a.conn.Write(writeCtx, websocket.MessageText, body)
 }
 
-func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage) {
+func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage, puckOrigin bool) {
 	if method == "turn.edit" || method == "turn.edit.read" {
 		a.handleEditing(ctx, id, method, raw)
 		return
@@ -615,7 +618,11 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "thread.bootstrap":
 		var thread map[string]any
 		var turnID string
-		thread, turnID, err = a.service.BootstrapThreadWithSettings(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings)
+		if puckOrigin {
+			thread, turnID, err = a.service.BootstrapThreadWithExecutionPolicy(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings)
+		} else {
+			thread, turnID, err = a.service.BootstrapThreadWithSettings(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings)
+		}
 		threadID := ""
 		if thread != nil {
 			threadID, _ = thread["threadId"].(string)
@@ -781,7 +788,11 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var text string
 		text, err = a.prepareMessage(ctx, p.Text, p.FileContexts)
 		if err == nil {
-			turnID, err = a.service.StartWithImages(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
+			if puckOrigin {
+				turnID, err = a.service.StartWithExecutionPolicy(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
+			} else {
+				turnID, err = a.service.StartWithImages(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
+			}
 		}
 		data = map[string]any{"turnId": turnID}
 	case "turn.interrupt":

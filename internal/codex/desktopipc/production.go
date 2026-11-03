@@ -130,6 +130,20 @@ func StartProductionTurn(ctx context.Context, c caller, owner, threadID, cwd str
 	return StartProductionTurnImages(ctx, c, owner, threadID, cwd, state, clientMessageID, text, nil)
 }
 
+type ExecutionPolicy struct {
+	ApprovalPolicy    string
+	ApprovalsReviewer string
+	SandboxPolicy     map[string]any
+}
+
+func PuckExecutionPolicy(cwd string) ExecutionPolicy {
+	return ExecutionPolicy{ApprovalPolicy: "on-request", ApprovalsReviewer: "user", SandboxPolicy: map[string]any{"type": "workspaceWrite", "writableRoots": []string{cwd}, "networkAccess": false}}
+}
+
+func StartProductionTurnWithPolicy(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string, policy ExecutionPolicy) (string, error) {
+	return startProductionTurnImages(ctx, c, owner, threadID, cwd, state, clientMessageID, text, nil, &policy)
+}
+
 // productionStartFence decodes the potentially large owner snapshot once.
 // The start path previously scanned the same frame three times to validate
 // addressability, check idleness and reject an existing receipt ID.
@@ -197,6 +211,10 @@ func productionStartFence(state json.RawMessage, cwd string) (map[string]struct{
 }
 
 func StartProductionTurnImages(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string, images []string) (string, error) {
+	return startProductionTurnImages(ctx, c, owner, threadID, cwd, state, clientMessageID, text, images, nil)
+}
+
+func startProductionTurnImages(ctx context.Context, c caller, owner, threadID, cwd string, state json.RawMessage, clientMessageID, text string, images []string, policy *ExecutionPolicy) (string, error) {
 	if owner == "" || threadID == "" || clientMessageID == "" || (strings.TrimSpace(text) == "" && len(images) == 0) {
 		return "", ErrProtocol
 	}
@@ -211,8 +229,14 @@ func StartProductionTurnImages(ctx context.Context, c caller, owner, threadID, c
 	for _, image := range images {
 		input = append(input, map[string]any{"type": "image", "url": image})
 	}
+	request := map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input}
+	if policy != nil {
+		request["approvalPolicy"] = policy.ApprovalPolicy
+		request["approvalsReviewer"] = policy.ApprovalsReviewer
+		request["sandboxPolicy"] = policy.SandboxPolicy
+	}
 	r, err := c.Call(ctx, Request{Method: "thread-follower-start-turn", Version: 2, TargetClientID: owner, Mutating: true, Params: map[string]any{
-		"conversationId": threadID, "turnStart": map[string]any{"request": map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input}, "context": map[string]bool{"inheritThreadSettings": true}},
+		"conversationId": threadID, "turnStart": map[string]any{"request": request, "context": map[string]bool{"inheritThreadSettings": true}},
 	}})
 	if err != nil {
 		return "", err

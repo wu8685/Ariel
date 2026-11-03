@@ -36,6 +36,14 @@ func (b AppServerBootstrapper) Bootstrap(ctx context.Context, cwd, messageID, te
 }
 
 func (b AppServerBootstrapper) BootstrapWithSettings(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (BootstrapResult, error) {
+	return b.bootstrap(ctx, cwd, messageID, text, images, settings, false)
+}
+
+func (b AppServerBootstrapper) BootstrapWithExecutionPolicy(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (BootstrapResult, error) {
+	return b.bootstrap(ctx, cwd, messageID, text, images, settings, true)
+}
+
+func (b AppServerBootstrapper) bootstrap(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values, puckPolicy bool) (BootstrapResult, error) {
 	if b.Binary == "" {
 		return BootstrapResult{}, appserver.ErrMethodUnavailable
 	}
@@ -56,6 +64,12 @@ func (b AppServerBootstrapper) BootstrapWithSettings(ctx context.Context, cwd, m
 		Tier   *string          `json:"serviceTier"`
 	}
 	startParams := map[string]any{"cwd": cwd, "ephemeral": false, "serviceName": "ariel"}
+	if puckPolicy {
+		policy := appserver.PuckExecutionPolicyParams(cwd)
+		startParams["approvalPolicy"] = policy["approvalPolicy"]
+		startParams["approvalsReviewer"] = policy["approvalsReviewer"]
+		startParams["sandbox"] = policy["sandbox"]
+	}
 	if settings != nil {
 		p := appserver.ExecutionParams(*settings)
 		startParams["model"] = p["model"]
@@ -83,6 +97,12 @@ func (b AppServerBootstrapper) BootstrapWithSettings(ctx context.Context, cwd, m
 		} `json:"turn"`
 	}
 	turnParams := map[string]any{"threadId": started.Thread.ID, "clientUserMessageId": messageID, "input": input}
+	if puckPolicy {
+		policy := appserver.PuckExecutionPolicyParams(cwd)
+		turnParams["approvalPolicy"] = policy["approvalPolicy"]
+		turnParams["approvalsReviewer"] = policy["approvalsReviewer"]
+		turnParams["sandboxPolicy"] = policy["sandboxPolicy"]
+	}
 	if settings != nil {
 		for k, v := range appserver.ExecutionParams(*settings) {
 			turnParams[k] = v

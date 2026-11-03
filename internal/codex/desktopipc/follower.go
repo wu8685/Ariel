@@ -218,6 +218,19 @@ func (f *Follower) StartWithImages(ctx context.Context, clientMessageID, text st
 	return StartProductionTurnImages(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, clientMessageID, text, images)
 }
 
+func (f *Follower) StartWithExecutionPolicy(ctx context.Context, clientMessageID, text string, images []string) (string, error) {
+	f.startMu.Lock()
+	defer f.startMu.Unlock()
+	defer f.pinHistoryForMutation()()
+	state, err := f.Current()
+	if err != nil {
+		return "", err
+	}
+	return startProductionTurnImages(ctx, f.c, f.o.owner, f.o.threadID, f.cwd, state, clientMessageID, text, images, ptrExecutionPolicy(PuckExecutionPolicy(f.cwd)))
+}
+
+func ptrExecutionPolicy(policy ExecutionPolicy) *ExecutionPolicy { return &policy }
+
 func (f *Follower) Interrupt(ctx context.Context, expectedTurnID string) error {
 	f.opMu.Lock()
 	defer f.opMu.Unlock()

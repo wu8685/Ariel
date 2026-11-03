@@ -492,6 +492,14 @@ func (s *Service) BootstrapThread(ctx context.Context, cwd, messageID, text stri
 }
 
 func (s *Service) BootstrapThreadWithSettings(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (map[string]any, string, error) {
+	return s.bootstrapThread(ctx, cwd, messageID, text, images, settings, false)
+}
+
+func (s *Service) BootstrapThreadWithExecutionPolicy(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (map[string]any, string, error) {
+	return s.bootstrapThread(ctx, cwd, messageID, text, images, settings, true)
+}
+
+func (s *Service) bootstrapThread(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values, puckPolicy bool) (map[string]any, string, error) {
 	if s.bootstrapper == nil {
 		return nil, "", appserver.ErrMethodUnavailable
 	}
@@ -524,6 +532,16 @@ func (s *Service) BootstrapThreadWithSettings(ctx context.Context, cwd, messageI
 		if e = catalog.Validate(*settings, len(images) > 0); e != nil {
 			return nil, "", e
 		}
+	}
+	if puckPolicy {
+		capable, ok := s.bootstrapper.(interface {
+			BootstrapWithExecutionPolicy(context.Context, string, string, string, []string, *modelsettings.Values) (BootstrapResult, error)
+		})
+		if !ok {
+			return nil, "", errors.New("EXECUTION_POLICY_UNENFORCEABLE")
+		}
+		result, err = capable.BootstrapWithExecutionPolicy(ctx, canonical, messageID, text, images, settings)
+	} else if settings != nil {
 		capable, ok := s.bootstrapper.(interface {
 			BootstrapWithSettings(context.Context, string, string, string, []string, *modelsettings.Values) (BootstrapResult, error)
 		})
@@ -1700,6 +1718,14 @@ func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (
 }
 
 func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text string, images []string) (string, error) {
+	return s.startWithImages(ctx, threadID, messageID, text, images, false)
+}
+
+func (s *Service) StartWithExecutionPolicy(ctx context.Context, threadID, messageID, text string, images []string) (string, error) {
+	return s.startWithImages(ctx, threadID, messageID, text, images, true)
+}
+
+func (s *Service) startWithImages(ctx context.Context, threadID, messageID, text string, images []string, puckPolicy bool) (string, error) {
 	if (text == "" && len(images) == 0) || validateUploadImages(images) != nil {
 		return "", errors.New("INVALID_ARGUMENT")
 	}
@@ -1737,7 +1763,15 @@ func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text
 	}
 	var turnID string
 	nativeStart := time.Now()
-	if len(images) > 0 {
+	if puckPolicy {
+		policyLive, ok := live.(interface {
+			StartWithExecutionPolicy(context.Context, string, string, []string) (string, error)
+		})
+		if !ok {
+			return "", errors.New("EXECUTION_POLICY_UNENFORCEABLE")
+		}
+		turnID, err = policyLive.StartWithExecutionPolicy(ctx, messageID, text, images)
+	} else if len(images) > 0 {
 		imageLive, ok := live.(interface {
 			StartWithImages(context.Context, string, string, []string) (string, error)
 		})

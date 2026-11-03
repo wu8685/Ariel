@@ -114,3 +114,8 @@ func readExecutionPolicy(state json.RawMessage, cwd string) (ExecutionPolicyProb
 	out.Enforced = out.ApprovalPolicy == "on-request" && out.SandboxType == "workspaceWrite" && out.WritableRootOK && out.NetworkDisabled
 	return out, nil
 }
+
+func ExecutionPolicyEnforced(state json.RawMessage, cwd string) bool {
+	result, err := readExecutionPolicy(state, cwd)
+	return err == nil && result.Enforced
+}

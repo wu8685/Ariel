@@ -331,6 +331,10 @@ func (s *Server) forwardPuck(ctx context.Context, origin Origin, deviceID, metho
 		s.mu.Unlock()
 		return puckRejected("FEATURE_DISABLED", "Puck brain is disabled on target device")
 	}
+	if (method == "thread.create" || method == "turn.start") && !agent.capabilities["executionPolicy"] {
+		s.mu.Unlock()
+		return puckRejected("EXECUTION_POLICY_UNENFORCEABLE", "target Agent cannot prove on-request execution policy")
+	}
 	relayID := newRequestID()
 	result := make(chan map[string]any, 1)
 	entry := &route{agent: agent, method: method, deviceID: deviceID, internal: result}

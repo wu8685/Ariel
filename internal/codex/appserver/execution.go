@@ -17,3 +17,19 @@ func ExecutionParams(v modelsettings.Values) map[string]any {
 	}
 	return map[string]any{"model": v.Model, "effort": effort, "serviceTier": tier}
 }
+
+// PuckExecutionPolicyParams is the single allowlisted policy shape used for
+// Puck-created execution threads. Callers select `sandbox` for thread/start
+// and `sandboxPolicy` for every turn/start.
+func PuckExecutionPolicyParams(cwd string) map[string]any {
+	return map[string]any{
+		"approvalPolicy":    "on-request",
+		"approvalsReviewer": "user",
+		"sandbox":           "workspace-write",
+		"sandboxPolicy": map[string]any{
+			"type":          "workspaceWrite",
+			"writableRoots": []string{cwd},
+			"networkAccess": false,
+		},
+	}
+}
