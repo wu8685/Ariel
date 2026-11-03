@@ -86,4 +86,24 @@ describe("PuckWorkspace", () => {
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
     expect(calls.filter(method => method === "puck.message.send")).toHaveLength(1);
   });
+
+  it("uses puck.watch events for durable conversation updates and unwatches on cleanup", async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const subscribeEvents = vi.fn((next: (event: Record<string, unknown>) => void) => { listener = next; return vi.fn(); });
+    const request = vi.fn(async (method: string) => {
+      if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] });
+      if (method === "puck.history") return accepted({ messages: [] });
+      if (method === "puck.watch") return accepted({ watchId: "watch-a" });
+      return accepted({});
+    });
+    const view = render(<PuckWorkspace request={request} subscribeEvents={subscribeEvents} state="ready" devices={[]} />);
+    await screen.findAllByText("小帕");
+    await act(async () => {
+      listener?.({ type: "event", v: 1, event: "puck.event", assistantId: "a-1", seq: 1, kind: "history", payload: { messages: [{ id: "durable-a", role: "assistant", kind: "text", text: "增量更新已落库" }] } });
+    });
+    expect(screen.getAllByText("增量更新已落库").length).toBeGreaterThan(0);
+    view.unmount();
+    await act(async () => undefined);
+    expect(request).toHaveBeenCalledWith("puck.unwatch", "relay", { watchId: "watch-a" });
+  });
 });

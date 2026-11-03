@@ -6,6 +6,7 @@ import "./puck.css";
 
 type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: { code?: string; message?: string } };
 type Request = (method: string, target: string, params: Record<string, unknown>) => Promise<PuckResponse>;
+type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
 type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string };
 type Message = { id: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string };
@@ -64,7 +65,7 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
   return null;
 }
 
-export function PuckWorkspace({ request, state, reason, devices, onBack, onOpenThread }: { request: Request; state: "ready" | "unavailable" | "disabled"; reason?: string; devices: Device[]; onBack?: () => void; onOpenThread?: (deviceId: string, threadId: string) => void }) {
+export function PuckWorkspace({ request, subscribeEvents, state, reason, devices, onBack, onOpenThread }: { request: Request; subscribeEvents?: SubscribeEvents; state: "ready" | "unavailable" | "disabled"; reason?: string; devices: Device[]; onBack?: () => void; onOpenThread?: (deviceId: string, threadId: string) => void }) {
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [selectedID, setSelectedID] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -100,13 +101,34 @@ export function PuckWorkspace({ request, state, reason, devices, onBack, onOpenT
   }, [selectedID]);
 	useEffect(() => {
 		if (!selectedID) return;
+		let active = true;
+		let watchID = "";
+		const unsubscribe = subscribeEvents?.(event => {
+			if (!active || event.event !== "puck.event" || event.assistantId !== selectedID || event.kind !== "history") return;
+			const payload = event.payload as Record<string, unknown> | undefined;
+			const durable = arrayData<Record<string, unknown>>(payload?.messages).map(normalizeMessage);
+			setMessages(current => mergeHistory(current, durable));
+		});
+		if (subscribeEvents) {
+			void request("puck.watch", "relay", { assistantId: selectedID }).then(response => {
+				const id = response.outcome === "accepted" ? String(response.data?.watchId || "") : "";
+				if (!id) return;
+				if (!active) void request("puck.unwatch", "relay", { watchId: id });
+				else watchID = id;
+			});
+		}
 		const timer = window.setInterval(() => { void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
 			if (response.outcome !== "accepted") return;
 			const durable = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
 			setMessages(current => mergeHistory(current, durable));
-		}); }, 2000);
-		return () => window.clearInterval(timer);
-	}, [selectedID]);
+		}); }, subscribeEvents ? 10000 : 2000);
+		return () => {
+			active = false;
+			unsubscribe?.();
+			window.clearInterval(timer);
+			if (watchID) void request("puck.unwatch", "relay", { watchId: watchID });
+		};
+	}, [selectedID, subscribeEvents]);
 
   async function createAssistant() {
     const deviceID = brainDeviceID || readyBrains[0]?.deviceId;

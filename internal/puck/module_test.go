@@ -361,3 +361,36 @@ func TestModuleUpdatesAvatar(t *testing.T) {
 		t.Fatalf("avatar=%v", avatar)
 	}
 }
+
+func TestModuleConversationWatchEmitsDurableChanges(t *testing.T) {
+	module, err := NewModule(t.TempDir(), &fakeModuleBridge{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	ctx, cancelContext := context.WithCancel(context.Background())
+	events, cancelWatch, watchErr := module.Watch(ctx, id)
+	if watchErr != nil {
+		t.Fatal(watchErr)
+	}
+	defer cancelWatch()
+	initial := <-events
+	if got := len(initial.Data["messages"].([]Message)); got != 0 {
+		t.Fatalf("initial messages=%d", got)
+	}
+	if err := module.store.AppendMessage(context.Background(), Message{ID: "watch-message", AssistantID: id, Role: "assistant", Kind: "text", Text: "已更新"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		messages := event.Data["messages"].([]Message)
+		if len(messages) != 1 || messages[0].Text != "已更新" {
+			t.Fatalf("messages=%+v", messages)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watch did not emit durable change")
+	}
+	cancelContext()
+}

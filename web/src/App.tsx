@@ -2864,7 +2864,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     }
   },[exclusiveFiles]);
 	if (workspaceMode === "puck" && (status === "ready" || hasConversationContext)) {
-		return <PuckWorkspace request={(method,target,params)=>client.request(method as Parameters<typeof client.request>[0],target,params)} state={puckAvailability.state} reason={puckAvailability.reason} devices={devices.map(device=>({deviceId:device.deviceId,name:device.deviceName,capabilities:device.capabilities}))} onBack={()=>setWorkspaceMode("codex")} onOpenThread={(targetDevice,targetThread)=>{setWorkspaceMode("codex");setDeviceId(targetDevice);void selectThread(targetThread,targetDevice)}}/>;
+		return <PuckWorkspace request={(method,target,params)=>client.request(method as Parameters<typeof client.request>[0],target,params)} subscribeEvents={listener=>client.subscribeEvents(event=>listener(event as unknown as Record<string,unknown>))} state={puckAvailability.state} reason={puckAvailability.reason} devices={devices.map(device=>({deviceId:device.deviceId,name:device.deviceName,capabilities:device.capabilities}))} onBack={()=>setWorkspaceMode("codex")} onOpenThread={(targetDevice,targetThread)=>{setWorkspaceMode("codex");setDeviceId(targetDevice);void selectThread(targetThread,targetDevice)}}/>;
 	}
   return <div className={`app-shell ${status === "ready" || hasConversationContext ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">

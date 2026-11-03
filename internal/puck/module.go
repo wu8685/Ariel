@@ -74,6 +74,60 @@ func (m *Module) Close() error {
 	return m.store.Close()
 }
 
+// Watch emits the durable conversation snapshot immediately and whenever it
+// changes. SQLite remains the source of truth; the relay only forwards these
+// bounded snapshots to currently connected browsers.
+func (m *Module) Watch(ctx context.Context, assistantID string) (<-chan relay.PuckResponse, func(), *relay.PuckError) {
+	if _, err := m.store.Assistant(ctx, assistantID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, &relay.PuckError{Code: "PUCK_ASSISTANT_NOT_FOUND", Message: "assistant not found"}
+		}
+		return nil, nil, &relay.PuckError{Code: "PUCK_STORE_ERROR", Message: err.Error()}
+	}
+
+	watchCtx, cancel := context.WithCancel(ctx)
+	events := make(chan relay.PuckResponse, 1)
+	var once sync.Once
+	stop := func() { once.Do(cancel) }
+	go func() {
+		defer close(events)
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		lastSnapshot := ""
+		emit := func() bool {
+			messages, err := m.store.Messages(watchCtx, assistantID, 200)
+			if err != nil {
+				return false
+			}
+			encoded, _ := json.Marshal(messages)
+			if string(encoded) == lastSnapshot {
+				return true
+			}
+			lastSnapshot = string(encoded)
+			select {
+			case events <- accepted(map[string]any{"messages": messages}):
+				return true
+			case <-watchCtx.Done():
+				return false
+			}
+		}
+		if !emit() {
+			return
+		}
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-ticker.C:
+				if !emit() {
+					return
+				}
+			}
+		}
+	}()
+	return events, stop, nil
+}
+
 func (m *Module) runBrainEvents(ctx context.Context) {
 	defer m.wg.Done()
 	for {

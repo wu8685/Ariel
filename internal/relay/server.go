@@ -83,10 +83,15 @@ type Server struct {
 	puckBridge             *PuckBridge
 	puckDecisions          map[string]puckDecision
 	puckHandler            PuckHandler
+	puckWatches            map[*peer]map[string]context.CancelFunc
 }
 
 type PuckHandler interface {
 	Handle(context.Context, string, json.RawMessage) PuckResponse
+}
+
+type PuckConversationWatcher interface {
+	Watch(context.Context, string) (<-chan PuckResponse, func(), *PuckError)
 }
 
 func (s *Server) SetPuckHandler(handler PuckHandler) {
@@ -225,7 +230,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.CacheEntryMaxBytes > cfg.CacheMaxBytes {
 		return nil, errors.New("cache entry limit exceeds cache budget")
 	}
-	server := &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}, puckDecisions: map[string]puckDecision{}}
+	server := &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}, puckDecisions: map[string]puckDecision{}, puckWatches: map[*peer]map[string]context.CancelFunc{}}
 	if cfg.PuckState == "ready" {
 		server.puckBridge = newPuckBridge(server)
 	}
@@ -573,6 +578,11 @@ func (s *Server) removePeer(p *peer) {
 	s.mu.Lock()
 	failed := make([]*route, 0)
 	cacheDeliveries := make([]cacheDelivery, 0)
+	puckWatchCancels := make([]context.CancelFunc, 0, len(s.puckWatches[p]))
+	for _, cancel := range s.puckWatches[p] {
+		puckWatchCancels = append(puckWatchCancels, cancel)
+	}
+	delete(s.puckWatches, p)
 	type orphan struct {
 		agent *peer
 		id    string
@@ -636,6 +646,9 @@ func (s *Server) removePeer(p *peer) {
 		}
 	}
 	s.mu.Unlock()
+	for _, cancel := range puckWatchCancels {
+		cancel()
+	}
 	s.sendCacheDeliveries(context.Background(), cacheDeliveries)
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelCleanup()
@@ -795,6 +808,10 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 			_ = p.send(ctx, responseErrorReason(msg.RequestID, "rejected", "FEATURE_DISABLED", "Puck unavailable", s.cfg.PuckReason))
 		} else if msg.Method == "puck.decision.record" {
 			s.recordPuckDecision(ctx, p, msg.RequestID, msg.Params)
+		} else if msg.Method == "puck.watch" {
+			s.startPuckConversationWatch(ctx, p, msg.RequestID, msg.Params)
+		} else if msg.Method == "puck.unwatch" {
+			s.stopPuckConversationWatch(ctx, p, msg.RequestID, msg.Params)
 		} else {
 			s.mu.Lock()
 			handler := s.puckHandler
@@ -860,6 +877,102 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 	s.mu.Unlock()
 	p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": "accepted", "data": map[string]any{"devices": devices, "documentAssetsVersion": 1}})
 	return true
+}
+
+func (s *Server) startPuckConversationWatch(ctx context.Context, web *peer, requestID string, raw json.RawMessage) {
+	var params struct {
+		AssistantID string `json:"assistantId"`
+	}
+	if json.Unmarshal(raw, &params) != nil || params.AssistantID == "" {
+		_ = web.send(ctx, responseError(requestID, "rejected", "INVALID_PARAMS", "assistantId is required"))
+		return
+	}
+	s.mu.Lock()
+	handler := s.puckHandler
+	watchCount := len(s.puckWatches[web])
+	s.mu.Unlock()
+	watcher, ok := handler.(PuckConversationWatcher)
+	if !ok {
+		_ = web.send(ctx, responseError(requestID, "rejected", "PUCK_WATCH_UNAVAILABLE", "Puck conversation watch is unavailable"))
+		return
+	}
+	if watchCount >= maxWebSubscriptions {
+		_ = web.send(ctx, responseError(requestID, "rejected", "OVERLOADED", "too many Puck watches"))
+		return
+	}
+
+	watchCtx, cancelContext := context.WithCancel(ctx)
+	events, cancelHandler, watchErr := watcher.Watch(watchCtx, params.AssistantID)
+	if watchErr != nil {
+		cancelContext()
+		_ = web.send(ctx, responseError(requestID, "rejected", watchErr.Code, watchErr.Message))
+		return
+	}
+	var cancelOnce sync.Once
+	cancel := func() {
+		cancelOnce.Do(func() {
+			cancelContext()
+			cancelHandler()
+		})
+	}
+	watchID := newRequestID()
+	s.mu.Lock()
+	if s.puckWatches[web] == nil {
+		s.puckWatches[web] = map[string]context.CancelFunc{}
+	}
+	s.puckWatches[web][watchID] = cancel
+	s.mu.Unlock()
+	if err := web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": map[string]any{"watchId": watchID}}); err != nil {
+		s.removePuckConversationWatch(web, watchID)
+		return
+	}
+
+	go func() {
+		defer s.removePuckConversationWatch(web, watchID)
+		seq := 0
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case event, open := <-events:
+				if !open {
+					return
+				}
+				if event.Error != nil {
+					return
+				}
+				seq++
+				if err := web.send(watchCtx, map[string]any{"type": "event", "v": 1, "event": "puck.event", "assistantId": params.AssistantID, "seq": seq, "kind": "history", "payload": event.Data}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (s *Server) stopPuckConversationWatch(ctx context.Context, web *peer, requestID string, raw json.RawMessage) {
+	var params struct {
+		WatchID string `json:"watchId"`
+	}
+	if json.Unmarshal(raw, &params) != nil || params.WatchID == "" {
+		_ = web.send(ctx, responseError(requestID, "rejected", "INVALID_PARAMS", "watchId is required"))
+		return
+	}
+	s.removePuckConversationWatch(web, params.WatchID)
+	_ = web.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": requestID, "outcome": "accepted", "data": map[string]any{}})
+}
+
+func (s *Server) removePuckConversationWatch(web *peer, watchID string) {
+	s.mu.Lock()
+	cancel := s.puckWatches[web][watchID]
+	delete(s.puckWatches[web], watchID)
+	if len(s.puckWatches[web]) == 0 {
+		delete(s.puckWatches, web)
+	}
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func newRequestID() string {
