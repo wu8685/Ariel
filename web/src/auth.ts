@@ -1,4 +1,4 @@
-export type AuthStatus = { mode: "pin" | "passkey"; authenticated: boolean; enrollmentRequired: boolean };
+export type AuthStatus = { mode: "pin" | "passkey"; authenticated: boolean; enrollmentRequired: boolean; puck?: { state: "ready" | "unavailable" | "disabled"; reason?: string } };
 
 type CreationJSON = {
   publicKey: Omit<PublicKeyCredentialCreationOptions, "challenge" | "user" | "excludeCredentials"> & {

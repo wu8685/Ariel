@@ -33,11 +33,12 @@ import { FileContentCache, FileQuoteChips, HistoricalFileQuotes, TurnFileChanges
 import { FileWorkspace, FileWorkspaceModel, useFileWorkspace } from "./file-workspace";
 import { FileWorkspaceSession } from "./file-workspace-session";
 import { WorkspaceBrowser, WorkspaceDirectoryCache } from "./workspace-browser";
+import { PuckWorkspace } from "./puck/PuckWorkspace";
 import type { ArielProtocolV1Envelope, Thread, Turn, Item, Response, Interaction, QueuedMessage } from "./generated/protocol";
 import "./interaction.css";
 export { InteractionCard } from "./interaction-card";
 
-type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; chillingWorkspaceBrowser?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean } };
+type Device = { deviceId: string; deviceName: string; agentOnline: boolean; codexReady: boolean; agentEpoch?: string; adapterVersion?: string; taskStoreId?: string; capabilities: { autoLoad: boolean; history?: boolean; send?: boolean; interrupt?: boolean; interaction?: boolean; queue?: boolean; threadCreate?: boolean; threadBootstrap?: boolean; threadArchive?: boolean; threadArchiveUndo?: boolean; threadRename?: boolean; threadPin?: boolean; chillingFileContext?: boolean; chillingMessageReferences?: boolean; chillingWorkspaceBrowser?: boolean; taskManagement?: boolean; taskExecution?: boolean; taskExecutionAuthorized?: boolean; taskTracking?: boolean; puckBrain?: boolean; puckBrainReady?: boolean } };
 const wsURL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const recentTurnLimit = 2;
 const historyTurnPageLimit = 3;
@@ -278,6 +279,8 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
   const [webAuthMode] = useState<WebAuthMode>(webAuthModeFromDocument);
   const [passkeyAuth, setPasskeyAuth] = useState<PasskeyAuthState>({ loaded: false, enrollmentRequired: false, error: "" });
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+	const [workspaceMode, setWorkspaceMode] = useState<"codex" | "puck">("codex");
+	const [puckAvailability, setPuckAvailability] = useState<{ state: "ready" | "unavailable" | "disabled"; reason?: string }>(() => webAuthModeFromDocument() === "pin" ? { state: "unavailable", reason: "PUCK_REQUIRES_PASSKEY_HTTPS" } : { state: "disabled" });
   const [setupToken, setSetupToken] = useState("");
   const [phonePairing, setPhonePairing] = useState<PhonePairing | null>(() => {
     const credential = initialPairingCredential ?? takePairingCredential(window.location, window.history);
@@ -1915,6 +1918,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     void loadAuthStatus().then(auth => {
       if (!active || generation !== authGeneration.current) return;
       if (auth.mode !== "passkey") throw new Error("Relay 返回了不一致的认证模式。");
+	  setPuckAvailability(auth.puck ?? { state: "disabled" });
       setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: "" });
       if (auth.authenticated) client.connect("cookie");
     }).catch(error => {
@@ -2859,10 +2863,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       root?.querySelector<HTMLElement>('.file-workspace [role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
     }
   },[exclusiveFiles]);
+	if (workspaceMode === "puck" && (status === "ready" || hasConversationContext)) {
+		return <PuckWorkspace request={(method,target,params)=>client.request(method as Parameters<typeof client.request>[0],target,params)} state={puckAvailability.state} reason={puckAvailability.reason} devices={devices.map(device=>({deviceId:device.deviceId,name:device.deviceName,capabilities:device.capabilities}))} onBack={()=>setWorkspaceMode("codex")}/>;
+	}
   return <div className={`app-shell ${status === "ready" || hasConversationContext ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
-      <div className="mast-actions"><span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span></div>
+      <div className="mast-actions">{(status === "ready" || hasConversationContext) && <button type="button" className="secondary" onClick={()=>setWorkspaceMode("puck")}>Puck</button>}<span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span></div>
     </header>
     {newThreadOpen && <div className="thread-create-backdrop" role="presentation">
       <section className="thread-create-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-create-title">
@@ -2896,7 +2903,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     <div className={`workspace${layout.wide?" wide-layout":""}${showList?" sidebar-visible":""}`}>
       {showList && !layout.wide && <button className="sidebar-backdrop" type="button" aria-label="关闭会话列表遮罩" onClick={() => setShowList(false)} />}
       <aside id="session-sidebar" className={`sidebar ${showList ? "open" : ""}`} aria-label="会话列表" aria-hidden={!showList || undefined} inert={!showList}>
-        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={layout.wide?20:24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions">{threadCreateEnabled && <CircleButton className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></CircleButton>}{webAuthMode === "pin" ? <CircleButton className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></CircleButton> : <CircleButton className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></CircleButton>}<CircleButton className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></CircleButton><CircleButton className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></CircleButton><CircleButton className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></CircleButton></div></div>
+        <div className="sidebar-toolbar"><div className="brand"><ArielLogo size={layout.wide?20:24} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><span className={`connection ${status}`} aria-label={connectionLabel}><span className="status-dot" aria-hidden="true" /><span className="sr-only">{connectionLabel}</span></span></div><div className="sidebar-toolbar-actions"><button type="button" className="icon-button" aria-label="打开 Puck" onClick={()=>setWorkspaceMode("puck")}>P</button>{threadCreateEnabled && <CircleButton className="icon-button icon-control" type="button" aria-label="新建会话" data-tooltip="新建会话" onClick={openNewThreadDialog}><PlusIcon /></CircleButton>}{webAuthMode === "pin" ? <CircleButton className="icon-button icon-control" type="button" aria-label="手机扫码登录" data-tooltip="手机扫码登录" onClick={() => void openPairingInvite()}><PairIcon /></CircleButton> : <CircleButton className="icon-button icon-control" type="button" aria-label="添加 Passkey" data-tooltip="添加 Passkey" onClick={() => void addPasskey()} disabled={passkeyBusy}><PasskeyIcon /></CircleButton>}<CircleButton className="icon-button icon-control" aria-label="刷新会话" data-tooltip="刷新会话" onClick={() => void loadThreads(deviceId, "", searchInputRef.current.trim(), true)} disabled={!deviceId || searchInput.trim() !== searchTerm}><RefreshIcon /></CircleButton><CircleButton className="sidebar-disconnect icon-button icon-control" aria-label={webAuthMode === "passkey" ? "退出" : "断开"} data-tooltip={webAuthMode === "passkey" ? "退出" : "断开"} onClick={disconnect}><DisconnectIcon /></CircleButton><CircleButton className="icon-button icon-control mobile-close" aria-label="关闭会话列表" data-tooltip="关闭" onClick={() => setShowList(false)}><CloseIcon /></CircleButton></div></div>
         <DevicePicker devices={devices} value={deviceId} disabled={status !== "ready"} visible={showList && !threadMenu} onOpen={()=>setThreadMenu(null)} onChange={id=>{if(id!==deviceId)fileWorkspaceSession.clear();setDeviceId(id)}}/>
         <div className="sidebar-search"><span className="search-glyph"><SearchIcon /></span><input type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={searchInput} maxLength={128} onChange={e => updateSearch(e.target.value)} disabled={status !== "ready" || !deviceId} />{searchInput && <CircleButton className="icon-control" type="button" aria-label="清空搜索" data-tooltip="清空搜索" onClick={() => updateSearch("")}><CloseIcon /></CircleButton>}</div>
         <div className="list-caption"><span>{searchInput.trim() ? "搜索结果" : "最近会话"}</span><span>{pinnedThreads.length > 0 ? `${pinnedThreads.length} 个置顶 · ` : ""}{threadGroups.length} 个项目 · {threads.length} 个会话</span></div>
