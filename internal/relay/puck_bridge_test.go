@@ -70,6 +70,21 @@ func TestPuckBridgeRoutesBrainEventsByConnectionIdentity(t *testing.T) {
 	}
 }
 
+func TestPuckBridgeFailsClosedWhenExecutionPolicyIsUnverified(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	agent := dialTest(t, server.URL, "")
+	hello := agentHello()
+	hello["capabilities"].(map[string]bool)["executionPolicy"] = false
+	sendJSON(t, agent, hello)
+	readJSON(t, agent)
+	response := r.PuckBridge().Forward(context.Background(), Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool"}, "mock-mac", "thread.create", json.RawMessage(`{"cwd":"/tmp/puck-fixture"}`))
+	if response.Error == nil || response.Error.Code != "EXECUTION_POLICY_UNENFORCEABLE" {
+		t.Fatalf("response=%+v", response)
+	}
+}
+
 func TestWebCannotCallPuckBrainMethods(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
 	server := httptest.NewServer(r.Handler())
