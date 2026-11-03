@@ -12,6 +12,9 @@ export type ArielProtocolV1Envelope =
   | Request
   | Response
   | DeviceStatus
+  | PuckBrainToolCall
+  | PuckBrainEvent
+  | PuckEvent
   | ThreadSnapshot
   | ThreadUpdate
   | ThreadError
@@ -25,6 +28,10 @@ export type ArielProtocolV1Envelope =
   | HttpsGithubComWu8685ArielProtocolSettingsSchemaJson
   | HttpsGithubComWu8685ArielProtocolEditSchemaJson;
 export type Id = string;
+export type PuckStatus = {
+  state: "off" | "unavailable" | "ready" | "degraded";
+  reason?: string;
+};
 export type Request = {
   type: "request";
   v: 1;
@@ -66,7 +73,27 @@ export type Request = {
     | "queue.delete"
     | "queue.reorder"
     | "queue.steer"
-    | "interaction.respond";
+    | "interaction.respond"
+    | "puck.list"
+    | "puck.create"
+    | "puck.update"
+    | "puck.delete"
+    | "puck.message.send"
+    | "puck.stop"
+    | "puck.question.answer"
+    | "puck.history"
+    | "puck.watch"
+    | "puck.unwatch"
+    | "puck.task.list"
+    | "puck.authorization.list"
+    | "puck.authorization.decide"
+    | "puck.decision.record"
+    | "puck.brain.ensure"
+    | "puck.brain.turn.start"
+    | "puck.brain.turn.interrupt"
+    | "puck.brain.toolResult"
+    | "puck.brain.status"
+    | "puck.brain.retire";
   params: {
     [k: string]: unknown;
   };
@@ -257,6 +284,9 @@ export interface Capabilities {
   taskExecution?: boolean;
   taskExecutionAuthorized?: boolean;
   taskTracking?: boolean;
+  puckBrain?: boolean;
+  puckBrainReady?: boolean;
+  executionPolicy?: boolean;
 }
 export interface HelloOK {
   type: "hello.ok";
@@ -264,6 +294,7 @@ export interface HelloOK {
   connectionId: Id;
   relayEpoch: Id;
   sessionToken?: string;
+  puck?: PuckStatus;
 }
 export interface Error {
   code:
@@ -296,6 +327,14 @@ export interface Error {
     | "UNSUPPORTED_FILE_TYPE"
     | "FILE_TOO_LARGE"
     | "FILE_CHANGED"
+    | "PUCK_UNAVAILABLE"
+    | "PUCK_ASSISTANT_NOT_FOUND"
+    | "EXECUTION_POLICY_UNENFORCEABLE"
+    | "PUCK_SELF_TARGET"
+    | "AUTHORIZATION_REQUIRED"
+    | "AUTHORIZATION_EXPIRED"
+    | "BRAIN_HOST_OFFLINE"
+    | "BRAIN_UNAVAILABLE"
     | "TASK_FEEDBACK_IDENTITY_MISMATCH"
     | "TASK_IDEMPOTENCY_CONFLICT"
     | "TASK_INVALID_ARGUMENT"
@@ -312,6 +351,7 @@ export interface Error {
     | "TASK_UNAUTHORIZED"
     | "TASK_VERSION_CONFLICT";
   message: string;
+  reason?: "PUCK_REQUIRES_PASSKEY_HTTPS" | "PUCK_DATA_DIR_UNWRITABLE" | "PUCK_DATA_DIR_LOCKED" | "PUCK_CIRCUIT_OPEN";
 }
 export interface DeviceStatus {
   type: "event";
@@ -323,6 +363,40 @@ export interface DeviceStatus {
   agentOnline: boolean;
   codexReady: boolean;
   capabilities?: Capabilities;
+}
+export interface PuckBrainToolCall {
+  type: "event";
+  v: 1;
+  event: "puck.brain.toolCall";
+  deviceId: Id;
+  threadId: Id;
+  callId: Id;
+  tool: string;
+  arguments: {
+    [k: string]: unknown;
+  };
+}
+export interface PuckBrainEvent {
+  type: "event";
+  v: 1;
+  event: "puck.brain.event" | "puck.brain.status";
+  deviceId: Id;
+  threadId: Id;
+  kind: string;
+  payload: {
+    [k: string]: unknown;
+  };
+}
+export interface PuckEvent {
+  type: "event";
+  v: 1;
+  event: "puck.event";
+  assistantId: Id;
+  seq: number;
+  kind: string;
+  payload: {
+    [k: string]: unknown;
+  };
 }
 export interface ThreadSnapshot {
   type: "event";

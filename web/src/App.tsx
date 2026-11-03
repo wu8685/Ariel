@@ -1830,6 +1830,10 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         return;
       }
       if (event.event === "thread.cache.snapshot" || event.event === "thread.cache.status" || event.event === "thread.cache.remove") return;
+      // Puck owns its event stream in the optional Puck view. Keeping the
+      // existing conversation reducer explicit prevents new optional protocol
+      // events from being mistaken for thread subscription updates.
+      if (!("subscriptionId" in event)) return;
       const current = selection.current;
       const currentEvent = belongsToSubscription(event, current.deviceId, current.threadId, expectedSubscription.current);
       const warm = warmSubscription(event.deviceId, event.threadId);

@@ -9,6 +9,9 @@
     { "$ref": "#/$defs/request" },
     { "$ref": "#/$defs/response" },
     { "$ref": "#/$defs/deviceStatus" },
+    { "$ref": "#/$defs/puckBrainToolCall" },
+    { "$ref": "#/$defs/puckBrainEvent" },
+    { "$ref": "#/$defs/puckEvent" },
     { "$ref": "#/$defs/threadSnapshot" },
     { "$ref": "#/$defs/threadUpdate" },
     { "$ref": "#/$defs/threadError" },
@@ -51,6 +54,9 @@
         "taskExecution": { "type": "boolean" },
         "taskExecutionAuthorized": { "type": "boolean" },
         "taskTracking": { "type": "boolean" }
+        ,"puckBrain": { "type": "boolean" }
+        ,"puckBrainReady": { "type": "boolean" }
+        ,"executionPolicy": { "type": "boolean" }
       }
     },
     "webHello": {
@@ -79,7 +85,8 @@
       "properties": {
         "type": { "const": "hello.ok" }, "v": { "const": 1 },
         "connectionId": { "$ref": "#/$defs/id" }, "relayEpoch": { "$ref": "#/$defs/id" },
-        "sessionToken": { "type": "string", "pattern": "^s_[0-9a-f]{64}$" }
+        "sessionToken": { "type": "string", "pattern": "^s_[0-9a-f]{64}$" },
+        "puck": { "$ref": "#/$defs/puckStatus" }
       }
     },
     "request": {
@@ -88,7 +95,7 @@
       "properties": {
         "type": { "const": "request" }, "v": { "const": 1 },
         "requestId": { "$ref": "#/$defs/requestId" }, "deviceId": { "$ref": "#/$defs/id" },
-        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond"] },
+        "method": { "enum": ["auth.pair.create", "auth.pair.cancel", "device.list", "thread.create", "thread.bootstrap", "thread.archive.update", "thread.archive.undo", "thread.name.update", "thread.pin.update", "thread.list", "thread.read", "thread.history", "thread.history.items", "thread.image", "thread.activity.read", "thread.subscribe", "thread.unsubscribe", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "file.context.asset.read", "file.context.changes", "file.context.read", "file.context.reference.read", "workspace.files.list", "workspace.file.read", "turn.start", "turn.interrupt", "queue.add", "queue.update", "queue.delete", "queue.reorder", "queue.steer", "interaction.respond", "puck.list", "puck.create", "puck.update", "puck.delete", "puck.message.send", "puck.stop", "puck.question.answer", "puck.history", "puck.watch", "puck.unwatch", "puck.task.list", "puck.authorization.list", "puck.authorization.decide", "puck.decision.record", "puck.brain.ensure", "puck.brain.turn.start", "puck.brain.turn.interrupt", "puck.brain.toolResult", "puck.brain.status", "puck.brain.retire"] },
         "params": { "type": "object" }
       },
       "allOf": [
@@ -125,10 +132,46 @@
         { "if": { "properties": { "method": { "const": "queue.delete" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueItemParams" } } } },
         { "if": { "properties": { "method": { "const": "queue.reorder" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueReorderParams" } } } },
         { "if": { "properties": { "method": { "const": "queue.steer" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/queueSteerParams" } } } },
-        { "if": { "properties": { "method": { "const": "interaction.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/respondParams" } } } }
+        { "if": { "properties": { "method": { "const": "interaction.respond" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/respondParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/emptyParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.create" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckCreateParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.update" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckUpdateParams" } } } },
+        { "if": { "properties": { "method": { "enum": ["puck.delete", "puck.stop", "puck.history", "puck.watch", "puck.task.list", "puck.authorization.list"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckAssistantParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.unwatch" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckUnwatchParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.message.send" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckMessageParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.question.answer" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckQuestionParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.authorization.decide" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckAuthorizationParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.decision.record" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckDecisionParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.brain.ensure" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckBrainEnsureParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.brain.turn.start" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckBrainTurnParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.brain.turn.interrupt" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckBrainInterruptParams" } } } },
+        { "if": { "properties": { "method": { "const": "puck.brain.toolResult" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckBrainToolResultParams" } } } },
+        { "if": { "properties": { "method": { "enum": ["puck.brain.status", "puck.brain.retire"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/puckBrainThreadParams" } } } }
       ]
     },
     "emptyParams": { "type": "object", "additionalProperties": false },
+    "puckStatus": {
+      "type": "object", "additionalProperties": false, "required": ["state"],
+      "properties": { "state": { "enum": ["off", "unavailable", "ready", "degraded"] }, "reason": { "type": "string", "minLength": 1, "maxLength": 128 } },
+      "allOf": [
+        { "if": { "properties": { "state": { "enum": ["unavailable", "degraded"] } } }, "then": { "required": ["reason"] } },
+        { "if": { "properties": { "state": { "enum": ["off", "ready"] } } }, "then": { "not": { "required": ["reason"] } } }
+      ]
+    },
+    "puckAssistantParams": { "type": "object", "additionalProperties": false, "required": ["assistantId"], "properties": { "assistantId": { "$ref": "#/$defs/id" } } },
+    "puckUnwatchParams": { "type": "object", "additionalProperties": false, "required": ["watchId"], "properties": { "watchId": { "$ref": "#/$defs/id" } } },
+    "puckCreateParams": { "type": "object", "additionalProperties": false, "required": ["name", "brainDeviceId"], "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 80 }, "description": { "type": "string", "maxLength": 512 }, "brainDeviceId": { "$ref": "#/$defs/id" }, "allowedScope": { "type": "object", "maxProperties": 64 } } },
+    "puckUpdateParams": { "type": "object", "additionalProperties": false, "required": ["assistantId"], "minProperties": 2, "properties": { "assistantId": { "$ref": "#/$defs/id" }, "name": { "type": "string", "minLength": 1, "maxLength": 80 }, "description": { "type": "string", "maxLength": 512 }, "brainDeviceId": { "$ref": "#/$defs/id" }, "allowedScope": { "type": "object", "maxProperties": 64 } } },
+    "puckMessageParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "clientMessageId", "text"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/requestId" }, "text": { "type": "string", "minLength": 1, "maxLength": 65536 } } },
+    "puckQuestionParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "questionId", "answer"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "questionId": { "$ref": "#/$defs/id" }, "answer": { "type": "string", "maxLength": 65536 } } },
+    "puckAuthorizationParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "authorizationId", "decision"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "authorizationId": { "$ref": "#/$defs/id" }, "decision": { "enum": ["approve_once", "reject"] } } },
+    "puckDecisionParams": { "type": "object", "additionalProperties": false, "required": ["interactionId", "decision"], "properties": { "interactionId": { "$ref": "#/$defs/id" }, "decision": { "type": "string", "minLength": 1, "maxLength": 128 }, "answers": { "type": "object", "maxProperties": 32 } } },
+    "puckBrainThreadParams": { "type": "object", "additionalProperties": false, "required": ["threadId"], "properties": { "threadId": { "$ref": "#/$defs/id" } } },
+    "puckBrainEnsureParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "name", "cwd", "developerInstructions", "toolsetVersion"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "name": { "type": "string", "minLength": 1, "maxLength": 80 }, "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" }, "developerInstructions": { "type": "string", "minLength": 1, "maxLength": 65536 }, "toolsetVersion": { "type": "integer", "minimum": 1 }, "model": { "type": "string", "maxLength": 256 }, "effort": { "type": "string", "maxLength": 128 } } },
+    "puckBrainTurnParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "threadId", "clientMessageId", "text"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/requestId" }, "text": { "type": "string", "minLength": 1, "maxLength": 65536 }, "model": { "type": "string", "maxLength": 256 }, "effort": { "type": "string", "maxLength": 128 } } },
+    "puckBrainInterruptParams": { "type": "object", "additionalProperties": false, "required": ["threadId", "turnId"], "properties": { "threadId": { "$ref": "#/$defs/id" }, "turnId": { "$ref": "#/$defs/id" } } },
+    "puckContentItem": { "type": "object", "additionalProperties": false, "required": ["type", "text"], "properties": { "type": { "const": "inputText" }, "text": { "type": "string", "maxLength": 65536 } } },
+    "puckBrainToolResultParams": { "type": "object", "additionalProperties": false, "required": ["threadId", "callId", "success", "contentItems"], "properties": { "threadId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" }, "success": { "type": "boolean" }, "contentItems": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/puckContentItem" } }, "truncated": { "type": "boolean" } } },
     "pairCancelParams": {
       "type": "object", "additionalProperties": false, "required": ["credential"],
       "properties": { "credential": { "type": "string", "pattern": "^p_[0-9a-f]{64}$" } }
@@ -487,8 +530,9 @@
     "error": {
       "type": "object", "additionalProperties": false, "required": ["code", "message"],
       "properties": {
-        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "DIRECTORY_CHANGED", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT"] },
-        "message": { "type": "string", "minLength": 1, "maxLength": 256 }
+        "code": { "enum": ["UNAUTHORIZED", "PROTOCOL_UNSUPPORTED", "DEVICE_OFFLINE", "TURN_BUSY", "STALE_TURN", "STALE_INTERACTION", "INTERACTION_UNSUPPORTED", "OUTCOME_UNKNOWN", "RESYNC_REQUIRED", "NATIVE_STATE_UNCERTAIN", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "OVERLOADED", "DUPLICATE_AGENT", "NOT_FOUND", "TIMEOUT", "FEATURE_DISABLED", "CHILLING_UNAVAILABLE", "CONTRACT_UNSUPPORTED", "FILE_NOT_FOUND", "PATH_NOT_ALLOWED", "REFERENCE_NOT_FOUND", "DIRECTORY_CHANGED", "DETAIL_PENDING", "DETAIL_CHANGED", "DETAIL_TOO_LARGE", "UNSUPPORTED_FILE_TYPE", "FILE_TOO_LARGE", "FILE_CHANGED", "PUCK_UNAVAILABLE", "PUCK_ASSISTANT_NOT_FOUND", "EXECUTION_POLICY_UNENFORCEABLE", "PUCK_SELF_TARGET", "AUTHORIZATION_REQUIRED", "AUTHORIZATION_EXPIRED", "BRAIN_HOST_OFFLINE", "BRAIN_UNAVAILABLE", "TASK_FEEDBACK_IDENTITY_MISMATCH", "TASK_IDEMPOTENCY_CONFLICT", "TASK_INVALID_ARGUMENT", "TASK_INVALID_STATE", "TASK_METHOD_NOT_ALLOWED", "TASK_NATIVE_IDENTITY_REQUIRED", "TASK_NOT_FOUND", "TASK_NOT_READY", "TASK_RECONCILIATION_REQUIRED", "TASK_RESOURCE_LIMIT", "TASK_STALE_BINDING", "TASK_STALE_LEASE", "TASK_STORE_NOT_FOUND", "TASK_UNAUTHORIZED", "TASK_VERSION_CONFLICT"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reason": { "enum": ["PUCK_REQUIRES_PASSKEY_HTTPS", "PUCK_DATA_DIR_UNWRITABLE", "PUCK_DATA_DIR_LOCKED", "PUCK_CIRCUIT_OPEN"] }
       }
     },
     "thread": {
@@ -635,6 +679,33 @@
         "taskStoreId": { "$ref": "#/$defs/id" },
         "agentOnline": { "type": "boolean" }, "codexReady": { "type": "boolean" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
+      }
+    },
+    "puckBrainToolCall": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "callId", "tool", "arguments"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "puck.brain.toolCall" },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "tool": { "type": "string", "minLength": 1, "maxLength": 128 }, "arguments": { "type": "object", "maxProperties": 64 }
+      }
+    },
+    "puckBrainEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "deviceId", "threadId", "kind", "payload"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "enum": ["puck.brain.event", "puck.brain.status"] },
+        "deviceId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 }, "payload": { "type": "object", "maxProperties": 64 }
+      }
+    },
+    "puckEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "v", "event", "assistantId", "seq", "kind", "payload"],
+      "properties": {
+        "type": { "const": "event" }, "v": { "const": 1 }, "event": { "const": "puck.event" },
+        "assistantId": { "$ref": "#/$defs/id" }, "seq": { "type": "integer", "minimum": 1 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 }, "payload": { "type": "object", "maxProperties": 64 }
       }
     },
     "threadSnapshot": {
