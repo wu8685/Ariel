@@ -22,6 +22,8 @@ type Orchestrator interface {
 	BrainEvents() <-chan relay.BrainEvent
 }
 
+const currentToolsetVersion = 1
+
 type Module struct {
 	store      *Store
 	bridge     Orchestrator
@@ -272,7 +274,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	}
 	id := randomID("assistant")
 	scope, _ := json.Marshal(input.AllowedScope)
-	a := Assistant{ID: id, Name: input.Name, Description: input.Description, Persona: input.Description, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: 1, AllowedScope: string(scope), Status: "provisioning"}
+	a := Assistant{ID: id, Name: input.Name, Description: input.Description, Persona: input.Description, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: currentToolsetVersion, AllowedScope: string(scope), Status: "provisioning"}
 	if err := m.store.CreateAssistant(ctx, a); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
@@ -307,8 +309,15 @@ func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if err != nil {
 		return notFound()
 	}
+	if a.ToolsetVersion > currentToolsetVersion {
+		return moduleError("BRAIN_UNAVAILABLE", "assistant toolset is newer than this Relay")
+	}
 	oldDevice, oldThread := a.BrainDeviceID, a.BrainThreadID
-	rotate := a.Status == "provisioning" || input.BrainDeviceID != nil
+	toolsetUpgrade := a.ToolsetVersion < currentToolsetVersion
+	rotate := a.Status == "provisioning" || input.BrainDeviceID != nil || toolsetUpgrade
+	if toolsetUpgrade {
+		a.ToolsetVersion = currentToolsetVersion
+	}
 	if input.Name != nil && *input.Name != "" {
 		a.Name = *input.Name
 	}

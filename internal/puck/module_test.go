@@ -200,6 +200,28 @@ func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {
 	}
 }
 
+func TestModuleRotatesBrainWhenStoredToolsetIsObsolete(t *testing.T) {
+	bridge := &fakeModuleBridge{ensureThreads: []string{"brain-old", "brain-new"}}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	if _, err := module.store.db.Exec(`UPDATE assistants SET toolset_version=0 WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "description": "refresh"}))
+	if updated.Error != nil {
+		t.Fatalf("update=%+v", updated)
+	}
+	assistant := updated.Data["assistant"].(map[string]any)
+	if assistant["brainThreadId"] != "brain-new" || assistant["toolsetVersion"] != currentToolsetVersion {
+		t.Fatalf("assistant=%+v", assistant)
+	}
+}
+
 func TestModuleCreateMessageHistoryAndDelete(t *testing.T) {
 	bridge := &fakeModuleBridge{}
 	module, err := NewModule(t.TempDir(), bridge)
