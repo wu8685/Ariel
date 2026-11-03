@@ -80,8 +80,7 @@ describe("PuckWorkspace", () => {
     expect(await screen.findByText("测试通过", { selector: "strong" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "A" }));
     expect(await screen.findByText("已回答")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "A" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "A" }));
+    expect(screen.queryByRole("button", { name: "A" })).toBeNull();
     expect(calls.filter(method => method === "puck.question.answer")).toHaveLength(1);
     const textarea = screen.getByLabelText("给 Puck 发消息");
     fireEvent.change(textarea, { target: { value: "继续" } });
@@ -89,7 +88,7 @@ describe("PuckWorkspace", () => {
     expect(calls.filter(method => method === "puck.message.send")).toHaveLength(1);
   });
 
-	it("reuses Ariel message and bubble classes for user and assistant content", async () => {
+	it("isolates Puck message typography from Ariel globals while retaining the Ariel bubble colors", async () => {
 		const request = vi.fn(async (method: string) => method === "puck.list"
 			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
 			: method === "puck.history" ? accepted({ messages: [
@@ -98,9 +97,28 @@ describe("PuckWorkspace", () => {
 			] }) : accepted({}));
 		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
 		await screen.findByText("用户消息");
-		expect(view.container.querySelector(".puck-message.message.user > .puck-message-content.message-body")).toBeTruthy();
-		expect(view.container.querySelector(".puck-message.message.assistant > .puck-message-content.message-body")).toBeTruthy();
-		expect(view.container.querySelector(".puck-message.user .puck-markdown.markdown-body")).toBeTruthy();
+		expect(view.container.querySelector(".puck-message.user > .puck-message-content")).toBeTruthy();
+		expect(view.container.querySelector(".puck-message.assistant > .puck-message-content")).toBeTruthy();
+		expect(view.container.querySelector(".puck-message.user .puck-markdown")).toBeTruthy();
+		expect(view.container.querySelector(".puck-message.message, .puck-message .message-body, .puck-message .message-text, .puck-message .markdown-body")).toBeNull();
+	});
+
+	it("collapses terminal card actions and omits attention badges from the information hero", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [
+				{ id: "q", role: "assistant", kind: "question", text: "选一个", cardJSON: JSON.stringify({ options: ["A", "B"], cardState: "answered", answer: "A" }) },
+				{ id: "z", role: "assistant", kind: "authorization", text: "运行测试", cardJSON: JSON.stringify({ cardState: "consumed", decision: "approve_once", decidedAt: "2026-11-04T01:32:00Z" }) },
+			] }) : accepted({}));
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		expect(await screen.findByText("已回答")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "A" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "B" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "仅这一次允许" })).toBeNull();
+		expect(screen.getByText(/你选择了/).textContent).toContain("A");
+		expect(screen.getByText(/已允许一次/)).toBeTruthy();
+		expect(view.container.querySelector(".puck-info .puck-avatar-large .puck-avatar-badge")).toBeNull();
 	});
 
   it("uses puck.watch events for durable conversation updates and unwatches on cleanup", async () => {

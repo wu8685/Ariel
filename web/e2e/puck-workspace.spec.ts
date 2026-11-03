@@ -57,13 +57,19 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
       await openPuck(page);
 			await expect(page.locator(".puck-workspace")).toHaveCSS("background-color", "rgb(5, 5, 5)");
       expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-			await expect(page.locator(".puck-message.assistant.text .puck-markdown").first()).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(page.locator(".puck-message.user .message-body")).toHaveCSS("background-color", "rgb(29, 93, 198)");
+			const assistantContent = page.locator(".puck-message.assistant.text .puck-message-content").first();
+			await expect(assistantContent).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+			await expect(assistantContent).toHaveCSS("padding", "0px");
+			await expect(page.locator(".puck-message.user .puck-message-content")).toHaveCSS("background-color", "rgb(29, 93, 198)");
+			await expect(page.locator(".puck-message.message, .puck-message .message-body, .puck-message .message-text, .puck-message .markdown-body")).toHaveCount(0);
 			await expect(page.locator(".puck-transcript .puck-message.assistant .puck-avatar")).toHaveCount(1);
       await expect(page.getByRole("group", { name: "问题卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "授权卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "任务卡片" })).toContainText("进行中");
       await expect(page.getByRole("button", { name: "打开会话" })).toBeVisible();
+			await expect(page.getByRole("button", { name: "打开会话" })).toHaveCSS("height", "28px");
+			await expect(page.getByRole("button", { name: "发送" })).toHaveCSS("height", "32px");
+			await expect(page.getByRole("button", { name: "停止全部工作" })).toHaveCSS("height", "32px");
 			const avatar = page.locator(".puck-conversation > header .puck-avatar");
       await expect(avatar).toHaveAttribute("data-expression", "waiting");
 			await expect(avatar.locator(".puck-avatar-ear")).toHaveCount(2);
@@ -75,7 +81,8 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await expect(avatar.locator(".puck-avatar-sparkles")).toHaveCount(0);
       await page.getByRole("button", { name: "Go" }).click();
       await expect(page.getByRole("group", { name: "问题卡片" })).toContainText("已回答");
-      await expect(page.getByRole("button", { name: "Go" })).toBeDisabled();
+			await expect(page.getByRole("button", { name: "Go" })).toHaveCount(0);
+			await expect(page.getByRole("group", { name: "问题卡片" })).toContainText("你选择了 Go");
       if (width < 700) {
         await page.getByRole("button", { name: "打开助理列表" }).click();
         await expect(page.locator(".puck-assistants")).toHaveClass(/mobile-open/);
@@ -88,7 +95,20 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
         await expect(page.locator(".puck-assistants")).toBeVisible();
         await expect(page.locator(".puck-info")).toBeVisible();
 				await expect(page.getByRole("radiogroup", { name: "头像形状" })).toBeVisible();
+				const headerBottoms = await Promise.all([".puck-assistants > header", ".puck-conversation > header", ".puck-info > header"].map(selector => page.locator(selector).evaluate(element => element.getBoundingClientRect().bottom)));
+				expect(Math.max(...headerBottoms) - Math.min(...headerBottoms)).toBeLessThanOrEqual(1);
       }
+			await expect(page.locator(".puck-conversation > header")).toHaveCSS("height", "52px");
+			if (width >= 700) await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "56px");
+			const gaps = await page.locator(".puck-message").evaluateAll(elements => ({
+				group: elements[1].getBoundingClientRect().top - elements[0].getBoundingClientRect().bottom,
+				inside: elements[2].getBoundingClientRect().top - elements[1].getBoundingClientRect().bottom,
+			}));
+			expect(gaps.group).toBeGreaterThanOrEqual(19);
+			expect(gaps.group).toBeLessThanOrEqual(21);
+			expect(gaps.inside).toBeGreaterThanOrEqual(5);
+			expect(gaps.inside).toBeLessThanOrEqual(7);
+			await expect(page.locator(".puck-info .puck-avatar-large .puck-avatar-badge")).toHaveCount(0);
       await expect(page).toHaveScreenshot(`puck-${width}-${colorScheme}.png`, { animations: "disabled", caret: "hide" });
     });
   });

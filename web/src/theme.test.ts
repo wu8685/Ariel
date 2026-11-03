@@ -8,6 +8,7 @@ const puckStyle = readFileSync(fileURLToPath(new URL("./puck/puck.css", import.m
 const html = readFileSync(fileURLToPath(new URL("../index.html", import.meta.url)), "utf8");
 const app = readFileSync(fileURLToPath(new URL("./App.tsx", import.meta.url)), "utf8");
 const main = readFileSync(fileURLToPath(new URL("./main.tsx", import.meta.url)), "utf8");
+const puckWorkspace = readFileSync(fileURLToPath(new URL("./puck/PuckWorkspace.tsx", import.meta.url)), "utf8");
 
 function token(name: string): string {
   return style.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1]?.toLowerCase() || "";
@@ -27,10 +28,22 @@ function contrast(a: string, b: string): number {
 }
 
 describe("fixed Night appearance", () => {
-	it("lets Puck user messages reuse the Ariel primary bubble variable", () => {
+	it("lets Puck user messages reuse Ariel primary colors without global message classes", () => {
 		expect(style).toMatch(/\.message\.user\s+\.message-body\s*\{[^}]*background:\s*var\(--color-primary\)/s);
 		expect(puckStyle).not.toMatch(/--color-primary\s*:/);
-		expect(puckStyle).not.toMatch(/\.puck-message\.user[^}]*background\s*:/s);
+		expect(puckStyle).toMatch(/--puck-user-bubble:\s*var\(--color-primary\)/);
+		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.assistant \.puck-message-content\s*\{[^}]*padding:\s*0;[^}]*background:\s*transparent/s);
+		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.user \.puck-message-content\s*\{[^}]*background:\s*var\(--puck-user-bubble\)/s);
+		for (const globalClass of ['className="message', 'className="message-body', 'className="message-text', 'className="markdown-body']) {
+			expect(puckWorkspace).not.toContain(globalClass);
+		}
+	});
+
+	it("defines and consumes the Puck layout type and spacing tokens", () => {
+		for (const tokenName of ["puck-space-1", "puck-space-2", "puck-space-3", "puck-space-4", "puck-space-5", "puck-space-6", "puck-space-8", "puck-text-body", "puck-text-ui", "puck-text-secondary", "puck-text-caption", "puck-radius-card", "puck-control-sm", "puck-control-md", "puck-avatar-msg", "puck-avatar-hero"]) {
+			expect(puckStyle, tokenName).toContain(`--${tokenName}:`);
+		}
+		expect(puckStyle).not.toMatch(/font-weight:\s*(?:700|750|800|900)/);
 	});
 
   it("uses dark page/surface tokens and high-contrast white text", () => {

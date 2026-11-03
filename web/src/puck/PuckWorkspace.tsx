@@ -69,12 +69,43 @@ function messageState(messages: Message[]): PuckState {
 function cardData(message: Message): Record<string, unknown> {
   try { return message.cardJSON ? JSON.parse(message.cardJSON) as Record<string, unknown> : {}; } catch { return {}; }
 }
+function expiryLabel(value: unknown): string {
+  if (!value) return "未说明";
+  const milliseconds = new Date(String(value)).getTime() - Date.now();
+  if (!Number.isFinite(milliseconds)) return "未说明";
+  const minutes = Math.max(0, Math.ceil(milliseconds / 60000));
+  return milliseconds <= 0 ? "已过期" : `${minutes} 分钟后过期`;
+}
+function decisionLabel(data: Record<string, unknown>): string {
+  const rejected = String(data.cardState) === "rejected" || String(data.decision) === "reject";
+  const decidedAt = data.decidedAt ? new Date(String(data.decidedAt)).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }) : "";
+  return `${rejected ? "已拒绝" : "已允许一次"}${decidedAt ? ` · ${decidedAt}` : ""}`;
+}
+const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"等待回复", awaiting_authorization:"等待授权", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败" };
 function Card({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:string)=>void }) {
   const data = cardData(message);
   const terminal = String(data.cardState || "pending") !== "pending";
-  if (message.kind === "question") return <section className="puck-card puck-question-card" role="group" aria-label="问题卡片"><strong>{terminal ? "已回答" : "需要你决定"}</strong><p>{message.text}</p><div className="puck-options">{arrayData<string>(data.options).map(option => <button key={option} type="button" disabled={terminal || submitting} onClick={()=>onAction("question",data,option)}>{option}</button>)}</div>{data.answer != null && <small>你的选择：{String(data.answer)}</small>}</section>;
-  if (message.kind === "authorization") return <section className="puck-card puck-authorization-card" role="group" aria-label="授权卡片"><strong>{terminal ? "授权已处理" : "需要授权"}</strong><p>{message.text}</p><dl><dt>动作</dt><dd>{String(data.action || "未说明")}</dd><dt>主机</dt><dd>{String(data.deviceId || "未说明")}</dd><dt>目录</dt><dd>{String(data.cwd || "未说明")}</dd><dt>有效期</dt><dd>{data.expiresAt ? new Date(String(data.expiresAt)).toLocaleString("zh-CN") : "未说明"}</dd></dl>{(data.risk != null || data.riskTags != null) && <small>风险：{String(data.risk || arrayData<string>(data.riskTags).join("、") || "无额外风险")}</small>}<div><button className="danger" type="button" disabled={terminal || submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="primary" type="button" disabled={terminal || submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div></section>;
-  if (message.kind === "task") return <section className="puck-card puck-task-card" role="group" aria-label="任务卡片"><strong>{message.text}</strong><span className="puck-state">{{running:"进行中",dispatching:"派发中",waiting_user:"等待回复",awaiting_authorization:"等待授权",stopped:"已停止",reconciling:"正在核对",done:"已完成",failed:"失败"}[String(data.status)] || String(data.status || "待处理")}</span><details><summary>{message.workSummary || "查看工作过程"}</summary><p>{String(data.summary || "执行细节按需展开，不在对话中刷屏。")}</p></details>{Boolean(data.deviceId && data.threadId) && <button type="button" onClick={()=>onAction("task",data,"open")}>打开会话</button>}</section>;
+  if (message.kind === "question") return <section className={`puck-card puck-question-card${terminal ? " terminal" : ""}`} role="group" aria-label="问题卡片">
+    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">?</span><strong>{terminal ? "已回答" : "需要你决定"}</strong></div>
+    <p>{message.text}</p>
+    {!terminal && <div className="puck-card-actions puck-options">{arrayData<string>(data.options).map(option => <button className="puck-chip" key={option} type="button" disabled={submitting} onClick={()=>onAction("question",data,option)}>{option}</button>)}</div>}
+    {data.answer != null && <p className="puck-card-result"><span aria-hidden="true">✓</span> 你选择了 <strong>{String(data.answer)}</strong></p>}
+  </section>;
+  if (message.kind === "authorization") return <section className={`puck-card puck-authorization-card${terminal ? " terminal" : ""}`} role="group" aria-label="授权卡片">
+    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">◇</span><strong>{terminal ? "授权已处理" : "需要授权"}</strong></div>
+    <p>{message.text}</p>
+    <dl><dt>动作</dt><dd>{String(data.action || "未说明")}</dd><dt>主机</dt><dd>{String(data.deviceId || "未说明")}</dd><dt>目录</dt><dd className="puck-mono">{String(data.cwd || "未说明")}</dd><dt>有效期</dt><dd title={data.expiresAt ? new Date(String(data.expiresAt)).toLocaleString("zh-CN") : undefined}>{expiryLabel(data.expiresAt)}</dd></dl>
+    {(data.risk != null || data.riskTags != null) && <p className="puck-risk"><span aria-hidden="true">△</span>风险：{String(data.risk || arrayData<string>(data.riskTags).join("、") || "无额外风险")}</p>}
+    {!terminal ? <div className="puck-card-actions"><button className="puck-btn" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div> : <p className="puck-card-result">{decisionLabel(data)}</p>}
+  </section>;
+  if (message.kind === "task") {
+    const status = String(data.status || "pending");
+    return <section className="puck-card puck-task-card" role="group" aria-label="任务卡片">
+      <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">›_</span><strong>{message.text}</strong><span className="puck-state" data-state={status}><i aria-hidden="true"/>{taskLabels[status] || status || "待处理"}</span></div>
+      <details><summary><span aria-hidden="true">›</span>{message.workSummary || "查看工作过程"}</summary><p>{String(data.summary || "执行细节按需展开，不在对话中刷屏。")}</p></details>
+      {Boolean(data.deviceId && data.threadId) && <div className="puck-card-actions"><button className="puck-btn" type="button" onClick={()=>onAction("task",data,"open")}>打开会话 <span aria-hidden="true">↗</span></button></div>}
+    </section>;
+  }
   return null;
 }
 
@@ -205,16 +236,59 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (confirmed) setAssistants(current => current.map(item => item.assistantId === confirmed.assistantId ? confirmed : item));
 	}
 
-  if (state !== "ready") return <main className="puck-unavailable"><button type="button" onClick={onBack}>返回会话</button><div><span className="puck-mark">P</span><h1>Puck 不可用</h1><p>{reason === "PUCK_REQUIRES_PASSKEY_HTTPS" ? "Puck 仅支持 Passkey + HTTPS" : "管理员尚未开启 Puck。"}</p><small>现有 Codex 会话不受影响。</small></div></main>;
+  if (state !== "ready") return <main className="puck-unavailable">
+    <button className="puck-btn" type="button" onClick={onBack}>返回会话</button>
+    <div><span className="puck-mark">P</span><h1>Puck 不可用</h1><p>{reason === "PUCK_REQUIRES_PASSKEY_HTTPS" ? "Puck 仅支持 Passkey + HTTPS" : "管理员尚未开启 Puck。"}</p><small>现有 Codex 会话不受影响。</small></div>
+  </main>;
+
+  const statusLabel = puckState === "waiting_user" ? "等你回复" : puckState === "awaiting_authorization" ? "等待授权" : puckState === "working" || puckState === "thinking" ? "思考中" : puckState === "error" ? "出错" : "可用";
   return <main className="puck-workspace">
-    {mobilePanel && <button className="puck-panel-backdrop" aria-label="关闭面板" onClick={()=>setMobilePanel("")}/>}<aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}><header><b>Puck</b><button type="button" onClick={() => setCreating(true)} aria-label="新建助理">＋</button></header>{assistants.map(item => <button className={item.assistantId === selectedID ? "active" : ""} key={item.assistantId} onClick={() => { setSelectedID(item.assistantId); setMobilePanel(""); }}><PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/><span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || (item.status === "ready" ? "在线" : "准备中")}</small></span></button>)}<button className="puck-back" type="button" onClick={onBack}>← Codex 会话</button></aside>
+    {mobilePanel && <button className="puck-panel-backdrop" aria-label="关闭面板" onClick={()=>setMobilePanel("")}/>}
+    <aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}>
+      <header><b>Puck</b><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理">＋</button></header>
+      <div className="puck-assistant-list">{assistants.map(item => <button className={`puck-assistant-row${item.assistantId === selectedID ? " active" : ""}`} key={item.assistantId} onClick={() => { setSelectedID(item.assistantId); setMobilePanel(""); }}>
+        <PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/>
+        <span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || (item.status === "ready" ? "在线" : "准备中")}</small></span>
+      </button>)}</div>
+      <button className="puck-back" type="button" onClick={onBack}><span aria-hidden="true">←</span> Codex 会话</button>
+    </aside>
+
     <section className="puck-conversation">
-      <header><button className="puck-mobile-menu puck-icon-button" type="button" aria-label="打开助理列表" onClick={()=>setMobilePanel("assistants")}>☰</button>{selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState}/>}<div><strong>{selected?.name || "Puck"}</strong><small>{selected ? "你的个人助理" : "创建一个助理开始"}</small></div>{selected && <div className="puck-header-actions"><button className="puck-mobile-menu puck-icon-button" type="button" aria-label="查看助理信息" onClick={()=>setMobilePanel("info")}>ⓘ</button>{busy && <button className="puck-stop" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true">■</span></button>}</div>}</header>
-      <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty"><span className="puck-mark">P</span><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="primary" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button></div> : messages.map((message,index) => { const continued = message.role === "assistant" && index > 0 && messages[index - 1].role === "assistant"; return <article key={message.id} className={`message puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}`}>{message.role === "assistant" && !continued && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}<div className="message-body puck-message-content"><Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>{!["question", "authorization", "task"].includes(message.kind) && <div className="message-text markdown-body puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown></div>}{message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}</div></article>; })}</div>
-      {notice && <div className="puck-notice" role="alert">{notice}<button onClick={() => setNotice("")}>关闭</button></div>}
-      {selected && <footer><textarea aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><span aria-hidden="true">↑</span></button></footer>}
+      <header>
+        <button className="puck-mobile-menu puck-icon-btn" type="button" aria-label="打开助理列表" onClick={()=>setMobilePanel("assistants")}>☰</button>
+        {selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState}/>}
+        <div className="puck-conversation-title"><strong>{selected?.name || "Puck"}</strong><small>{selected ? "你的个人助理" : "创建一个助理开始"}</small></div>
+        {selected && <div className="puck-header-actions"><button className="puck-mobile-menu puck-icon-btn" type="button" aria-label="查看助理信息" onClick={()=>setMobilePanel("info")}>ⓘ</button>{busy && <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button>}</div>}
+      </header>
+      <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty">
+        <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button>
+      </div> : messages.map((message,index) => {
+        const continued = index > 0 && messages[index - 1].role === message.role;
+        const groupEnd = index === messages.length - 1 || messages[index + 1].role !== message.role;
+        return <article key={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}`}>
+          {message.role === "assistant" && !continued && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
+          <div className="puck-message-content">
+            <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
+            {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
+            {groupEnd && message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}
+          </div>
+        </article>;
+      })}</div>
+      {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
+      {selected && <footer><div className="puck-composer"><textarea aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><span aria-hidden="true">↑</span></button></div></footer>}
     </section>
-    <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}><h3>助理信息</h3>{selected ? <><div className="puck-avatar-editor"><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large" attention={["waiting_user","awaiting_authorization","error"].includes(puckState)}/><div className="puck-avatar-picker"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color}} size="small"/><span className="puck-avatar-choice-check" aria-hidden="true">✓</span></button>; })}</div><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/><span className="puck-avatar-choice-check" aria-hidden="true">✓</span></button>; })}</div></div></div><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd>{selected.status === "ready" ? "可用" : "准备中"}</dd><dt>大脑主机</dt><dd>{devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd></dl><p>{selected.description || "尚未添加说明。"}</p></> : <p>选择助理后查看设置。</p>}</aside>
-    {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><div><button type="button" onClick={() => setCreating(false)}>取消</button><button className="primary" type="submit">创建</button></div></form></div>}
+
+    <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>
+      <header><h3>助理信息</h3></header>
+      {selected ? <div className="puck-info-content">
+        <div className="puck-avatar-editor"><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/><strong>{selected.name}</strong><p>{selected.description || "添加说明"}</p></div>
+        <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color}} size="small" animated={false}/></button>; })}</div></div>
+          <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/></button>; })}</div></div>
+        </div>
+        <section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd></dl></section>
+      </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}
+    </aside>
+
+    {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreating(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit">创建</button></div></form></div>}
   </main>;
 }
