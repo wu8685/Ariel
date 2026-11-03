@@ -24,7 +24,7 @@ func CreateFixture(ctx context.Context, rpc appserver.RPC, opts CreateOptions) (
 	if !opts.WriteEnabled || !filepath.IsAbs(opts.Parent) || !filepath.IsAbs(opts.ManifestPath) {
 		return m, ErrFixtureGuard
 	}
-	if opts.Purpose != "" && opts.Purpose != "user-input" && opts.Purpose != "command-decline" && opts.Purpose != "command-cancel" && opts.Purpose != "command-accept" && opts.Purpose != "file-change" && opts.Purpose != "permission-request" {
+	if opts.Purpose != "" && opts.Purpose != "user-input" && opts.Purpose != "command-decline" && opts.Purpose != "command-cancel" && opts.Purpose != "command-accept" && opts.Purpose != "file-change" && opts.Purpose != "permission-request" && opts.Purpose != "execution-policy" {
 		return m, ErrFixtureGuard
 	}
 	if _, err := os.Lstat(opts.ManifestPath); !os.IsNotExist(err) {
@@ -68,6 +68,12 @@ func CreateFixture(ctx context.Context, rpc appserver.RPC, opts CreateOptions) (
 	if opts.Purpose == "permission-request" {
 		params["approvalPolicy"] = "on-request"
 		params["developerInstructions"] = "This is an isolated Ariel permission-request fixture. Only when explicitly requested, ask for the smallest single-turn filesystem write permission for this fixture workspace; do not perform the write, run commands, read unrelated files, request network access, or create tasks. For the seed turn, do not use tools."
+	}
+	if opts.Purpose == "execution-policy" {
+		params["approvalPolicy"] = "on-request"
+		params["approvalsReviewer"] = "user"
+		params["sandbox"] = "workspace-write"
+		params["developerInstructions"] = "This is an isolated Ariel execution-policy fixture. Never use tools, inspect files, access the network, change settings, or create tasks. Reply only with the requested literal response."
 	}
 	if err := rpc.Call(ctx, "thread/start", params, &result); err != nil {
 		return m, err

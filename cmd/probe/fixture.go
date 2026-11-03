@@ -15,7 +15,10 @@ import (
 )
 
 func fixtureCommand(ctx context.Context, args []string, out, errout io.Writer) int {
-	if len(args) > 0 && (args[0] == "exercise" || args[0] == "stale-interaction" || args[0] == "user-input" || args[0] == "user-input-race" || args[0] == "user-input-interrupt" || args[0] == "command-decline" || args[0] == "command-cancel" || args[0] == "command-pending" || args[0] == "user-input-pending" || args[0] == "file-pending" || args[0] == "permission-pending" || args[0] == "busy-submit") {
+	if len(args) > 0 && args[0] == "delete" {
+		return fixtureDeleteCommand(ctx, args[1:], out, errout)
+	}
+	if len(args) > 0 && (args[0] == "exercise" || args[0] == "stale-interaction" || args[0] == "user-input" || args[0] == "user-input-race" || args[0] == "user-input-interrupt" || args[0] == "command-decline" || args[0] == "command-cancel" || args[0] == "command-pending" || args[0] == "user-input-pending" || args[0] == "file-pending" || args[0] == "permission-pending" || args[0] == "busy-submit" || args[0] == "execution-policy") {
 		return fixtureControlCommand(ctx, args[1:], out, errout, args[0])
 	}
 	if len(args) == 0 || args[0] != "create" {
@@ -38,7 +41,7 @@ func fixtureCommand(ctx context.Context, args []string, out, errout io.Writer) i
 		fmt.Fprintln(errout, "requires --write-enabled and --manifest")
 		return 2
 	}
-	if *purpose != "" && *purpose != "user-input" && *purpose != "command-decline" && *purpose != "command-cancel" && *purpose != "command-accept" && *purpose != "file-change" && *purpose != "permission-request" {
+	if *purpose != "" && *purpose != "user-input" && *purpose != "command-decline" && *purpose != "command-cancel" && *purpose != "command-accept" && *purpose != "file-change" && *purpose != "permission-request" && *purpose != "execution-policy" {
 		fmt.Fprintln(errout, "unknown fixture purpose")
 		return 2
 	}
@@ -74,6 +77,49 @@ func fixtureCommand(ctx context.Context, args []string, out, errout io.Writer) i
 		result["reason"] = err.Error()
 	}
 	if json.NewEncoder(out).Encode(result) != nil || err != nil {
+		return 1
+	}
+	return 0
+}
+
+func fixtureDeleteCommand(ctx context.Context, args []string, out, errout io.Writer) int {
+	cfg, err := probe.Defaults()
+	if err != nil {
+		return 1
+	}
+	f := flag.NewFlagSet("fixture delete", flag.ContinueOnError)
+	f.SetOutput(errout)
+	write := f.Bool("write-enabled", false, "explicitly delete this guarded fixture")
+	path := f.String("manifest", "", "manifest from fixture create")
+	f.StringVar(&cfg.AppPath, "app", cfg.AppPath, "Desktop app")
+	f.StringVar(&cfg.Binary, "codex-binary", "", "matching binary")
+	if f.Parse(args) != nil || f.NArg() != 0 || !*write || *path == "" {
+		fmt.Fprintln(errout, "requires --write-enabled and --manifest")
+		return 2
+	}
+	m, err := probe.LoadManifest(*path)
+	if err != nil || m.Authorize(true, m.ThreadID, m.Workspace) != nil {
+		fmt.Fprintln(errout, "fixture guard rejected cleanup")
+		return 1
+	}
+	cleanup, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	binary, _, err := probe.SelectBinary(cfg.Binary, probe.BundledBinary(cfg.AppPath), func(p string) (string, error) { return probe.BinaryVersion(cleanup, p) })
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	rpc, err := appserver.Start(cleanup, binary, m.Workspace)
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	defer rpc.Close()
+	if err := probe.DeleteFixture(cleanup, rpc, m, *path, true); err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	if json.NewEncoder(out).Encode(map[string]bool{"threadDeleted": true, "workspaceDeleted": true, "manifestDeleted": true}) != nil {
 		return 1
 	}
 	return 0
@@ -136,6 +182,10 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		fmt.Fprintln(errout, "busy-submit requires a no-tools fixture")
 		return 1
 	}
+	if operation == "execution-policy" && m.Purpose != "execution-policy" {
+		fmt.Fprintln(errout, "requires a dedicated execution-policy fixture")
+		return 1
+	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	binary, version, err := probe.SelectBinary(cfg.Binary, probe.BundledBinary(cfg.AppPath), func(p string) (string, error) { return probe.BinaryVersion(ctx, p) })
@@ -174,6 +224,17 @@ func fixtureControlCommand(ctx context.Context, args []string, out, errout io.Wr
 		return 1
 	}
 	defer c.Close()
+	if operation == "execution-policy" {
+		result, e := c.ProbeExecutionPolicy(ctx, m.ThreadID, m.Workspace)
+		output := map[string]any{"executionPolicy": result}
+		if e != nil {
+			output["reason"] = e.Error()
+		}
+		if json.NewEncoder(out).Encode(output) != nil || e != nil || !result.Enforced {
+			return 1
+		}
+		return 0
+	}
 	if operation == "command-pending" || operation == "user-input-pending" || operation == "file-pending" || operation == "permission-pending" {
 		purpose := "command-accept"
 		if operation == "user-input-pending" {

@@ -37,7 +37,13 @@
 - kill → 新进程裸 `thread/resume`：`approvalPolicy:on-request`（保留），`sandbox:dangerFullAccess`，DB 立即改写为 `disabled`。
 - 再 resume 后在 `turn/start` 携带 `approvalPolicy:on-request` + `sandboxPolicy:{type:workspaceWrite,…}`：沙箱重新生效（inside OK、outside FAILED），DB 恢复为 workspace-write 受限策略。
 - **含义**：任何不带沙箱参数的客户端恢复（包括 Desktop 自动加载，与 2026-10-04 m1-m4 观察一致）都会把该 thread 的沙箱降到全局 `danger-full-access` 并写回持久设置；逐 turn `sandboxPolicy` 有效且会成为新的持久值。审批策略在 thread 上持久。
-- Desktop IPC follower `start-turn` 接管场景：**未测**（需要 Ariel 的 follower harness 并让 Desktop 加载测试 thread，风险超出本次范围）。
+- Desktop IPC follower `start-turn` 接管场景：见 P6；已运行隔离 fixture，但无法取得兼容读回，结论为 **unverified**。
+
+## P6 Q23 Desktop follower 显式 policy（UNVERIFIED，fail closed）
+- P0 实施第 0 步新增受 manifest／guard／临时 cwd 三重保护的 `probe fixture execution-policy`。探针只接受自己刚创建的 `purpose=execution-policy` fixture，发送一条要求字面回复且禁止工具的 turn；wire 显式携带 `approvalPolicy:on-request`、`approvalsReviewer:user`、`sandboxPolicy:{type:workspaceWrite,writableRoots:[fixture cwd],networkAccess:false}`，并要求从 follower owner 的 `latestThreadSettings` 读回一致设置。
+- 实机环境：Desktop 26.930.51102、Codex 0.160.0；fixture 创建与 seed 通过，Desktop follower policy probe 返回 `IPC protocol incompatible`，未取得可证明 `on-request + workspaceWrite` 生效的 owner 读回。该结果不能区分 Desktop 拒绝显式字段与当前私有 follower profile／快照结构不兼容，故结论是 **unverified**，不是“策略已失效”。
+- 决策：按 spec §4.4 第 4 条和 B10 fail closed。当前版本不得凭 `executionPolicy` 能力自动派发或续投；无法完成逐 turn policy 强制并读回时返回 `EXECUTION_POLICY_UNENFORCEABLE`，创建 B10 单次授权卡片。后续 Codex／Desktop 版本只有在该探针重新通过后才可开启自动派发。
+- 清理：探针通过 `thread/delete` 删除唯一 fixture thread，删除 manifest 与 `mktemp` cwd；state DB 中该临时 cwd 记录为 0；探针命令启动的 app-server 均随命令退出。未读取、resume、归档或写入任何既有 thread，未修改全局 Codex 配置。
 
 ## P5 Q25 时延（热进程，trivial turn）
 | 样本 | turn/start→首个 agent delta | →turn/completed |

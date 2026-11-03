@@ -40,6 +40,9 @@ const usage = `Ariel read-only compatibility probe
   probe fixture create --purpose command-cancel --manifest PATH --write-enabled
   probe fixture command-cancel --manifest PATH --write-enabled
   probe fixture busy-submit --manifest PATH --write-enabled
+  probe fixture create --purpose execution-policy --manifest PATH --write-enabled
+  probe fixture execution-policy --manifest PATH --write-enabled
+  probe fixture delete --manifest PATH --write-enabled
 Fixture create is opt-in: creates a new read-only isolated thread and a short seed reply.
 Output contains structural summaries only; no chat text or live identifiers.
 `
