@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, type CSSProperties, type PointerEvent, type ReactNode } from "react";
-import { registerAvatarMotion, type BlinkPhase, type GazeDirection } from "./PuckAvatarScheduler";
+import { registerAvatarMotion, restPoseForKey, type AvatarPose, type BlinkPhase } from "./PuckAvatarScheduler";
 
 export type AvatarShape = "circle" | "cloud" | "tilted_square" | "four_star" | "clover" | "heart" | "flower" | "drop" | "capsule" | "triangle" | "tilted_rect" | "burst" | "hexagon" | "pumpkin";
 export type PuckState = "idle" | "thinking" | "working" | "waiting_user" | "awaiting_authorization" | "attention" | "error" | "done" | string;
@@ -48,6 +48,21 @@ export function stateLabel(state: PuckState): string {
   return "空闲";
 }
 
+function applyPose(element: HTMLElement, pose: AvatarPose) {
+  element.dataset.pose = pose.name;
+  element.style.setProperty("--puck-head-x", `${pose.headX}px`);
+  element.style.setProperty("--puck-head-y", `${pose.headY}px`);
+  element.style.setProperty("--puck-head-rotate", `${pose.headRotate}deg`);
+  element.style.setProperty("--puck-face-x", `${pose.faceX}px`);
+  element.style.setProperty("--puck-face-y", `${pose.faceY}px`);
+  element.style.setProperty("--puck-face-rotate", `${pose.faceRotate}deg`);
+  element.style.setProperty("--puck-left-eye-xscale", String(pose.leftEyeScaleX));
+  element.style.setProperty("--puck-right-eye-xscale", String(pose.rightEyeScaleX));
+  element.style.setProperty("--puck-left-eye-yscale", String(pose.leftEyeScaleY));
+  element.style.setProperty("--puck-right-eye-yscale", String(pose.rightEyeScaleY));
+  element.style.setProperty("--puck-eye-roundness", String(pose.eyeRoundness));
+}
+
 function shapePath(shape: AvatarShape): ReactNode {
   switch (shape) {
     case "circle": return <circle cx="50" cy="55" r="34" />;
@@ -71,6 +86,8 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
   const instanceId = useId().replaceAll(":", "");
   const root = useRef<HTMLDivElement>(null);
   const reducedMotion = useRef(false);
+  const restPose = useMemo(() => restPoseForKey(`${assistantId}:${instanceId}`), [assistantId, instanceId]);
+  const currentPose = useRef(restPose);
   const avatar = useMemo(() => design || deriveAvatar(assistantId), [assistantId, design]);
   const expression = expressionForState(state);
 
@@ -80,10 +97,9 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     const countMotion = () => element.dataset.motionCount = String(Number(element.dataset.motionCount || 0) + 1);
     const target = {
       setBlinkPhase(phase: BlinkPhase) { element.dataset.blinkPhase = phase; countMotion(); },
-      setGaze(direction: GazeDirection) {
-        element.dataset.gaze = direction.name;
-        element.style.setProperty("--puck-eye-x", `${direction.x * 4.4}px`);
-        element.style.setProperty("--puck-eye-y", `${direction.y * 5.2}px`);
+      setPose(pose: AvatarPose) {
+        currentPose.current = pose;
+        applyPose(element, pose);
         countMotion();
       },
     };
@@ -114,7 +130,12 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     const box = root.current.getBoundingClientRect();
     const x = Math.max(-1, Math.min(1, (event.clientX - box.left) / box.width * 2 - 1));
     const y = Math.max(-1, Math.min(1, (event.clientY - box.top) / box.height * 2 - 1));
-    root.current.style.setProperty("--puck-eye-x", `${x * 4.4}px`); root.current.style.setProperty("--puck-eye-y", `${y * 5.2}px`);
+    applyPose(root.current, {
+      name: "pointer", headX: x * 3, headY: y * 2.5, headRotate: Math.abs(x) > .12 ? x * 12 : y * 8,
+      faceX: x * 7, faceY: y * 6, faceRotate: Math.abs(x) > .12 ? x * 22 + y * 3 : currentPose.current.faceRotate,
+      leftEyeScaleX: x > .12 ? .62 : 1, rightEyeScaleX: x < -.12 ? .62 : 1,
+      leftEyeScaleY: x > .12 ? .82 : 1, rightEyeScaleY: x < -.12 ? .82 : 1, eyeRoundness: 1.6,
+    });
   }
 
   function react() {
@@ -126,30 +147,34 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
       { opacity: 1, offset: .28, transform: `translate(calc(-50% + ${index % 2 ? 16 : -16}px), calc(-50% - ${12 + index * 2}px)) scale(1)` },
       { opacity: 0, transform: `translate(calc(-50% + ${index % 2 ? 22 : -22}px), calc(-50% - ${18 + index * 3}px)) scale(.4)` },
     ], { duration: 420, easing: "ease-out" })] : []);
-    const winkTarget = element.querySelector<SVGGElement>(".puck-avatar-eye-left");
+    const winkTarget = element.querySelector<SVGElement>(".puck-avatar-eye-left .puck-avatar-eye-shape");
     const wink = winkTarget && typeof winkTarget.animate === "function" ? winkTarget.animate([
-      { transform: "rotate(-8deg) scaleY(1)" }, { transform: "rotate(-8deg) scaleY(.05)", offset: .45 }, { transform: "rotate(-8deg) scaleY(1)" },
+      { transform: "scaleY(1)" }, { transform: "scaleY(.05)", offset: .45 }, { transform: "scaleY(1)" },
     ], { duration: 300, easing: "ease-out" }) : undefined;
     if (wink) animations.push(wink);
     if (animations.length === 0) { element.dataset.reacting = "false"; return; }
     void Promise.allSettled(animations.map(animation => animation.finished)).then(() => { if (root.current === element) element.dataset.reacting = "false"; });
   }
 
-  const style = { "--puck-avatar-color": avatar.color, "--puck-eye-x": "0px", "--puck-eye-y": "0px" } as CSSProperties;
-  const leftClip = `${instanceId}-puck-left-eye`;
-  const rightClip = `${instanceId}-puck-right-eye`;
+  const style = {
+    "--puck-avatar-color": avatar.color,
+    "--puck-head-x": `${restPose.headX}px`, "--puck-head-y": `${restPose.headY}px`, "--puck-head-rotate": `${restPose.headRotate}deg`,
+    "--puck-face-x": `${restPose.faceX}px`, "--puck-face-y": `${restPose.faceY}px`, "--puck-face-rotate": `${restPose.faceRotate}deg`,
+    "--puck-left-eye-xscale": restPose.leftEyeScaleX, "--puck-right-eye-xscale": restPose.rightEyeScaleX,
+    "--puck-left-eye-yscale": restPose.leftEyeScaleY, "--puck-right-eye-yscale": restPose.rightEyeScaleY,
+    "--puck-eye-roundness": restPose.eyeRoundness,
+  } as CSSProperties;
 
   return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
-    data-expression={expression} data-shape={avatar.shape} data-reacting="false" data-blink-phase="open" data-gaze="center" data-motion-count="0"
-    style={style} onPointerMove={follow} onPointerLeave={() => { root.current?.style.setProperty("--puck-eye-x", "0px"); root.current?.style.setProperty("--puck-eye-y", "0px"); }}
+    data-expression={expression} data-shape={avatar.shape} data-reacting="false" data-blink-phase="open" data-pose="rest" data-motion-count="0"
+    style={style} onPointerMove={follow} onPointerLeave={() => { if (root.current) applyPose(root.current, currentPose.current); }}
     onPointerDown={react} onDragStart={event => event.preventDefault()}>
     <span className="puck-avatar-motion"><svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-      <defs><clipPath id={leftClip}><ellipse cx="40" cy="55" rx="7" ry="9"/></clipPath><clipPath id={rightClip}><ellipse cx="61" cy="55" rx="7" ry="9"/></clipPath></defs>
       <g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M39 37C36 29 36 20 40 13c3 8 5 16 5 24Z"/><path className="puck-avatar-ear" d="M61 37c3-8 3-17-1-24-3 8-5 16-5 24Z"/></g>
       <g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
-      <g className="puck-avatar-eyes">
-        <g className="puck-avatar-eye puck-avatar-eye-left"><ellipse className="puck-avatar-eye-white" cx="40" cy="55" rx="7" ry="9"/><g clipPath={`url(#${leftClip})`}><ellipse className="puck-avatar-pupil" cx="40" cy="55" rx="4.6" ry="7.6"/></g><path className="puck-avatar-closed-line" d="M33 55h14"/></g>
-        <g className="puck-avatar-eye puck-avatar-eye-right"><ellipse className="puck-avatar-eye-white" cx="61" cy="55" rx="7" ry="9"/><g clipPath={`url(#${rightClip})`}><ellipse className="puck-avatar-pupil" cx="61" cy="55" rx="4.6" ry="7.6"/></g><path className="puck-avatar-closed-line" d="M54 55h14"/></g>
+      <g className="puck-avatar-face">
+        <g className="puck-avatar-eye puck-avatar-eye-left"><ellipse className="puck-avatar-eye-shape" cx="40" cy="55" rx="4.6" ry="8"/></g>
+        <g className="puck-avatar-eye puck-avatar-eye-right"><ellipse className="puck-avatar-eye-shape" cx="61" cy="55" rx="4.6" ry="8"/></g>
       </g>
     </svg></span>
     <span className="puck-avatar-sparkles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-sparkle" key={index}/>)}</span>

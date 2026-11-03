@@ -757,10 +757,19 @@
 .puck-workspace .puck-info-status[data-state="error"] i { background: #ff453a; }
 .puck-workspace .puck-info-empty { margin: var(--puck-space-4); color: var(--color-muted); }
 
-/* Avatar silhouettes stay fixed; the compositor only translates pupils and scales eyes for blinks. */
+/* Grok-like motion: one rigid head, one parallel-eye face, transform-only transitions. */
 .puck-workspace .puck-avatar {
-  --puck-eye-x: 0px;
-  --puck-eye-y: 0px;
+  --puck-head-x: 0px;
+  --puck-head-y: 0px;
+  --puck-head-rotate: 0deg;
+  --puck-face-x: 0px;
+  --puck-face-y: 0px;
+  --puck-face-rotate: -24deg;
+  --puck-left-eye-xscale: 1;
+  --puck-right-eye-xscale: 1;
+  --puck-left-eye-yscale: 1;
+  --puck-right-eye-yscale: 1;
+  --puck-eye-roundness: 1;
   position: relative;
   flex: none;
   width: var(--puck-avatar-header);
@@ -775,32 +784,35 @@
   height: var(--puck-avatar-msg);
   margin-top: calc(var(--puck-border) * -1);
 }
-.puck-workspace .puck-avatar-motion { display:block; width:100%; height:100%; }
+.puck-workspace .puck-avatar-motion {
+  display:block;
+  width:100%;
+  height:100%;
+  transform:translate(var(--puck-head-x),var(--puck-head-y)) rotate(var(--puck-head-rotate));
+  transform-origin:50% 55%;
+  transition:transform 420ms cubic-bezier(.16,.88,.28,1.08);
+}
 .puck-workspace .puck-avatar svg { width:100%; height:100%; overflow:visible; filter:drop-shadow(0 4px 8px #0003); }
 .puck-workspace .puck-avatar-body { fill:var(--puck-avatar-color); transform-origin:center; }
 .puck-workspace .puck-avatar-stem { filter:brightness(.58); }
 .puck-workspace .puck-avatar-ears { fill:var(--puck-avatar-color); filter:brightness(.72); }
-.puck-workspace .puck-avatar-eye { transform-box: view-box; transition: transform 100ms ease-in; }
-.puck-workspace .puck-avatar-eye-left { transform: rotate(-8deg); transform-origin:40px 55px; }
-.puck-workspace .puck-avatar-eye-right { transform: rotate(7deg); transform-origin:61px 55px; }
-.puck-workspace .puck-avatar-eye-white { fill:#f7f7f3; }
-.puck-workspace .puck-avatar-pupil {
-  fill:#172023;
-  transform:translate(var(--puck-eye-x),var(--puck-eye-y));
-  transition:transform 190ms cubic-bezier(.16,.88,.28,1.08);
+.puck-workspace .puck-avatar-face {
+  fill:#0b0b0c;
+  transform:translate(var(--puck-face-x),var(--puck-face-y)) rotate(var(--puck-face-rotate));
+  transform-origin:50px 55px;
+  transition:transform 420ms cubic-bezier(.16,.88,.28,1.08);
 }
-.puck-workspace .puck-avatar-closed-line { fill:none; stroke:#172023; stroke-width:2.6; stroke-linecap:round; vector-effect:non-scaling-stroke; opacity:0; }
-.puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-eye-left { transform:rotate(14deg); }
-.puck-workspace .puck-avatar[data-expression="worried"] .puck-avatar-eye-right { transform:rotate(-14deg); }
-.puck-workspace .puck-avatar[data-expression="happy"] .puck-avatar-eye { transform:scaleY(.45); }
-.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye,
-.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye { transform:rotate(var(--puck-eye-angle, 0deg)) scaleY(.04); }
-.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-left,
-.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-left { --puck-eye-angle:-8deg; }
-.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-right,
-.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-right { --puck-eye-angle:7deg; }
-.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-closed-line { opacity:1; }
-.puck-workspace .puck-avatar[data-blink-phase="opening"] .puck-avatar-eye { transition-timing-function:ease-out; }
+.puck-workspace .puck-avatar-eye { transform-box:fill-box; transition:transform 420ms cubic-bezier(.16,.88,.28,1.08); }
+.puck-workspace .puck-avatar-eye-left { transform:scaleX(var(--puck-left-eye-xscale)) scaleY(var(--puck-left-eye-yscale)); transform-origin:40px 55px; }
+.puck-workspace .puck-avatar-eye-right { transform:scaleX(var(--puck-right-eye-xscale)) scaleY(var(--puck-right-eye-yscale)); transform-origin:61px 55px; }
+.puck-workspace .puck-avatar-eye-shape {
+  transform:scaleX(var(--puck-eye-roundness)) scaleY(1);
+  transform-origin:center;
+  transition:transform 420ms cubic-bezier(.16,.88,.28,1.08);
+}
+.puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-shape,
+.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-shape { transform:scaleX(var(--puck-eye-roundness)) scaleY(.05); transition-duration:80ms; transition-timing-function:ease-in; }
+.puck-workspace .puck-avatar[data-blink-phase="opening"] .puck-avatar-eye-shape { transition-duration:90ms; transition-timing-function:ease-out; }
 .puck-workspace .puck-avatar-badge {
   position: absolute;
   top: 0;

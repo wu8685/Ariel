@@ -1,9 +1,23 @@
 export type BlinkPhase = "open" | "closing" | "closed" | "opening";
-export type GazeDirection = { x: -1 | 0 | 1; y: -1 | 0 | 1; name: string };
+export type MotionDirection = { x: -1 | 0 | 1; y: -1 | 0 | 1; name: string };
+export type AvatarPose = {
+  name: string;
+  headX: number;
+  headY: number;
+  headRotate: number;
+  faceX: number;
+  faceY: number;
+  faceRotate: number;
+  leftEyeScaleX: number;
+  rightEyeScaleX: number;
+  leftEyeScaleY: number;
+  rightEyeScaleY: number;
+  eyeRoundness: number;
+};
 
 export type AvatarMotionTarget = {
   setBlinkPhase(phase: BlinkPhase): void;
-  setGaze(direction: GazeDirection): void;
+  setPose(pose: AvatarPose): void;
 };
 
 type Entry = {
@@ -14,11 +28,13 @@ type Entry = {
   reducedMotion: boolean;
   blinkPhase: BlinkPhase;
   blinkAt: number;
-  gazeAt: number;
+  poseAt: number;
+  posePhase: "rest" | "look";
+  restPose: AvatarPose;
 };
 
-const directions: GazeDirection[] = [
-  { x: 0, y: 0, name: "center" },
+export const motionDirections: ReadonlyArray<MotionDirection> = [
+  { x: 0, y: 0, name: "rest" },
   { x: -1, y: 0, name: "left" }, { x: 1, y: 0, name: "right" },
   { x: 0, y: -1, name: "up" }, { x: 0, y: 1, name: "down" },
   { x: -1, y: -1, name: "up-left" }, { x: 1, y: -1, name: "up-right" },
@@ -44,6 +60,37 @@ function randomFor(value: string): () => number {
   };
 }
 
+export function restPoseForKey(key: string): AvatarPose {
+  const value = seed(key);
+  const side: -1 | 1 = value & 1 ? 1 : -1;
+  const vertical: -1 | 0 = value & 2 ? -1 : 0;
+  const faceRotate = side * (20 + ((value >>> 4) % 11));
+  return {
+    name: "rest",
+    headX: 0, headY: 0, headRotate: 0,
+    faceX: side * (3 + ((value >>> 8) % 3)), faceY: vertical * (2 + ((value >>> 11) % 3)), faceRotate,
+    leftEyeScaleX: side > 0 ? .72 : 1, rightEyeScaleX: side < 0 ? .72 : 1,
+    leftEyeScaleY: side > 0 ? .86 : 1, rightEyeScaleY: side < 0 ? .86 : 1,
+    eyeRoundness: 1,
+  };
+}
+
+export function poseForDirection(direction: MotionDirection, rest: AvatarPose): AvatarPose {
+  if (direction.name === "rest") return rest;
+  const turn = direction.x !== 0 ? direction.x * 12 : direction.y * 8;
+  const leftFar = direction.x > 0;
+  const rightFar = direction.x < 0;
+  return {
+    name: direction.name,
+    headX: direction.x * 3, headY: direction.y * 2.5, headRotate: turn,
+    faceX: direction.x * 7, faceY: direction.y * 6,
+    faceRotate: direction.x === 0 ? rest.faceRotate : direction.x * 22 + direction.y * 3,
+    leftEyeScaleX: leftFar ? .62 : 1, rightEyeScaleX: rightFar ? .62 : 1,
+    leftEyeScaleY: leftFar ? .82 : 1, rightEyeScaleY: rightFar ? .82 : 1,
+    eyeRoundness: 1.65,
+  };
+}
+
 function between(entry: Entry, minimum: number, maximum: number): number {
   return minimum + Math.floor(entry.random() * (maximum - minimum + 1));
 }
@@ -54,8 +101,10 @@ function active(entry: Entry): boolean {
 
 function initialize(entry: Entry, now = Date.now()) {
   entry.blinkPhase = "open";
+  entry.posePhase = "rest";
+  entry.target.setPose(entry.restPose);
   entry.blinkAt = now + between(entry, entry.reducedMotion ? 8_000 : 2_000, entry.reducedMotion ? 16_000 : 7_000);
-  entry.gazeAt = entry.reducedMotion ? Number.POSITIVE_INFINITY : now + between(entry, 700, 4_500);
+  entry.poseAt = entry.reducedMotion ? Number.POSITIVE_INFINITY : now + between(entry, 2_000, 8_000);
 }
 
 function clearWake() {
@@ -69,7 +118,7 @@ function scheduleWake() {
   let earliest = Number.POSITIVE_INFINITY;
   for (const entry of entries.values()) {
     if (!active(entry)) continue;
-    earliest = Math.min(earliest, entry.blinkAt, entry.gazeAt);
+    earliest = Math.min(earliest, entry.blinkAt, entry.poseAt);
   }
   if (!Number.isFinite(earliest)) return;
   timer = setTimeout(runDueEvents, Math.max(0, earliest - Date.now()));
@@ -80,17 +129,17 @@ function advanceBlink(entry: Entry, now: number) {
     case "open":
       entry.blinkPhase = "closing";
       entry.target.setBlinkPhase("closing");
-      entry.blinkAt = now + 100;
+      entry.blinkAt = now + 80;
       return;
     case "closing":
       entry.blinkPhase = "closed";
       entry.target.setBlinkPhase("closed");
-      entry.blinkAt = now + 50;
+      entry.blinkAt = now + 30;
       return;
     case "closed":
       entry.blinkPhase = "opening";
       entry.target.setBlinkPhase("opening");
-      entry.blinkAt = now + 100;
+      entry.blinkAt = now + 90;
       return;
     case "opening": {
       entry.blinkPhase = "open";
@@ -101,10 +150,23 @@ function advanceBlink(entry: Entry, now: number) {
   }
 }
 
-function advanceGaze(entry: Entry, now: number) {
-  const direction = directions[Math.floor(entry.random() * directions.length)] || directions[0];
-  entry.target.setGaze(direction);
-  entry.gazeAt = now + between(entry, direction.name === "center" ? 3_000 : 1_000, direction.name === "center" ? 11_000 : 3_000);
+function advancePose(entry: Entry, now: number) {
+  if (entry.posePhase === "rest") {
+    const direction = motionDirections[1 + Math.floor(entry.random() * (motionDirections.length - 1))] || motionDirections[1];
+    entry.target.setPose(poseForDirection(direction, entry.restPose));
+    entry.posePhase = "look";
+    entry.poseAt = now + between(entry, 500, 2_000);
+    return;
+  }
+  if (entry.random() < .35) {
+    const direction = motionDirections[1 + Math.floor(entry.random() * (motionDirections.length - 1))] || motionDirections[1];
+    entry.target.setPose(poseForDirection(direction, entry.restPose));
+    entry.poseAt = now + between(entry, 500, 2_000);
+    return;
+  }
+  entry.target.setPose(entry.restPose);
+  entry.posePhase = "rest";
+  entry.poseAt = now + between(entry, 3_000, 9_000);
 }
 
 function runDueEvents() {
@@ -113,7 +175,7 @@ function runDueEvents() {
   for (const entry of entries.values()) {
     if (!active(entry)) continue;
     if (entry.blinkAt <= now) advanceBlink(entry, now);
-    if (!entry.reducedMotion && entry.gazeAt <= now) advanceGaze(entry, now);
+    if (!entry.reducedMotion && entry.poseAt <= now) advancePose(entry, now);
   }
   scheduleWake();
 }
@@ -139,10 +201,12 @@ function removeVisibilityListenerIfIdle() {
 }
 
 export function registerAvatarMotion(key: string, target: AvatarMotionTarget, options: { visible?: boolean; reducedMotion?: boolean } = {}) {
+  const id = nextID++;
   const entry: Entry = {
-    id: nextID++, target, random: randomFor(`${key}:${nextID}`),
+    id, target, random: randomFor(`${key}:${id}`),
     visible: options.visible ?? true, reducedMotion: options.reducedMotion ?? false,
-    blinkPhase: "open", blinkAt: Number.POSITIVE_INFINITY, gazeAt: Number.POSITIVE_INFINITY,
+    blinkPhase: "open", blinkAt: Number.POSITIVE_INFINITY, poseAt: Number.POSITIVE_INFINITY, posePhase: "rest",
+    restPose: restPoseForKey(key),
   };
   initialize(entry);
   entries.set(entry.id, entry);

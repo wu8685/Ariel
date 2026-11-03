@@ -40,11 +40,13 @@ describe("PuckAvatar", () => {
 		}
 	});
 
-	it("renders stationary white eye masks with independently translated dark pupils", () => {
+	it("renders two parallel black capsule eyes directly on one moving face", () => {
 		const { container } = render(<PuckAvatar assistantId="assistant-eyes" name="眼睛测试" animated={false}/>);
-		expect(container.querySelectorAll(".puck-avatar-eye-white")).toHaveLength(2);
-		expect(container.querySelectorAll(".puck-avatar-pupil")).toHaveLength(2);
-		expect(container.querySelectorAll("clipPath")).toHaveLength(2);
+		const face = container.querySelector(".puck-avatar-face");
+		const eyes = Array.from(face?.querySelectorAll(".puck-avatar-eye-shape") || []);
+		expect(eyes).toHaveLength(2);
+		expect(eyes.map(eye => [eye.getAttribute("rx"), eye.getAttribute("ry")])).toEqual([["4.6", "8"], ["4.6", "8"]]);
+		expect(container.querySelector(".puck-avatar-eye-white, .puck-avatar-pupil, clipPath")).toBeNull();
 		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();
 	});
 
@@ -91,5 +93,6 @@ describe("PuckAvatar", () => {
 		expect(avatarStyle).not.toMatch(/\.puck-workspace \.puck-avatar svg[^}]*animation:/s);
 		expect(avatarStyle).not.toMatch(/\.puck-workspace \.puck-avatar-body[^}]*animation:/s);
 		expect(avatarStyle).not.toMatch(/will-change/);
+		expect(avatarStyle).not.toMatch(/\.puck-avatar-eye-(?:left|right)[^{]*\{[^}]*rotate/s);
 	});
 });

@@ -78,8 +78,8 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await expect(avatar.locator(".puck-avatar-ear")).toHaveCount(2);
 			await expect(avatar.locator(".puck-avatar-crown, .puck-avatar-leaf, .puck-avatar-flower, .puck-avatar-mouth")).toHaveCount(0);
 			await expect(avatar.locator(".puck-avatar-brows")).toHaveCount(0);
-			await expect(avatar.locator(".puck-avatar-eye-white")).toHaveCount(2);
-			await expect(avatar.locator(".puck-avatar-pupil")).toHaveCount(2);
+			await expect(avatar.locator(".puck-avatar-eye-shape")).toHaveCount(2);
+			await expect(avatar.locator(".puck-avatar-eye-white, .puck-avatar-pupil, clipPath")).toHaveCount(0);
       await expect(avatar.locator("svg")).toHaveCSS("animation-name", "none");
 			await avatar.click();
 			await expect(avatar).toHaveAttribute("data-reacting", "false");
@@ -96,6 +96,9 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 				await page.getByRole("button", { name: "查看助理信息" }).click();
 				await expect(page.getByRole("radiogroup", { name: "头像形状" })).toBeVisible();
 				expect(await page.locator(".puck-avatar-picker").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+				if (width === 390 && colorScheme === "dark") await expect(page).toHaveScreenshot("puck-390-info-drawer-dark.png", { animations: "disabled", caret: "hide" });
+				await page.mouse.click(10, 400);
+				await expect(page.locator(".puck-info")).not.toHaveClass(/mobile-open/);
       } else {
         await expect(page.locator(".puck-assistants")).toBeVisible();
         await expect(page.locator(".puck-info")).toBeVisible();
@@ -140,7 +143,8 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		const box = await avatar.boundingBox();
 		expect(box).toBeTruthy();
 		await page.mouse.move(box!.x + box!.width - 2, box!.y + box!.height / 2);
-		await expect(avatar).not.toHaveCSS("--puck-eye-x", "0px");
+		await expect(avatar).not.toHaveCSS("--puck-face-x", "0px");
+		await expect(avatar).not.toHaveCSS("--puck-head-rotate", "0deg");
 		await avatar.click();
 		await expect(avatar).toHaveAttribute("data-reacting", "true");
 		await expect(avatar.locator(".puck-avatar-sparkle")).toHaveCount(5);
@@ -148,6 +152,32 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await page.mouse.move(1000, 800);
 		await expect(avatar).toHaveAttribute("data-reacting", "false", { timeout: 1000 });
 		await expect(avatar).toHaveAttribute("draggable", "false");
+	});
+
+	test("captures the same avatar at rest, two turns and a blink", async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+		await openPuck(page);
+		const board = page.locator(".puck-motion-storyboard");
+		await page.locator(".puck-conversation > header .puck-avatar").evaluate(source => {
+			const frames = [
+				{ label: "静止", head: [0, 0, 0], face: [4, -4, -24], eyes: [.72, 1, 1], blink: "open" },
+				{ label: "看左上", head: [-3, -2, -12], face: [-7, -6, -18], eyes: [1, .62, 1.65], blink: "open" },
+				{ label: "看右下", head: [3, 2, 12], face: [7, 6, 22], eyes: [.62, 1, 1.65], blink: "open" },
+				{ label: "眨眼", head: [0, 0, 0], face: [4, -4, -24], eyes: [.72, 1, 1], blink: "closed" },
+			];
+			const storyboard = document.createElement("section");
+			storyboard.className = "puck-motion-storyboard";
+			Object.assign(storyboard.style, { position: "fixed", inset: "80px auto auto 80px", zIndex: "99", display: "flex", gap: "24px", padding: "24px", borderRadius: "20px", background: "#0d0d0e", color: "white", font: "14px -apple-system, system-ui" });
+			for (const frame of frames) {
+				const cell = document.createElement("div"); Object.assign(cell.style, { display: "grid", justifyItems: "center", gap: "10px" });
+				const avatar = source.cloneNode(true) as HTMLElement; avatar.querySelector(".puck-avatar-badge")?.remove();
+				Object.assign(avatar.style, { width: "112px", height: "112px", "--puck-head-x": `${frame.head[0]}px`, "--puck-head-y": `${frame.head[1]}px`, "--puck-head-rotate": `${frame.head[2]}deg`, "--puck-face-x": `${frame.face[0]}px`, "--puck-face-y": `${frame.face[1]}px`, "--puck-face-rotate": `${frame.face[2]}deg`, "--puck-left-eye-xscale": String(frame.eyes[0]), "--puck-right-eye-xscale": String(frame.eyes[1]), "--puck-eye-roundness": String(frame.eyes[2]) } as CSSStyleDeclaration & Record<string, string>);
+				avatar.dataset.blinkPhase = frame.blink;
+				cell.append(avatar, Object.assign(document.createElement("span"), { textContent: frame.label })); storyboard.append(cell);
+			}
+			document.querySelector(".puck-workspace")?.append(storyboard);
+		});
+		await expect(board).toHaveScreenshot("puck-avatar-motion-storyboard.png", { animations: "disabled" });
 	});
 
 	test("selects every avatar property directly and persists mouse and keyboard changes", async ({ page }) => {
