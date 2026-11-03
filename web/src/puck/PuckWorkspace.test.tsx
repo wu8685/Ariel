@@ -31,11 +31,11 @@ describe("PuckWorkspace", () => {
 	await screen.findAllByText("小帕");
     fireEvent.change(screen.getByLabelText("给 Puck 发消息"), { target: { value: "检查测试" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    expect(await screen.findByText("正在处理…")).toBeTruthy();
+    expect((await screen.findAllByText("正在处理…")).length).toBeGreaterThan(0);
     expect(screen.getByText("检查测试")).toBeTruthy();
     await act(async () => { resolveHistory?.(); });
     expect(screen.getByText("检查测试")).toBeTruthy();
-    expect(screen.getByText("正在处理…")).toBeTruthy();
+    expect(screen.getAllByText("正在处理…").length).toBeGreaterThan(0);
   });
 
   it("renders question, authorization and task cards and can stop work", async () => {
@@ -46,14 +46,14 @@ describe("PuckWorkspace", () => {
     ];
     const request = vi.fn(async (method: string) => method === "puck.list"
       ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
-      : method === "puck.history" ? accepted({ messages }) : accepted({ summary: "已请求停止 1 项" }));
+      : method === "puck.history" ? accepted({ messages }) : accepted({ summary: "已请求停止 1 项", message: { id: "stop", role: "assistant", kind: "stop_summary", text: "已请求停止 1 项" } }));
     const onOpenThread = vi.fn();
     render(<PuckWorkspace request={request} state="ready" devices={[]} onOpenThread={onOpenThread} />);
     expect(await screen.findByRole("group", { name: "问题卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "授权卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "任务卡片" })).toBeTruthy();
 	await act(async () => { fireEvent.click(screen.getByRole("button", { name: "停止全部工作" })); });
-    expect(await screen.findByText("已请求停止 1 项")).toBeTruthy();
+    expect((await screen.findAllByText("已请求停止 1 项")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "打开会话" }));
     expect(onOpenThread).toHaveBeenCalledWith("exec-a", "thread-a");
   });
@@ -61,5 +61,29 @@ describe("PuckWorkspace", () => {
   it("explains unavailable deployment prerequisites", async () => {
     render(<PuckWorkspace request={vi.fn()} state="unavailable" reason="PUCK_REQUIRES_PASSKEY_HTTPS" devices={[]} />);
     expect(screen.getByText("Puck 仅支持 Passkey + HTTPS")).toBeTruthy();
+  });
+
+  it("submits a card once, updates it in place, renders Markdown and sends with Enter", async () => {
+    const calls: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      calls.push(method);
+      if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] });
+      if (method === "puck.history") return accepted({ messages: [
+        { id: "md", role: "assistant", kind: "text", text: "**测试通过**" },
+        { id: "q", role: "assistant", kind: "question", text: "选一个", cardJSON: JSON.stringify({ questionId: "q-1", options: ["A"], cardState: "pending" }) },
+      ] });
+      return accepted({ state: "processing" });
+    });
+    render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    expect(await screen.findByText("测试通过", { selector: "strong" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
+    expect(await screen.findByText("已回答")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "A" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
+    expect(calls.filter(method => method === "puck.question.answer")).toHaveLength(1);
+    const textarea = screen.getByLabelText("给 Puck 发消息");
+    fireEvent.change(textarea, { target: { value: "继续" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    expect(calls.filter(method => method === "puck.message.send")).toHaveLength(1);
   });
 });
