@@ -48,10 +48,12 @@ describe("PuckWorkspace", () => {
       ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
       : method === "puck.history" ? accepted({ messages }) : accepted({ summary: "已请求停止 1 项", message: { id: "stop", role: "assistant", kind: "stop_summary", text: "已请求停止 1 项" } }));
     const onOpenThread = vi.fn();
-    render(<PuckWorkspace request={request} state="ready" devices={[]} onOpenThread={onOpenThread} />);
+    const view = render(<PuckWorkspace request={request} state="ready" devices={[]} onOpenThread={onOpenThread} />);
     expect(await screen.findByRole("group", { name: "问题卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "授权卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "任务卡片" })).toBeTruthy();
+	expect(view.container.querySelectorAll(".puck-transcript .puck-avatar")).toHaveLength(1);
+	expect(view.container.querySelectorAll(".puck-message.assistant.continued")).toHaveLength(2);
 	await act(async () => { fireEvent.click(screen.getByRole("button", { name: "停止全部工作" })); });
     expect((await screen.findAllByText("已请求停止 1 项")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "打开会话" }));
@@ -87,6 +89,20 @@ describe("PuckWorkspace", () => {
     expect(calls.filter(method => method === "puck.message.send")).toHaveLength(1);
   });
 
+	it("reuses Ariel message and bubble classes for user and assistant content", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [
+				{ id: "u", role: "user", kind: "text", text: "用户消息" },
+				{ id: "a", role: "assistant", kind: "text", text: "助理消息" },
+			] }) : accepted({}));
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByText("用户消息");
+		expect(view.container.querySelector(".puck-message.message.user > .puck-message-content.message-body")).toBeTruthy();
+		expect(view.container.querySelector(".puck-message.message.assistant > .puck-message-content.message-body")).toBeTruthy();
+		expect(view.container.querySelector(".puck-message.user .puck-markdown.markdown-body")).toBeTruthy();
+	});
+
   it("uses puck.watch events for durable conversation updates and unwatches on cleanup", async () => {
     let listener: ((event: Record<string, unknown>) => void) | undefined;
     const subscribeEvents = vi.fn((next: (event: Record<string, unknown>) => void) => { listener = next; return vi.fn(); });
@@ -108,7 +124,7 @@ describe("PuckWorkspace", () => {
   });
 
 	it("renders direct accessible avatar choices and persists click and keyboard selection", async () => {
-		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "blob", color: "#9b5cff" }) };
+		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "circle", color: "#8957f5" }) };
 		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
 			if (method === "puck.list") return accepted({ assistants: [assistant] });
 			if (method === "puck.history") return accepted({ messages: [] });
@@ -122,22 +138,22 @@ describe("PuckWorkspace", () => {
 		await screen.findAllByText("小帕");
 		const shapes = screen.getByRole("radiogroup", { name: "头像形状" });
 		const colors = screen.getByRole("radiogroup", { name: "头像颜色" });
-		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(4);
-		expect(colors.querySelectorAll('[role="radio"]')).toHaveLength(7);
-		expect(screen.getByRole("radio", { name: "圆团" }).getAttribute("aria-checked")).toBe("true");
-		expect(screen.getByRole("radio", { name: "亮紫" }).getAttribute("aria-checked")).toBe("true");
+		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(14);
+		expect(colors.querySelectorAll('[role="radio"]')).toHaveLength(11);
+		expect(screen.getByRole("radio", { name: "圆" }).getAttribute("aria-checked")).toBe("true");
+		expect(screen.getByRole("radio", { name: "紫" }).getAttribute("aria-checked")).toBe("true");
 		expect(screen.queryByRole("combobox", { name: "头像形状" })).toBeNull();
 		expect(screen.queryByLabelText("头像颜色", { selector: 'input[type="color"]' })).toBeNull();
 
-		fireEvent.click(screen.getByRole("radio", { name: "星形" }));
-		await waitFor(() => expect(screen.getByRole("radio", { name: "星形" }).getAttribute("aria-checked")).toBe("true"));
-		expect(document.querySelector(".puck-avatar-large")?.getAttribute("data-shape")).toBe("star");
-		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "star", color: "#9b5cff" } });
-		fireEvent.keyDown(screen.getByRole("radio", { name: "星形" }), { key: "ArrowRight" });
-		await waitFor(() => expect(screen.getByRole("radio", { name: "圆角三角" }).getAttribute("aria-checked")).toBe("true"));
-		fireEvent.click(screen.getByRole("radio", { name: "亮蓝" }));
-		await waitFor(() => expect(screen.getByRole("radio", { name: "亮蓝" }).getAttribute("aria-checked")).toBe("true"));
-		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#1687ff");
-		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "triangle", color: "#1687ff" } });
+		fireEvent.click(screen.getByRole("radio", { name: "尖刺星" }));
+		await waitFor(() => expect(screen.getByRole("radio", { name: "尖刺星" }).getAttribute("aria-checked")).toBe("true"));
+		expect(document.querySelector(".puck-avatar-large")?.getAttribute("data-shape")).toBe("burst");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "burst", color: "#8957f5" } });
+		fireEvent.keyDown(screen.getByRole("radio", { name: "尖刺星" }), { key: "ArrowRight" });
+		await waitFor(() => expect(screen.getByRole("radio", { name: "圆角六边形" }).getAttribute("aria-checked")).toBe("true"));
+		fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
+		await waitFor(() => expect(screen.getByRole("radio", { name: "蓝" }).getAttribute("aria-checked")).toBe("true"));
+		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#2588f7");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "hexagon", color: "#2588f7" } });
 	});
 });

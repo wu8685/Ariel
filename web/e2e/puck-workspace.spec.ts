@@ -58,7 +58,8 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await expect(page.locator(".puck-workspace")).toHaveCSS("background-color", "rgb(5, 5, 5)");
       expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 			await expect(page.locator(".puck-message.assistant.text .puck-markdown").first()).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(page.locator(".puck-message.user .puck-markdown")).toHaveCSS("background-color", "rgb(28, 28, 30)");
+			await expect(page.locator(".puck-message.user .message-body")).toHaveCSS("background-color", "rgb(29, 93, 198)");
+			await expect(page.locator(".puck-transcript .puck-message.assistant .puck-avatar")).toHaveCount(1);
       await expect(page.getByRole("group", { name: "问题卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "授权卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "任务卡片" })).toContainText("进行中");
@@ -66,12 +67,12 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			const avatar = page.locator(".puck-conversation > header .puck-avatar");
       await expect(avatar).toHaveAttribute("data-expression", "waiting");
 			await expect(avatar.locator(".puck-avatar-ear")).toHaveCount(2);
-			await expect(avatar.locator(".puck-avatar-leaf")).toHaveCount(2);
+			await expect(avatar.locator(".puck-avatar-crown, .puck-avatar-leaf, .puck-avatar-flower, .puck-avatar-mouth")).toHaveCount(0);
 			await expect(avatar.locator(".puck-avatar-brows")).toHaveCount(0);
       await expect(avatar.locator("svg")).toHaveCSS("animation-name", "none");
 			await avatar.click();
 			await expect(avatar).toHaveAttribute("data-reacting", "false");
-			await expect(avatar.locator(".puck-avatar-particles")).toHaveCount(0);
+			await expect(avatar.locator(".puck-avatar-sparkles")).toHaveCount(0);
       await page.getByRole("button", { name: "Go" }).click();
       await expect(page.getByRole("group", { name: "问题卡片" })).toContainText("已回答");
       await expect(page.getByRole("button", { name: "Go" })).toBeDisabled();
@@ -95,7 +96,7 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 
 test.describe("Puck forest-sprite avatar interaction", () => {
 	test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false, colorScheme: "dark", reducedMotion: "no-preference" });
-	test("follows the pointer and clears playful petals after click", async ({ page }) => {
+	test("follows the pointer and clears playful sparkles after click", async ({ page }) => {
 		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
 		await openPuck(page);
 		const avatar = page.locator(".puck-conversation > header .puck-avatar");
@@ -104,9 +105,10 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await page.mouse.move(box!.x + box!.width - 2, box!.y + box!.height / 2);
 		await expect(avatar).not.toHaveCSS("--puck-eye-x", "0px");
 		await avatar.click();
-		await expect(avatar.locator(".puck-avatar-particles")).toBeVisible();
+		await expect(avatar.locator(".puck-avatar-sparkles")).toBeVisible();
+		await expect(avatar.locator(".puck-avatar-particle")).toHaveCount(0);
 		await page.mouse.move(1000, 800);
-		await expect(avatar.locator(".puck-avatar-particles")).toHaveCount(0, { timeout: 1000 });
+		await expect(avatar.locator(".puck-avatar-sparkles")).toHaveCount(0, { timeout: 1000 });
 		await expect(avatar).toHaveAttribute("draggable", "false");
 	});
 
@@ -114,15 +116,16 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await openPuck(page);
 		const shapeGroup = page.getByRole("radiogroup", { name: "头像形状" });
 		const colorGroup = page.getByRole("radiogroup", { name: "头像颜色" });
-		await expect(shapeGroup.getByRole("radio")).toHaveCount(4);
-		await expect(colorGroup.getByRole("radio")).toHaveCount(7);
-		await page.getByRole("radio", { name: "星形" }).click();
-		await expect(page.getByRole("radio", { name: "星形" })).toHaveAttribute("aria-checked", "true");
-		await expect(page.locator(".puck-avatar-large")).toHaveAttribute("data-shape", "star");
-		await page.getByRole("radio", { name: "星形" }).press("ArrowRight");
-		await expect(page.getByRole("radio", { name: "圆角三角" })).toHaveAttribute("aria-checked", "true");
-		await page.getByRole("radio", { name: "亮蓝" }).press("Enter");
-		await expect(page.getByRole("radio", { name: "亮蓝" })).toHaveAttribute("aria-checked", "true");
-		await expect.poll(() => avatarUpdates.at(-1)?.avatar).toEqual({ shape: "triangle", color: "#1687ff" });
+		await expect(shapeGroup.getByRole("radio")).toHaveCount(14);
+		await expect(colorGroup.getByRole("radio")).toHaveCount(11);
+		expect(await shapeGroup.getByRole("radio").evaluateAll(radios => radios.map(radio => radio.getAttribute("aria-label")))).toEqual(["圆", "云团", "倾斜圆角方块", "四角星", "四叶花", "心形团", "波浪花", "梨形水滴", "胶囊", "圆角三角", "倾斜圆角矩形", "尖刺星", "圆角六边形", "南瓜"]);
+		await page.getByRole("radio", { name: "尖刺星" }).click();
+		await expect(page.getByRole("radio", { name: "尖刺星" })).toHaveAttribute("aria-checked", "true");
+		await expect(page.locator(".puck-avatar-large")).toHaveAttribute("data-shape", "burst");
+		await page.getByRole("radio", { name: "尖刺星" }).press("ArrowRight");
+		await expect(page.getByRole("radio", { name: "圆角六边形" })).toHaveAttribute("aria-checked", "true");
+		await page.getByRole("radio", { name: "蓝" }).press("Enter");
+		await expect(page.getByRole("radio", { name: "蓝" })).toHaveAttribute("aria-checked", "true");
+		await expect.poll(() => avatarUpdates.at(-1)?.avatar).toEqual({ shape: "hexagon", color: "#2588f7" });
 	});
 });

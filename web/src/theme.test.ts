@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const style = readFileSync(fileURLToPath(new URL("./style.css", import.meta.url)), "utf8");
 const interaction = readFileSync(fileURLToPath(new URL("./interaction.css", import.meta.url)), "utf8");
+const puckStyle = readFileSync(fileURLToPath(new URL("./puck/puck.css", import.meta.url)), "utf8");
 const html = readFileSync(fileURLToPath(new URL("../index.html", import.meta.url)), "utf8");
 const app = readFileSync(fileURLToPath(new URL("./App.tsx", import.meta.url)), "utf8");
 const main = readFileSync(fileURLToPath(new URL("./main.tsx", import.meta.url)), "utf8");
@@ -26,6 +27,12 @@ function contrast(a: string, b: string): number {
 }
 
 describe("fixed Night appearance", () => {
+	it("lets Puck user messages reuse the Ariel primary bubble variable", () => {
+		expect(style).toMatch(/\.message\.user\s+\.message-body\s*\{[^}]*background:\s*var\(--color-primary\)/s);
+		expect(puckStyle).not.toMatch(/--color-primary\s*:/);
+		expect(puckStyle).not.toMatch(/\.puck-message\.user[^}]*background\s*:/s);
+	});
+
   it("uses dark page/surface tokens and high-contrast white text", () => {
     expect(style).toMatch(/color-scheme:\s*dark/);
     expect(token("color-page")).toBe("#000000");
