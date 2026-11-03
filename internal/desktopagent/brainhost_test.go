@@ -51,6 +51,13 @@ func (f *fakeBrainProcess) Reply(_ context.Context, _ json.RawMessage, result an
 func (f *fakeBrainProcess) replyCount() int       { f.mu.Lock(); defer f.mu.Unlock(); return len(f.replies) }
 func (f *fakeBrainProcess) Done() <-chan struct{} { return f.done }
 func (f *fakeBrainProcess) Close() error          { return nil }
+func (f *fakeBrainProcess) exit() {
+	select {
+	case <-f.done:
+	default:
+		close(f.done)
+	}
+}
 
 func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 	process := newFakeBrainProcess()
@@ -72,6 +79,48 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 	config := start["config"].(map[string]any)
 	if config["features.code_mode_host"] != true || config["tools.shell"] != false {
 		t.Fatalf("config=%+v", config)
+	}
+}
+
+func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
+	first, second := newFakeBrainProcess(), newFakeBrainProcess()
+	starts := 0
+	events := make(chan BrainHostEvent, 8)
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), RestartBackoff: time.Millisecond, Start: func(context.Context, string, string) (brainProcess, error) {
+		starts++
+		if starts == 1 {
+			return first, nil
+		}
+		return second, nil
+	}, Emit: func(event BrainHostEvent) { events <- event }})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	first.exit()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		second.mu.Lock()
+		resumed := len(second.calls) > 0 && second.calls[0].method == "thread/resume"
+		second.mu.Unlock()
+		if resumed {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	second.mu.Lock()
+	resumed := len(second.calls) > 0 && second.calls[0].method == "thread/resume"
+	second.mu.Unlock()
+	if !resumed || starts != 2 {
+		t.Fatalf("starts=%d resumed=%v", starts, resumed)
+	}
+	select {
+	case event := <-events:
+		if event.ThreadID != "brain-thread" || event.Payload["reason"] != "turn.lost" {
+			t.Fatalf("event=%+v", event)
+		}
+	default:
+		t.Fatal("missing turn.lost event")
 	}
 }
 

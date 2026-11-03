@@ -24,13 +24,14 @@ type brainProcess interface {
 }
 
 type BrainHostConfig struct {
-	Enabled     bool
-	Binary      string
-	Root        string
-	MaxInFlight int
-	ToolTimeout time.Duration
-	Start       func(context.Context, string, string) (brainProcess, error)
-	Emit        func(BrainHostEvent)
+	Enabled        bool
+	Binary         string
+	Root           string
+	MaxInFlight    int
+	ToolTimeout    time.Duration
+	RestartBackoff time.Duration
+	Start          func(context.Context, string, string) (brainProcess, error)
+	Emit           func(BrainHostEvent)
 }
 
 type BrainEnsure struct {
@@ -52,13 +53,16 @@ type pendingBrainCall struct {
 }
 
 type BrainHost struct {
-	cfg     BrainHostConfig
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	process brainProcess
-	threads map[string]string
-	pending map[string]pendingBrainCall
+	cfg          BrainHostConfig
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.Mutex
+	process      brainProcess
+	threads      map[string]string
+	pending      map[string]pendingBrainCall
+	ensures      map[string]BrainEnsure
+	failures     []time.Time
+	circuitUntil time.Time
 }
 
 func NewBrainHost(cfg BrainHostConfig) *BrainHost {
@@ -71,16 +75,26 @@ func NewBrainHost(cfg BrainHostConfig) *BrainHost {
 	if cfg.ToolTimeout <= 0 {
 		cfg.ToolTimeout = 60 * time.Second
 	}
+	if cfg.RestartBackoff <= 0 {
+		cfg.RestartBackoff = time.Second
+	}
 	if cfg.Start == nil {
 		cfg.Start = func(ctx context.Context, binary, cwd string) (brainProcess, error) {
 			return appserver.StartBrainInteractive(ctx, binary, cwd)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}}
+	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}}
 }
 
-func (h *BrainHost) Ready() bool { return h != nil && h.cfg.Enabled && h.cfg.Binary != "" }
+func (h *BrainHost) Ready() bool {
+	if h == nil || !h.cfg.Enabled || h.cfg.Binary == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.circuitUntil.IsZero() || time.Now().After(h.circuitUntil)
+}
 
 func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, error) {
 	if !h.Ready() || request.AssistantID == "" || request.Name == "" || request.DeveloperInstructions == "" || request.ToolsetVersion < 1 || strings.ContainsAny(request.AssistantID, `/\\`) {
@@ -115,6 +129,8 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 	}
 	h.mu.Lock()
 	h.threads[threadID] = request.AssistantID
+	request.ThreadID = threadID
+	h.ensures[threadID] = request
 	h.mu.Unlock()
 	return threadID, nil
 }
@@ -242,12 +258,48 @@ func (h *BrainHost) run(process brainProcess) {
 				p.timer.Stop()
 				delete(h.pending, id)
 			}
+			now := time.Now()
+			kept := h.failures[:0]
+			for _, at := range h.failures {
+				if now.Sub(at) < 10*time.Minute {
+					kept = append(kept, at)
+				}
+			}
+			h.failures = append(kept, now)
+			requests := make([]BrainEnsure, 0, len(h.ensures))
+			for _, request := range h.ensures {
+				requests = append(requests, request)
+			}
+			if len(h.failures) >= 5 {
+				h.circuitUntil = now.Add(10 * time.Minute)
+			}
+			circuitOpen := now.Before(h.circuitUntil)
 			h.mu.Unlock()
 			if h.cfg.Emit != nil {
-				h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.status", Payload: map[string]any{"state": "degraded", "reason": "process_exited"}})
+				for _, request := range requests {
+					h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.status", AssistantID: request.AssistantID, ThreadID: request.ThreadID, Payload: map[string]any{"state": "degraded", "reason": "turn.lost"}})
+				}
+			}
+			if !circuitOpen && len(requests) > 0 {
+				go h.restart(requests)
 			}
 			return
 		case <-h.ctx.Done():
+			return
+		}
+	}
+}
+
+func (h *BrainHost) restart(requests []BrainEnsure) {
+	timer := time.NewTimer(h.cfg.RestartBackoff)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-h.ctx.Done():
+		return
+	}
+	for _, request := range requests {
+		if _, err := h.Ensure(h.ctx, request); err != nil {
 			return
 		}
 	}
