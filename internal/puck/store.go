@@ -156,6 +156,60 @@ func (s *Store) Assistant(ctx context.Context, id string) (Assistant, error) {
 	return a, err
 }
 
+func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Assistant
+	for rows.Next() {
+		var a Assistant
+		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetAssistantBrain(ctx context.Context, assistantID, threadID, status string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET brain_thread_id=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`, threadID, status, nowText(time.Time{}), assistantID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,description=?,persona=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
+		a.Name, a.Description, a.Persona, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), a.Status, nowText(time.Time{}), a.ID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET status='deleted',deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL`, nowText(time.Time{}), nowText(time.Time{}), assistantID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) AppendMessage(ctx context.Context, m Message) error {
 	if len(m.Text) > 64<<10 || len(m.CardJSON) > 8<<10 {
 		return errors.New("Puck message exceeds storage limit")

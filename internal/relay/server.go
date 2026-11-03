@@ -82,6 +82,17 @@ type Server struct {
 	cachePromotionRequests map[string]cacheKey
 	puckBridge             *PuckBridge
 	puckDecisions          map[string]puckDecision
+	puckHandler            PuckHandler
+}
+
+type PuckHandler interface {
+	Handle(context.Context, string, json.RawMessage) PuckResponse
+}
+
+func (s *Server) SetPuckHandler(handler PuckHandler) {
+	s.mu.Lock()
+	s.puckHandler = handler
+	s.mu.Unlock()
 }
 
 type pairing struct {
@@ -785,7 +796,19 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		} else if msg.Method == "puck.decision.record" {
 			s.recordPuckDecision(ctx, p, msg.RequestID, msg.Params)
 		} else {
-			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "PUCK_UNAVAILABLE", "Puck module not attached"))
+			s.mu.Lock()
+			handler := s.puckHandler
+			s.mu.Unlock()
+			if handler == nil {
+				_ = p.send(ctx, responseError(msg.RequestID, "rejected", "PUCK_UNAVAILABLE", "Puck module not attached"))
+			} else {
+				result := handler.Handle(ctx, msg.Method, msg.Params)
+				if result.Error != nil {
+					_ = p.send(ctx, responseError(msg.RequestID, result.Outcome, result.Error.Code, result.Error.Message))
+				} else {
+					_ = p.send(ctx, map[string]any{"type": "response", "v": 1, "requestId": msg.RequestID, "outcome": result.Outcome, "data": result.Data})
+				}
+			}
 		}
 		return true
 	}

@@ -164,6 +164,14 @@ func buildHandler(cfg config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.puck.State == puck.StateReady {
+		module, moduleErr := puck.NewModule(cfg.puck.DataDir, r.PuckBridge())
+		if moduleErr != nil {
+			log.Printf("WARNING puck unavailable: reason=%s detail=%s", puck.ReasonDataDirUnwritable, moduleErr)
+		} else {
+			r.SetPuckHandler(module)
+		}
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/ws", r.Handler())
 	if auth != nil {
