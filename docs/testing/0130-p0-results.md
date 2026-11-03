@@ -27,7 +27,7 @@
 | P0 fail-closed smoke | `./tests/puck-p0-smoke.sh` | 通过 |
 | Web 单测 | `cd web && npm test` | 45 files、374 tests 全部通过 |
 | Web production build | `cd web && npm run build` | 通过 |
-| Chromium 回归 | `cd web && npx playwright test` | 159 tests 全部通过，含 Puck 320／390／1280px 基线 |
+| Chromium 回归 | `cd web && npx playwright test` | Puck 320／390／1280px 与截图基线 3/3 通过；最终全量首轮 158/159，唯一失败为既有 file-workspace reload 超时，原命令精确复跑 1/1 通过（本分支较早一轮全量 159/159 通过） |
 | Kubernetes | `kubectl kustomize deploy/kubernetes/overlays/passkey-puck` | 通过；渲染含 Puck 开关、`/data/puck`、896MiB／1152Mi，PIN overlay 相对 `main` 无变更 |
 | ECS | `deploy-ecs.sh ... --mode passkey --enable-puck --dry-run` 及 PIN 反例 | Passkey 通过；PIN 组合按固定原因拒绝 |
 
