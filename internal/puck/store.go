@@ -25,8 +25,16 @@ type Assistant struct {
 }
 
 type Message struct {
-	ID, AssistantID, Role, Kind, Text, CardJSON, Reaction, WorkSummary, BrainTurnID string
-	CreatedAt                                                                       time.Time
+	ID          string    `json:"id"`
+	AssistantID string    `json:"assistantId"`
+	Role        string    `json:"role"`
+	Kind        string    `json:"kind"`
+	Text        string    `json:"text"`
+	CardJSON    string    `json:"cardJSON,omitempty"`
+	Reaction    string    `json:"reaction,omitempty"`
+	WorkSummary string    `json:"workSummary,omitempty"`
+	BrainTurnID string    `json:"brainTurnId,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 type Task struct {

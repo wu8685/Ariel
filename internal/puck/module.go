@@ -71,6 +71,7 @@ func (m *Module) runBrainEvents(ctx context.Context) {
 
 func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	if event.Name != "puck.brain.toolCall" {
+		m.recordBrainMessage(ctx, event)
 		return
 	}
 	var input struct {
@@ -83,6 +84,42 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	result := m.tools.Execute(ctx, pucktools.Call{AssistantID: event.AssistantID, Tool: input.Tool, Arguments: input.Arguments})
 	content, _ := json.Marshal(result)
 	_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: event.AssistantID, Trigger: "tool"}, event.DeviceID, "puck.brain.toolResult", mustJSON(map[string]any{"threadId": event.ThreadID, "callId": input.CallID, "success": result.Success, "contentItems": []map[string]any{{"type": "inputText", "text": string(content)}}, "truncated": result.Truncated}))
+}
+
+func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent) {
+	var envelope struct {
+		Kind    string `json:"kind"`
+		Payload struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(event.Payload, &envelope) != nil {
+		return
+	}
+	method := envelope.Kind
+	if method == "" {
+		method = envelope.Payload.Method
+	}
+	if method != "item/completed" && method != "item/agentMessage/completed" {
+		return
+	}
+	var params struct {
+		TurnID string                          `json:"turnId"`
+		Item   struct{ ID, Type, Text string } `json:"item"`
+		Text   string                          `json:"text"`
+	}
+	if json.Unmarshal(envelope.Payload.Params, &params) != nil {
+		return
+	}
+	text := params.Item.Text
+	if text == "" {
+		text = params.Text
+	}
+	if text == "" || params.Item.Type != "" && params.Item.Type != "agentMessage" {
+		return
+	}
+	_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "text", Text: text, BrainTurnID: params.TurnID})
 }
 
 type toolOrchestrator struct{ bridge Orchestrator }

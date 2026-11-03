@@ -57,6 +57,15 @@ export function PuckWorkspace({ request, state, reason, devices, onBack }: { req
     });
     return () => { active = false; };
   }, [selectedID]);
+	useEffect(() => {
+		if (!selectedID) return;
+		const timer = window.setInterval(() => { void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
+			if (response.outcome !== "accepted") return;
+			const durable = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
+			setMessages(current => durable.length ? [...durable, ...current.filter(message => message.kind === "processing" || message.kind === "acknowledged").filter(local => !durable.some(saved => saved.id === local.id.replace(/-processing$/, "")))] : current);
+		}); }, 2000);
+		return () => window.clearInterval(timer);
+	}, [selectedID]);
 
   async function createAssistant() {
     const deviceID = brainDeviceID || readyBrains[0]?.deviceId;
@@ -73,6 +82,7 @@ export function PuckWorkspace({ request, state, reason, devices, onBack }: { req
     setMessages(current => [...current, { id: clientMessageId, role: "user", kind: "text", text }, { id: `${clientMessageId}-processing`, role: "assistant", kind: "processing", text: "正在处理…" }]);
     const response = await request("puck.message.send", "relay", { assistantId: selected.assistantId, clientMessageId, text });
     if (response.outcome !== "accepted") setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response) } : item));
+	else window.setTimeout(() => setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` && item.kind === "processing" ? { ...item, kind: "acknowledged", text: "收到，正在处理。" } : item)), Number(response.data?.templateAfterMs || 3000));
   }
   async function stop() {
     if (!selected) return;

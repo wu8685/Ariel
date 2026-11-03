@@ -111,6 +111,27 @@ func TestModuleExecutesTrustedBrainToolCallAndReturnsResult(t *testing.T) {
 	t.Fatal("tool result was not returned")
 }
 
+func TestModuleRecordsCompletedBrainMessage(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.event", Payload: json.RawMessage(`{"kind":"item/completed","payload":{"method":"item/completed","params":{"turnId":"turn-a","item":{"id":"item-a","type":"agentMessage","text":"已经完成。"}}}}`)}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id}))
+		if messages := history.Data["messages"].([]Message); len(messages) == 1 && messages[0].Text == "已经完成。" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("completed brain message was not recorded")
+}
+
 func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {
 	bridge := &fakeModuleBridge{ensureThreads: []string{"brain-old", "brain-new"}}
 	module, err := NewModule(t.TempDir(), bridge)
