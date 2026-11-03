@@ -80,6 +80,7 @@ type Server struct {
 	cachePromoting         map[cacheKey]bool
 	cachePromotionIDs      map[cacheKey]string
 	cachePromotionRequests map[string]cacheKey
+	puckBridge             *PuckBridge
 }
 
 type pairing struct {
@@ -96,6 +97,7 @@ type route struct {
 	timer    *time.Timer
 	threadID string
 	subID    string
+	internal chan map[string]any
 }
 
 type subscription struct {
@@ -206,7 +208,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.CacheEntryMaxBytes > cfg.CacheMaxBytes {
 		return nil, errors.New("cache entry limit exceeds cache budget")
 	}
-	return &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}}, nil
+	server := &Server{cfg: cfg, epoch: rand.Text(), now: time.Now, origins: origins, webSessions: map[[32]byte]time.Time{}, pairings: map[[32]byte]pairing{}, pairingByWeb: map[*peer][32]byte{}, agents: map[string]*peer{}, webs: map[*peer]struct{}{}, routes: map[string]*route{}, byWeb: map[*peer]map[string]string{}, subs: map[*peer]map[string]*subscription{}, cache: newCacheStore(cfg.CacheMaxBytes, cfg.CacheEntryMaxBytes, cfg.CacheWarmGrace, cfg.CacheFreshness), cachePromoting: map[cacheKey]bool{}, cachePromotionIDs: map[cacheKey]string{}, cachePromotionRequests: map[string]cacheKey{}}
+	if cfg.PuckState == "ready" {
+		server.puckBridge = newPuckBridge(server)
+	}
+	return server, nil
 }
 
 func ValidWebPIN(pin string) bool {
@@ -563,10 +569,16 @@ func (s *Server) removePeer(p *peer) {
 	for id, pending := range s.routes {
 		if pending.web == p || pending.agent == p {
 			delete(s.routes, id)
-			delete(s.byWeb[pending.web], pending.webID)
+			if pending.web != nil {
+				delete(s.byWeb[pending.web], pending.webID)
+			}
 			pending.timer.Stop()
 			if pending.agent == p && pending.web != p {
-				failed = append(failed, pending)
+				if pending.internal != nil {
+					pending.internal <- responseError(pending.webID, "unknown", "OUTCOME_UNKNOWN", "agent disconnected after forwarding")
+				} else {
+					failed = append(failed, pending)
+				}
 			}
 		}
 	}
@@ -716,6 +728,9 @@ func (s *Server) broadcastDevice(deviceID string, departed *peer) {
 	}
 	s.mu.Unlock()
 	status := s.currentDeviceStatus(deviceID, departed)
+	if s.puckBridge != nil {
+		s.puckBridge.routeDeviceStatus(status)
+	}
 	for _, p := range webs {
 		p.send(context.Background(), status)
 	}
@@ -755,6 +770,10 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		return false
 	}
 	if strings.HasPrefix(msg.Method, "puck.") {
+		if strings.HasPrefix(msg.Method, "puck.brain.") {
+			_ = p.send(ctx, responseError(msg.RequestID, "rejected", "UNAUTHORIZED", "Puck brain methods are module-only"))
+			return true
+		}
 		if s.cfg.PuckState != "ready" {
 			_ = p.send(ctx, responseErrorReason(msg.RequestID, "rejected", "FEATURE_DISABLED", "Puck unavailable", s.cfg.PuckReason))
 		} else {
@@ -786,6 +805,16 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 		return true
 	}
 	if msg.Method != "device.list" {
+		if s.puckBridge != nil {
+			var reference struct {
+				ThreadID string `json:"threadId"`
+			}
+			_ = json.Unmarshal(msg.Params, &reference)
+			if _, brain := s.puckBridge.assistantFor(msg.DeviceID, reference.ThreadID); brain {
+				_ = p.send(ctx, responseError(msg.RequestID, "rejected", "RECURSION_DENIED", "brain thread is private to Puck"))
+				return true
+			}
+		}
 		return s.forwardRequest(ctx, p, msg.RequestID, msg.DeviceID, msg.Method, msg.Params)
 	}
 	s.mu.Lock()
@@ -1001,7 +1030,9 @@ func (s *Server) finishRoute(relayID string, agent *peer, response map[string]an
 		return
 	}
 	delete(s.routes, relayID)
-	delete(s.byWeb[entry.web], entry.webID)
+	if entry.web != nil {
+		delete(s.byWeb[entry.web], entry.webID)
+	}
 	entry.timer.Stop()
 	if response["outcome"] == "accepted" {
 		if entry.method == "thread.subscribe" || entry.method == "thread.settings.watch" {
@@ -1022,10 +1053,20 @@ func (s *Server) finishRoute(relayID string, agent *peer, response map[string]an
 		}
 	}
 	s.mu.Unlock()
+	if entry.internal != nil {
+		select {
+		case entry.internal <- response:
+		default:
+		}
+		return
+	}
 	entry.web.send(context.Background(), response)
 }
 
 func (s *Server) handleAgentEvent(ctx context.Context, agent *peer, body []byte) bool {
+	if s.puckBridge != nil && s.puckBridge.routeBrainEvent(agent.deviceID, body) {
+		return true
+	}
 	var event struct {
 		Event          string `json:"event"`
 		DeviceID       string `json:"deviceId"`

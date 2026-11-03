@@ -37,6 +37,7 @@ export type Request = {
   v: 1;
   requestId: RequestId;
   deviceId: Id;
+  origin?: PuckOrigin;
   method:
     | "auth.pair.create"
     | "auth.pair.cancel"
@@ -295,6 +296,11 @@ export interface HelloOK {
   relayEpoch: Id;
   sessionToken?: string;
   puck?: PuckStatus;
+}
+export interface PuckOrigin {
+  kind: "puck";
+  assistantId: Id;
+  trigger: "user_message" | "tool" | "routine" | "event";
 }
 export interface Error {
   code:

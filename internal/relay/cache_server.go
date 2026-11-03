@@ -303,13 +303,14 @@ func (s *Server) cacheUpdateMessagesLocked(key cacheKey) []cacheDelivery {
 		for name, value := range base {
 			msg[name] = value
 		}
-		deliveries = append(deliveries, cacheDelivery{web: watcher.web, key: watcher.id, message: msg, cacheKey: key, entry: entry, revision: entry.deliveryRevision})
+		deliveries = append(deliveries, cacheDelivery{web: watcher.web, puck: watcher.puck, key: watcher.id, message: msg, cacheKey: key, entry: entry, revision: entry.deliveryRevision})
 	}
 	return deliveries
 }
 
 type cacheDelivery struct {
 	web      *peer
+	puck     chan map[string]any
 	key      string
 	message  map[string]any
 	cacheKey cacheKey
@@ -327,8 +328,16 @@ func (s *Server) sendCacheDeliveries(ctx context.Context, deliveries []cacheDeli
 		s.mu.Lock()
 		entry := s.cache.entries[delivery.cacheKey]
 		if entry != nil && entry == delivery.entry && entry.deliveryRevision == delivery.revision {
-			if watcher, ok := entry.watchers[delivery.key]; ok && watcher.web == delivery.web {
-				delivery.web.enqueueCacheDelivery(delivery.key, delivery.message)
+			if watcher, ok := entry.watchers[delivery.key]; ok && watcher.web == delivery.web && watcher.puck == delivery.puck {
+				if delivery.puck != nil {
+					select {
+					case delivery.puck <- delivery.message:
+					default:
+						delete(entry.watchers, delivery.key)
+					}
+				} else {
+					delivery.web.enqueueCacheDelivery(delivery.key, delivery.message)
+				}
 			}
 		}
 		s.mu.Unlock()

@@ -33,8 +33,9 @@ type cacheSnapshot struct {
 }
 
 type cacheWatcher struct {
-	id  string
-	web *peer
+	id   string
+	web  *peer
+	puck chan map[string]any
 }
 
 type cacheEntry struct {
@@ -72,6 +73,12 @@ func (s *cacheStore) watch(key cacheKey, watchID string, web *peer, now time.Tim
 	entry.watchers[watchID] = cacheWatcher{id: watchID, web: web}
 	entry.lastUsed = now
 	entry.warmUntil = time.Time{}
+	return entry
+}
+
+func (s *cacheStore) watchPuck(key cacheKey, watchID string, events chan map[string]any, now time.Time) *cacheEntry {
+	entry := s.watch(key, watchID, nil, now)
+	entry.watchers[watchID] = cacheWatcher{id: watchID, puck: events}
 	return entry
 }
 
