@@ -7,6 +7,7 @@ const initialAssistants = [
 ];
 let assistants = initialAssistants;
 let avatarUpdates: Record<string, unknown>[] = [];
+let sentMessages: Record<string, unknown>[] = [];
 const initialMessages = [
 	{ id: "user-request", role: "user", kind: "text", text: "帮我检查 Ariel 的测试状态。", createdAt: "2026-11-03T11:59:59Z" },
 	{ id: "hello", role: "assistant", kind: "text", text: "晚上好。测试已经开始，我会在有结果时告诉你。", workSummary: JSON.stringify({ elapsedMs: 12400, steps: 3 }), createdAt: "2026-11-03T12:00:00Z" },
@@ -19,6 +20,7 @@ let messages = initialMessages;
 async function openPuck(page: Page, history: typeof initialMessages = initialMessages) {
   assistants = initialAssistants;
 	avatarUpdates = [];
+  sentMessages = [];
   messages = history;
   await page.route("**/api/auth/status", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ mode: "passkey", authenticated: true, enrollmentRequired: false, puck: { state: "ready" } }) }));
   await page.route("http://127.0.0.1:4173/", async route => {
@@ -48,6 +50,10 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
 			messages = messages.map(item => item.id === message.params.messageId ? { ...item, reaction } : item);
 			data = { reaction };
 		}
+    if (message.method === "puck.message.send") {
+      sentMessages.push(message.params);
+      data = { state: "processing", startedAt: "2026-11-03T12:00:04Z" };
+    }
     if (message.method === "puck.question.answer") {
       messages = messages.map(item => item.id === "question" ? { ...item, cardJSON: JSON.stringify({ questionId: "question-a", options: ["Go", "Web"], cardState: "answered", answer: "Go" }) } : item);
       data = {};
@@ -139,6 +145,19 @@ test.describe("Puck HTTP availability normalization", () => {
 	}
 });
 
+test.describe("Puck touch reactions", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+	test("hides the persistent add control and opens the picker on long press", async ({ page }) => {
+		await openPuck(page);
+		await expect(page.getByRole("button", { name: "给消息添加回应" }).first()).toBeHidden();
+		const message = page.locator(".puck-message").first();
+		await message.dispatchEvent("pointerdown", { pointerType: "touch", isPrimary: true, clientX: 50, clientY: 100 });
+		await page.waitForTimeout(550);
+		await expect(page.getByRole("button", { name: "回应 👍" })).toBeVisible();
+		await message.dispatchEvent("pointerup", { pointerType: "touch", isPrimary: true, clientX: 50, clientY: 100 });
+	});
+});
+
 for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
   test.describe(`Puck workspace ${width}px ${colorScheme}`, () => {
     test.use({ viewport: { width, height: 844 }, isMobile: width < 700, hasTouch: width < 700, colorScheme });
@@ -223,8 +242,8 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await page.getByRole("textbox", { name: "给 Puck 发消息" }).fill("第一行\n第二行\n第三行");
 			expect(await page.locator(".puck-composer").evaluate(composer => composer.getBoundingClientRect().height)).toBeGreaterThan(48);
 			await expect(sendButton).toBeEnabled();
-			await expect(sendButton).toHaveCSS("background-color", "rgb(255, 255, 255)");
-			await expect(sendButton).toHaveCSS("color", "rgb(10, 10, 10)");
+			await expect(sendButton).toHaveCSS("background-color", "rgb(255, 45, 141)");
+			await expect(sendButton).toHaveCSS("color", "rgb(11, 11, 12)");
 			const arrowCenter = await sendButton.evaluate(button => {
 				const outer = button.getBoundingClientRect();
 				const icon = button.querySelector("svg")!.getBoundingClientRect();
@@ -239,6 +258,32 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
     });
   });
 }
+
+test.describe("Puck composer attachments", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+  test("keeps the plus target visible and sends a removable image-only draft", async ({ page }) => {
+    await openPuck(page);
+    const attach = page.getByRole("button", { name: "选择截图" });
+    await expect(attach).toBeVisible();
+    const attachBox = await attach.boundingBox();
+    expect(attachBox?.width).toBeGreaterThanOrEqual(32);
+    expect(attachBox?.height).toBeGreaterThanOrEqual(32);
+    const input = page.getByLabel("附加截图");
+    await input.setInputFiles({ name: "fixture.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") });
+    await expect(page.getByRole("img", { name: "fixture.png" })).toBeVisible();
+    await page.getByRole("button", { name: "移除截图：fixture.png" }).click();
+    await expect(page.getByRole("img", { name: "fixture.png" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
+    await input.setInputFiles({ name: "fixture.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") });
+    await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
+    await page.getByRole("button", { name: "发送" }).click();
+    await expect.poll(() => sentMessages.length).toBe(1);
+    expect(sentMessages[0].text).toBe("");
+    expect(sentMessages[0].images).toEqual([expect.stringMatching(/^data:image\/png;base64,/)]);
+    await expect(page.getByLabel("待发送截图")).toHaveCount(0);
+    await expect(page.locator(".puck-message.user .puck-message-image")).toHaveCount(1);
+  });
+});
 
 test.describe("Puck forest-sprite avatar interaction", () => {
 	test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false, colorScheme: "dark", reducedMotion: "no-preference" });

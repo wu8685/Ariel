@@ -39,6 +39,31 @@ func TestAuthorizedTaskCarriesConsumedUserDecisionOrigin(t *testing.T) {
 	}
 }
 
+func TestReadToolRetriesOneRejectedResyncButMutationDoesNot(t *testing.T) {
+	readAttempts := 0
+	readOrchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
+		readAttempts++
+		if readAttempts == 1 {
+			return Result{Outcome: "rejected", Code: "RESYNC_REQUIRED", Message: "RESYNC_REQUIRED"}
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a"}}
+	}}
+	read := New(readOrchestrator, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "read_thread", Arguments: json.RawMessage(`{"deviceId":"exec-a","threadId":"thread-a"}`)})
+	if !read.Success || readAttempts != 2 {
+		t.Fatalf("read=%+v attempts=%d", read, readAttempts)
+	}
+
+	mutationAttempts := 0
+	mutationOrchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
+		mutationAttempts++
+		return Result{Outcome: "rejected", Code: "RESYNC_REQUIRED", Message: "RESYNC_REQUIRED"}
+	}}
+	mutation := New(mutationOrchestrator, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "respond_interaction", Arguments: json.RawMessage(`{"deviceId":"exec-a","threadId":"thread-a","interactionId":"i","answer":"yes"}`)})
+	if mutation.Success || mutationAttempts != 1 {
+		t.Fatalf("mutation=%+v attempts=%d", mutation, mutationAttempts)
+	}
+}
+
 type fakeBackend struct {
 	tasks  map[string]Task
 	events []Event

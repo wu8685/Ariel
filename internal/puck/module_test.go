@@ -15,14 +15,15 @@ import (
 )
 
 type fakeModuleBridge struct {
-	mu             sync.Mutex
-	calls          []string
-	brains         map[relay.BrainThread]string
-	ensureFailures int
-	turnFailures   int
-	ensureThreads  []string
-	events         chan relay.BrainEvent
-	params         []json.RawMessage
+	mu              sync.Mutex
+	calls           []string
+	brains          map[relay.BrainThread]string
+	ensureFailures  int
+	turnFailures    int
+	turnFailureCode string
+	ensureThreads   []string
+	events          chan relay.BrainEvent
+	params          []json.RawMessage
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
@@ -48,7 +49,11 @@ func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, 
 	if method == "puck.brain.turn.start" {
 		if f.turnFailures > 0 {
 			f.turnFailures--
-			return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: "BRAIN_UNAVAILABLE", Message: "fixture turn unavailable"}}
+			code := f.turnFailureCode
+			if code == "" {
+				code = "BRAIN_UNAVAILABLE"
+			}
+			return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: code, Message: code}}
 		}
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
@@ -59,6 +64,54 @@ func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, 
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-a"}}
 	}
 	return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
+}
+
+func TestMessageResumesBrainAndRetriesOneDefinitelyRejectedTurn(t *testing.T) {
+	bridge := &fakeModuleBridge{turnFailureCode: "RESYNC_REQUIRED"}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	bridge.mu.Lock()
+	bridge.calls, bridge.params, bridge.turnFailures = nil, nil, 1
+	bridge.mu.Unlock()
+
+	result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "recovery-message", "text": "继续"}))
+	if result.Error != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if !slices.Equal(bridge.calls, []string{"puck.brain.turn.start", "puck.brain.ensure", "puck.brain.turn.start"}) {
+		t.Fatalf("calls=%v", bridge.calls)
+	}
+	var resumed struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(bridge.params[1], &resumed); err != nil || resumed.ThreadID != "brain-thread-a" {
+		t.Fatalf("resume params=%s thread=%q err=%v", bridge.params[1], resumed.ThreadID, err)
+	}
+}
+
+func TestBrainErrorCodeIsNeverPersistedAsRawAssistantText(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.recordBrainMessage(context.Background(), relay.BrainEvent{AssistantID: id, Payload: json.RawMessage(`{"kind":"item/completed","payload":{"params":{"turnId":"turn-error","item":{"type":"agentMessage","text":"RESYNC_REQUIRED"}}}}`)})
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	last := history[len(history)-1]
+	if last.Text == "RESYNC_REQUIRED" || !strings.Contains(last.Text, "重试") || last.Kind != "error" {
+		t.Fatalf("last=%+v", last)
+	}
 }
 
 func TestModuleStartsRealGreetingAndPersistsFallbackWhenTurnUnavailable(t *testing.T) {
@@ -179,6 +232,68 @@ func TestModulePersistsRealTurnDurationStepsUnreadAndReactions(t *testing.T) {
 	var actors map[string]string
 	if json.Unmarshal([]byte(reacted.Reaction), &actors) != nil || actors["user"] != "👍" || actors["assistant"] != "👀" {
 		t.Fatalf("reaction=%q", reacted.Reaction)
+	}
+}
+
+func TestMessageAcceptsImagesPersistsThemOutsideTextAndForwardsToBrain(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	image := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	sent := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000132", "text": "", "images": []string{image}}))
+	if sent.Error != nil {
+		t.Fatalf("sent=%+v", sent)
+	}
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	var user Message
+	for _, message := range history {
+		if message.ID == "00000000-0000-4000-8000-000000000132" {
+			user = message
+		}
+	}
+	if user.Text != "" || !strings.Contains(user.CardJSON, image) {
+		t.Fatalf("user=%+v", user)
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	var forwarded struct {
+		Text   string   `json:"text"`
+		Images []string `json:"images"`
+	}
+	for index := len(bridge.calls) - 1; index >= 0; index-- {
+		if bridge.calls[index] == "puck.brain.turn.start" {
+			_ = json.Unmarshal(bridge.params[index], &forwarded)
+			break
+		}
+	}
+	if len(forwarded.Images) != 1 || forwarded.Images[0] != image || !strings.Contains(forwarded.Text, "PUCK_ENVELOPE") {
+		t.Fatalf("forwarded=%+v", forwarded)
+	}
+}
+
+func TestMessageRejectsEmptyOrInvalidImages(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	for _, input := range []map[string]any{
+		{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000133", "text": "", "images": []string{}},
+		{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000134", "text": "x", "images": []string{"data:image/svg+xml;base64,PHN2Zy8+"}},
+		{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000135", "text": "x", "images": []string{"data:image/png;base64,AAAA"}},
+	} {
+		if result := module.Handle(context.Background(), "puck.message.send", mustJSON(input)); result.Error == nil || result.Error.Code != "INVALID_ARGUMENT" {
+			t.Fatalf("accepted invalid input=%+v result=%+v", input, result)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -55,5 +56,11 @@ func TestNativeReadDeadlineIsExplicitlyClassified(t *testing.T) {
 	}
 	if got := requestErrorCode("turn.start", context.DeadlineExceeded); got != "OUTCOME_UNKNOWN" {
 		t.Fatalf("mutation deadline classified as %s, want OUTCOME_UNKNOWN", got)
+	}
+}
+
+func TestPuckBrainUnavailableErrorIsNotDisguisedAsResyncRequired(t *testing.T) {
+	if got := requestErrorCode("puck.brain.turn.start", errors.New("BRAIN_UNAVAILABLE")); got != "BRAIN_UNAVAILABLE" {
+		t.Fatalf("brain unavailable classified as %s, want BRAIN_UNAVAILABLE", got)
 	}
 }

@@ -80,13 +80,18 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 	if config["features.code_mode_host"] != true || config["tools.shell"] != false {
 		t.Fatalf("config=%+v", config)
 	}
-	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", "", ""); err != nil {
+	image := "data:image/png;base64,AAAA"
+	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", []string{image}, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	turn := process.calls[1].params
 	policy, _ := turn["sandboxPolicy"].(map[string]any)
 	if turn["clientUserMessageId"] != "client-message-a" || turn["approvalPolicy"] != "never" || policy["type"] != "readOnly" {
 		t.Fatalf("turn=%+v", turn)
+	}
+	input := turn["input"].([]any)
+	if len(input) != 2 || input[0].(map[string]any)["text"] != "hello" || input[1].(map[string]any)["type"] != "image" || input[1].(map[string]any)["url"] != image {
+		t.Fatalf("input=%+v", input)
 	}
 }
 

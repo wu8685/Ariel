@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { readScreenshotFiles, type ScreenshotDraft } from "../screenshots";
 import { avatarColors, avatarShapes, deriveAvatar, PuckAvatar, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
 import "./puck.css";
 
@@ -12,14 +13,37 @@ type Assistant = { assistantId: string; name: string; avatar?: string; descripti
 type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 
+const puckErrorText: Record<string, string> = {
+  RESYNC_REQUIRED: "实时连接暂时失效，请重试。",
+  BRAIN_UNAVAILABLE: "助理暂时无法思考，请稍后重试。",
+  BRAIN_HOST_OFFLINE: "助理所在主机暂时离线，请稍后重试。",
+  DEVICE_OFFLINE: "目标设备当前离线，请稍后重试。",
+  TIMEOUT: "请求超时，请重试。",
+  OVERLOADED: "当前请求较多，请稍后重试。",
+  OUTCOME_UNKNOWN: "操作结果暂时无法确认，请刷新后核对。",
+};
+function isRawErrorCode(value: string): boolean { return /^[A-Z][A-Z0-9_]+$/.test(value.trim()); }
+
 function responseError(response: PuckResponse): string {
-  return response.error?.message || response.error?.code || "请求失败，请稍后重试。";
+  const code = response.error?.code?.trim() || "";
+  if (puckErrorText[code]) return puckErrorText[code];
+  const message = response.error?.message?.trim() || "";
+  return message && !isRawErrorCode(message) ? message : "请求暂时未完成，请重试。";
+}
+function friendlyAssistantText(role: string, text: string): string {
+  if (role !== "assistant") return text;
+  const code = text.trim();
+  if (puckErrorText[code]) return puckErrorText[code];
+  return /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(code) ? "操作暂时未完成，请重试。" : text;
 }
 function arrayData<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function normalizeMessage(value: Record<string, unknown>): Message {
+  const role = String(value.role ?? value.Role ?? "assistant");
+  const rawText = String(value.text ?? value.Text ?? "");
+  const text = friendlyAssistantText(role, rawText);
   return {
-    id: String(value.id ?? value.ID ?? crypto.randomUUID()), assistantId: String(value.assistantId ?? value.AssistantID ?? "") || undefined, role: String(value.role ?? value.Role ?? "assistant"),
-    kind: String(value.kind ?? value.Kind ?? "text"), text: String(value.text ?? value.Text ?? ""),
+    id: String(value.id ?? value.ID ?? crypto.randomUUID()), assistantId: String(value.assistantId ?? value.AssistantID ?? "") || undefined, role,
+    kind: text !== rawText ? "error" : String(value.kind ?? value.Kind ?? "text"), text,
     cardJSON: String(value.cardJSON ?? value.CardJSON ?? ""), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""),
   };
 }
@@ -81,6 +105,22 @@ function messageState(messages: Message[]): PuckState {
 function cardData(message: Message): Record<string, unknown> {
   try { return message.cardJSON ? JSON.parse(message.cardJSON) as Record<string, unknown> : {}; } catch { return {}; }
 }
+function messageImages(message: Message): string[] { return arrayData<string>(cardData(message).images); }
+function retryPayload(message: Message): { text:string; images:string[] } | undefined {
+  const retry = cardData(message).retry;
+  if (!retry || typeof retry !== "object") return undefined;
+  const value = retry as Record<string, unknown>;
+  return { text: String(value.text || ""), images: arrayData<string>(value.images) };
+}
+function decodedDataURIBytes(dataUri: string): number {
+  const payload = dataUri.slice(dataUri.indexOf(",") + 1);
+  return Math.max(0, Math.floor(payload.length * 3 / 4) - (payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0));
+}
+function avatarForeground(color: string): string {
+  const channels = [1, 3, 5].map(index => Number.parseInt(color.slice(index, index + 2), 16) / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+  const luminance = .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+  return (luminance + .05) / .012 > 1.05 / (luminance + .05) ? "#0b0b0c" : "#ffffff";
+}
 function expiryLabel(value: unknown): string {
   if (!value) return "未说明";
   const milliseconds = new Date(String(value)).getTime() - Date.now();
@@ -131,6 +171,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [selectedID, setSelectedID] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
+  const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
   const [notice, setNotice] = useState("");
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -138,9 +179,11 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	const [submittingCard, setSubmittingCard] = useState("__none__");
 	const [mobilePanel, setMobilePanel] = useState<"" | "assistants" | "info">("");
 	const avatarUpdateSequence = useRef(0);
+  const screenshotInputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef("");
   const [clock, setClock] = useState(() => Date.now());
   const [reactionTarget, setReactionTarget] = useState("");
+  const reactionLongPressTimer = useRef<number | undefined>(undefined);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
@@ -220,13 +263,35 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	setMessages(greeting?.state === "processing" ? [{ id:String(greeting.messageId), role:"assistant", kind:"processing", text:"正在准备…", workSummary:JSON.stringify({startedAt:greeting.startedAt,state:"running"}) }] : []);
   }
   async function send() {
-    const text = draft.trim(); if (!selected || !text) return;
-    if (["停", "停止"].includes(text)) { setDraft(""); await stop(); return; }
-    const clientMessageId = crypto.randomUUID(); setDraft(""); const localStartedAt = new Date().toISOString();
-    setMessages(current => [...current, { id: clientMessageId, role: "user", kind: "text", text }, { id: `${clientMessageId}-processing`, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
-    const response = await request("puck.message.send", "relay", { assistantId: selected.assistantId, clientMessageId, text });
-    if (response.outcome !== "accepted") setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response), workSummary:"" } : item));
+    const text = draft.trim(); if (!selected || (!text && screenshots.length === 0)) return;
+    if (screenshots.length === 0 && ["停", "停止"].includes(text)) { setDraft(""); await stop(); return; }
+    const images = screenshots.map(image => image.dataUri);
+    const clientMessageId = crypto.randomUUID(); setDraft(""); setScreenshots([]); if (screenshotInputRef.current) screenshotInputRef.current.value = ""; const localStartedAt = new Date().toISOString();
+    setMessages(current => [...current, { id: clientMessageId, role: "user", kind: "text", text, cardJSON: images.length ? JSON.stringify({ images }) : "" }, { id: `${clientMessageId}-processing`, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
+    const response = await request("puck.message.send", "relay", { assistantId: selected.assistantId, clientMessageId, text, images });
+    if (response.outcome !== "accepted") setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response), cardJSON:JSON.stringify({retry:{text,images}}), workSummary:"" } : item));
 	else setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, workSummary:JSON.stringify({startedAt:response.data?.startedAt || localStartedAt,state:"running"}) } : item));
+  }
+  function restoreRetry(message: Message) {
+    const retry = retryPayload(message); if (!retry) return;
+    setDraft(retry.text);
+    setScreenshots(retry.images.map((dataUri,index) => ({ name:`重试图片 ${index + 1}.${dataUri.startsWith("data:image/jpeg") ? "jpg" : "png"}`, bytes:decodedDataURIBytes(dataUri), dataUri })));
+    setNotice("内容已放回输入框，请再次发送。");
+  }
+  function beginReactionLongPress(messageID: string, pointerType: string) {
+    if (pointerType !== "touch") return;
+    if (reactionLongPressTimer.current !== undefined) window.clearTimeout(reactionLongPressTimer.current);
+    reactionLongPressTimer.current = window.setTimeout(() => { setReactionTarget(messageID); reactionLongPressTimer.current = undefined; }, 500);
+  }
+  function cancelReactionLongPress() {
+    if (reactionLongPressTimer.current !== undefined) window.clearTimeout(reactionLongPressTimer.current);
+    reactionLongPressTimer.current = undefined;
+  }
+  async function addScreenshots(files: FileList | null) {
+    if (!files?.length) return;
+    try { setScreenshots(await readScreenshotFiles(screenshots, files)); setNotice(""); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "无法读取截图。"); }
+    finally { if (screenshotInputRef.current) screenshotInputRef.current.value = ""; }
   }
   async function stop() {
     if (!selected) return;
@@ -289,6 +354,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (!faviconOriginal.current) faviconOriginal.current = { href:link.getAttribute("href") || "", type:link.getAttribute("type") || "" };
 		return () => { const original=faviconOriginal.current; if (original) { link.href=original.href; link.type=original.type; } };
 	}, []);
+	useEffect(() => () => cancelReactionLongPress(), []);
 	useEffect(() => {
 		if (!selected || navigator.userAgent.includes("jsdom")) return;
 		let cancelled=false; const svg=document.querySelector<SVGSVGElement>(".puck-conversation > header .puck-avatar svg"); if (!svg) return;
@@ -325,23 +391,26 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       </header>
       <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty">
         <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button>
-      </div> : messages.map((message,index) => {
+	      </div> : messages.map((message,index) => {
         const continued = index > 0 && messages[index - 1].role === message.role;
         const groupEnd = index === messages.length - 1 || messages[index + 1].role !== message.role;
-        const working = message.role === "assistant" && ["processing", "greeting_processing", "acknowledged"].includes(message.kind);
-        return <article key={message.id} data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`}>
+	        const working = message.role === "assistant" && ["processing", "greeting_processing", "acknowledged"].includes(message.kind);
+	        const reactionEntries = Object.entries(reactions(message));
+	        return <article key={message.id} data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`} onPointerDown={event=>beginReactionLongPress(message.id,event.pointerType)} onPointerUp={cancelReactionLongPress} onPointerCancel={cancelReactionLongPress}>
           {working && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
           <div className="puck-message-content">
-            <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
-            {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
+	            <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
+	            {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
+	            {message.kind === "error" && retryPayload(message) && <button className="puck-error-retry" type="button" aria-label="重试发送" onClick={()=>restoreRetry(message)}>重试</button>}
+            {messageImages(message).length > 0 && <div className="puck-message-images" aria-label="已发送图片">{messageImages(message).map((image, imageIndex) => <a href={image} target="_blank" rel="noreferrer" key={imageIndex} aria-label={`放大已发送图片 ${imageIndex + 1}`}><img className="puck-message-image" src={image} alt={`已发送图片 ${imageIndex + 1}`}/></a>)}</div>}
             {workLabel(message,clock) && <div className="puck-work-summary">{workLabel(message,clock)}</div>}
-            <div className="puck-reactions">{Object.entries(reactions(message)).map(([actor,emoji]) => <button type="button" className="puck-reaction-pill" aria-label={`${actor === "user" ? "你" : "助理"}回应 ${emoji}，1 个`} key={actor} onClick={()=>actor === "user" && void reactTo(message,emoji)}>{emoji} <span>1</span></button>)}<button type="button" className="puck-reaction-add" aria-label="给消息添加回应" onClick={()=>setReactionTarget(current=>current === message.id ? "" : message.id)}>＋</button>{reactionTarget === message.id && <div className="puck-reaction-picker">{reactionChoices.map(emoji=><button type="button" key={emoji} aria-label={`回应 ${emoji}`} onClick={()=>void reactTo(message,emoji)}>{emoji}</button>)}</div>}</div>
+	            <div className={`puck-reactions${reactionEntries.length ? " has-reactions" : ""}${reactionTarget === message.id ? " picker-open" : ""}`}>{reactionEntries.map(([actor,emoji]) => <button type="button" className="puck-reaction-pill" aria-label={`${actor === "user" ? "你" : "助理"}回应 ${emoji}，1 个`} key={actor} onClick={()=>actor === "user" && void reactTo(message,emoji)}>{emoji} <span>1</span></button>)}<button type="button" className="puck-reaction-add" aria-label="给消息添加回应" onClick={()=>setReactionTarget(current=>current === message.id ? "" : message.id)}>＋</button>{reactionTarget === message.id && <div className="puck-reaction-picker">{reactionChoices.map(emoji=><button type="button" key={emoji} aria-label={`回应 ${emoji}`} onClick={()=>void reactTo(message,emoji)}>{emoji}</button>)}</div>}</div>
             {groupEnd && message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}
           </div>
         </article>;
       })}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
-      {selected && <footer><div className="puck-composer"><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></footer>}
+      {selected && <footer><div className="puck-composer-shell">{screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
     </section>
 
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>

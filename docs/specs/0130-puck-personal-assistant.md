@@ -136,6 +136,9 @@ Puck 视图固定使用独立的深色外观，不跟随操作系统或 Ariel �
 - 过程折叠：mock Brain 产生 20 个工具步骤时对话中只有一行“工作了 · 执行 20 步”，展开可见列表。
 - 卡片：问题卡片单选／多选／自由输入／跳过；授权卡片批准、拒绝、过期变灰；任务卡片状态随事件原地更新；附件卡片打开现有查看器。
 - 输入框与停止：工作中出现停止按钮；点击后进行中任务全部中断并出现“已停止”汇总消息。
+- 输入与附件（第 17 轮增量，2026-11-05）：composer 左侧提供不小于现有触控目标的“附加截图”按钮，隐藏 input 仅接受 PNG／JPEG 且允许多选；复用 Ariel Codex 的 `readScreenshotFiles`／`ScreenshotDraft`，单次最多 3 张、解码后合计不超过 4 MiB，草稿显示可移除缩略图。纯文字、文字加图、纯图片均可发送，文字与图片都为空时禁用发送；成功发起后清空文字与图片草稿。composer 发送按钮仅在 Puck 内使用当前助理 `avatarDesign(selected).color`（`--puck-avatar-color`），换色后立即同步；箭头和 disabled 状态保持可读，其他 primary 按钮不继承头像色。
+- 附件协议与持久化（第 17 轮增量，2026-11-05）：`puck.message.send` 与内部 `puck.brain.turn.start` 增加可选 `images: string[]`。每项必须是严格 base64 的 PNG／JPEG data URI，真实解码格式须与 MIME 一致，最多 3 张、解码后合计 ≤ 4 MiB，并沿用 Desktop Agent 的像素边界；`text` 可为空但 `images` 不可同时为空。用户消息正文仍只存文本，图片 data URI 以 `card_json.images` 持久化并由历史轮询／watch 回放为用户气泡缩略图，不写入 `text`。BrainHost 将文本项（非空时）与按序的 `{type:"image",url:dataUri}` 一起写入 app-server `turn/start.input`；无图片时 wire 与现有行为一致。任意非图片文件仍不支持。
+- 错误恢复与触屏回应（第 17 轮增量追加，2026-11-05）：Desktop Agent 必须保留 `BRAIN_UNAVAILABLE` 等 Puck 明确错误码，不得把它们降级成 `RESYNC_REQUIRED`。`puck.brain.turn.start` 在明确 rejected 的 `BRAIN_UNAVAILABLE`／`RESYNC_REQUIRED` 下由 Module 重新 `puck.brain.ensure` 后只重试一次；read-only Brain 工具遇到 rejected `RESYNC_REQUIRED` 同参数重读一次，mutation／unknown 不自动重放。任何形如原始错误码的 assistant 文本或 Web error message 均映射为中文说明，不直接展示 code；本地失败气泡提供把原请求放回 composer 的“重试”入口。消息回应入口在桌面仅 hover／focus 显示；`hover:none` 下不常驻“+”，已有回应 pill 保留，长按消息打开表情选择器。
 - 新建：表单提交后进入对话并收到问候与问题卡片；准备失败显示重试。
 - 动态头像：十四种确定性形状与十一种明确颜色、每种形状适配的两个细长尖耳在侧栏、标题、消息与信息栏一致，并在 28–40 px 可辨识；任何状态都无白眼眶、叶冠、花朵、花瓣、嘴或眉毛；右侧选择器全集可点击、可键盘操作并立即持久化；两只黑色胶囊眼始终平行，整张脸八向移动并用远侧眼收窄表现透视，头部轮廓随之转向，随机双眼眨眼；全部实例共享单个 timeout 调度链，标签页隐藏或视口外暂停，动画不触发 React render，reduced-motion 下只保留低频眨眼。
 

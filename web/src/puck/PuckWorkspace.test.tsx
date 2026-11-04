@@ -5,22 +5,75 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PuckWorkspace } from "./PuckWorkspace";
 
 const accepted = (data: Record<string, unknown>) => ({ type: "response", v: 1, requestId: crypto.randomUUID(), outcome: "accepted", data } as const);
+const rejected = (code: string) => ({ type: "response", v: 1, requestId: crypto.randomUUID(), outcome: "rejected", error: { code, message: code } } as const);
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("PuckWorkspace", () => {
-  it("keeps the primary send control high contrast with a centered SVG arrow", async () => {
-    const request = vi.fn(async (method: string) => method === "puck.list"
-      ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
-      : method === "puck.history" ? accepted({ messages: [] }) : accepted({}));
+  it("uses only the selected avatar color for the accessible composer send control and updates it immediately", async () => {
+    const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => method === "puck.list"
+      ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "cloud", color: "#ff2f92" }) }] })
+      : method === "puck.history" ? accepted({ messages: [] })
+      : method === "puck.update" ? accepted({ assistant: { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify(params.avatar) } }) : accepted({}));
     const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
     await screen.findAllByText("小帕");
     const send = screen.getByRole("button", { name: "发送" });
     expect(send.querySelector("svg")).toBeTruthy();
+    const composer = view.container.querySelector<HTMLElement>(".puck-composer")!;
+    expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#ff2f92");
+    fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
+    await waitFor(() => expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#2588f7"));
     const css = readFileSync("src/puck/puck.css", "utf8");
-    expect(css).toMatch(/\.puck-workspace \.puck-send\.primary\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*background:\s*var\(--puck-action\);[^}]*color:\s*var\(--puck-on-action\)/s);
+    expect(css).toMatch(/\.puck-workspace \.puck-send\.primary\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*background:\s*var\(--puck-avatar-color\);[^}]*color:\s*var\(--puck-send-foreground\)/s);
     expect(css).toMatch(/\.puck-workspace \.puck-send\.primary:disabled\s*\{[^}]*background:\s*[^;]+;[^}]*color:\s*[^;]+;/s);
+    expect(css).not.toMatch(/\.puck-workspace \.puck-btn\.primary\s*\{[^}]*background:\s*var\(--puck-avatar-color\)/s);
     expect(view.container.querySelector(".puck-send svg")).toBeTruthy();
   });
+
+  it("adds, removes and sends screenshot-only drafts through puck.message.send", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+      calls.push({ method, params });
+      if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] });
+      if (method === "puck.history") return accepted({ messages: [] });
+      return accepted({ state: "processing" });
+    });
+    render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    await screen.findAllByText("小帕");
+    expect(screen.getByRole("button", { name: "选择截图" })).toBeTruthy();
+    const input = screen.getByLabelText("附加截图") as HTMLInputElement;
+    const image = new File([new Uint8Array([137, 80, 78, 71])], "puck.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [image] } });
+    expect(await screen.findByRole("img", { name: "puck.png" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "移除截图：puck.png" }));
+    expect(screen.queryByRole("img", { name: "puck.png" })).toBeNull();
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { files: [image] } });
+    await screen.findByRole("img", { name: "puck.png" });
+    const send = screen.getByRole("button", { name: "发送" });
+    expect((send as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(send);
+    await waitFor(() => expect(calls.filter(call => call.method === "puck.message.send")).toHaveLength(1));
+    const sent = calls.find(call => call.method === "puck.message.send")!.params;
+    expect(sent.text).toBe("");
+    expect(sent.images).toEqual([expect.stringMatching(/^data:image\/png;base64,/) ]);
+    await waitFor(() => expect(screen.queryByLabelText("待发送截图")).toBeNull());
+  });
+
+  it("never displays a raw error code and restores a failed send for explicit retry", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [] })
+			: method === "puck.message.send" ? rejected("RESYNC_REQUIRED") : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("小帕");
+		const composer = screen.getByLabelText("给 Puck 发消息") as HTMLTextAreaElement;
+		fireEvent.change(composer, { target: { value: "继续刚才的问题" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		expect((await screen.findAllByText("实时连接暂时失效，请重试。")).length).toBeGreaterThan(0);
+		expect(screen.queryByText("RESYNC_REQUIRED")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
+		expect(composer.value).toBe("继续刚才的问题");
+	});
 
   it("ignores a previous assistant's late polling history after switching assistants", async () => {
     vi.useFakeTimers();
@@ -160,7 +213,7 @@ describe("PuckWorkspace", () => {
 		const request = vi.fn(async (method: string) => method === "puck.list"
 			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
 			: method === "puck.history" ? accepted({ messages: [
-				{ id: "u", role: "user", kind: "text", text: "用户消息" },
+				{ id: "u", role: "user", kind: "text", text: "用户消息", cardJSON: JSON.stringify({ images: ["data:image/png;base64,AAAA"] }) },
 				{ id: "a", role: "assistant", kind: "text", text: "助理消息" },
 			] }) : accepted({}));
 		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
@@ -168,6 +221,7 @@ describe("PuckWorkspace", () => {
 		expect(view.container.querySelector(".puck-message.user > .puck-message-content")).toBeTruthy();
 		expect(view.container.querySelector(".puck-message.assistant > .puck-message-content")).toBeTruthy();
 		expect(view.container.querySelector(".puck-message.user .puck-markdown")).toBeTruthy();
+		expect(view.container.querySelector<HTMLImageElement>(".puck-message.user .puck-message-image")?.src).toContain("data:image/png;base64,AAAA");
 		expect(view.container.querySelector(".puck-message.message, .puck-message .message-body, .puck-message .message-text, .puck-message .markdown-body")).toBeNull();
 	});
 

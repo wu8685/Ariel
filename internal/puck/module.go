@@ -203,8 +203,12 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if text == "" || params.Item.Type != "" && params.Item.Type != "agentMessage" {
 		return
 	}
+	kind := "text"
+	if friendly, ok := friendlyBrainError(text); ok {
+		text, kind = friendly, "error"
+	}
 	pending := m.clearPendingForTurn(event.AssistantID, params.TurnID)
-	message := Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "text", Text: text, BrainTurnID: params.TurnID}
+	message := Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, BrainTurnID: params.TurnID}
 	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == params.TurnID) {
 		message.ID = pending.responseID
 		elapsed := m.now().Sub(pending.startedAt)
@@ -217,6 +221,29 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 		return
 	}
 	_ = m.store.AppendMessage(ctx, message)
+}
+
+func friendlyBrainError(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	switch trimmed {
+	case "RESYNC_REQUIRED":
+		return "实时连接暂时失效，请重试。", true
+	case "BRAIN_UNAVAILABLE", "BRAIN_HOST_OFFLINE":
+		return "助理暂时无法思考，请稍后重试。", true
+	case "DEVICE_OFFLINE":
+		return "目标设备当前离线，请稍后重试。", true
+	case "TIMEOUT", "OVERLOADED", "OUTCOME_UNKNOWN", "PROTOCOL_UNSUPPORTED", "HISTORY_TOO_LARGE", "PUCK_UNAVAILABLE":
+		return "操作暂时未完成，请重试。", true
+	}
+	if trimmed == "" || trimmed != strings.ToUpper(trimmed) || !strings.Contains(trimmed, "_") {
+		return "", false
+	}
+	for _, char := range trimmed {
+		if char != '_' && (char < 'A' || char > 'Z') && (char < '0' || char > '9') {
+			return "", false
+		}
+	}
+	return "操作暂时未完成，请重试。", true
 }
 
 type toolOrchestrator struct{ bridge Orchestrator }
@@ -533,6 +560,15 @@ func (m *Module) ensureBrain(ctx context.Context, a Assistant) relay.PuckRespons
 	return m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.ensure", mustJSON(request))
 }
 
+func (m *Module) resumeBrain(ctx context.Context, a Assistant) relay.PuckResponse {
+	request := map[string]any{"assistantId": a.ID, "name": "[Puck] " + a.Name, "threadId": a.BrainThreadID, "cwd": "/agent-managed/puck/" + a.ID, "developerInstructions": brainInstructions(a.ID, a.Name, a.Description), "model": a.BrainModel, "effort": a.BrainReasoning, "toolsetVersion": a.ToolsetVersion}
+	return m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.ensure", mustJSON(request))
+}
+
+func retryableBrainRejection(response relay.PuckResponse) bool {
+	return response.Outcome == "rejected" && response.Error != nil && (response.Error.Code == "BRAIN_UNAVAILABLE" || response.Error.Code == "RESYNC_REQUIRED")
+}
+
 func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
 		AssistantID string `json:"assistantId"`
@@ -556,11 +592,12 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResp
 
 func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
-		AssistantID     string `json:"assistantId"`
-		ClientMessageID string `json:"clientMessageId"`
-		Text            string `json:"text"`
+		AssistantID     string   `json:"assistantId"`
+		ClientMessageID string   `json:"clientMessageId"`
+		Text            string   `json:"text"`
+		Images          []string `json:"images"`
 	}
-	if json.Unmarshal(raw, &input) != nil || input.Text == "" {
+	if json.Unmarshal(raw, &input) != nil || (input.Text == "" && len(input.Images) == 0) || validateMessageImages(input.Images) != nil {
 		return moduleError("INVALID_ARGUMENT", "invalid message")
 	}
 	a, err := m.store.Assistant(ctx, input.AssistantID)
@@ -576,10 +613,24 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 			return moduleError("PUCK_UNAVAILABLE", err.Error())
 		}
 	}
-	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text}); err != nil {
+	cardJSON := ""
+	if len(input.Images) > 0 {
+		encoded, _ := json.Marshal(map[string]any{"images": input.Images})
+		cardJSON = string(encoded)
+	}
+	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text, CardJSON: cardJSON}); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a, input.Text), "model": a.BrainModel, "effort": a.BrainReasoning}))
+	turnRequest := mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a, input.Text), "images": input.Images, "model": a.BrainModel, "effort": a.BrainReasoning})
+	origin := relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}
+	result := m.bridge.Forward(ctx, origin, a.BrainDeviceID, "puck.brain.turn.start", turnRequest)
+	if retryableBrainRejection(result) {
+		resumed := m.resumeBrain(ctx, a)
+		if resumed.Outcome != "accepted" {
+			return resumed
+		}
+		result = m.bridge.Forward(ctx, origin, a.BrainDeviceID, "puck.brain.turn.start", turnRequest)
+	}
 	if result.Error != nil {
 		return result
 	}

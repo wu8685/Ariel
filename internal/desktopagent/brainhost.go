@@ -156,14 +156,21 @@ func puckDynamicTools() []map[string]any {
 	return tools
 }
 
-func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text, model, effort string) (string, error) {
+func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text string, images []string, model, effort string) (string, error) {
 	h.mu.Lock()
 	process, known := h.process, h.threads[threadID]
 	h.mu.Unlock()
 	if process == nil || known == "" {
 		return "", errors.New("BRAIN_UNAVAILABLE")
 	}
-	params := map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}, "approvalPolicy": "never", "sandboxPolicy": map[string]any{"type": "readOnly"}}
+	input := make([]map[string]any, 0, 1+len(images))
+	if text != "" {
+		input = append(input, map[string]any{"type": "text", "text": text, "text_elements": []any{}})
+	}
+	for _, image := range images {
+		input = append(input, map[string]any{"type": "image", "url": image})
+	}
+	params := map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input, "approvalPolicy": "never", "sandboxPolicy": map[string]any{"type": "readOnly"}}
 	if model != "" {
 		params["model"] = model
 	}
@@ -403,6 +410,7 @@ func (a *agent) handleBrain(ctx context.Context, id, method string, raw json.Raw
 		ClientMessageID, Text, TurnID, CallID                             string
 		Success                                                           bool
 		ContentItems                                                      []map[string]any
+		Images                                                            []string
 	}
 	if json.Unmarshal(raw, &input) != nil {
 		a.reply(ctx, id, method, nil, errors.New("INVALID_ARGUMENT"))
@@ -415,7 +423,7 @@ func (a *agent) handleBrain(ctx context.Context, id, method string, raw json.Raw
 		input.ThreadID, err = a.brain.Ensure(ctx, BrainEnsure{AssistantID: input.AssistantID, Name: input.Name, ThreadID: input.ThreadID, DeveloperInstructions: input.DeveloperInstructions, Model: input.Model, Effort: input.Effort, ToolsetVersion: input.ToolsetVersion})
 		data["threadId"] = input.ThreadID
 	case "puck.brain.turn.start":
-		input.TurnID, err = a.brain.Turn(ctx, input.ThreadID, input.ClientMessageID, input.Text, input.Model, input.Effort)
+		input.TurnID, err = a.brain.Turn(ctx, input.ThreadID, input.ClientMessageID, input.Text, input.Images, input.Model, input.Effort)
 		data["turnId"] = input.TurnID
 	case "puck.brain.turn.interrupt":
 		err = a.brain.Interrupt(ctx, input.ThreadID, input.TurnID)

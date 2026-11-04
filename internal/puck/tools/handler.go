@@ -134,7 +134,12 @@ func (h *Handler) forward(ctx context.Context, call Call, method string) ToolRes
 		return toolError("INVALID_ARGUMENT", "deviceId is required")
 	}
 	delete(arguments, "deviceId")
-	return fromResult(h.orchestrator.Forward(ctx, origin(call.AssistantID), target, method, mustJSON(arguments)))
+	params := mustJSON(arguments)
+	result := h.orchestrator.Forward(ctx, origin(call.AssistantID), target, method, params)
+	if (method == "thread.list" || method == "thread.read") && result.Outcome == "rejected" && result.Code == "RESYNC_REQUIRED" {
+		result = h.orchestrator.Forward(ctx, origin(call.AssistantID), target, method, params)
+	}
+	return fromResult(result)
 }
 
 func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) ToolResult {
