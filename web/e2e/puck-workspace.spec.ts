@@ -61,6 +61,38 @@ async function openPuck(page: Page) {
   await expect(page.getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
 
+test.describe("Puck HTTP availability normalization", () => {
+	for (const fixture of [
+		{ state: "off", opensPuck: false },
+		{ state: "degraded", reason: "PUCK_BRAIN_UNAVAILABLE", opensPuck: true },
+	] as const) {
+		test(`${fixture.state} does not masquerade as ready`, async ({ page }) => {
+			await page.route("**/api/auth/status", route => route.fulfill({
+				contentType: "application/json",
+				body: JSON.stringify({ mode: "passkey", authenticated: true, enrollmentRequired: false, puck: fixture }),
+			}));
+			await page.route("http://127.0.0.1:4173/", async route => {
+				const response = await route.fetch();
+				await route.fulfill({ response, body: (await response.text()).replace("__ARIEL_WEB_AUTH__", "passkey") });
+			});
+			await page.routeWebSocket("**/ws", socket => socket.onMessage(raw => {
+				const message = JSON.parse(String(raw));
+				if (message.type === "hello") socket.send(JSON.stringify({ type: "hello.ok", v: 1, connectionId: "puck-status-e2e", relayEpoch: "puck-status-e2e", sessionToken: token }));
+			}));
+			await page.goto("/");
+			const button = page.getByRole("button", { name: "打开 Puck" });
+			if (!fixture.opensPuck) {
+				await expect(button).toHaveCount(0);
+				return;
+			}
+			await expect(button).toBeVisible();
+			await button.click();
+			await expect(page.locator(".puck-unavailable")).toContainText("Puck 不可用");
+			await expect(page.getByRole("textbox", { name: "给 Puck 发消息" })).toHaveCount(0);
+		});
+	}
+});
+
 for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
   test.describe(`Puck workspace ${width}px ${colorScheme}`, () => {
     test.use({ viewport: { width, height: 844 }, isMobile: width < 700, hasTouch: width < 700, colorScheme });

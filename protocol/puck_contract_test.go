@@ -4,7 +4,10 @@ import "testing"
 
 func TestPuckProtocolExtensionsAreOptionalAndBounded(t *testing.T) {
 	valid := []string{
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"off"}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"ready"}}`,
 		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"unavailable","reason":"PUCK_REQUIRES_PASSKEY_HTTPS"}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"degraded","reason":"PUCK_BRAIN_UNAVAILABLE"}}`,
 		`{"type":"hello","v":1,"role":"agent","token":"secret","deviceId":"device-a","deviceName":"Mac","agentEpoch":"epoch-a","adapterVersion":"desktop-ipc-0.160.0","capabilities":{"autoLoad":true,"codexReady":false,"puckBrain":true,"puckBrainReady":true,"executionPolicy":false}}`,
 		`{"type":"event","v":1,"event":"device.status","deviceId":"device-a","agentOnline":true,"codexReady":false,"capabilities":{"autoLoad":true,"codexReady":false,"puckBrain":true,"puckBrainReady":true,"executionPolicy":false}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.list","params":{}}`,
@@ -31,6 +34,11 @@ func TestPuckProtocolExtensionsAreOptionalAndBounded(t *testing.T) {
 func TestPuckProtocolRejectsIdentityAndShapeConfusion(t *testing.T) {
 	invalid := []string{
 		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"ready","reason":"must-not-exist"}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"unavailable"}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"degraded"}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"unknown"}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","puck":{"state":"ready","extra":true}}`,
+		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a","unknown":true}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.message.send","params":{"assistantId":"assistant-a","text":"missing id"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"puck.brain.turn.start","params":{"assistantId":"assistant-a","threadId":"thread-a","clientMessageId":"bad","text":"x"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"octagon","color":"#ff2f92"}}}`,

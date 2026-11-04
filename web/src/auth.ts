@@ -1,4 +1,13 @@
-export type AuthStatus = { mode: "pin" | "passkey"; authenticated: boolean; enrollmentRequired: boolean; puck?: { state: "ready" | "unavailable" | "disabled"; reason?: string } };
+export type PuckWireStatus = { state: "off" | "unavailable" | "ready" | "degraded"; reason?: string };
+export type PuckUIStatus = { state: "ready" | "unavailable" | "disabled"; reason?: string };
+export type AuthStatus = { mode: "pin" | "passkey"; authenticated: boolean; enrollmentRequired: boolean; puck?: PuckWireStatus };
+
+export function normalizePuckStatus(status?: PuckWireStatus): PuckUIStatus {
+  if (!status || status.state === "off") return { state: "disabled" };
+  if (status.state === "ready") return { state: "ready" };
+  if (status.state === "unavailable" || status.state === "degraded") return { state: "unavailable", ...(status.reason ? { reason: status.reason } : {}) };
+  return { state: "unavailable" };
+}
 
 type CreationJSON = {
   publicKey: Omit<PublicKeyCredentialCreationOptions, "challenge" | "user" | "excludeCredentials"> & {

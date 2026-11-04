@@ -131,6 +131,7 @@
 | 0128 | [大会话 IPC 事件积压与有界缓冲](0128-large-ipc-event-buffer-pressure.md) | Approved（2026-11-01 用户确认；目标 Mac 待实测） | large follower 1024 条／128 MiB，共享实际排队预算；不丢 patch，不扩大单状态上限 |
 | 0129 | [大会话旧正文回收与按需订阅自恢复](0129-recent-native-state-and-follower-self-recovery.md) | Implemented（Go／race／371 Web／156 Chromium；未发布） | Agent 回收窗口外正文、减少整份状态复制；被关注 follower 退避重建，保留 revision／owner 与写入门禁；首次入站超限未解决 |
 | 0130 | [Puck 个人助理编排层与跨主机 Codex 任务管理](0130-puck-personal-assistant.md) | Approved（P0 范围，2026-11-03；Q1–Q4／Q10／Q13–Q15／Q20–Q22／命名 Puck／Q24／Q27／Q28 已决，写探针见 §4.2.2；brain thread 在 Desktop 可见已接受；Q23 follower 路径在 P0 第 0 步验证；P1 起逐阶段确认） | Relay 进程内第二入口（默认关闭，仅 Passkey + HTTPS）承载多个助理（产品名 Puck），大脑在所选主机 Codex；自主派发、关键动作才授权，原生审批始终归用户；Web Push 通知 |
+| 0131 | [Relay 握手向后兼容与 Puck reaction 测试修复建议](0131-relay-hello-puck-compat-and-reaction-test.md) | Draft（修复建议） | 未协商的 v1 `hello.ok` 保持旧严格契约；Web 从 HTTP 读取 Puck 状态；reaction 测试按目标消息断言 |
 
 ## 设计基线
 
