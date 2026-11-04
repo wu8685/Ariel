@@ -692,7 +692,7 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 
 ### P1：任务跟踪 + Web Push
 
-范围：`task_events`／`pending_decisions`／`push_subscriptions`／`notification_prefs`／`notifications`；§9 完整状态机与里程碑映射（E3、E4）；UI3.3／3.5／3.6（Codex 审批卡片、附件卡片、通知权限卡片）、UI2.3 表情回应、侧栏未读与待处理角标、信息栏“任务”“通知”标签页；watcher；A 类交互推送与 `puck.decision.record` 门禁；VAPID、`/sw.js`、订阅管理、按助理／类型开关；通知中心；B7–B9；多助理共享大脑主机的 brain turn 并发上限；brain thread 轮换（#64 对策）。
+范围：`task_events`／`pending_decisions`／`push_subscriptions`／`notification_prefs`／`notifications`；§9 完整状态机与里程碑映射（E3、E4）；UI3.3／3.5／3.6（Codex 审批卡片、附件卡片、通知权限卡片）、侧栏待处理角标、信息栏“任务”“通知”标签页；watcher；A 类交互推送与 `puck.decision.record` 门禁；VAPID、`/sw.js`、订阅管理、按助理／类型开关；通知中心与按助理 avatar descriptor 生成／缓存通知 PNG；B7–B9；多助理共享大脑主机的 brain turn 并发上限；brain thread 轮换（#64 对策）。UI2.3 的轻量表情回应与账号级全局未读水位已按 §1.3 提前实现；若未来引入稳定 reader ID，再在 P1 扩展为设备级已读水位，不能以浏览器临时 ID 冒充账号设备身份。
 
 验收：
 

@@ -246,6 +246,19 @@
   font-weight: var(--puck-weight-regular);
   line-height: var(--puck-leading-caption);
 }
+.puck-workspace .puck-unread-count {
+  min-width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: var(--puck-radius-full);
+  background: #0a84ff;
+  color: #fff;
+  font-size: 10px;
+  font-weight: var(--puck-weight-semibold);
+  line-height: 1;
+}
 .puck-workspace .puck-back {
   width: 100%;
   height: var(--puck-control-md);
@@ -382,6 +395,7 @@
   color: var(--color-muted);
 }
 .puck-workspace .puck-message.processing .puck-markdown,
+.puck-workspace .puck-message.greeting_processing .puck-markdown,
 .puck-workspace .puck-message.acknowledged .puck-markdown { color: var(--color-muted); }
 .puck-workspace .puck-thinking-dots {
   display: inline-flex;
@@ -420,6 +434,63 @@
 .puck-workspace .puck-message.user time { right: 0; }
 .puck-workspace .puck-message:hover time,
 .puck-workspace .puck-message:focus-within time { opacity: 1; }
+.puck-workspace .puck-work-summary {
+  margin-top: var(--puck-space-2);
+  color: var(--color-subtle);
+  font-size: var(--puck-text-caption);
+  line-height: var(--puck-leading-caption);
+}
+.puck-workspace .puck-reactions {
+  position: relative;
+  min-height: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--puck-space-1);
+  margin-top: var(--puck-space-1);
+}
+.puck-workspace .puck-reaction-pill,
+.puck-workspace .puck-reaction-add,
+.puck-workspace .puck-reaction-picker button {
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 7px;
+  border: var(--puck-border) solid var(--color-border);
+  border-radius: var(--puck-radius-full);
+  background: var(--puck-card-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1;
+}
+.puck-workspace .puck-reaction-pill > span { color: var(--color-muted); font-size: 10px; }
+.puck-workspace .puck-reaction-add {
+  padding: 0;
+  color: var(--color-muted);
+  opacity: 0;
+  transition: opacity .14s ease, background .14s ease;
+}
+.puck-workspace .puck-message:hover .puck-reaction-add,
+.puck-workspace .puck-message:focus-within .puck-reaction-add { opacity: 1; }
+.puck-workspace .puck-reaction-picker {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + var(--puck-space-1));
+  left: 0;
+  display: flex;
+  gap: var(--puck-space-1);
+  padding: var(--puck-space-1);
+  border: var(--puck-border) solid var(--color-border-strong);
+  border-radius: var(--puck-radius-full);
+  background: var(--color-panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.puck-workspace .puck-message.user .puck-reaction-picker { right: 0; left: auto; }
+.puck-workspace .puck-reaction-picker button { padding: 0; border: 0; background: transparent; }
 
 .puck-workspace .puck-card {
   width: min(100%, var(--puck-card-width));
@@ -653,6 +724,40 @@
   color: var(--color-muted);
   font-size: var(--puck-text-secondary);
   line-height: 1.5;
+}
+.puck-workspace .puck-description-edit {
+  min-height: 24px;
+  margin-top: var(--puck-space-1);
+  padding: 0 var(--puck-space-2);
+  border: 0;
+  border-radius: var(--puck-radius-full);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: var(--puck-text-caption);
+}
+.puck-workspace .puck-description-edit:hover { background: var(--puck-hover); color: var(--color-text); }
+.puck-workspace .puck-description-editor {
+  width: 100%;
+  margin-top: var(--puck-space-3);
+}
+.puck-workspace .puck-description-editor textarea {
+  width: 100%;
+  min-height: 88px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: var(--puck-space-2) var(--puck-space-3);
+  border: var(--puck-border) solid var(--color-border-strong);
+  border-radius: var(--puck-radius-sm);
+  background: var(--puck-card-bg);
+  color: var(--color-text);
+  font: inherit;
+  line-height: var(--puck-leading-secondary);
+}
+.puck-workspace .puck-description-editor > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--puck-space-2);
+  margin-top: var(--puck-space-2);
 }
 .puck-workspace .puck-avatar-picker {
   width: 100%;
@@ -948,6 +1053,10 @@
   .puck-workspace .puck-message.user .puck-message-content { max-width: 82%; }
   .puck-workspace .puck-card { width: 100%; }
   .puck-workspace .puck-conversation > footer { padding: 0 var(--puck-space-3) calc(var(--puck-space-3) + env(safe-area-inset-bottom)); }
+}
+
+@media (hover: none) {
+  .puck-workspace .puck-reaction-add { opacity: 1; }
 }
 
 @media(prefers-reduced-motion:reduce) {

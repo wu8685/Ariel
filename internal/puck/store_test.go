@@ -3,6 +3,7 @@ package puck
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,6 +52,103 @@ func TestStoreMigratesAndIsolatesAssistantRecords(t *testing.T) {
 	}
 	if assistant, err := store.Assistant(ctx, "assistant-a"); err != nil || assistant.Name != "Puck A" {
 		t.Fatalf("assistant=%+v err=%v", assistant, err)
+	}
+}
+
+func TestStoreTracksServerUnreadPreviewAndActorReactions(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	a := Assistant{ID: "assistant-a", Name: "Puck", BrainDeviceID: "brain-a", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}
+	if err := store.CreateAssistant(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, Message{ID: "user-a", AssistantID: a.ID, Role: "user", Kind: "text", Text: "开始吧"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, Message{ID: "assistant-a", AssistantID: a.ID, Role: "assistant", Kind: "text", Text: "已经开始"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Assistant(ctx, a.ID)
+	if err != nil || got.UnreadCount != 1 || got.LastMessagePreview != "已经开始" {
+		t.Fatalf("assistant=%+v err=%v", got, err)
+	}
+	if _, err := store.UpdateMessageReaction(ctx, a.ID, "user-a", "user", "👍"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertMessage(ctx, Message{ID: "user-a", AssistantID: a.ID, Role: "user", Kind: "text", Text: "开始吧（已同步）"}); err != nil {
+		t.Fatal(err)
+	}
+	reaction, err := store.UpdateMessageReaction(ctx, a.ID, "user-a", "assistant", "👀")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actors map[string]string
+	if json.Unmarshal([]byte(reaction), &actors) != nil || actors["user"] != "👍" || actors["assistant"] != "👀" {
+		t.Fatalf("reaction=%s", reaction)
+	}
+	if _, err := store.UpdateMessageReaction(ctx, a.ID, "user-a", "user", "👍"); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := store.Messages(ctx, a.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actors = map[string]string{}
+	if json.Unmarshal([]byte(messages[0].Reaction), &actors) != nil || actors["user"] != "" || actors["assistant"] != "👀" {
+		t.Fatalf("messages=%+v actors=%v", messages, actors)
+	}
+	if err := store.MarkAssistantRead(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = store.Assistant(ctx, a.ID)
+	if got.UnreadCount != 0 {
+		t.Fatalf("unread=%d", got.UnreadCount)
+	}
+}
+
+func TestStoreSchemaIncludesV1ToV2UnreadMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "puck-v1.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TABLE assistants (id TEXT PRIMARY KEY); PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != storeSchemaVersion {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	rows, err := store.db.Query(`PRAGMA table_info(assistants)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if !columns["unread_count"] || !columns["last_message_preview"] {
+		t.Fatalf("columns=%v", columns)
 	}
 }
 

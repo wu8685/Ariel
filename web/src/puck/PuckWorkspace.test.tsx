@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PuckWorkspace } from "./PuckWorkspace";
 
 const accepted = (data: Record<string, unknown>) => ({ type: "response", v: 1, requestId: crypto.randomUUID(), outcome: "accepted", data } as const);
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("PuckWorkspace", () => {
   it("creates an assistant and shows an immediate processing bubble when sending", async () => {
@@ -185,5 +185,58 @@ describe("PuckWorkspace", () => {
 		await waitFor(() => expect(screen.getByRole("radio", { name: "蓝" }).getAttribute("aria-checked")).toBe("true"));
 		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#2588f7");
 		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "hexagon", color: "#2588f7" } });
+	});
+
+	it("shows server unread counts, clears them on open, and persists editable instructions", async () => {
+		let assistants = [
+			{ assistantId: "a-1", name: "小帕", description: "开发助理", brainDeviceId: "brain-a", status: "ready", unreadCount: 0, lastMessagePreview: "已完成测试" },
+			{ assistantId: "a-2", name: "罗宾", description: "", brainDeviceId: "brain-a", status: "ready", unreadCount: 3, lastMessagePreview: "需要你确认方案" },
+		];
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.read") { assistants = assistants.map(item => item.assistantId === params.assistantId ? { ...item, unreadCount: 0 } : item); return accepted({ unreadCount: 0 }); }
+			if (method === "puck.update") { assistants = assistants.map(item => item.assistantId === params.assistantId ? { ...item, description: String(params.description) } : item); return accepted({ assistant: assistants.find(item => item.assistantId === params.assistantId) }); }
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("小帕");
+		expect(screen.getByLabelText("罗宾有 3 条未读消息").textContent).toBe("3");
+		expect(screen.getByText("需要你确认方案")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /罗宾/ }));
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.read", "relay", { assistantId: "a-2" }));
+		expect(screen.queryByLabelText("罗宾有 3 条未读消息")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "编辑说明" }));
+		fireEvent.change(screen.getByLabelText("助理说明"), { target: { value: "先给结论，再列风险" } });
+		fireEvent.click(screen.getByRole("button", { name: "保存说明" }));
+		await screen.findByText("先给结论，再列风险");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-2", description: "先给结论，再列风险" });
+	});
+
+	it("renders live real elapsed time, final work summary and actor reaction pills", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-04T02:00:05Z"));
+		let messages: Array<{ id:string; role:string; kind:string; text:string; reaction?:string; workSummary?:string }> = [
+			{ id: "user-a", role: "user", kind: "text", text: "检查测试", reaction: JSON.stringify({ assistant: "👀" }) },
+			{ id: "processing-a", role: "assistant", kind: "greeting_processing", text: "正在准备…", workSummary: JSON.stringify({ startedAt: "2026-11-04T02:00:00Z", state: "running" }) },
+			{ id: "done-a", role: "assistant", kind: "text", text: "已经完成", workSummary: JSON.stringify({ elapsedMs: 12500, steps: 3 }) },
+		];
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", unreadCount: 0 }] });
+			if (method === "puck.history") return accepted({ messages });
+			if (method === "puck.message.react") { messages = messages.map(message => message.id === params.messageId ? { ...message, reaction: JSON.stringify({ assistant: "👀", user: params.emoji }) } : message); return accepted({ reaction: JSON.stringify({ assistant: "👀", user: params.emoji }) }); }
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(screen.getByText("工作了 5 秒")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "停止全部工作" })).toBeTruthy();
+		expect(screen.getByText("工作了 13 秒 · 执行 3 步")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "助理回应 👀，1 个" })).toBeTruthy();
+		fireEvent.click(screen.getAllByRole("button", { name: "给消息添加回应" })[0]);
+		fireEvent.click(screen.getByRole("button", { name: "回应 👍" }));
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(request).toHaveBeenCalledWith("puck.message.react", "relay", { assistantId: "a-1", messageId: "user-a", emoji: "👍" });
+		expect(screen.getByRole("button", { name: "你回应 👍，1 个" })).toBeTruthy();
 	});
 });

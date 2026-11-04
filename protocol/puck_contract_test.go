@@ -10,6 +10,8 @@ func TestPuckProtocolExtensionsAreOptionalAndBounded(t *testing.T) {
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.list","params":{}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.message.send","params":{"assistantId":"assistant-a","clientMessageId":"00000000-0000-4000-8000-000000000002","text":"你好"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"pumpkin","color":"#ff2f92"}}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.read","params":{"assistantId":"assistant-a"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.message.react","params":{"assistantId":"assistant-a","messageId":"message-a","emoji":"👍"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"puck.brain.turn.start","params":{"assistantId":"assistant-a","threadId":"thread-a","clientMessageId":"00000000-0000-4000-8000-000000000002","text":"信封内容"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"puck.brain.toolResult","params":{"threadId":"thread-a","callId":"call-a","success":true,"contentItems":[{"type":"inputText","text":"ok"}]}}`,
 		`{"type":"event","v":1,"event":"puck.brain.toolCall","deviceId":"device-a","threadId":"thread-a","callId":"call-a","tool":"start_task","arguments":{"clientTaskId":"task-a"}}`,
@@ -33,6 +35,7 @@ func TestPuckProtocolRejectsIdentityAndShapeConfusion(t *testing.T) {
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"puck.brain.turn.start","params":{"assistantId":"assistant-a","threadId":"thread-a","clientMessageId":"bad","text":"x"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"octagon","color":"#ff2f92"}}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"star","color":"red"}}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.message.react","params":{"assistantId":"assistant-a","messageId":"message-a","emoji":"🔥"}}`,
 		`{"type":"event","v":1,"event":"puck.brain.toolCall","deviceId":"device-a","assistantId":"spoofed","threadId":"thread-a","callId":"call-a","tool":"start_task","arguments":{}}`,
 		`{"type":"event","v":1,"event":"puck.brain.toolCall","deviceId":"device-a","threadId":"thread-a","callId":"call-a","tool":"start_task","arguments":"not-object"}`,
 	}

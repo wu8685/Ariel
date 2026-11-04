@@ -1,12 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const token = `s_${"b".repeat(64)}`;
-const initialAssistants = [{ assistantId: "puck-one", name: "小帕", description: "负责日常开发协助", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "cloud", color: "#ff2d8d" }) }];
+const initialAssistants = [
+	{ assistantId: "puck-one", name: "小帕", description: "负责日常开发协助", brainDeviceId: "brain-a", status: "ready", unreadCount: 0, lastMessagePreview: "测试已经开始", avatar: JSON.stringify({ shape: "cloud", color: "#ff2d8d" }) },
+	{ assistantId: "puck-two", name: "罗宾", description: "整理研究资料", brainDeviceId: "brain-a", status: "ready", unreadCount: 2, lastMessagePreview: "需要你确认研究范围", avatar: JSON.stringify({ shape: "drop", color: "#16c96a" }) },
+];
 let assistants = initialAssistants;
 let avatarUpdates: Record<string, unknown>[] = [];
 const initialMessages = [
 	{ id: "user-request", role: "user", kind: "text", text: "帮我检查 Ariel 的测试状态。", createdAt: "2026-11-03T11:59:59Z" },
-  { id: "hello", role: "assistant", kind: "text", text: "晚上好。测试已经开始，我会在有结果时告诉你。", createdAt: "2026-11-03T12:00:00Z" },
+	{ id: "hello", role: "assistant", kind: "text", text: "晚上好。测试已经开始，我会在有结果时告诉你。", workSummary: JSON.stringify({ elapsedMs: 12400, steps: 3 }), createdAt: "2026-11-03T12:00:00Z" },
   { id: "question", role: "assistant", kind: "question", text: "先运行哪组测试？", cardJSON: JSON.stringify({ questionId: "question-a", options: ["Go", "Web"], cardState: "pending" }), createdAt: "2026-11-03T12:00:01Z" },
   { id: "authorization", role: "assistant", kind: "authorization", text: "这次操作需要你的确认。", cardJSON: JSON.stringify({ authorizationId: "authorization-a", action: "start_task", deviceId: "brain-a", cwd: "/work/ariel", expiresAt: "2026-11-03T12:30:00Z", risk: "目标主机无法证明审批策略", cardState: "pending" }), createdAt: "2026-11-03T12:00:02Z" },
   { id: "task", role: "assistant", kind: "task", text: "运行 Ariel 测试", cardJSON: JSON.stringify({ status: "running", deviceId: "brain-a", threadId: "thread-a" }), createdAt: "2026-11-03T12:00:03Z" },
@@ -33,8 +36,17 @@ async function openPuck(page: Page) {
     if (message.method === "puck.history") data = { messages };
 		if (message.method === "puck.update") {
 			avatarUpdates.push(message.params);
-			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, avatar: JSON.stringify(message.params.avatar) } : item);
+			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, ...(message.params.avatar ? { avatar: JSON.stringify(message.params.avatar) } : {}), ...(typeof message.params.description === "string" ? { description: message.params.description } : {}) } : item);
 			data = { assistant: assistants.find(item => item.assistantId === message.params.assistantId) };
+		}
+		if (message.method === "puck.read") {
+			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, unreadCount: 0 } : item);
+			data = { unreadCount: 0 };
+		}
+		if (message.method === "puck.message.react") {
+			const reaction = JSON.stringify({ user: message.params.emoji });
+			messages = messages.map(item => item.id === message.params.messageId ? { ...item, reaction } : item);
+			data = { reaction };
 		}
     if (message.method === "puck.question.answer") {
       messages = messages.map(item => item.id === "question" ? { ...item, cardJSON: JSON.stringify({ questionId: "question-a", options: ["Go", "Web"], cardState: "answered", answer: "Go" }) } : item);
@@ -248,5 +260,32 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await page.getByRole("radio", { name: "蓝" }).press("Enter");
 		await expect(page.getByRole("radio", { name: "蓝" })).toHaveAttribute("aria-checked", "true");
 		await expect.poll(() => avatarUpdates.at(-1)?.avatar).toEqual({ shape: "hexagon", color: "#2588f7" });
+	});
+
+	test("syncs unread, reactions, editable instructions and a selected-assistant PNG favicon", async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+		await openPuck(page);
+		await expect(page.getByLabel("罗宾有 2 条未读消息")).toHaveText("2");
+		await expect(page.getByText("需要你确认研究范围")).toBeVisible();
+		const puckIcon = page.locator('link[rel="icon"]');
+		await expect(puckIcon).toHaveAttribute("type", "image/png");
+		await expect(puckIcon).toHaveAttribute("href", /^data:image\/png;base64,/);
+		const firstIcon = await puckIcon.getAttribute("href");
+		await page.getByRole("button", { name: /罗宾/ }).click();
+		await expect(page.getByLabel("罗宾有 2 条未读消息")).toHaveCount(0);
+		await expect.poll(() => puckIcon.getAttribute("href")).not.toBe(firstIcon);
+		await page.getByRole("button", { name: "编辑说明" }).click();
+		await page.getByLabel("助理说明").fill("先整理来源，再给结论");
+		await page.getByRole("button", { name: "保存说明" }).click();
+		await expect(page.getByText("先整理来源，再给结论")).toBeVisible();
+		await page.getByRole("button", { name: /小帕/ }).click();
+		await expect(page.getByText("工作了 13 秒 · 执行 3 步")).toBeVisible();
+		await page.getByRole("button", { name: "给消息添加回应" }).first().click();
+		await page.getByRole("button", { name: "回应 🎉" }).click();
+		await expect(page.getByRole("button", { name: "你回应 🎉，1 个" })).toBeVisible();
+		await expect(page).toHaveScreenshot("puck-feature-parity-1280-dark.png", { animations: "disabled", caret: "hide" });
+		await page.getByRole("button", { name: "Codex 会话" }).click();
+		await expect(puckIcon).toHaveAttribute("type", "image/svg+xml");
+		await expect(puckIcon).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-micro.svg");
 	});
 });

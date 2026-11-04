@@ -8,8 +8,9 @@ type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: {
 type Request = (method: string, target: string, params: Record<string, unknown>) => Promise<PuckResponse>;
 type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
-type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string };
-type Message = { id: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string };
+type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; unreadCount?: number; lastMessagePreview?: string };
+type Message = { id: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
+const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 
 function responseError(response: PuckResponse): string {
   return response.error?.message || response.error?.code || "请求失败，请稍后重试。";
@@ -19,9 +20,17 @@ function normalizeMessage(value: Record<string, unknown>): Message {
   return {
     id: String(value.id ?? value.ID ?? crypto.randomUUID()), role: String(value.role ?? value.Role ?? "assistant"),
     kind: String(value.kind ?? value.Kind ?? "text"), text: String(value.text ?? value.Text ?? ""),
-    cardJSON: String(value.cardJSON ?? value.CardJSON ?? ""), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""),
+    cardJSON: String(value.cardJSON ?? value.CardJSON ?? ""), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""),
   };
 }
+function workData(message: Message): Record<string, unknown> { try { return message.workSummary ? JSON.parse(message.workSummary) as Record<string, unknown> : {}; } catch { return {}; } }
+function workLabel(message: Message, now: number): string {
+	const data = workData(message); const elapsed = Number(data.elapsedMs);
+	if (Number.isFinite(elapsed)) return `工作了 ${Math.max(0, Math.ceil(elapsed / 1000))} 秒 · 执行 ${Math.max(0, Number(data.steps) || 0)} 步`;
+	const started = new Date(String(data.startedAt || "")).getTime();
+	return Number.isFinite(started) ? `工作了 ${Math.max(0, Math.floor((now - started) / 1000))} 秒` : "";
+}
+function reactions(message: Message): Record<string,string> { try { return message.reaction ? JSON.parse(message.reaction) as Record<string,string> : {}; } catch { return {}; } }
 function mergeHistory(current: Message[], durable: Message[]): Message[] {
   if (durable.length === 0) return current;
   const durableIDs = new Set(durable.map(message => message.id));
@@ -61,7 +70,7 @@ function messageState(messages: Message[]): PuckState {
   if (attention?.kind === "authorization") return "awaiting_authorization";
   const task = latest.find(message => message.kind === "task");
   const status = String(task ? cardData(task).status || "" : "");
-  if (["running", "dispatching"].includes(status) || latest.some(message => message.kind === "processing")) return "working";
+  if (["running", "dispatching"].includes(status) || latest.some(message => ["processing", "greeting_processing"].includes(message.kind))) return "working";
   if (status === "failed" || latest[0]?.kind === "error") return "error";
   if (["done", "completed"].includes(status)) return "done";
   return "idle";
@@ -126,20 +135,36 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	const [submittingCard, setSubmittingCard] = useState("__none__");
 	const [mobilePanel, setMobilePanel] = useState<"" | "assistants" | "info">("");
 	const avatarUpdateSequence = useRef(0);
+  const selectedRef = useRef("");
+  const [clock, setClock] = useState(() => Date.now());
+  const [reactionTarget, setReactionTarget] = useState("");
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
   const readyBrains = useMemo(() => devices.filter(device => device.capabilities?.puckBrainReady), [devices]);
   const selected = assistants.find(assistant => assistant.assistantId === selectedID);
   const puckState = messageState(messages);
-  const busy = messages.some(message => message.kind === "processing" || (message.kind === "task" && ["running", "dispatching", "waiting_user", "awaiting_authorization"].includes(String(cardData(message).status))));
+  const busy = messages.some(message => ["processing", "greeting_processing"].includes(message.kind) || (message.kind === "task" && ["running", "dispatching", "waiting_user", "awaiting_authorization"].includes(String(cardData(message).status))));
+  selectedRef.current = selectedID;
+
+  useEffect(() => {
+	if (!messages.some(message => workData(message).state === "running")) return;
+	setClock(Date.now()); const timer = window.setInterval(() => setClock(Date.now()), 1000);
+	return () => window.clearInterval(timer);
+  }, [messages]);
 
   async function loadList() {
     const response = await request("puck.list", "relay", {});
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     const next = arrayData<Assistant>(response.data?.assistants);
-    setAssistants(next); setSelectedID(current => current && next.some(item => item.assistantId === current) ? current : next[0]?.assistantId || "");
+    setAssistants(next.map(item => item.assistantId === selectedRef.current ? { ...item, unreadCount: 0 } : item)); setSelectedID(current => current && next.some(item => item.assistantId === current) ? current : next[0]?.assistantId || "");
   }
-  useEffect(() => { if (state === "ready") void loadList(); }, [state]);
+  useEffect(() => { if (state !== "ready") return; void loadList(); const timer = window.setInterval(() => void loadList(), 5000); return () => window.clearInterval(timer); }, [state]);
   useEffect(() => {
     if (!selectedID) { setMessages([]); return; }
+	setEditingDescription(false); setDescriptionDraft(assistants.find(item => item.assistantId === selectedID)?.description || "");
+	setAssistants(current => current.map(item => item.assistantId === selectedID ? { ...item, unreadCount: 0 } : item));
+	void request("puck.read", "relay", { assistantId: selectedID });
     let active = true;
     void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
       if (active && response.outcome === "accepted") {
@@ -158,6 +183,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 			const payload = event.payload as Record<string, unknown> | undefined;
 			const durable = arrayData<Record<string, unknown>>(payload?.messages).map(normalizeMessage);
 			setMessages(current => mergeHistory(current, durable));
+			void request("puck.read", "relay", { assistantId: selectedID });
 		});
 		if (subscribeEvents) {
 			void request("puck.watch", "relay", { assistantId: selectedID }).then(response => {
@@ -187,15 +213,17 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     const assistant = response.data?.assistant as Assistant;
     setAssistants(current => [...current, assistant]); setSelectedID(assistant.assistantId); setName(""); setCreating(false);
-    setMessages([]);
+    const greeting = response.data?.greeting as Record<string,unknown> | undefined;
+	setMessages(greeting?.state === "processing" ? [{ id:String(greeting.messageId), role:"assistant", kind:"processing", text:"正在准备…", workSummary:JSON.stringify({startedAt:greeting.startedAt,state:"running"}) }] : []);
   }
   async function send() {
     const text = draft.trim(); if (!selected || !text) return;
     if (["停", "停止"].includes(text)) { setDraft(""); await stop(); return; }
-    const clientMessageId = crypto.randomUUID(); setDraft("");
-    setMessages(current => [...current, { id: clientMessageId, role: "user", kind: "text", text }, { id: `${clientMessageId}-processing`, role: "assistant", kind: "processing", text: "正在处理…" }]);
+    const clientMessageId = crypto.randomUUID(); setDraft(""); const localStartedAt = new Date().toISOString();
+    setMessages(current => [...current, { id: clientMessageId, role: "user", kind: "text", text }, { id: `${clientMessageId}-processing`, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
     const response = await request("puck.message.send", "relay", { assistantId: selected.assistantId, clientMessageId, text });
-    if (response.outcome !== "accepted") setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response) } : item));
+    if (response.outcome !== "accepted") setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response), workSummary:"" } : item));
+	else setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, workSummary:JSON.stringify({startedAt:response.data?.startedAt || localStartedAt,state:"running"}) } : item));
   }
   async function stop() {
     if (!selected) return;
@@ -240,6 +268,32 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		const confirmed = response.data?.assistant as Assistant | undefined;
 		if (confirmed) setAssistants(current => current.map(item => item.assistantId === confirmed.assistantId ? confirmed : item));
 	}
+	async function saveDescription() {
+		if (!selected) return; const description = descriptionDraft.trim();
+		const response = await request("puck.update", "relay", { assistantId:selected.assistantId, description });
+		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
+		const confirmed = response.data?.assistant as Assistant | undefined;
+		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, description }) : item)); setEditingDescription(false);
+	}
+	async function reactTo(message: Message, emoji: string) {
+		if (!selected) return; const response = await request("puck.message.react", "relay", { assistantId:selected.assistantId, messageId:message.id, emoji });
+		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
+		setMessages(current => current.map(item => item.id === message.id ? { ...item, reaction:String(response.data?.reaction || "") } : item)); setReactionTarget("");
+	}
+
+	useEffect(() => {
+		const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]'); if (!link) return;
+		if (!faviconOriginal.current) faviconOriginal.current = { href:link.getAttribute("href") || "", type:link.getAttribute("type") || "" };
+		return () => { const original=faviconOriginal.current; if (original) { link.href=original.href; link.type=original.type; } };
+	}, []);
+	useEffect(() => {
+		if (!selected || navigator.userAgent.includes("jsdom")) return;
+		let cancelled=false; const svg=document.querySelector<SVGSVGElement>(".puck-conversation > header .puck-avatar svg"); if (!svg) return;
+		const clone=svg.cloneNode(true) as SVGSVGElement; clone.setAttribute("xmlns","http://www.w3.org/2000/svg"); clone.setAttribute("width","128"); clone.setAttribute("height","128");
+		clone.querySelectorAll<SVGElement>(".puck-avatar-body,.puck-avatar-ears,.puck-avatar-stem").forEach(node=>node.setAttribute("fill",avatarDesign(selected).color)); clone.querySelectorAll<SVGElement>(".puck-avatar-face").forEach(node=>node.setAttribute("fill","#0b0b0c"));
+		const image=new Image(); image.onload=()=>{ if(cancelled)return; const canvas=document.createElement("canvas"); canvas.width=canvas.height=128; const context=canvas.getContext("2d"); if(!context)return; context.drawImage(image,0,0,128,128); const link=document.querySelector<HTMLLinkElement>('link[rel="icon"]'); if(link){link.type="image/png";link.href=canvas.toDataURL("image/png");} };
+		image.src=`data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`; return()=>{cancelled=true;};
+	}, [selectedID, selected?.avatar]);
 
   if (state !== "ready") return <main className="puck-unavailable">
     <button className="puck-btn" type="button" onClick={onBack}>返回会话</button>
@@ -252,8 +306,9 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     <aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}>
       <header><b>Puck</b><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理">＋</button></header>
       <div className="puck-assistant-list">{assistants.map(item => <button className={`puck-assistant-row${item.assistantId === selectedID ? " active" : ""}`} key={item.assistantId} onClick={() => { setSelectedID(item.assistantId); setMobilePanel(""); }}>
-        <PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/>
-        <span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || (item.status === "ready" ? "在线" : "准备中")}</small></span>
+        <PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={Boolean(item.unreadCount) || item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/>
+        <span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || item.lastMessagePreview || (item.status === "ready" ? "在线" : "准备中")}</small></span>
+        {Boolean(item.unreadCount) && <span className="puck-unread-count" aria-label={`${item.name}有 ${item.unreadCount} 条未读消息`}>{Math.min(99,item.unreadCount || 0)}</span>}
       </button>)}</div>
       <button className="puck-back" type="button" onClick={onBack}><span aria-hidden="true">←</span> Codex 会话</button>
     </aside>
@@ -274,7 +329,9 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
           {message.role === "assistant" && !continued && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
           <div className="puck-message-content">
             <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
-            {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
+            {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
+            {workLabel(message,clock) && <div className="puck-work-summary">{workLabel(message,clock)}</div>}
+            <div className="puck-reactions">{Object.entries(reactions(message)).map(([actor,emoji]) => <button type="button" className="puck-reaction-pill" aria-label={`${actor === "user" ? "你" : "助理"}回应 ${emoji}，1 个`} key={actor} onClick={()=>actor === "user" && void reactTo(message,emoji)}>{emoji} <span>1</span></button>)}<button type="button" className="puck-reaction-add" aria-label="给消息添加回应" onClick={()=>setReactionTarget(current=>current === message.id ? "" : message.id)}>＋</button>{reactionTarget === message.id && <div className="puck-reaction-picker">{reactionChoices.map(emoji=><button type="button" key={emoji} aria-label={`回应 ${emoji}`} onClick={()=>void reactTo(message,emoji)}>{emoji}</button>)}</div>}</div>
             {groupEnd && message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}
           </div>
         </article>;
@@ -286,7 +343,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>
       <header><h3>助理信息</h3></header>
       {selected ? <div className="puck-info-content">
-        <div className="puck-avatar-editor"><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/><strong>{selected.name}</strong><p>{selected.description || "添加说明"}</p></div>
+        <div className="puck-avatar-editor"><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/><strong>{selected.name}</strong>{editingDescription ? <div className="puck-description-editor"><textarea aria-label="助理说明" maxLength={512} value={descriptionDraft} onChange={event=>setDescriptionDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={()=>{setEditingDescription(false);setDescriptionDraft(selected.description || "");}}>取消</button><button className="puck-btn primary" type="button" aria-label="保存说明" onClick={()=>void saveDescription()}>保存</button></div></div> : <><p>{selected.description || "尚未添加说明"}</p><button className="puck-description-edit" type="button" aria-label="编辑说明" onClick={()=>{setDescriptionDraft(selected.description || "");setEditingDescription(true);}}>编辑说明</button></>}</div>
         <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color}} size="small" animated={false}/></button>; })}</div></div>
           <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/></button>; })}</div></div>
         </div>

@@ -36,11 +36,15 @@ type Module struct {
 	pendingMu  sync.Mutex
 	pending    map[string]pendingBrainTurn
 	ackDelay   time.Duration
+	now        func() time.Time
 }
 
 type pendingBrainTurn struct {
-	threadID, turnID, messageID string
-	timer                       *time.Timer
+	threadID, turnID, messageID, responseID string
+	startedAt                               time.Time
+	steps                                   int
+	ack                                     bool
+	timer                                   *time.Timer
 }
 
 func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
@@ -49,7 +53,7 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), cancel: cancel, pending: map[string]pendingBrainTurn{}, ackDelay: 3 * time.Second}
+	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), cancel: cancel, pending: map[string]pendingBrainTurn{}, ackDelay: 3 * time.Second, now: time.Now}
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
 	m.wg.Add(1)
@@ -155,6 +159,12 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	if json.Unmarshal(event.Payload, &input) != nil || input.CallID == "" || input.Tool == "" {
 		return
 	}
+	m.pendingMu.Lock()
+	if pending, ok := m.pending[event.AssistantID]; ok {
+		pending.steps++
+		m.pending[event.AssistantID] = pending
+	}
+	m.pendingMu.Unlock()
 	result := m.tools.Execute(ctx, pucktools.Call{AssistantID: event.AssistantID, Tool: input.Tool, Arguments: input.Arguments})
 	content, _ := json.Marshal(result)
 	_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: event.AssistantID, Trigger: "tool"}, event.DeviceID, "puck.brain.toolResult", mustJSON(map[string]any{"threadId": event.ThreadID, "callId": input.CallID, "success": result.Success, "contentItems": []map[string]any{{"type": "inputText", "text": string(content)}}, "truncated": result.Truncated}))
@@ -193,8 +203,20 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if text == "" || params.Item.Type != "" && params.Item.Type != "agentMessage" {
 		return
 	}
-	m.clearPending(event.AssistantID)
-	_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "text", Text: text, BrainTurnID: params.TurnID})
+	pending := m.clearPendingForTurn(event.AssistantID, params.TurnID)
+	message := Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "text", Text: text, BrainTurnID: params.TurnID}
+	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == params.TurnID) {
+		message.ID = pending.responseID
+		elapsed := m.now().Sub(pending.startedAt)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		summary, _ := json.Marshal(map[string]any{"elapsedMs": elapsed.Milliseconds(), "steps": pending.steps})
+		message.WorkSummary = string(summary)
+		_ = m.store.UpsertMessage(ctx, message)
+		return
+	}
+	_ = m.store.AppendMessage(ctx, message)
 }
 
 type toolOrchestrator struct{ bridge Orchestrator }
@@ -257,6 +279,21 @@ func (b toolBackend) Task(ctx context.Context, assistantID, taskID string) (puck
 	return pucktools.Task{ID: task.ID, AssistantID: task.AssistantID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, LastTurnID: task.LastTurnID}, err
 }
 func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
+	if event.Kind == "react" {
+		var input struct{ MessageID, Emoji string }
+		if json.Unmarshal(event.Payload, &input) != nil || input.MessageID == "" || !slices.Contains(allowedReactions, input.Emoji) {
+			return errors.New("invalid reaction")
+		}
+		var role string
+		if err := b.module.store.db.QueryRowContext(ctx, `SELECT role FROM conversation_messages WHERE assistant_id=? AND id=?`, event.AssistantID, input.MessageID).Scan(&role); err != nil {
+			return err
+		}
+		if role != "user" {
+			return errors.New("brain reactions target user messages")
+		}
+		_, err := b.module.store.UpdateMessageReaction(ctx, event.AssistantID, input.MessageID, "assistant", input.Emoji)
+		return err
+	}
 	kind := strings.TrimPrefix(event.Kind, "post_")
 	if kind == "ask_user" {
 		kind = "question"
@@ -303,6 +340,10 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.message(ctx, params)
 		case "puck.history":
 			response = m.history(ctx, params)
+		case "puck.read":
+			response = m.read(ctx, params)
+		case "puck.message.react":
+			response = m.react(ctx, params)
 		case "puck.stop":
 			response = m.stop(ctx, params)
 		case "puck.question.answer":
@@ -384,7 +425,21 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	}
 	a.BrainThreadID, a.Status = threadID, "ready"
 	m.syncBrainThreads(ctx)
-	return accepted(map[string]any{"assistant": assistantData(a)})
+	greetingID := newUUID()
+	startedAt := m.now()
+	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。"), "model": a.BrainModel, "effort": a.BrainReasoning}))
+	if greeting.Error != nil {
+		_ = m.store.AppendMessage(ctx, Message{ID: greetingID, AssistantID: a.ID, Role: "assistant", Kind: "notice", Text: fmt.Sprintf("你好，我是 %s。大脑暂时无法生成问候，你仍可以直接告诉我想做什么。", a.Name)})
+		return accepted(map[string]any{"assistant": assistantData(a), "greeting": map[string]any{"state": "fallback", "messageId": greetingID}})
+	}
+	turnID, _ := greeting.Data["turnId"].(string)
+	summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
+	if err := m.store.AppendMessage(ctx, Message{ID: greetingID, AssistantID: a.ID, Role: "assistant", Kind: "greeting_processing", Text: "正在准备…", WorkSummary: string(summary), BrainTurnID: turnID, CreatedAt: startedAt}); err != nil {
+		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.interrupt", mustJSON(map[string]any{"threadId": a.BrainThreadID, "expectedTurnId": turnID}))
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	m.setPending(a, turnID, greetingID, greetingID, startedAt, false)
+	return accepted(map[string]any{"assistant": assistantData(a), "greeting": map[string]any{"state": "processing", "messageId": greetingID, "startedAt": startedAt.UTC()}})
 }
 
 func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
@@ -512,21 +567,42 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if err != nil {
 		return notFound()
 	}
+	previous := m.clearPending(a.ID)
+	if previous.turnID != "" {
+		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.interrupt", mustJSON(map[string]any{"threadId": previous.threadID, "expectedTurnId": previous.turnID}))
+	}
+	if previous.responseID != "" {
+		if err := m.store.DeleteMessage(ctx, a.ID, previous.responseID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return moduleError("PUCK_UNAVAILABLE", err.Error())
+		}
+	}
 	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text}); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a.ID, input.Text), "model": a.BrainModel, "effort": a.BrainReasoning}))
+	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a, input.Text), "model": a.BrainModel, "effort": a.BrainReasoning}))
 	if result.Error != nil {
 		return result
 	}
 	turnID, _ := result.Data["turnId"].(string)
-	m.setPending(a, turnID, input.ClientMessageID)
-	return accepted(map[string]any{"messageId": input.ClientMessageID, "state": "processing", "templateAfterMs": 3000})
+	startedAt := m.now()
+	responseID := input.ClientMessageID + "-processing"
+	summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
+	if err := m.store.AppendMessage(ctx, Message{ID: responseID, AssistantID: a.ID, Role: "assistant", Kind: "processing", Text: "正在处理…", WorkSummary: string(summary), BrainTurnID: turnID, CreatedAt: startedAt}); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	m.setPending(a, turnID, input.ClientMessageID, responseID, startedAt, true)
+	return accepted(map[string]any{"messageId": input.ClientMessageID, "responseId": responseID, "state": "processing", "startedAt": startedAt.UTC(), "templateAfterMs": 3000})
 }
 
-func (m *Module) setPending(a Assistant, turnID, messageID string) {
+func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, startedAt time.Time, ack bool) {
 	m.clearPending(a.ID)
-	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID}
+	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, startedAt: startedAt, ack: ack}
+	if !ack {
+		m.pendingMu.Lock()
+		m.pending[a.ID] = pending
+		m.pendingMu.Unlock()
+		return
+	}
 	pending.timer = time.AfterFunc(m.ackDelay, func() {
 		m.pendingMu.Lock()
 		current, ok := m.pending[a.ID]
@@ -536,7 +612,8 @@ func (m *Module) setPending(a Assistant, turnID, messageID string) {
 		}
 		m.pendingMu.Unlock()
 		if ok && current.messageID == messageID {
-			_ = m.store.AppendMessage(context.Background(), Message{ID: messageID + "-ack", AssistantID: a.ID, Role: "assistant", Kind: "acknowledged", Text: "收到，我正在处理。", BrainTurnID: turnID})
+			summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
+			_ = m.store.UpsertMessage(context.Background(), Message{ID: responseID, AssistantID: a.ID, Role: "assistant", Kind: "acknowledged", Text: "收到，我正在处理。", WorkSummary: string(summary), BrainTurnID: turnID})
 		}
 	})
 	m.pendingMu.Lock()
@@ -548,6 +625,20 @@ func (m *Module) clearPending(assistantID string) pendingBrainTurn {
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
 	p := m.pending[assistantID]
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	delete(m.pending, assistantID)
+	return p
+}
+
+func (m *Module) clearPendingForTurn(assistantID, turnID string) pendingBrainTurn {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	p, ok := m.pending[assistantID]
+	if !ok || p.turnID != "" && turnID != "" && p.turnID != turnID {
+		return pendingBrainTurn{}
+	}
 	if p.timer != nil {
 		p.timer.Stop()
 	}
@@ -572,6 +663,39 @@ func (m *Module) history(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	return accepted(map[string]any{"messages": messages})
 }
 
+func (m *Module) read(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
+	var input struct {
+		AssistantID string `json:"assistantId"`
+	}
+	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" {
+		return moduleError("INVALID_ARGUMENT", "invalid assistant")
+	}
+	if err := m.store.MarkAssistantRead(ctx, input.AssistantID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return notFound()
+		}
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	return accepted(map[string]any{"unreadCount": 0})
+}
+
+var allowedReactions = []string{"👍", "❤️", "😂", "🎉", "👀"}
+
+func (m *Module) react(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
+	var input struct{ AssistantID, MessageID, Emoji string }
+	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" || input.MessageID == "" || !slices.Contains(allowedReactions, input.Emoji) {
+		return moduleError("INVALID_ARGUMENT", "invalid reaction")
+	}
+	reaction, err := m.store.UpdateMessageReaction(ctx, input.AssistantID, input.MessageID, "user", input.Emoji)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return notFound()
+		}
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	return accepted(map[string]any{"reaction": reaction})
+}
+
 func (m *Module) stop(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
 		AssistantID string `json:"assistantId"`
@@ -584,6 +708,11 @@ func (m *Module) stop(ctx context.Context, raw json.RawMessage) relay.PuckRespon
 		return notFound()
 	}
 	brain := m.clearPending(a.ID)
+	if brain.responseID != "" {
+		if err := m.store.DeleteMessage(ctx, a.ID, brain.responseID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return moduleError("PUCK_UNAVAILABLE", err.Error())
+		}
+	}
 	results := make([]map[string]any, 0)
 	brainStopped := false
 	if brain.turnID != "" {
@@ -653,7 +782,7 @@ func (m *Module) answerQuestion(ctx context.Context, raw json.RawMessage) relay.
 	if err != nil {
 		return notFound()
 	}
-	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a.ID, "问题 "+input.QuestionID+" 的回答："+input.Answer)}))
+	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a, "问题 "+input.QuestionID+" 的回答："+input.Answer)}))
 	if result.Error != nil {
 		return result
 	}
@@ -713,7 +842,7 @@ func (m *Module) syncBrainThreads(ctx context.Context) {
 }
 
 func assistantData(a Assistant) map[string]any {
-	return map[string]any{"assistantId": a.ID, "name": a.Name, "avatar": a.Avatar, "description": a.Description, "brainDeviceId": a.BrainDeviceID, "brainThreadId": a.BrainThreadID, "status": a.Status, "toolsetVersion": a.ToolsetVersion}
+	return map[string]any{"assistantId": a.ID, "name": a.Name, "avatar": a.Avatar, "description": a.Description, "brainDeviceId": a.BrainDeviceID, "brainThreadId": a.BrainThreadID, "status": a.Status, "toolsetVersion": a.ToolsetVersion, "unreadCount": a.UnreadCount, "lastMessagePreview": a.LastMessagePreview}
 }
 func brainInstructions(id, name, description string) string {
 	return fmt.Sprintf(`你是 [Puck] %s（%s）。%s
@@ -774,8 +903,12 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	encoded, _ := json.Marshal(card)
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
-func brainEnvelope(id, text string) string {
-	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n%s", id, newUUID(), text)
+func brainEnvelope(a Assistant, text string) string {
+	description := strings.TrimSpace(a.Description)
+	if description == "" {
+		description = "作为个人助理，先澄清目标，再可靠地完成用户交代的事项。"
+	}
+	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n长期说明：%s\n\n用户请求：%s", a.ID, newUUID(), description, text)
 }
 func accepted(data map[string]any) relay.PuckResponse {
 	return relay.PuckResponse{Outcome: "accepted", Data: data}
