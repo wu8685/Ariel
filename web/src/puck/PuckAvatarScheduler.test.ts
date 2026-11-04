@@ -27,6 +27,8 @@ describe("Puck avatar global motion scheduler", () => {
     expect(Math.abs(rest.faceRotate)).toBeGreaterThanOrEqual(20);
     expect(Math.abs(rest.faceRotate)).toBeLessThanOrEqual(30);
     expect(Math.min(rest.leftEyeScaleX, rest.rightEyeScaleX)).toBeLessThan(1);
+    if (rest.faceX < 0) expect(rest.leftEyeScaleX).toBeLessThan(rest.rightEyeScaleX);
+    if (rest.faceX > 0) expect(rest.rightEyeScaleX).toBeLessThan(rest.leftEyeScaleX);
 
     expect(motionDirections.filter(direction => direction.name !== "rest")).toHaveLength(8);
     for (const direction of motionDirections.filter(direction => direction.name !== "rest")) {
@@ -42,8 +44,18 @@ describe("Puck avatar global motion scheduler", () => {
       expect(pose.eyeRoundness).toBeLessThanOrEqual(2);
       expect(pose.motionDuration).toBeGreaterThanOrEqual(600);
       expect(pose.motionDuration).toBeLessThanOrEqual(800);
-      if (direction.x > 0) expect(pose.leftEyeScaleX).toBeLessThan(pose.rightEyeScaleX);
-      if (direction.x < 0) expect(pose.rightEyeScaleX).toBeLessThan(pose.leftEyeScaleX);
+      if (direction.x < 0) {
+        expect(pose.leftEyeScaleX).toBeLessThan(pose.rightEyeScaleX);
+        expect(pose.leftEyeScaleY).toBeLessThan(pose.rightEyeScaleY);
+      }
+      if (direction.x > 0) {
+        expect(pose.rightEyeScaleX).toBeLessThan(pose.leftEyeScaleX);
+        expect(pose.rightEyeScaleY).toBeLessThan(pose.leftEyeScaleY);
+      }
+      if (direction.x === 0) {
+        expect(pose.leftEyeScaleX).toBe(pose.rightEyeScaleX);
+        expect(pose.leftEyeScaleY).toBe(pose.rightEyeScaleY);
+      }
     }
     expect(rest.motionDuration).toBeGreaterThanOrEqual(700);
     expect(rest.motionDuration).toBeLessThanOrEqual(900);

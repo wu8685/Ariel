@@ -158,8 +158,8 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     applyPose(root.current, {
       name: "pointer", motionDuration: 720, headX: x * 4.5, headY: y * 4, headRotate: Math.abs(x) > .12 ? x * 14 : y * 10,
       faceX: x * 7, faceY: y * 6, faceRotate: Math.abs(x) > .12 ? x * 22 + y * 3 : currentPose.current.faceRotate,
-      leftEyeScaleX: x > .12 ? .62 : 1, rightEyeScaleX: x < -.12 ? .62 : 1,
-      leftEyeScaleY: x > .12 ? .82 : 1, rightEyeScaleY: x < -.12 ? .82 : 1, eyeRoundness: 1.7,
+      leftEyeScaleX: x < -.12 ? .62 : 1, rightEyeScaleX: x > .12 ? .62 : 1,
+      leftEyeScaleY: x < -.12 ? .82 : 1, rightEyeScaleY: x > .12 ? .82 : 1, eyeRoundness: 1.7,
     });
   }
 

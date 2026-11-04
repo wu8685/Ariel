@@ -71,8 +71,8 @@ export function restPoseForKey(key: string): AvatarPose {
     motionDuration: 820,
     headX: 0, headY: 0, headRotate: 0,
     faceX: side * (3 + ((value >>> 8) % 3)), faceY: vertical * (2 + ((value >>> 11) % 3)), faceRotate,
-    leftEyeScaleX: side > 0 ? .72 : 1, rightEyeScaleX: side < 0 ? .72 : 1,
-    leftEyeScaleY: side > 0 ? .86 : 1, rightEyeScaleY: side < 0 ? .86 : 1,
+    leftEyeScaleX: side < 0 ? .72 : 1, rightEyeScaleX: side > 0 ? .72 : 1,
+    leftEyeScaleY: side < 0 ? .86 : 1, rightEyeScaleY: side > 0 ? .86 : 1,
     eyeRoundness: 1,
   };
 }
@@ -80,16 +80,16 @@ export function restPoseForKey(key: string): AvatarPose {
 export function poseForDirection(direction: MotionDirection, rest: AvatarPose): AvatarPose {
   if (direction.name === "rest") return rest;
   const turn = direction.x !== 0 ? direction.x * 14 : direction.y * 10;
-  const leftFar = direction.x > 0;
-  const rightFar = direction.x < 0;
+  const leftNear = direction.x < 0;
+  const rightNear = direction.x > 0;
   return {
     name: direction.name,
     motionDuration: 720,
     headX: direction.x * 4.5, headY: direction.y * 4, headRotate: turn,
     faceX: direction.x * 7, faceY: direction.y * 6,
     faceRotate: direction.x === 0 ? rest.faceRotate : direction.x * 22 + direction.y * 3,
-    leftEyeScaleX: leftFar ? .62 : 1, rightEyeScaleX: rightFar ? .62 : 1,
-    leftEyeScaleY: leftFar ? .82 : 1, rightEyeScaleY: rightFar ? .82 : 1,
+    leftEyeScaleX: leftNear ? .62 : 1, rightEyeScaleX: rightNear ? .62 : 1,
+    leftEyeScaleY: leftNear ? .82 : 1, rightEyeScaleY: rightNear ? .82 : 1,
     eyeRoundness: 1.7,
   };
 }

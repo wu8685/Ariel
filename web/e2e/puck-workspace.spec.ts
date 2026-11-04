@@ -172,10 +172,10 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		const board = page.locator(".puck-motion-storyboard");
 		await page.locator(".puck-conversation > header .puck-avatar").evaluate(source => {
 			const frames = [
-				{ label: "静止", head: [0, 0, 0], face: [4, -4, -24], eyes: [.72, 1, 1], blink: "open" },
-				{ label: "看左上", head: [-4.5, -4, -14], face: [-7, -6, -18], eyes: [1, .62, 1.7], blink: "open" },
-				{ label: "看右下", head: [4.5, 4, 14], face: [7, 6, 22], eyes: [.62, 1, 1.7], blink: "open" },
-				{ label: "眨眼", head: [0, 0, 0], face: [4, -4, -24], eyes: [.72, 1, 1], blink: "closed" },
+				{ label: "静止", head: [0, 0, 0], face: [4, -4, -24], eyes: [1, .72, 1], blink: "open" },
+				{ label: "看左上", head: [-4.5, -4, -14], face: [-7, -6, -18], eyes: [.62, 1, 1.7], blink: "open" },
+				{ label: "看右下", head: [4.5, 4, 14], face: [7, 6, 22], eyes: [1, .62, 1.7], blink: "open" },
+				{ label: "眨眼", head: [0, 0, 0], face: [4, -4, -24], eyes: [1, .72, 1], blink: "closed" },
 			];
 			const storyboard = document.createElement("section");
 			storyboard.className = "puck-motion-storyboard";
@@ -205,14 +205,14 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 			avatar.classList.add("puck-motion-capture");
 			avatar.querySelector(".puck-avatar-badge")?.remove();
 			Object.assign(avatar.style, { width: "128px", height: "128px" });
-			const properties = { "--puck-motion-duration": "720ms", "--puck-head-x": "0%", "--puck-head-y": "0%", "--puck-head-rotate": "0deg", "--puck-face-x": "4px", "--puck-face-y": "-4px", "--puck-face-rotate": "-24deg", "--puck-left-eye-xscale": ".72", "--puck-right-eye-xscale": "1", "--puck-eye-roundness": "1" };
+			const properties = { "--puck-motion-duration": "720ms", "--puck-head-x": "0%", "--puck-head-y": "0%", "--puck-head-rotate": "0deg", "--puck-face-x": "4px", "--puck-face-y": "-4px", "--puck-face-rotate": "-24deg", "--puck-left-eye-xscale": "1", "--puck-right-eye-xscale": ".72", "--puck-eye-roundness": "1" };
 			Object.entries(properties).forEach(([name, value]) => avatar.style.setProperty(name, value));
 			stage.append(avatar); document.querySelector(".puck-workspace")!.append(stage); void avatar.offsetWidth;
 		});
 		const capture = page.locator(".puck-motion-capture");
 		await page.waitForTimeout(32);
 		await capture.evaluate(avatar => {
-			const properties = { "--puck-head-x": "4.5%", "--puck-head-y": "4%", "--puck-head-rotate": "14deg", "--puck-face-x": "7px", "--puck-face-y": "6px", "--puck-face-rotate": "22deg", "--puck-left-eye-xscale": ".62", "--puck-right-eye-xscale": "1", "--puck-eye-roundness": "1.7" };
+			const properties = { "--puck-head-x": "4.5%", "--puck-head-y": "4%", "--puck-head-rotate": "14deg", "--puck-face-x": "7px", "--puck-face-y": "6px", "--puck-face-rotate": "22deg", "--puck-left-eye-xscale": "1", "--puck-right-eye-xscale": ".62", "--puck-eye-roundness": "1.7" };
 			Object.entries(properties).forEach(([name, value]) => (avatar as HTMLElement).style.setProperty(name, value));
 		});
 		await page.waitForTimeout(32);

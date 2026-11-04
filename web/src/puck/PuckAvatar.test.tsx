@@ -88,6 +88,19 @@ describe("PuckAvatar", () => {
 		}
 	});
 
+	it("makes the eye nearest the gaze direction smaller during pointer turns", () => {
+		const { container } = render(<PuckAvatar assistantId="assistant-perspective" name="透视测试" animated={false}/>);
+		const avatar = container.querySelector<HTMLElement>(".puck-avatar")!;
+		vi.spyOn(avatar, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON: () => ({}) });
+
+		fireEvent.pointerMove(avatar, { clientX: 0, clientY: 50, pointerType: "mouse" });
+		expect(Number(avatar.style.getPropertyValue("--puck-left-eye-xscale"))).toBeLessThan(Number(avatar.style.getPropertyValue("--puck-right-eye-xscale")));
+		fireEvent.pointerMove(avatar, { clientX: 100, clientY: 50, pointerType: "mouse" });
+		expect(Number(avatar.style.getPropertyValue("--puck-right-eye-xscale"))).toBeLessThan(Number(avatar.style.getPropertyValue("--puck-left-eye-xscale")));
+		fireEvent.pointerMove(avatar, { clientX: 50, clientY: 0, pointerType: "mouse" });
+		expect(avatar.style.getPropertyValue("--puck-left-eye-xscale")).toBe(avatar.style.getPropertyValue("--puck-right-eye-xscale"));
+	});
+
 	it("does not re-render while the shared scheduler changes gaze and blink phases", async () => {
 		vi.useFakeTimers();
 		let renders = 0;
