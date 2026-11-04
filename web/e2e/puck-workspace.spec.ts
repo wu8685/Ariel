@@ -161,8 +161,8 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await page.locator(".puck-conversation > header .puck-avatar").evaluate(source => {
 			const frames = [
 				{ label: "静止", head: [0, 0, 0], face: [4, -4, -24], eyes: [.72, 1, 1], blink: "open" },
-				{ label: "看左上", head: [-3, -2, -12], face: [-7, -6, -18], eyes: [1, .62, 1.65], blink: "open" },
-				{ label: "看右下", head: [3, 2, 12], face: [7, 6, 22], eyes: [.62, 1, 1.65], blink: "open" },
+				{ label: "看左上", head: [-4.5, -4, -14], face: [-7, -6, -18], eyes: [1, .62, 1.7], blink: "open" },
+				{ label: "看右下", head: [4.5, 4, 14], face: [7, 6, 22], eyes: [.62, 1, 1.7], blink: "open" },
 				{ label: "眨眼", head: [0, 0, 0], face: [4, -4, -24], eyes: [.72, 1, 1], blink: "closed" },
 			];
 			const storyboard = document.createElement("section");
@@ -171,13 +171,66 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 			for (const frame of frames) {
 				const cell = document.createElement("div"); Object.assign(cell.style, { display: "grid", justifyItems: "center", gap: "10px" });
 				const avatar = source.cloneNode(true) as HTMLElement; avatar.querySelector(".puck-avatar-badge")?.remove();
-				Object.assign(avatar.style, { width: "112px", height: "112px", "--puck-head-x": `${frame.head[0]}px`, "--puck-head-y": `${frame.head[1]}px`, "--puck-head-rotate": `${frame.head[2]}deg`, "--puck-face-x": `${frame.face[0]}px`, "--puck-face-y": `${frame.face[1]}px`, "--puck-face-rotate": `${frame.face[2]}deg`, "--puck-left-eye-xscale": String(frame.eyes[0]), "--puck-right-eye-xscale": String(frame.eyes[1]), "--puck-eye-roundness": String(frame.eyes[2]) } as CSSStyleDeclaration & Record<string, string>);
+				Object.assign(avatar.style, { width: "112px", height: "112px" });
+				const properties = { "--puck-head-x": `${frame.head[0]}%`, "--puck-head-y": `${frame.head[1]}%`, "--puck-head-rotate": `${frame.head[2]}deg`, "--puck-face-x": `${frame.face[0]}px`, "--puck-face-y": `${frame.face[1]}px`, "--puck-face-rotate": `${frame.face[2]}deg`, "--puck-left-eye-xscale": String(frame.eyes[0]), "--puck-right-eye-xscale": String(frame.eyes[1]), "--puck-eye-roundness": String(frame.eyes[2]) };
+				Object.entries(properties).forEach(([name, value]) => avatar.style.setProperty(name, value));
 				avatar.dataset.blinkPhase = frame.blink;
 				cell.append(avatar, Object.assign(document.createElement("span"), { textContent: frame.label })); storyboard.append(cell);
 			}
 			document.querySelector(".puck-workspace")?.append(storyboard);
 		});
 		await expect(board).toHaveScreenshot("puck-avatar-motion-storyboard.png", { animations: "disabled" });
+	});
+
+	test("keeps head, face and eyes on one smooth 720ms compositor timeline", async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
+		await openPuck(page);
+		await page.locator(".puck-conversation > header .puck-avatar").evaluate(source => {
+			const stage = document.createElement("section");
+			stage.className = "puck-motion-capture-stage";
+			Object.assign(stage.style, { position: "fixed", inset: "0", zIndex: "100", display: "grid", placeItems: "center", background: "#0d0d0e" });
+			const avatar = source.cloneNode(true) as HTMLElement;
+			avatar.classList.add("puck-motion-capture");
+			avatar.querySelector(".puck-avatar-badge")?.remove();
+			Object.assign(avatar.style, { width: "128px", height: "128px" });
+			const properties = { "--puck-motion-duration": "720ms", "--puck-head-x": "0%", "--puck-head-y": "0%", "--puck-head-rotate": "0deg", "--puck-face-x": "4px", "--puck-face-y": "-4px", "--puck-face-rotate": "-24deg", "--puck-left-eye-xscale": ".72", "--puck-right-eye-xscale": "1", "--puck-eye-roundness": "1" };
+			Object.entries(properties).forEach(([name, value]) => avatar.style.setProperty(name, value));
+			stage.append(avatar); document.querySelector(".puck-workspace")!.append(stage); void avatar.offsetWidth;
+		});
+		const capture = page.locator(".puck-motion-capture");
+		await page.waitForTimeout(32);
+		await capture.evaluate(avatar => {
+			const properties = { "--puck-head-x": "4.5%", "--puck-head-y": "4%", "--puck-head-rotate": "14deg", "--puck-face-x": "7px", "--puck-face-y": "6px", "--puck-face-rotate": "22deg", "--puck-left-eye-xscale": ".62", "--puck-right-eye-xscale": "1", "--puck-eye-roundness": "1.7" };
+			Object.entries(properties).forEach(([name, value]) => (avatar as HTMLElement).style.setProperty(name, value));
+		});
+		await page.waitForTimeout(32);
+		const timeline = await capture.evaluate(element => {
+			const animated = [".puck-avatar-head", ".puck-avatar-face", ".puck-avatar-eye-left", ".puck-avatar-eye-right", ".puck-avatar-eye-shape"];
+			const animations = animated.flatMap(selector => Array.from(element.querySelectorAll(selector))).flatMap(node => node.getAnimations());
+			const result = animations.map(animation => {
+				const timing = animation.effect?.getTiming();
+				return { duration: Number(timing?.duration), easing: timing?.easing };
+			});
+			animations.forEach(animation => animation.pause());
+			return result;
+		});
+		expect(timeline.length).toBeGreaterThanOrEqual(5);
+		expect(new Set(timeline.map(item => item.duration))).toEqual(new Set([720]));
+		expect(new Set(timeline.map(item => item.easing))).toEqual(new Set(["cubic-bezier(0.45, 0, 0.25, 1)"]));
+
+		const frames: string[] = [];
+		for (let time = 0; time <= 720; time += 16) {
+			await capture.evaluate((element, currentTime) => element.getAnimations({ subtree: true }).forEach(animation => { animation.pause(); animation.currentTime = currentTime; }), time);
+			frames.push(`data:image/png;base64,${(await capture.screenshot({ animations: "allow" })).toString("base64")}`);
+		}
+		await page.evaluate(frameURLs => {
+			document.querySelector(".puck-motion-capture-stage")?.remove();
+			const strip = document.createElement("section"); strip.className = "puck-motion-filmstrip";
+			Object.assign(strip.style, { position: "fixed", inset: "12px", zIndex: "100", display: "grid", gridTemplateColumns: "repeat(8, 64px)", gap: "8px", width: "fit-content", padding: "16px", borderRadius: "16px", background: "#0d0d0e" });
+			frameURLs.forEach((src, index) => { const image = new Image(); image.src = src; image.width = 64; image.height = 64; image.alt = `${index * 16}ms`; strip.append(image); });
+			document.querySelector(".puck-workspace")!.append(strip);
+		}, frames);
+		await expect(page.locator(".puck-motion-filmstrip")).toHaveScreenshot("puck-avatar-motion-frames.png", { animations: "allow" });
 	});
 
 	test("selects every avatar property directly and persists mouse and keyboard changes", async ({ page }) => {

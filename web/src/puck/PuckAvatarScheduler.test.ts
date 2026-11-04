@@ -31,14 +31,40 @@ describe("Puck avatar global motion scheduler", () => {
     expect(motionDirections.filter(direction => direction.name !== "rest")).toHaveLength(8);
     for (const direction of motionDirections.filter(direction => direction.name !== "rest")) {
       const pose = poseForDirection(direction, rest);
-      expect(Math.abs(pose.headRotate)).toBeGreaterThanOrEqual(8);
+      expect(Math.abs(pose.headRotate)).toBeGreaterThanOrEqual(10);
       expect(Math.abs(pose.headRotate)).toBeLessThanOrEqual(15);
+      if (direction.x !== 0) expect(Math.abs(pose.headX)).toBeGreaterThanOrEqual(3);
+      if (direction.y !== 0) expect(Math.abs(pose.headY)).toBeGreaterThanOrEqual(3);
+      expect(Math.max(Math.abs(pose.headX), Math.abs(pose.headY))).toBeLessThanOrEqual(6);
       expect(Math.sign(pose.faceX)).toBe(direction.x === 0 ? 0 : Math.sign(direction.x));
       expect(Math.sign(pose.faceY)).toBe(direction.y === 0 ? 0 : Math.sign(direction.y));
-      expect(pose.eyeRoundness).toBeGreaterThanOrEqual(1.6);
+      expect(pose.eyeRoundness).toBeGreaterThanOrEqual(1.5);
+      expect(pose.eyeRoundness).toBeLessThanOrEqual(2);
+      expect(pose.motionDuration).toBeGreaterThanOrEqual(600);
+      expect(pose.motionDuration).toBeLessThanOrEqual(800);
       if (direction.x > 0) expect(pose.leftEyeScaleX).toBeLessThan(pose.rightEyeScaleX);
       if (direction.x < 0) expect(pose.rightEyeScaleX).toBeLessThan(pose.leftEyeScaleX);
     }
+    expect(rest.motionDuration).toBeGreaterThanOrEqual(700);
+    expect(rest.motionDuration).toBeLessThanOrEqual(900);
+  });
+
+  it("uses one smooth 220-280ms timeline for both eyelids", async () => {
+    vi.useFakeTimers();
+    const phases: Array<{ phase: string; at: number }> = [];
+    const registration = registerAvatarMotion("assistant-blink", {
+      setPose: vi.fn(),
+      setBlinkPhase: phase => phases.push({ phase, at: Date.now() }),
+    }, { reducedMotion: true });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    const first = ["closing", "closed", "opening", "open"].map(phase => phases.find(event => event.phase === phase)!);
+    expect(first.every(Boolean)).toBe(true);
+    expect(first[1].at - first[0].at).toBe(100);
+    expect(first[2].at - first[1].at).toBe(40);
+    expect(first[3].at - first[2].at).toBe(110);
+    expect(first[3].at - first[0].at).toBe(250);
+    registration.unregister();
   });
 
   it("shares exactly one timeout across independent avatars without a RAF loop", async () => {

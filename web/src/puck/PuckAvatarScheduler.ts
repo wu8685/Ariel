@@ -2,6 +2,7 @@ export type BlinkPhase = "open" | "closing" | "closed" | "opening";
 export type MotionDirection = { x: -1 | 0 | 1; y: -1 | 0 | 1; name: string };
 export type AvatarPose = {
   name: string;
+  motionDuration: number;
   headX: number;
   headY: number;
   headRotate: number;
@@ -67,6 +68,7 @@ export function restPoseForKey(key: string): AvatarPose {
   const faceRotate = side * (20 + ((value >>> 4) % 11));
   return {
     name: "rest",
+    motionDuration: 820,
     headX: 0, headY: 0, headRotate: 0,
     faceX: side * (3 + ((value >>> 8) % 3)), faceY: vertical * (2 + ((value >>> 11) % 3)), faceRotate,
     leftEyeScaleX: side > 0 ? .72 : 1, rightEyeScaleX: side < 0 ? .72 : 1,
@@ -77,17 +79,18 @@ export function restPoseForKey(key: string): AvatarPose {
 
 export function poseForDirection(direction: MotionDirection, rest: AvatarPose): AvatarPose {
   if (direction.name === "rest") return rest;
-  const turn = direction.x !== 0 ? direction.x * 12 : direction.y * 8;
+  const turn = direction.x !== 0 ? direction.x * 14 : direction.y * 10;
   const leftFar = direction.x > 0;
   const rightFar = direction.x < 0;
   return {
     name: direction.name,
-    headX: direction.x * 3, headY: direction.y * 2.5, headRotate: turn,
+    motionDuration: 720,
+    headX: direction.x * 4.5, headY: direction.y * 4, headRotate: turn,
     faceX: direction.x * 7, faceY: direction.y * 6,
     faceRotate: direction.x === 0 ? rest.faceRotate : direction.x * 22 + direction.y * 3,
     leftEyeScaleX: leftFar ? .62 : 1, rightEyeScaleX: rightFar ? .62 : 1,
     leftEyeScaleY: leftFar ? .82 : 1, rightEyeScaleY: rightFar ? .82 : 1,
-    eyeRoundness: 1.65,
+    eyeRoundness: 1.7,
   };
 }
 
@@ -129,17 +132,17 @@ function advanceBlink(entry: Entry, now: number) {
     case "open":
       entry.blinkPhase = "closing";
       entry.target.setBlinkPhase("closing");
-      entry.blinkAt = now + 80;
+      entry.blinkAt = now + 100;
       return;
     case "closing":
       entry.blinkPhase = "closed";
       entry.target.setBlinkPhase("closed");
-      entry.blinkAt = now + 30;
+      entry.blinkAt = now + 40;
       return;
     case "closed":
       entry.blinkPhase = "opening";
       entry.target.setBlinkPhase("opening");
-      entry.blinkAt = now + 90;
+      entry.blinkAt = now + 110;
       return;
     case "opening": {
       entry.blinkPhase = "open";
@@ -153,20 +156,22 @@ function advanceBlink(entry: Entry, now: number) {
 function advancePose(entry: Entry, now: number) {
   if (entry.posePhase === "rest") {
     const direction = motionDirections[1 + Math.floor(entry.random() * (motionDirections.length - 1))] || motionDirections[1];
-    entry.target.setPose(poseForDirection(direction, entry.restPose));
+    const pose = poseForDirection(direction, entry.restPose);
+    entry.target.setPose(pose);
     entry.posePhase = "look";
-    entry.poseAt = now + between(entry, 500, 2_000);
+    entry.poseAt = now + pose.motionDuration + between(entry, 500, 2_000);
     return;
   }
   if (entry.random() < .35) {
     const direction = motionDirections[1 + Math.floor(entry.random() * (motionDirections.length - 1))] || motionDirections[1];
-    entry.target.setPose(poseForDirection(direction, entry.restPose));
-    entry.poseAt = now + between(entry, 500, 2_000);
+    const pose = poseForDirection(direction, entry.restPose);
+    entry.target.setPose(pose);
+    entry.poseAt = now + pose.motionDuration + between(entry, 500, 2_000);
     return;
   }
   entry.target.setPose(entry.restPose);
   entry.posePhase = "rest";
-  entry.poseAt = now + between(entry, 3_000, 9_000);
+  entry.poseAt = now + entry.restPose.motionDuration + between(entry, 3_000, 9_000);
 }
 
 function runDueEvents() {

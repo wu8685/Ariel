@@ -694,7 +694,7 @@
   height: var(--puck-avatar-msg);
   pointer-events: none;
 }
-.puck-workspace .puck-shape-option .puck-avatar-motion { transform: none !important; transition: none; }
+.puck-workspace .puck-shape-option .puck-avatar-head { transform: none !important; transition: none; }
 .puck-workspace .puck-shape-option .puck-avatar svg {
   animation: none;
   filter: drop-shadow(0 calc(var(--puck-space-1) / 2) var(--puck-space-1) #0002);
@@ -759,6 +759,8 @@
 
 /* Grok-like motion: one rigid head, one parallel-eye face, transform-only transitions. */
 .puck-workspace .puck-avatar {
+  --puck-motion-duration: 820ms;
+  --puck-motion-easing: cubic-bezier(.45, 0, .25, 1);
   --puck-head-x: 0px;
   --puck-head-y: 0px;
   --puck-head-rotate: 0deg;
@@ -788,9 +790,12 @@
   display:block;
   width:100%;
   height:100%;
+}
+.puck-workspace .puck-avatar-head {
   transform:translate(var(--puck-head-x),var(--puck-head-y)) rotate(var(--puck-head-rotate));
-  transform-origin:50% 55%;
-  transition:transform 420ms cubic-bezier(.16,.88,.28,1.08);
+  transform-box:fill-box;
+  transform-origin:center;
+  transition:transform var(--puck-motion-duration) var(--puck-motion-easing);
 }
 .puck-workspace .puck-avatar svg { width:100%; height:100%; overflow:visible; filter:drop-shadow(0 4px 8px #0003); }
 .puck-workspace .puck-avatar-body { fill:var(--puck-avatar-color); transform-origin:center; }
@@ -799,20 +804,26 @@
 .puck-workspace .puck-avatar-face {
   fill:#0b0b0c;
   transform:translate(var(--puck-face-x),var(--puck-face-y)) rotate(var(--puck-face-rotate));
-  transform-origin:50px 55px;
-  transition:transform 420ms cubic-bezier(.16,.88,.28,1.08);
+  transform-box:fill-box;
+  transform-origin:center;
+  transition:transform var(--puck-motion-duration) var(--puck-motion-easing);
 }
-.puck-workspace .puck-avatar-eye { transform-box:fill-box; transition:transform 420ms cubic-bezier(.16,.88,.28,1.08); }
-.puck-workspace .puck-avatar-eye-left { transform:scaleX(var(--puck-left-eye-xscale)) scaleY(var(--puck-left-eye-yscale)); transform-origin:40px 55px; }
-.puck-workspace .puck-avatar-eye-right { transform:scaleX(var(--puck-right-eye-xscale)) scaleY(var(--puck-right-eye-yscale)); transform-origin:61px 55px; }
+.puck-workspace .puck-avatar-eye { transform-box:fill-box; transform-origin:center; transition:transform var(--puck-motion-duration) var(--puck-motion-easing); }
+.puck-workspace .puck-avatar-eye-left { transform:scaleX(var(--puck-left-eye-xscale)) scaleY(var(--puck-left-eye-yscale)); }
+.puck-workspace .puck-avatar-eye-right { transform:scaleX(var(--puck-right-eye-xscale)) scaleY(var(--puck-right-eye-yscale)); }
 .puck-workspace .puck-avatar-eye-shape {
   transform:scaleX(var(--puck-eye-roundness)) scaleY(1);
+  transform-box:fill-box;
   transform-origin:center;
-  transition:transform 420ms cubic-bezier(.16,.88,.28,1.08);
+  transition:transform var(--puck-motion-duration) var(--puck-motion-easing);
 }
 .puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-shape,
-.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-shape { transform:scaleX(var(--puck-eye-roundness)) scaleY(.05); transition-duration:80ms; transition-timing-function:ease-in; }
-.puck-workspace .puck-avatar[data-blink-phase="opening"] .puck-avatar-eye-shape { transition-duration:90ms; transition-timing-function:ease-out; }
+.puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-shape { transform:scaleX(var(--puck-eye-roundness)) scaleY(.05); transition-duration:100ms; transition-timing-function:ease-in; }
+.puck-workspace .puck-avatar[data-blink-phase="opening"] .puck-avatar-eye-shape { transition-duration:110ms; transition-timing-function:ease-out; }
+.puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-head,
+.puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-face,
+.puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-eye,
+.puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-eye-shape { will-change:transform; }
 .puck-workspace .puck-avatar-badge {
   position: absolute;
   top: 0;

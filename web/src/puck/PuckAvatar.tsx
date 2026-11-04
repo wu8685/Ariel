@@ -50,8 +50,9 @@ export function stateLabel(state: PuckState): string {
 
 function applyPose(element: HTMLElement, pose: AvatarPose) {
   element.dataset.pose = pose.name;
-  element.style.setProperty("--puck-head-x", `${pose.headX}px`);
-  element.style.setProperty("--puck-head-y", `${pose.headY}px`);
+  element.style.setProperty("--puck-motion-duration", `${pose.motionDuration}ms`);
+  element.style.setProperty("--puck-head-x", `${pose.headX}%`);
+  element.style.setProperty("--puck-head-y", `${pose.headY}%`);
   element.style.setProperty("--puck-head-rotate", `${pose.headRotate}deg`);
   element.style.setProperty("--puck-face-x", `${pose.faceX}px`);
   element.style.setProperty("--puck-face-y", `${pose.faceY}px`);
@@ -125,16 +126,40 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     };
   }, [animated, assistantId, instanceId]);
 
+  useEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const moving = new Set<EventTarget>();
+    const transitionStarted = (event: Event) => {
+      if ((event as TransitionEvent).propertyName !== "transform") return;
+      moving.add(event.target!);
+      element.dataset.moving = "true";
+    };
+    const transitionFinished = (event: Event) => {
+      if ((event as TransitionEvent).propertyName !== "transform") return;
+      moving.delete(event.target!);
+      if (moving.size === 0) element.dataset.moving = "false";
+    };
+    element.addEventListener("transitionrun", transitionStarted);
+    element.addEventListener("transitionend", transitionFinished);
+    element.addEventListener("transitioncancel", transitionFinished);
+    return () => {
+      element.removeEventListener("transitionrun", transitionStarted);
+      element.removeEventListener("transitionend", transitionFinished);
+      element.removeEventListener("transitioncancel", transitionFinished);
+    };
+  }, []);
+
   function follow(event: PointerEvent<HTMLDivElement>) {
     if (reducedMotion.current || event.pointerType === "touch" || !root.current) return;
     const box = root.current.getBoundingClientRect();
     const x = Math.max(-1, Math.min(1, (event.clientX - box.left) / box.width * 2 - 1));
     const y = Math.max(-1, Math.min(1, (event.clientY - box.top) / box.height * 2 - 1));
     applyPose(root.current, {
-      name: "pointer", headX: x * 3, headY: y * 2.5, headRotate: Math.abs(x) > .12 ? x * 12 : y * 8,
+      name: "pointer", motionDuration: 720, headX: x * 4.5, headY: y * 4, headRotate: Math.abs(x) > .12 ? x * 14 : y * 10,
       faceX: x * 7, faceY: y * 6, faceRotate: Math.abs(x) > .12 ? x * 22 + y * 3 : currentPose.current.faceRotate,
       leftEyeScaleX: x > .12 ? .62 : 1, rightEyeScaleX: x < -.12 ? .62 : 1,
-      leftEyeScaleY: x > .12 ? .82 : 1, rightEyeScaleY: x < -.12 ? .82 : 1, eyeRoundness: 1.6,
+      leftEyeScaleY: x > .12 ? .82 : 1, rightEyeScaleY: x < -.12 ? .82 : 1, eyeRoundness: 1.7,
     });
   }
 
@@ -158,7 +183,8 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
 
   const style = {
     "--puck-avatar-color": avatar.color,
-    "--puck-head-x": `${restPose.headX}px`, "--puck-head-y": `${restPose.headY}px`, "--puck-head-rotate": `${restPose.headRotate}deg`,
+    "--puck-motion-duration": `${restPose.motionDuration}ms`,
+    "--puck-head-x": `${restPose.headX}%`, "--puck-head-y": `${restPose.headY}%`, "--puck-head-rotate": `${restPose.headRotate}deg`,
     "--puck-face-x": `${restPose.faceX}px`, "--puck-face-y": `${restPose.faceY}px`, "--puck-face-rotate": `${restPose.faceRotate}deg`,
     "--puck-left-eye-xscale": restPose.leftEyeScaleX, "--puck-right-eye-xscale": restPose.rightEyeScaleX,
     "--puck-left-eye-yscale": restPose.leftEyeScaleY, "--puck-right-eye-yscale": restPose.rightEyeScaleY,
@@ -166,15 +192,17 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
   } as CSSProperties;
 
   return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
-    data-expression={expression} data-shape={avatar.shape} data-reacting="false" data-blink-phase="open" data-pose="rest" data-motion-count="0"
+    data-expression={expression} data-shape={avatar.shape} data-reacting="false" data-moving="false" data-blink-phase="open" data-pose="rest" data-motion-count="0"
     style={style} onPointerMove={follow} onPointerLeave={() => { if (root.current) applyPose(root.current, currentPose.current); }}
     onPointerDown={react} onDragStart={event => event.preventDefault()}>
     <span className="puck-avatar-motion"><svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-      <g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M39 37C36 29 36 20 40 13c3 8 5 16 5 24Z"/><path className="puck-avatar-ear" d="M61 37c3-8 3-17-1-24-3 8-5 16-5 24Z"/></g>
+      <g className="puck-avatar-head">
+      <g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M38 43C35 31 36 19 40 10c4 12 6 23 5 33Z"/><path className="puck-avatar-ear" d="M62 43c3-12 2-24-2-33-4 12-6 23-5 33Z"/></g>
       <g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
       <g className="puck-avatar-face">
-        <g className="puck-avatar-eye puck-avatar-eye-left"><ellipse className="puck-avatar-eye-shape" cx="40" cy="55" rx="4.6" ry="8"/></g>
-        <g className="puck-avatar-eye puck-avatar-eye-right"><ellipse className="puck-avatar-eye-shape" cx="61" cy="55" rx="4.6" ry="8"/></g>
+        <g className="puck-avatar-eye puck-avatar-eye-left"><ellipse className="puck-avatar-eye-shape" cx="43" cy="55" rx="4" ry="8"/></g>
+        <g className="puck-avatar-eye puck-avatar-eye-right"><ellipse className="puck-avatar-eye-shape" cx="57" cy="55" rx="4" ry="8"/></g>
+      </g>
       </g>
     </svg></span>
     <span className="puck-avatar-sparkles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-sparkle" key={index}/>)}</span>

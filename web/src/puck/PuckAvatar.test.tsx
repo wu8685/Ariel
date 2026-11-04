@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { avatarColors, avatarShapes, deriveAvatar, expressionForState, PuckAvatar } from "./PuckAvatar";
 import { resetAvatarMotionSchedulerForTests } from "./PuckAvatarScheduler";
 import avatarSource from "./PuckAvatar.tsx?raw";
-import avatarStyle from "./puck.css?raw";
+const avatarStyle = readFileSync("src/puck/puck.css", "utf8");
 
 afterEach(() => { cleanup(); resetAvatarMotionSchedulerForTests(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -45,9 +46,20 @@ describe("PuckAvatar", () => {
 		const face = container.querySelector(".puck-avatar-face");
 		const eyes = Array.from(face?.querySelectorAll(".puck-avatar-eye-shape") || []);
 		expect(eyes).toHaveLength(2);
-		expect(eyes.map(eye => [eye.getAttribute("rx"), eye.getAttribute("ry")])).toEqual([["4.6", "8"], ["4.6", "8"]]);
+		expect(eyes.map(eye => [eye.getAttribute("cx"), eye.getAttribute("rx"), eye.getAttribute("ry")])).toEqual([["43", "4", "8"], ["57", "4", "8"]]);
+		expect(Number(eyes[1].getAttribute("cx")) - Number(eyes[0].getAttribute("cx"))).toBe(14);
 		expect(container.querySelector(".puck-avatar-eye-white, .puck-avatar-pupil, clipPath")).toBeNull();
 		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();
+	});
+
+	it("keeps both embedded ears, body and face in one moving head group", () => {
+		const { container } = render(<PuckAvatar assistantId="assistant-head" name="头部测试" animated={false}/>);
+		const head = container.querySelector(".puck-avatar-head");
+		expect(head).not.toBeNull();
+		expect(head?.querySelectorAll(":scope > .puck-avatar-ears > .puck-avatar-ear")).toHaveLength(2);
+		expect(head?.querySelector(":scope > .puck-avatar-body")).not.toBeNull();
+		expect(head?.querySelector(":scope > .puck-avatar-face")).not.toBeNull();
+		expect(Array.from(head?.querySelectorAll(".puck-avatar-ear") || []).every(ear => /43/.test(ear.getAttribute("d") || ""))).toBe(true);
 	});
 
   it("is accessible, non-draggable and reacts to touch", () => {
@@ -92,7 +104,24 @@ describe("PuckAvatar", () => {
 		expect(avatarSource).not.toMatch(/\buseState\b|requestAnimationFrame|setInterval|setTimeout/);
 		expect(avatarStyle).not.toMatch(/\.puck-workspace \.puck-avatar svg[^}]*animation:/s);
 		expect(avatarStyle).not.toMatch(/\.puck-workspace \.puck-avatar-body[^}]*animation:/s);
-		expect(avatarStyle).not.toMatch(/will-change/);
+		expect(avatarStyle).toMatch(/\[data-moving="true"\][^{]*\{[^}]*will-change:\s*transform/s);
+		expect(avatarStyle).not.toMatch(/\.puck-avatar-head\s*\{[^}]*will-change/s);
+		expect(avatarStyle).toMatch(/--puck-motion-easing:\s*cubic-bezier\(\.45,\s*0,\s*\.25,\s*1\)/);
+		expect(avatarStyle).toMatch(/transition:\s*transform var\(--puck-motion-duration\) var\(--puck-motion-easing\)/);
 		expect(avatarStyle).not.toMatch(/\.puck-avatar-eye-(?:left|right)[^{]*\{[^}]*rotate/s);
+	});
+
+	it("adds will-change only while a transform transition is active", () => {
+		const { container } = render(<PuckAvatar assistantId="assistant-transition" name="过渡测试" animated={false}/>);
+		const avatar = container.querySelector<HTMLElement>(".puck-avatar")!;
+		const head = container.querySelector(".puck-avatar-head")!;
+		const run = new Event("transitionrun", { bubbles: true });
+		Object.defineProperty(run, "propertyName", { value: "transform" });
+		head.dispatchEvent(run);
+		expect(avatar.dataset.moving).toBe("true");
+		const end = new Event("transitionend", { bubbles: true });
+		Object.defineProperty(end, "propertyName", { value: "transform" });
+		head.dispatchEvent(end);
+		expect(avatar.dataset.moving).toBe("false");
 	});
 });
