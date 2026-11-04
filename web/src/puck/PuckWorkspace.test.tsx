@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PuckWorkspace } from "./PuckWorkspace";
 
@@ -7,6 +8,73 @@ const accepted = (data: Record<string, unknown>) => ({ type: "response", v: 1, r
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("PuckWorkspace", () => {
+  it("keeps the primary send control high contrast with a centered SVG arrow", async () => {
+    const request = vi.fn(async (method: string) => method === "puck.list"
+      ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+      : method === "puck.history" ? accepted({ messages: [] }) : accepted({}));
+    const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    await screen.findAllByText("小帕");
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send.querySelector("svg")).toBeTruthy();
+    const css = readFileSync("src/puck/puck.css", "utf8");
+    expect(css).toMatch(/\.puck-workspace \.puck-send\.primary\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*background:\s*var\(--puck-action\);[^}]*color:\s*var\(--puck-on-action\)/s);
+    expect(css).toMatch(/\.puck-workspace \.puck-send\.primary:disabled\s*\{[^}]*background:\s*[^;]+;[^}]*color:\s*[^;]+;/s);
+    expect(view.container.querySelector(".puck-send svg")).toBeTruthy();
+  });
+
+  it("ignores a previous assistant's late polling history after switching assistants", async () => {
+    vi.useFakeTimers();
+    let resolveLate: ((value: ReturnType<typeof accepted>) => void) | undefined;
+    const calls = new Map<string, number>();
+    const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+      if (method === "puck.list") return accepted({ assistants: [
+        { assistantId: "a-1", name: "旧助理", brainDeviceId: "brain-a", status: "ready" },
+        { assistantId: "a-2", name: "新助理", brainDeviceId: "brain-a", status: "ready" },
+      ] });
+      if (method === "puck.history") {
+        const id = String(params.assistantId);
+        const count = (calls.get(id) || 0) + 1;
+        calls.set(id, count);
+        if (id === "a-1" && count > 1) return new Promise<ReturnType<typeof accepted>>(resolve => { resolveLate = resolve; });
+        return accepted({ messages: id === "a-1"
+          ? [{ id: "old", assistantId: "a-1", role: "assistant", kind: "text", text: "旧助理历史" }]
+          : [{ id: "new", assistantId: "a-2", role: "assistant", kind: "text", text: "新助理问候" }] });
+      }
+      return accepted({});
+    });
+    render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getAllByText("旧助理历史").length).toBeGreaterThan(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    fireEvent.click(screen.getAllByText("新助理")[0].closest("button")!);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getAllByText("新助理问候").length).toBeGreaterThan(0);
+    await act(async () => { resolveLate?.(accepted({ messages: [
+      { id: "leaked-1", assistantId: "a-1", role: "user", kind: "text", text: "看下目前你能看到哪几个主机？" },
+      { id: "leaked-2", assistantId: "a-1", role: "user", kind: "text", text: "看下那本书的总结完成了吗" },
+    ] })); await Promise.resolve(); });
+    expect(screen.queryByText("看下目前你能看到哪几个主机？")).toBeNull();
+    expect(screen.queryByText("看下那本书的总结完成了吗")).toBeNull();
+    expect(screen.getAllByText("新助理问候").length).toBeGreaterThan(0);
+  });
+
+  it("shows an avatar only on an active processing row, never on completed assistant history", async () => {
+    const request = vi.fn(async (method: string) => method === "puck.list"
+      ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+      : method === "puck.history" ? accepted({ messages: [
+        { id: "done", role: "assistant", kind: "text", text: "已经完成的答复" },
+        { id: "working", role: "assistant", kind: "processing", text: "正在处理…" },
+      ] }) : accepted({}));
+    const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    await screen.findByText("已经完成的答复");
+    const completed = screen.getByText("已经完成的答复").closest(".puck-message");
+    const processing = screen.getAllByText("正在处理…").map(node => node.closest(".puck-message")).find(Boolean);
+    expect(completed).toBeTruthy();
+    expect(processing).toBeTruthy();
+    expect(completed!.querySelector(".puck-avatar")).toBeNull();
+    expect(processing!.querySelector(".puck-avatar")).toBeTruthy();
+  });
+
   it("creates an assistant and shows an immediate processing bubble when sending", async () => {
     let assistants: Record<string, unknown>[] = [];
     let resolveHistory: (() => void) | undefined;
@@ -52,7 +120,7 @@ describe("PuckWorkspace", () => {
     expect(await screen.findByRole("group", { name: "问题卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "授权卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "任务卡片" })).toBeTruthy();
-	expect(view.container.querySelectorAll(".puck-transcript .puck-avatar")).toHaveLength(1);
+	expect(view.container.querySelectorAll(".puck-transcript .puck-avatar")).toHaveLength(0);
 	expect(view.container.querySelectorAll(".puck-message.assistant.continued")).toHaveLength(2);
 	await act(async () => { fireEvent.click(screen.getByRole("button", { name: "停止全部工作" })); });
     expect((await screen.findAllByText("已请求停止 1 项")).length).toBeGreaterThan(0);

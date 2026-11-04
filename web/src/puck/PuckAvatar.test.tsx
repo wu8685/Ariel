@@ -99,6 +99,8 @@ describe("PuckAvatar", () => {
 		expect(Number(avatar.style.getPropertyValue("--puck-right-eye-xscale"))).toBeLessThan(Number(avatar.style.getPropertyValue("--puck-left-eye-xscale")));
 		fireEvent.pointerMove(avatar, { clientX: 50, clientY: 0, pointerType: "mouse" });
 		expect(avatar.style.getPropertyValue("--puck-left-eye-xscale")).toBe(avatar.style.getPropertyValue("--puck-right-eye-xscale"));
+		expect(Math.abs(Number.parseFloat(avatar.style.getPropertyValue("--puck-head-y")))).toBeGreaterThanOrEqual(6);
+		expect(Math.abs(Number.parseFloat(avatar.style.getPropertyValue("--puck-face-y")))).toBeGreaterThanOrEqual(9);
 	});
 
 	it("does not re-render while the shared scheduler changes gaze and blink phases", async () => {

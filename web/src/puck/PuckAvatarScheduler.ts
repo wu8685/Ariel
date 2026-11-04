@@ -1,5 +1,6 @@
 export type BlinkPhase = "open" | "closing" | "closed" | "opening";
 export type MotionDirection = { x: -1 | 0 | 1; y: -1 | 0 | 1; name: string };
+export type MotionLoop = { name: "horizontal-left" | "horizontal-right" | "vertical-up" | "vertical-down"; directions: ReadonlyArray<MotionDirection> };
 export type AvatarPose = {
   name: string;
   motionDuration: number;
@@ -31,6 +32,7 @@ type Entry = {
   blinkAt: number;
   poseAt: number;
   posePhase: "rest" | "look";
+  motionQueue: MotionDirection[];
   restPose: AvatarPose;
 };
 
@@ -40,6 +42,14 @@ export const motionDirections: ReadonlyArray<MotionDirection> = [
   { x: 0, y: -1, name: "up" }, { x: 0, y: 1, name: "down" },
   { x: -1, y: -1, name: "up-left" }, { x: 1, y: -1, name: "up-right" },
   { x: -1, y: 1, name: "down-left" }, { x: 1, y: 1, name: "down-right" },
+];
+
+const direction = (name: string) => motionDirections.find(item => item.name === name)!;
+export const motionLoops: ReadonlyArray<MotionLoop> = [
+  { name: "horizontal-left", directions: ["left", "up-left", "up", "up-right", "right", "down-right", "down", "down-left"].map(direction) },
+  { name: "horizontal-right", directions: ["right", "up-right", "up", "up-left", "left", "down-left", "down", "down-right"].map(direction) },
+  { name: "vertical-up", directions: ["up", "up-right", "right", "down-right", "down", "down-left", "left", "up-left"].map(direction) },
+  { name: "vertical-down", directions: ["down", "down-right", "right", "up-right", "up", "up-left", "left", "down-left"].map(direction) },
 ];
 
 const entries = new Map<number, Entry>();
@@ -79,17 +89,17 @@ export function restPoseForKey(key: string): AvatarPose {
 
 export function poseForDirection(direction: MotionDirection, rest: AvatarPose): AvatarPose {
   if (direction.name === "rest") return rest;
-  const turn = direction.x !== 0 ? direction.x * 14 : direction.y * 10;
+  const turn = direction.x !== 0 ? direction.x * 24 : direction.y * 20;
   const leftNear = direction.x < 0;
   const rightNear = direction.x > 0;
   return {
     name: direction.name,
     motionDuration: 720,
-    headX: direction.x * 4.5, headY: direction.y * 4, headRotate: turn,
-    faceX: direction.x * 7, faceY: direction.y * 6,
-    faceRotate: direction.x === 0 ? rest.faceRotate : direction.x * 22 + direction.y * 3,
-    leftEyeScaleX: leftNear ? .62 : 1, rightEyeScaleX: rightNear ? .62 : 1,
-    leftEyeScaleY: leftNear ? .82 : 1, rightEyeScaleY: rightNear ? .82 : 1,
+    headX: direction.x * 7.5, headY: direction.y * 6.8, headRotate: turn,
+    faceX: direction.x * 11.5, faceY: direction.y * 10,
+    faceRotate: direction.x === 0 ? rest.faceRotate : direction.x * 28 + direction.y * 4,
+    leftEyeScaleX: leftNear ? .55 : 1, rightEyeScaleX: rightNear ? .55 : 1,
+    leftEyeScaleY: leftNear ? .78 : 1, rightEyeScaleY: rightNear ? .78 : 1,
     eyeRoundness: 1.7,
   };
 }
@@ -105,6 +115,7 @@ function active(entry: Entry): boolean {
 function initialize(entry: Entry, now = Date.now()) {
   entry.blinkPhase = "open";
   entry.posePhase = "rest";
+  entry.motionQueue = [];
   entry.target.setPose(entry.restPose);
   entry.blinkAt = now + between(entry, entry.reducedMotion ? 8_000 : 2_000, entry.reducedMotion ? 16_000 : 7_000);
   entry.poseAt = entry.reducedMotion ? Number.POSITIVE_INFINITY : now + between(entry, 2_000, 8_000);
@@ -154,7 +165,20 @@ function advanceBlink(entry: Entry, now: number) {
 }
 
 function advancePose(entry: Entry, now: number) {
+  if (entry.motionQueue.length > 0) {
+    const pose = poseForDirection(entry.motionQueue.shift()!, entry.restPose);
+    entry.target.setPose(pose);
+    entry.posePhase = "look";
+    entry.poseAt = now + pose.motionDuration;
+    return;
+  }
   if (entry.posePhase === "rest") {
+    if (entry.random() < .38) {
+      const loop = motionLoops[Math.floor(entry.random() * motionLoops.length)] || motionLoops[0];
+      entry.motionQueue = [...loop.directions];
+      advancePose(entry, now);
+      return;
+    }
     const direction = motionDirections[1 + Math.floor(entry.random() * (motionDirections.length - 1))] || motionDirections[1];
     const pose = poseForDirection(direction, entry.restPose);
     entry.target.setPose(pose);
@@ -210,7 +234,7 @@ export function registerAvatarMotion(key: string, target: AvatarMotionTarget, op
   const entry: Entry = {
     id, target, random: randomFor(`${key}:${id}`),
     visible: options.visible ?? true, reducedMotion: options.reducedMotion ?? false,
-    blinkPhase: "open", blinkAt: Number.POSITIVE_INFINITY, poseAt: Number.POSITIVE_INFINITY, posePhase: "rest",
+    blinkPhase: "open", blinkAt: Number.POSITIVE_INFINITY, poseAt: Number.POSITIVE_INFINITY, posePhase: "rest", motionQueue: [],
     restPose: restPoseForKey(key),
   };
   initialize(entry);

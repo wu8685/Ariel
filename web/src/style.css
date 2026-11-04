@@ -390,9 +390,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-bottom: 1px solid var(--color-border);
   background: var(--color-page);
   flex: none;
-  transition: height .18s ease, padding .18s ease, opacity .12s ease, border-color .18s ease;
 }
-.conversation-head.history-collapsed { height: 0; padding: 0 10px; border-bottom-width: 0; border-bottom-color: transparent; opacity: 0; visibility: hidden; pointer-events: none; overflow: hidden; }
 .conversation-title { min-width: 0; flex: 1; }
 .conversation-title .eyebrow { display: none; }
 .conversation-head h2, .head-path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -659,8 +657,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .sidebar-toolbar-actions button { width: 44px; height: 44px; }
   .sidebar-disconnect { min-width: 44px; min-height: 44px; }
   .conversation { height: 100%; }
-  .conversation-head { height: 52px; padding: 3px 10px; gap: 6px; z-index: 3; background: var(--color-page); border-bottom-color: var(--color-border); }
-  .conversation-head.history-collapsed { height: 0; padding: 0 10px; border-bottom-width: 0; border-bottom-color: transparent; }
+  .conversation-head { height: calc(52px + env(safe-area-inset-top)); padding: max(3px, env(safe-area-inset-top)) 10px 3px; gap: 6px; z-index: 3; background: var(--color-page); border-bottom-color: var(--color-border); }
   .conversation-title { min-width: 0; flex: 1; }
   .conversation-title .eyebrow { display: none; }
   .conversation-head h2, .head-path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -366,8 +366,9 @@ test.describe("wide-screen file and chat workspace",()=>{
   for(const position of ["middle","near-end"])test(`opening and minimizing the split preserves the ${position} history item across text reflow`,async({page})=>{
     await page.setViewportSize({width:1280,height:844});const {methods,reads}=await setup(page,false,{longChat:true});
     const transcript=page.locator(".transcript");await transcript.evaluate((el,position)=>{el.scrollTop=position==="middle"?1800:(el.scrollHeight-el.clientHeight)*.8;el.dispatchEvent(new Event("scroll"))},position);
-    await expect(page.locator(".conversation-head")).toHaveAttribute("data-history-collapsed","true");
-    await expect(page.locator(".conversation-head")).toHaveCSS("height","0px");
+    await expect(page.locator(".conversation-head")).toHaveAttribute("data-history-collapsed","false");
+    await expect(page.locator(".conversation-head")).toHaveCSS("height","52px");
+    await expect(page.locator(".composer-wrap")).toHaveAttribute("data-history-collapsed","true");
     const anchor=()=>transcript.evaluate(el=>{const top=el.getBoundingClientRect().top;const node=[...el.querySelectorAll<HTMLElement>('[data-item-id]')].find(n=>n.getBoundingClientRect().bottom>top+1)!;return {id:node.dataset.itemId,top:node.getBoundingClientRect().top-top}});
     const before=await anchor();
     await page.getByRole("button",{name:"查看原文：a.md"}).evaluate((button:HTMLButtonElement)=>button.click());await expect(page.getByTestId("file-source")).toBeVisible();

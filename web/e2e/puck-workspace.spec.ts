@@ -16,10 +16,10 @@ const initialMessages = [
 ];
 let messages = initialMessages;
 
-async function openPuck(page: Page) {
+async function openPuck(page: Page, history: typeof initialMessages = initialMessages) {
   assistants = initialAssistants;
 	avatarUpdates = [];
-  messages = initialMessages;
+  messages = history;
   await page.route("**/api/auth/status", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ mode: "passkey", authenticated: true, enrollmentRequired: false, puck: { state: "ready" } }) }));
   await page.route("http://127.0.0.1:4173/", async route => {
     const response = await route.fetch();
@@ -59,6 +59,52 @@ async function openPuck(page: Page) {
   await expect(page.getByRole("button", { name: "打开 Puck" })).toBeVisible();
   await page.getByRole("button", { name: "打开 Puck" }).click();
   await expect(page.getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
+}
+
+for (const width of [390, 1280]) {
+  test.describe(`Puck fixed workspace ${width}px`, () => {
+    test.use({ viewport: { width, height: 844 }, isMobile: width < 700, hasTouch: width < 700, colorScheme: "dark" });
+    test("keeps the header and desktop side panels fixed while only the transcript scrolls", async ({ page }) => {
+      const longHistory = [
+        ...initialMessages,
+        ...Array.from({ length: 24 }, (_, index) => ({
+          id: `scroll-${index}`,
+          role: index % 2 ? "user" : "assistant",
+          kind: "text",
+          text: `滚动固定布局验证 ${index + 1}。${"只有中间消息列表应滚动，顶部和侧栏保持原位。".repeat(3)}`,
+          createdAt: `2026-11-03T12:${String(index + 5).padStart(2, "0")}:00Z`,
+        })),
+      ];
+      await openPuck(page, longHistory);
+      const transcript = page.locator(".puck-transcript");
+      const header = page.locator(".puck-conversation > header");
+      const menu = page.getByRole("button", { name: "打开助理列表" });
+      const before = width >= 700 ? await Promise.all([
+        page.locator(".puck-assistants").boundingBox(),
+        page.locator(".puck-info").boundingBox(),
+      ]) : [];
+
+      await transcript.evaluate(element => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+      });
+
+      await expect(header).toBeInViewport();
+      expect(await page.evaluate(() => document.scrollingElement?.scrollTop || 0)).toBe(0);
+      if (width < 700) {
+        await expect(menu).toBeVisible();
+        await menu.click();
+        await expect(page.locator(".puck-assistants")).toHaveClass(/mobile-open/);
+      } else {
+        const after = await Promise.all([
+          page.locator(".puck-assistants").boundingBox(),
+          page.locator(".puck-info").boundingBox(),
+        ]);
+        expect(after).toEqual(before);
+      }
+      await expect(page).toHaveScreenshot(`sticky-puck-${width}-after-scroll.png`, { animations: "disabled", caret: "hide" });
+    });
+  });
 }
 
 test.describe("Puck HTTP availability normalization", () => {
@@ -106,7 +152,7 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await expect(assistantContent).toHaveCSS("padding", "0px");
 			await expect(page.locator(".puck-message.user .puck-message-content")).toHaveCSS("background-color", "rgb(29, 93, 198)");
 			await expect(page.locator(".puck-message.message, .puck-message .message-body, .puck-message .message-text, .puck-message .markdown-body")).toHaveCount(0);
-			await expect(page.locator(".puck-transcript .puck-message.assistant .puck-avatar")).toHaveCount(1);
+			await expect(page.locator(".puck-transcript .puck-message.assistant .puck-avatar")).toHaveCount(0);
       await expect(page.getByRole("group", { name: "问题卡片" })).toBeVisible();
       await expect(page.getByRole("group", { name: "授权卡片" })).toBeVisible();
 			await expect(page.getByRole("group", { name: "授权卡片" })).toContainText("已过期");
@@ -115,7 +161,9 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
       await expect(page.getByRole("group", { name: "任务卡片" })).toContainText("进行中");
       await expect(page.getByRole("button", { name: "打开会话" })).toBeVisible();
 			await expect(page.getByRole("button", { name: "打开会话" })).toHaveCSS("height", "28px");
-			await expect(page.getByRole("button", { name: "发送" })).toHaveCSS("height", "32px");
+			const sendButton = page.getByRole("button", { name: "发送" });
+			await expect(sendButton).toHaveCSS("height", "32px");
+			await expect(sendButton).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 			await expect(page.getByRole("button", { name: "停止全部工作" })).toHaveCSS("height", "32px");
 			const avatar = page.locator(".puck-conversation > header .puck-avatar");
       await expect(avatar).toHaveAttribute("data-expression", "waiting");
@@ -174,6 +222,20 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
       await expect(page).toHaveScreenshot(`puck-${width}-${colorScheme}.png`, { animations: "disabled", caret: "hide" });
 			await page.getByRole("textbox", { name: "给 Puck 发消息" }).fill("第一行\n第二行\n第三行");
 			expect(await page.locator(".puck-composer").evaluate(composer => composer.getBoundingClientRect().height)).toBeGreaterThan(48);
+			await expect(sendButton).toBeEnabled();
+			await expect(sendButton).toHaveCSS("background-color", "rgb(255, 255, 255)");
+			await expect(sendButton).toHaveCSS("color", "rgb(10, 10, 10)");
+			const arrowCenter = await sendButton.evaluate(button => {
+				const outer = button.getBoundingClientRect();
+				const icon = button.querySelector("svg")!.getBoundingClientRect();
+				return {
+					x: Math.abs(outer.left + outer.width / 2 - (icon.left + icon.width / 2)),
+					y: Math.abs(outer.top + outer.height / 2 - (icon.top + icon.height / 2)),
+				};
+			});
+			expect(arrowCenter.x).toBeLessThanOrEqual(.5);
+			expect(arrowCenter.y).toBeLessThanOrEqual(.5);
+			if (width === 390 && colorScheme === "dark") await expect(page).toHaveScreenshot("puck-send-enabled-390-dark.png", { animations: "disabled", caret: "hide" });
     });
   });
 }
@@ -198,15 +260,17 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await expect(avatar).toHaveAttribute("draggable", "false");
 	});
 
-	test("captures the same avatar at rest, two turns and a blink", async ({ page }) => {
+	test("captures the same avatar at rest, larger turns, orbit poses and a blink", async ({ page }) => {
 		await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
 		await openPuck(page);
 		const board = page.locator(".puck-motion-storyboard");
 		await page.locator(".puck-conversation > header .puck-avatar").evaluate(source => {
 			const frames = [
 				{ label: "静止", head: [0, 0, 0], face: [4, -4, -24], eyes: [1, .72, 1], blink: "open" },
-				{ label: "看左上", head: [-4.5, -4, -14], face: [-7, -6, -18], eyes: [.62, 1, 1.7], blink: "open" },
-				{ label: "看右下", head: [4.5, 4, 14], face: [7, 6, 22], eyes: [1, .62, 1.7], blink: "open" },
+				{ label: "左上扫视", head: [-7.5, -6.8, -24], face: [-11.5, -10, -32], eyes: [.55, 1, 1.7], blink: "open" },
+				{ label: "环绕顶部", head: [0, -6.8, -20], face: [0, -10, -24], eyes: [1, 1, 1.7], blink: "open" },
+				{ label: "右下扫视", head: [7.5, 6.8, 24], face: [11.5, 10, 32], eyes: [1, .55, 1.7], blink: "open" },
+				{ label: "环绕底部", head: [0, 6.8, 20], face: [0, 10, -24], eyes: [1, 1, 1.7], blink: "open" },
 				{ label: "眨眼", head: [0, 0, 0], face: [4, -4, -24], eyes: [1, .72, 1], blink: "closed" },
 			];
 			const storyboard = document.createElement("section");
@@ -244,7 +308,7 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		const capture = page.locator(".puck-motion-capture");
 		await page.waitForTimeout(32);
 		await capture.evaluate(avatar => {
-			const properties = { "--puck-head-x": "4.5%", "--puck-head-y": "4%", "--puck-head-rotate": "14deg", "--puck-face-x": "7px", "--puck-face-y": "6px", "--puck-face-rotate": "22deg", "--puck-left-eye-xscale": "1", "--puck-right-eye-xscale": ".62", "--puck-eye-roundness": "1.7" };
+			const properties = { "--puck-head-x": "7.5%", "--puck-head-y": "6.8%", "--puck-head-rotate": "24deg", "--puck-face-x": "11.5px", "--puck-face-y": "10px", "--puck-face-rotate": "32deg", "--puck-left-eye-xscale": "1", "--puck-right-eye-xscale": ".55", "--puck-eye-roundness": "1.7" };
 			Object.entries(properties).forEach(([name, value]) => (avatar as HTMLElement).style.setProperty(name, value));
 		});
 		await page.waitForTimeout(32);

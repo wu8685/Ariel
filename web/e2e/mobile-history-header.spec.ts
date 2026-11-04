@@ -59,9 +59,73 @@ async function openHistoryFixture(page: Page, thread: Thread = fixtureThread, fa
   await page.getByRole("button", { name: "展开项目 history-fixture，/tmp/history-fixture" }).click();
   await page.getByText(thread.title).click();
   await expect(page.getByRole("heading", { name: thread.title })).toBeVisible();
-  await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
+  if ((page.viewportSize()?.width || 0) >= 1200) await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);
+  else await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
   return { sendEvent: (event: unknown) => relaySocket?.send(JSON.stringify(event)) };
 }
+
+test("keeps the mobile header and menu reachable at the latest message without document scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openHistoryFixture(page);
+  const transcript = page.locator(".transcript");
+  await transcript.evaluate(element => {
+    element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+    element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500);
+    element.dispatchEvent(new Event("scroll"));
+  });
+
+  const header = page.locator(".conversation-head");
+  const menu = header.getByRole("button", { name: /打开会话列表/ });
+  await expect(header).toBeInViewport();
+  await expect(menu).toBeVisible();
+
+  await transcript.evaluate(element => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+
+  await expect(header).toBeInViewport();
+  await expect(menu).toBeVisible();
+  const geometry = await header.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      top: bounds.top,
+      bottom: bounds.bottom,
+      viewportHeight: window.innerHeight,
+      documentScrollTop: document.scrollingElement?.scrollTop || 0,
+    };
+  });
+  expect(geometry.top).toBeGreaterThanOrEqual(0);
+  expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight);
+  expect(geometry.documentScrollTop).toBe(0);
+  await menu.click();
+  await expect(page.locator(".sidebar")).toHaveClass(/\bopen\b/);
+  await page.getByRole("button", { name: "关闭会话列表遮罩" }).click({ position: { x: 386, y: 400 } });
+  await expect(page.locator(".sidebar")).not.toHaveClass(/\bopen\b/);
+  await expect(page).toHaveScreenshot("sticky-header-390-bottom.png", { animations: "disabled", caret: "hide" });
+});
+
+test("keeps the desktop conversation header and sidebar fixed while the transcript scrolls", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await openHistoryFixture(page);
+  const header = page.locator(".conversation-head");
+  const menu = header.getByRole("button", { name: /收起会话列表/ });
+  const sidebar = page.locator(".sidebar");
+  await expect(sidebar).toHaveClass(/\bopen\b/);
+  const before = await sidebar.boundingBox();
+
+  const transcript = page.locator(".transcript");
+  await transcript.evaluate(element => {
+    element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+    element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500);
+    element.dispatchEvent(new Event("scroll"));
+  });
+
+  await expect(header).toBeInViewport();
+  await expect(header.getByRole("button", { name: /收起会话列表/ })).toBeVisible();
+  expect(await sidebar.boundingBox()).toEqual(before);
+  expect(await page.evaluate(() => document.scrollingElement?.scrollTop || 0)).toBe(0);
+});
 
 test("the running composer stays visible when the mobile keyboard shrinks the viewport", async ({ page }) => {
   const running: Thread = {
@@ -137,7 +201,7 @@ test("typing through Safari-style viewport resize and streaming never collapses 
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "true");
 });
 
-test("scrolling into history fully collapses the chrome and gives its height to the transcript", async ({ page }) => {
+test("scrolling into history keeps the header while giving the composer's height to the transcript", async ({ page }) => {
   await openHistoryFixture(page);
   const head = page.locator(".conversation-head");
   const transcript = page.locator(".transcript");
@@ -155,13 +219,12 @@ test("scrolling into history fully collapses the chrome and gives its height to 
     element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 100);
     element.dispatchEvent(new Event("scroll"));
   });
-  await expect(head).toHaveAttribute("data-history-collapsed", "true");
-  await expect(head).toHaveCSS("height", "0px");
-  await expect(head).toHaveCSS("visibility", "hidden");
-  await expect(head.getByRole("button", { name: /打开会话列表/ })).toBeHidden();
-  await expect(page.locator(".permission-info-button")).toBeHidden();
-  await expect(head.getByRole("heading", { name: fixtureThread.title })).toBeHidden();
-  await expect(head.locator(".head-path")).toBeHidden();
+  await expect(head).toHaveAttribute("data-history-collapsed", "false");
+  await expect(head).toHaveCSS("height", "52px");
+  await expect(head).toHaveCSS("visibility", "visible");
+  await expect(head.getByRole("button", { name: /打开会话列表/ })).toBeVisible();
+  await expect(head.getByRole("heading", { name: fixtureThread.title })).toBeVisible();
+  await expect(head.locator(".head-path")).toBeVisible();
   await expect(composerWrap).toHaveAttribute("data-history-collapsed", "true");
   await expect(composerWrap).toHaveCSS("height", "0px");
   await expect(composerWrap).toHaveCSS("visibility", "hidden");
@@ -171,9 +234,9 @@ test("scrolling into history fully collapses the chrome and gives its height to 
     transcriptTop: document.querySelector(".transcript")?.getBoundingClientRect().top || 0,
     transcriptHeight: document.querySelector(".transcript")?.getBoundingClientRect().height || 0,
   }));
-  expect(collapsed.headHeight).toBe(0);
-  expect(initial.transcriptTop - collapsed.transcriptTop).toBeGreaterThanOrEqual(52);
-  expect(collapsed.transcriptHeight - initial.transcriptHeight).toBeGreaterThanOrEqual(initial.headHeight + initial.composerHeight);
+  expect(collapsed.headHeight).toBe(52);
+  expect(collapsed.transcriptTop).toBe(initial.transcriptTop);
+  expect(collapsed.transcriptHeight - initial.transcriptHeight).toBeGreaterThanOrEqual(initial.composerHeight);
   const restore = page.getByRole("button", { name: "恢复输入区并回到最新" });
   await expect(restore).toBeVisible();
   await expect(restore).toHaveText("");
@@ -203,15 +266,16 @@ test("returning to latest restores the chrome once without oscillation", async (
     element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500);
     element.dispatchEvent(new Event("scroll"));
   });
-  await expect(head).toHaveAttribute("data-history-collapsed", "true");
-  await expect(head).toHaveCSS("height", "0px");
+  await expect(head).toHaveAttribute("data-history-collapsed", "false");
+  await expect(head).toHaveCSS("height", "52px");
+  await expect(composerWrap).toHaveAttribute("data-history-collapsed", "true");
 
   await page.evaluate(() => {
-    const head = document.querySelector(".conversation-head");
+    const composer = document.querySelector(".composer-wrap");
     const states: string[] = [];
     (window as unknown as { __arielHistoryChromeStates: string[] }).__arielHistoryChromeStates = states;
-    if (!head) return;
-    new MutationObserver(() => states.push(head.getAttribute("data-history-collapsed") || "")).observe(head, { attributes: true, attributeFilter: ["data-history-collapsed"] });
+    if (!composer) return;
+    new MutationObserver(() => states.push(composer.getAttribute("data-history-collapsed") || "")).observe(composer, { attributes: true, attributeFilter: ["data-history-collapsed"] });
   });
   await transcript.evaluate(element => {
     element.scrollTop = element.scrollHeight;
@@ -247,14 +311,15 @@ test("a one-pixel final step to the latest restores the chrome", async ({ page }
     element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500);
     element.dispatchEvent(new Event("scroll"));
   });
-  await expect(head).toHaveAttribute("data-history-collapsed", "true");
+  await expect(head).toHaveAttribute("data-history-collapsed", "false");
+  await expect(composerWrap).toHaveAttribute("data-history-collapsed", "true");
 
   await page.evaluate(() => {
-    const head = document.querySelector(".conversation-head");
+    const composer = document.querySelector(".composer-wrap");
     const states: string[] = [];
     (window as unknown as { __arielHistoryChromeStates: string[] }).__arielHistoryChromeStates = states;
-    if (!head) return;
-    new MutationObserver(() => states.push(head.getAttribute("data-history-collapsed") || "")).observe(head, { attributes: true, attributeFilter: ["data-history-collapsed"] });
+    if (!composer) return;
+    new MutationObserver(() => states.push(composer.getAttribute("data-history-collapsed") || "")).observe(composer, { attributes: true, attributeFilter: ["data-history-collapsed"] });
   });
   await transcript.evaluate(element => {
     const bottom = element.scrollHeight - element.clientHeight;

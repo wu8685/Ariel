@@ -156,10 +156,10 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     const x = Math.max(-1, Math.min(1, (event.clientX - box.left) / box.width * 2 - 1));
     const y = Math.max(-1, Math.min(1, (event.clientY - box.top) / box.height * 2 - 1));
     applyPose(root.current, {
-      name: "pointer", motionDuration: 720, headX: x * 4.5, headY: y * 4, headRotate: Math.abs(x) > .12 ? x * 14 : y * 10,
-      faceX: x * 7, faceY: y * 6, faceRotate: Math.abs(x) > .12 ? x * 22 + y * 3 : currentPose.current.faceRotate,
-      leftEyeScaleX: x < -.12 ? .62 : 1, rightEyeScaleX: x > .12 ? .62 : 1,
-      leftEyeScaleY: x < -.12 ? .82 : 1, rightEyeScaleY: x > .12 ? .82 : 1, eyeRoundness: 1.7,
+      name: "pointer", motionDuration: 720, headX: x * 7.5, headY: y * 6.8, headRotate: Math.abs(x) > .12 ? x * 24 : y * 20,
+      faceX: x * 11.5, faceY: y * 10, faceRotate: Math.abs(x) > .12 ? x * 28 + y * 4 : currentPose.current.faceRotate,
+      leftEyeScaleX: x < -.12 ? .55 : 1, rightEyeScaleX: x > .12 ? .55 : 1,
+      leftEyeScaleY: x < -.12 ? .78 : 1, rightEyeScaleY: x > .12 ? .78 : 1, eyeRoundness: 1.7,
     });
   }
 

@@ -1515,15 +1515,15 @@ describe("Ariel app interactions", () => {
     fireEvent.scroll(transcript);
     const conversationHead = document.querySelector(".conversation-head") as HTMLElement;
     const composerWrap = document.querySelector(".composer-wrap") as HTMLElement;
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
-    expect(conversationHead.dataset.historyCollapsed).toBe("true");
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
+    expect(conversationHead.dataset.historyCollapsed).toBe("false");
     expect(composerWrap.classList.contains("history-collapsed")).toBe(true);
     expect(composerWrap.dataset.historyCollapsed).toBe("true");
     const earlierScrollCalls = vi.mocked(Element.prototype.scrollIntoView).mock.calls.length;
     const updated: Thread = { ...recent, turns: [{ ...recent.turns[0], items: [{ itemId: "answer", role: "assistant", text: "partial and more" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
     expect(transcript.scrollTop).toBe(300);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(earlierScrollCalls);
     const returnToLatest = screen.getByRole("button", { name: "回到最新" });
     expect(returnToLatest.textContent).toBe("");
@@ -1537,7 +1537,7 @@ describe("Ariel app interactions", () => {
     expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
   });
 
-  it("uses hysteresis before expanding the collapsed history chrome near the latest messages", async () => {
+  it("uses hysteresis before expanding the collapsed history composer near the latest messages", async () => {
     const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "inProgress", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
     const { socket } = await openFixture(recent);
     const transcript = document.querySelector(".transcript") as HTMLElement;
@@ -1548,16 +1548,16 @@ describe("Ariel app interactions", () => {
 
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     expect(composerWrap.classList.contains("history-collapsed")).toBe(true);
 
     transcript.scrollTop = 730;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     const updated: Thread = { ...recent, turns: [{ ...recent.turns[0], items: [{ itemId: "answer", role: "assistant", text: "history with streamed update" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: updated }));
     expect(transcript.scrollTop).toBe(730);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
 
     transcript.scrollTop = 780;
     fireEvent.scroll(transcript);
@@ -1576,11 +1576,11 @@ describe("Ariel app interactions", () => {
 
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
 
     transcript.scrollTop = 767;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
 
     transcript.scrollTop = 768;
     fireEvent.scroll(transcript);
@@ -1598,12 +1598,12 @@ describe("Ariel app interactions", () => {
 
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
 
     transcript.scrollTop = 800;
     fireEvent.touchStart(transcript, { touches: [{ clientY: 250 }] });
     fireEvent.touchMove(transcript, { touches: [{ clientY: 300 }] });
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     fireEvent.touchEnd(transcript);
     fireEvent.touchStart(transcript, { touches: [{ clientY: 300 }] });
     fireEvent.touchMove(transcript, { touches: [{ clientY: 250 }] });
@@ -1622,7 +1622,7 @@ describe("Ariel app interactions", () => {
 
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
 
     transcript.scrollTop = 800;
     fireEvent.scroll(transcript);
@@ -1638,11 +1638,11 @@ describe("Ariel app interactions", () => {
     fireEvent.wheel(transcript, { deltaY: -100 });
     transcript.scrollTop = 700;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     expect(composerWrap.classList.contains("history-collapsed")).toBe(true);
   });
 
-  it("expands the history header immediately when selecting another thread", async () => {
+  it("keeps the history header expanded when selecting another thread", async () => {
     const recent: Thread = { ...fixtureThread, turns: [{ turnId: "current", status: "completed", items: [{ itemId: "answer", role: "assistant", text: "history" }] }] };
     const another: Thread = { ...fixtureThread, threadId: "another", title: "Another", cwd: "/tmp/another" };
     await openFixture(recent, false, false, [recent, another]);
@@ -1652,7 +1652,7 @@ describe("Ariel app interactions", () => {
     Object.defineProperty(transcript, "scrollHeight", { configurable: true, value: 1000 });
     transcript.scrollTop = 300;
     fireEvent.scroll(transcript);
-    expect(conversationHead.classList.contains("history-collapsed")).toBe(true);
+    expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: /打开会话列表/ }));
     await expandProject(another.cwd);

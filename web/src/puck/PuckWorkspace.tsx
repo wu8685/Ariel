@@ -9,7 +9,7 @@ type Request = (method: string, target: string, params: Record<string, unknown>)
 type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
 type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; unreadCount?: number; lastMessagePreview?: string };
-type Message = { id: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
+type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 
 function responseError(response: PuckResponse): string {
@@ -18,10 +18,13 @@ function responseError(response: PuckResponse): string {
 function arrayData<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function normalizeMessage(value: Record<string, unknown>): Message {
   return {
-    id: String(value.id ?? value.ID ?? crypto.randomUUID()), role: String(value.role ?? value.Role ?? "assistant"),
+    id: String(value.id ?? value.ID ?? crypto.randomUUID()), assistantId: String(value.assistantId ?? value.AssistantID ?? "") || undefined, role: String(value.role ?? value.Role ?? "assistant"),
     kind: String(value.kind ?? value.Kind ?? "text"), text: String(value.text ?? value.Text ?? ""),
     cardJSON: String(value.cardJSON ?? value.CardJSON ?? ""), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""),
   };
+}
+function historyMessages(value: unknown, assistantID: string): Message[] {
+  return arrayData<Record<string, unknown>>(value).map(normalizeMessage).filter(message => !message.assistantId || message.assistantId === assistantID);
 }
 function workData(message: Message): Record<string, unknown> { try { return message.workSummary ? JSON.parse(message.workSummary) as Record<string, unknown> : {}; } catch { return {}; } }
 function workLabel(message: Message, now: number): string {
@@ -168,7 +171,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     let active = true;
     void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
       if (active && response.outcome === "accepted") {
-        const durable = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
+        const durable = historyMessages(response.data?.messages, selectedID);
         setMessages(current => mergeHistory(current, durable));
       }
     });
@@ -181,7 +184,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		const unsubscribe = subscribeEvents?.(event => {
 			if (!active || event.event !== "puck.event" || event.assistantId !== selectedID || event.kind !== "history") return;
 			const payload = event.payload as Record<string, unknown> | undefined;
-			const durable = arrayData<Record<string, unknown>>(payload?.messages).map(normalizeMessage);
+			const durable = historyMessages(payload?.messages, selectedID);
 			setMessages(current => mergeHistory(current, durable));
 			void request("puck.read", "relay", { assistantId: selectedID });
 		});
@@ -194,8 +197,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 			});
 		}
 		const timer = window.setInterval(() => { void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
-			if (response.outcome !== "accepted") return;
-			const durable = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
+			if (!active || response.outcome !== "accepted") return;
+			const durable = historyMessages(response.data?.messages, selectedID);
 			setMessages(current => mergeHistory(current, durable));
 		}); }, subscribeEvents ? 10000 : 2000);
 		return () => {
@@ -325,8 +328,9 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       </div> : messages.map((message,index) => {
         const continued = index > 0 && messages[index - 1].role === message.role;
         const groupEnd = index === messages.length - 1 || messages[index + 1].role !== message.role;
-        return <article key={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}`}>
-          {message.role === "assistant" && !continued && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
+        const working = message.role === "assistant" && ["processing", "greeting_processing", "acknowledged"].includes(message.kind);
+        return <article key={message.id} data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`}>
+          {working && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
           <div className="puck-message-content">
             <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
             {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
@@ -337,7 +341,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </article>;
       })}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
-      {selected && <footer><div className="puck-composer"><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><span aria-hidden="true">↑</span></button></div></footer>}
+      {selected && <footer><div className="puck-composer"><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim()}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></footer>}
     </section>
 
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>

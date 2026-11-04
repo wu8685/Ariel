@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getAvatarMotionSchedulerDebug,
   motionDirections,
+  motionLoops,
   poseForDirection,
   registerAvatarMotion,
   restPoseForKey,
@@ -21,7 +22,7 @@ function target(): AvatarMotionTarget {
 }
 
 describe("Puck avatar global motion scheduler", () => {
-  it("derives a stable angled rest face and eight directional head turns with perspective", () => {
+  it("derives a stable angled rest face and eight larger directional head turns with near-eye perspective", () => {
     expect(restPoseForKey("indy")).toEqual(restPoseForKey("indy"));
     const rest = restPoseForKey("indy");
     expect(Math.abs(rest.faceRotate)).toBeGreaterThanOrEqual(20);
@@ -33,11 +34,13 @@ describe("Puck avatar global motion scheduler", () => {
     expect(motionDirections.filter(direction => direction.name !== "rest")).toHaveLength(8);
     for (const direction of motionDirections.filter(direction => direction.name !== "rest")) {
       const pose = poseForDirection(direction, rest);
-      expect(Math.abs(pose.headRotate)).toBeGreaterThanOrEqual(10);
-      expect(Math.abs(pose.headRotate)).toBeLessThanOrEqual(15);
-      if (direction.x !== 0) expect(Math.abs(pose.headX)).toBeGreaterThanOrEqual(3);
-      if (direction.y !== 0) expect(Math.abs(pose.headY)).toBeGreaterThanOrEqual(3);
-      expect(Math.max(Math.abs(pose.headX), Math.abs(pose.headY))).toBeLessThanOrEqual(6);
+      expect(Math.abs(pose.headRotate)).toBeGreaterThanOrEqual(18);
+      expect(Math.abs(pose.headRotate)).toBeLessThanOrEqual(26);
+      if (direction.x !== 0) expect(Math.abs(pose.headX)).toBeGreaterThanOrEqual(6);
+      if (direction.y !== 0) expect(Math.abs(pose.headY)).toBeGreaterThanOrEqual(6);
+      expect(Math.max(Math.abs(pose.headX), Math.abs(pose.headY))).toBeLessThanOrEqual(9);
+      if (direction.x !== 0) expect(Math.abs(pose.faceX)).toBeGreaterThanOrEqual(10);
+      if (direction.y !== 0) expect(Math.abs(pose.faceY)).toBeGreaterThanOrEqual(9);
       expect(Math.sign(pose.faceX)).toBe(direction.x === 0 ? 0 : Math.sign(direction.x));
       expect(Math.sign(pose.faceY)).toBe(direction.y === 0 ? 0 : Math.sign(direction.y));
       expect(pose.eyeRoundness).toBeGreaterThanOrEqual(1.5);
@@ -59,6 +62,17 @@ describe("Puck avatar global motion scheduler", () => {
     }
     expect(rest.motionDuration).toBeGreaterThanOrEqual(700);
     expect(rest.motionDuration).toBeLessThanOrEqual(900);
+  });
+
+  it("defines horizontal and vertical orbit loops that sweep every side without returning to center", () => {
+    expect(motionLoops.map(loop => loop.name)).toEqual(expect.arrayContaining(["horizontal-left", "horizontal-right", "vertical-up", "vertical-down"]));
+    for (const loop of motionLoops) {
+      expect(loop.directions.length).toBeGreaterThanOrEqual(6);
+      expect(loop.directions.every(direction => direction.name !== "rest")).toBe(true);
+      expect(new Set(loop.directions.map(direction => Math.sign(direction.x)))).toEqual(new Set([-1, 0, 1]));
+      expect(new Set(loop.directions.map(direction => Math.sign(direction.y)))).toEqual(new Set([-1, 0, 1]));
+      expect(loop.directions.some(direction => direction.x !== 0 && direction.y !== 0)).toBe(true);
+    }
   });
 
   it("uses one smooth 220-280ms timeline for both eyelids", async () => {
