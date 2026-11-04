@@ -165,9 +165,20 @@ func TestModulePersistsRealTurnDurationStepsUnreadAndReactions(t *testing.T) {
 		t.Fatalf("brain reaction=%+v", brainReaction)
 	}
 	history = module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	var reacted Message
+	reactedCount := 0
+	for _, message := range history {
+		if message.ID == "00000000-0000-4000-8000-000000000130" {
+			reacted = message
+			reactedCount++
+		}
+	}
+	if reactedCount != 1 {
+		t.Fatalf("target message count=%d, want 1: %+v", reactedCount, history)
+	}
 	var actors map[string]string
-	if json.Unmarshal([]byte(history[0].Reaction), &actors) != nil || actors["user"] != "👍" || actors["assistant"] != "👀" {
-		t.Fatalf("reaction=%q", history[0].Reaction)
+	if json.Unmarshal([]byte(reacted.Reaction), &actors) != nil || actors["user"] != "👍" || actors["assistant"] != "👀" {
+		t.Fatalf("reaction=%q", reacted.Reaction)
 	}
 }
 

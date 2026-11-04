@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { base64URLToBuffer, bufferToBase64URL, loadAuthStatus, loginWithPasskey, registerPasskey } from "./auth";
+import { base64URLToBuffer, bufferToBase64URL, loadAuthStatus, loginWithPasskey, normalizePuckStatus, registerPasskey } from "./auth";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Passkey Web client", () => {
+  it("normalizes HTTP Puck wire states without inventing readiness", () => {
+    expect(normalizePuckStatus(undefined)).toEqual({ state: "disabled" });
+    expect(normalizePuckStatus({ state: "off" })).toEqual({ state: "disabled" });
+    expect(normalizePuckStatus({ state: "ready" })).toEqual({ state: "ready" });
+    expect(normalizePuckStatus({ state: "unavailable", reason: "NO_HTTPS" })).toEqual({ state: "unavailable", reason: "NO_HTTPS" });
+    expect(normalizePuckStatus({ state: "degraded", reason: "NO_BRAIN" })).toEqual({ state: "unavailable", reason: "NO_BRAIN" });
+    expect(normalizePuckStatus({ state: "future" } as never)).toEqual({ state: "unavailable" });
+  });
+
   it("bounds the silent status check so recovery cannot block manual login forever", async () => {
     vi.useFakeTimers();
     try {

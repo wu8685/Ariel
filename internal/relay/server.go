@@ -462,13 +462,6 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	defer s.removePeer(p)
 	ack := map[string]any{"type": "hello.ok", "v": 1, "connectionId": p.id, "relayEpoch": s.epoch}
-	if s.cfg.PuckState != "" {
-		status := map[string]any{"state": s.cfg.PuckState}
-		if s.cfg.PuckReason != "" {
-			status["reason"] = s.cfg.PuckReason
-		}
-		ack["puck"] = status
-	}
 	if p.role == "web" && sessionToken != "" {
 		ack["sessionToken"] = sessionToken
 	}

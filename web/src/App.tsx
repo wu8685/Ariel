@@ -28,7 +28,7 @@ import { DevicePicker } from "./device-picker";
 import { useWorkspaceLayout } from "./workspace-layout";
 import { editableMessage, parseEditTarget, historyRewritten, type MessageEdit } from "./message-edit";
 import {StreamFence} from "./stream-fence";
-import { loadAuthStatus, loginWithPasskey, logoutPasskey, registerPasskey } from "./auth";
+import { loadAuthStatus, loginWithPasskey, logoutPasskey, normalizePuckStatus, registerPasskey } from "./auth";
 import { FileContentCache, FileQuoteChips, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileViewMode } from "./file-context";
 import { FileWorkspace, FileWorkspaceModel, useFileWorkspace } from "./file-workspace";
 import { FileWorkspaceSession } from "./file-workspace-session";
@@ -1918,7 +1918,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     void loadAuthStatus().then(auth => {
       if (!active || generation !== authGeneration.current) return;
       if (auth.mode !== "passkey") throw new Error("Relay 返回了不一致的认证模式。");
-	  setPuckAvailability(auth.puck ?? { state: "disabled" });
+	  setPuckAvailability(normalizePuckStatus(auth.puck));
       setPasskeyAuth({ loaded: true, enrollmentRequired: auth.enrollmentRequired, error: "" });
       if (auth.authenticated) client.connect("cookie");
     }).catch(error => {
