@@ -27,6 +27,27 @@ func TestUnverifiedNativeProfileBlocksOnlyTaskWrites(t *testing.T) {
 	}
 }
 
+func TestPuckBrainAllowsOnlyVerifiedOrIsolatedProbeProfile(t *testing.T) {
+	if !puckBrainAllowed(probe.IPCProfileVerified, "26.930.31730", "0.160.0") {
+		t.Fatal("verified native profile disabled Puck brain")
+	}
+	if !puckBrainAllowed(probe.IPCProfileUnverified, "26.930.51102", "0.160.0") {
+		t.Fatal("isolated Puck write-probe profile was not admitted")
+	}
+	for _, tc := range []struct {
+		profile      probe.IPCProfileStatus
+		desktop, cli string
+	}{
+		{probe.IPCProfileUnverified, "26.931.1", "0.160.0"},
+		{probe.IPCProfileUnverified, "26.930.51102", "0.161.0"},
+		{probe.IPCProfileUnsupported, "26.930.51102", "0.160.0"},
+	} {
+		if puckBrainAllowed(tc.profile, tc.desktop, tc.cli) {
+			t.Fatalf("unprobed profile admitted: %+v", tc)
+		}
+	}
+}
+
 func TestTaskManagerAndExecutorConfigurationRemainSeparate(t *testing.T) {
 	base := config{url: "ws://localhost:8080/ws", token: "fixture-device-token", deviceID: "manager", deviceName: "Manager"}
 	if _, err := configureTasks(base, false, true, "unix:///tmp/tasks.sock", "", "", ""); err == nil {

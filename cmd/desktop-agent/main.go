@@ -127,6 +127,18 @@ func taskExecutionCheckForProfile(enabled, managerOnly bool, profile probe.IPCPr
 	}
 }
 
+func puckBrainAllowed(profile probe.IPCProfileStatus, desktopVersion, cliVersion string) bool {
+	if profile == probe.IPCProfileVerified {
+		return true
+	}
+	// The Puck brain uses the public app-server path, not the Desktop follower
+	// path covered by the broader IPC profile. This exact pair passed the
+	// isolated write probes recorded in docs/testing/0130-probe-results.md.
+	return profile == probe.IPCProfileUnverified &&
+		strings.TrimPrefix(desktopVersion, "v") == "26.930.51102" &&
+		strings.TrimPrefix(cliVersion, "v") == "0.160.0"
+}
+
 func main() {
 	disableExecutionSettings := flag.Bool("disable-execution-settings", os.Getenv("ARIEL_DISABLE_EXECUTION_SETTINGS") == "true", "disable per-conversation model/effort/speed extension (for rollback or unverified Codex versions)")
 	fileFlags := filecontext.RegisterFlags(flag.CommandLine, os.LookupEnv)
@@ -204,7 +216,7 @@ func main() {
 		if profileStatus == probe.IPCProfileUnverified {
 			log.Printf("compatibility warning: Desktop %s / Codex %s is above the minimum profile and has not been verified version-by-version; incompatible IPC operations will fail", desktopVersion, cliVersion)
 		}
-		if cfg.puckBrain && profileStatus != probe.IPCProfileVerified {
+		if cfg.puckBrain && !puckBrainAllowed(profileStatus, desktopVersion, cliVersion) {
 			cfg.puckBrain = false
 			log.Print("Puck brain disabled: this Codex/Desktop version has not passed the isolated Puck compatibility gate")
 		}
