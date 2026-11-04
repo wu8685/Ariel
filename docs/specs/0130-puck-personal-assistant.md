@@ -139,6 +139,21 @@ Puck 视图固定使用独立的深色外观，不跟随操作系统或 Ariel �
 - 新建：表单提交后进入对话并收到问候与问题卡片；准备失败显示重试。
 - 动态头像：十四种确定性形状与十一种明确颜色、每种形状适配的两个细长尖耳在侧栏、标题、消息与信息栏一致，并在 28–40 px 可辨识；任何状态都无白眼眶、叶冠、花朵、花瓣、嘴或眉毛；右侧选择器全集可点击、可键盘操作并立即持久化；两只黑色胶囊眼始终平行，整张脸八向移动并用远侧眼收窄表现透视，头部轮廓随之转向，随机双眼眨眼；全部实例共享单个 timeout 调度链，标签页隐藏或视口外暂停，动画不触发 React render，reduced-motion 下只保留低频眨眼。
 
+### 1.3 Grok Bot 功能体验对照（第 10 轮）
+
+本节是用户在 P0 已交付后批准的增量范围；仍须保持 `--enable-puck` 关闭时行为与资产字节不变。
+
+| 项目 | 本轮决定 | 行为与边界 |
+| --- | --- | --- |
+| 主动问候 | 实现 | `puck.create` 完成 `puck.brain.ensure` 后立即启动一次真实 greeting turn，要求 Brain 简短介绍自己、能力边界并询问第一件事；Web 显示持久化的“正在准备”状态。若 thread 已建立但 greeting turn 无法启动，助理仍可创建，并落库一条明确的降级消息，不能伪造 Brain 文本。若 `ensure` 本身失败，维持既有 `provisioning` + 重试语义。 |
+| 真实工作耗时 | 实现 | Relay 以 `puck.brain.turn.start` 被接受的时间为起点，以该 turn 的最终 agent message 落库为终点。进行中消息持久化 `startedAt`，Web 每秒仅更新可见计时文本；最终 `workSummary` 保存 `elapsedMs` 与该 turn 真实收到的 Puck tool call 数，显示“工作了 N 秒 · 执行 N 步”。不得用固定随机值或页面打开时间替代。 |
+| 跨助理未读 | 实现（全局水位） | SQLite 为每个助理保存 `unread_count` 与最后消息预览；新的助理消息增加未读，`puck.list` 返回服务端值。打开会话后 Web 调用 `puck.read` 原子清零，所有 Web 端下一次同步看到一致结果。本轮采用账号级全局已读水位，不做“每台浏览器各自未读”，因为当前 Passkey 身份没有稳定的设备级 reader ID。 |
+| 消息表情回应 | 实现（轻量） | 常用集合固定为 👍、❤️、😂、🎉、👀。用户经 `puck.message.react` 对任意消息回应；Brain 复用受信 `react` dynamic tool 对用户消息回应。每个 actor（`user`／`assistant`）在一条消息上最多一个 emoji，再点同一项取消；结果随消息落库并显示为小 pill。不做任意 emoji、表情线程或通知。 |
+| 助理头像通知／图标 | 部分实现 | Puck Web 打开时，标签页 favicon 从当前助理实际 SVG 在浏览器本地栅格化为 PNG；切换助理即时更新，离开 Puck 后恢复 Ariel 图标。已安装 PWA 图标不能按当前助理动态改变；且 P0 尚未实现 §10 的 VAPID、Service Worker 和 Push dispatch，因此本轮不伪造 Web Push 图标能力，继续使用 Ariel 静态图标。P1 在通知 payload 携带无敏感信息的 avatar descriptor，由 Service Worker 选择或生成缓存 PNG；PWA 保留应用级 Ariel 图标。 |
+| 可编辑说明 | 实现 | 信息栏提供显式“编辑说明／保存／取消”；保存复用 `puck.update.description`，SQLite 中 `description`／`persona` 同步更新。除创建 thread 时写入 `developerInstructions` 外，每个后续可信 Puck envelope 都重申当前长期说明，使不轮换的既有 brain thread 在下一 turn 生效；空说明使用明确的默认职责，不注入空白指令。 |
+
+验收补充：Go 测试覆盖 schema v1→v2 迁移、问候成功／降级、耗时与步数、未读增减／清零、用户与 Brain 表情 actor 隔离、说明进入下一 turn；Vitest 覆盖实时秒表、工作摘要、未读切换、表情选择与说明保存；Playwright 覆盖 320／390／1280 px 的未读角标、表情 pill、说明编辑与动态 PNG favicon，且 Puck 退出后 favicon 恢复。
+
 ## 2. 已决事项（2026-11-03 用户决定）
 
 | 编号 | 决定 | 落点 |
