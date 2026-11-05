@@ -200,8 +200,8 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
       <g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M38 43C35 31 36 19 40 10c4 12 6 23 5 33Z"/><path className="puck-avatar-ear" d="M62 43c3-12 2-24-2-33-4 12-6 23-5 33Z"/></g>
       <g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
       <g className="puck-avatar-face">
-        <g className="puck-avatar-eye puck-avatar-eye-left"><ellipse className="puck-avatar-eye-shape" cx="43" cy="55" rx="4" ry="8"/></g>
-        <g className="puck-avatar-eye puck-avatar-eye-right"><ellipse className="puck-avatar-eye-shape" cx="57" cy="55" rx="4" ry="8"/></g>
+        <g className="puck-avatar-eye puck-avatar-eye-left"><rect className="puck-avatar-eye-shape" x="39" y="47" width="8" height="16" rx="3"/></g>
+        <g className="puck-avatar-eye puck-avatar-eye-right"><rect className="puck-avatar-eye-shape" x="53" y="47" width="8" height="16" rx="3"/></g>
       </g>
       </g>
     </svg></span>

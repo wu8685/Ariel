@@ -179,8 +179,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	const [submittingCard, setSubmittingCard] = useState("__none__");
 	const [mobilePanel, setMobilePanel] = useState<"" | "assistants" | "info">("");
 	const avatarUpdateSequence = useRef(0);
+  const listSequence = useRef(0);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef("");
+  const messageAssistantRef = useRef("");
   const [clock, setClock] = useState(() => Date.now());
   const [reactionTarget, setReactionTarget] = useState("");
   const reactionLongPressTimer = useRef<number | undefined>(undefined);
@@ -193,6 +195,20 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const busy = messages.some(message => ["processing", "greeting_processing"].includes(message.kind) || (message.kind === "task" && ["running", "dispatching", "waiting_user", "awaiting_authorization"].includes(String(cardData(message).status))));
   selectedRef.current = selectedID;
 
+  function selectAssistant(assistantID: string, initialMessages: Message[] = []) {
+    if (assistantID === selectedRef.current && messageAssistantRef.current === assistantID && initialMessages.length === 0) return;
+    cancelReactionLongPress();
+    selectedRef.current = assistantID;
+    messageAssistantRef.current = assistantID;
+    setMessages(initialMessages);
+    setReactionTarget("");
+    setSelectedID(assistantID);
+  }
+  function updateScopedMessages(assistantID: string, update: (current: Message[]) => Message[]) {
+    if (selectedRef.current !== assistantID || messageAssistantRef.current !== assistantID) return;
+    setMessages(current => selectedRef.current === assistantID && messageAssistantRef.current === assistantID ? update(current) : current);
+  }
+
   useEffect(() => {
 	if (!messages.some(message => workData(message).state === "running")) return;
 	setClock(Date.now()); const timer = window.setInterval(() => setClock(Date.now()), 1000);
@@ -200,14 +216,20 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   }, [messages]);
 
   async function loadList() {
+    const sequence = ++listSequence.current;
     const response = await request("puck.list", "relay", {});
+    if (sequence !== listSequence.current) return;
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     const next = arrayData<Assistant>(response.data?.assistants);
-    setAssistants(next.map(item => item.assistantId === selectedRef.current ? { ...item, unreadCount: 0 } : item)); setSelectedID(current => current && next.some(item => item.assistantId === current) ? current : next[0]?.assistantId || "");
+    const currentID = selectedRef.current;
+    const nextID = currentID && next.some(item => item.assistantId === currentID) ? currentID : next[0]?.assistantId || "";
+    setAssistants(next.map(item => item.assistantId === nextID ? { ...item, unreadCount: 0 } : item));
+    if (nextID !== currentID) selectAssistant(nextID);
   }
   useEffect(() => { if (state !== "ready") return; void loadList(); const timer = window.setInterval(() => void loadList(), 5000); return () => window.clearInterval(timer); }, [state]);
   useEffect(() => {
-    if (!selectedID) { setMessages([]); return; }
+    if (!selectedID) { messageAssistantRef.current = ""; setMessages([]); return; }
+	if (messageAssistantRef.current !== selectedID) { messageAssistantRef.current = selectedID; setMessages([]); }
 	setEditingDescription(false); setDescriptionDraft(assistants.find(item => item.assistantId === selectedID)?.description || "");
 	setAssistants(current => current.map(item => item.assistantId === selectedID ? { ...item, unreadCount: 0 } : item));
 	void request("puck.read", "relay", { assistantId: selectedID });
@@ -215,7 +237,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
       if (active && response.outcome === "accepted") {
         const durable = historyMessages(response.data?.messages, selectedID);
-        setMessages(current => mergeHistory(current, durable));
+        updateScopedMessages(selectedID, current => mergeHistory(current, durable));
       }
     });
     return () => { active = false; };
@@ -228,7 +250,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 			if (!active || event.event !== "puck.event" || event.assistantId !== selectedID || event.kind !== "history") return;
 			const payload = event.payload as Record<string, unknown> | undefined;
 			const durable = historyMessages(payload?.messages, selectedID);
-			setMessages(current => mergeHistory(current, durable));
+			updateScopedMessages(selectedID, current => mergeHistory(current, durable));
 			void request("puck.read", "relay", { assistantId: selectedID });
 		});
 		if (subscribeEvents) {
@@ -242,7 +264,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		const timer = window.setInterval(() => { void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
 			if (!active || response.outcome !== "accepted") return;
 			const durable = historyMessages(response.data?.messages, selectedID);
-			setMessages(current => mergeHistory(current, durable));
+			updateScopedMessages(selectedID, current => mergeHistory(current, durable));
 		}); }, subscribeEvents ? 10000 : 2000);
 		return () => {
 			active = false;
@@ -257,20 +279,22 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (!name.trim() || !deviceID) { setNotice("请填写名称并选择可用的大脑主机。"); return; }
     const response = await request("puck.create", "relay", { name: name.trim(), brainDeviceId: deviceID, allowedScope: {} });
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
+    listSequence.current += 1;
     const assistant = response.data?.assistant as Assistant;
-    setAssistants(current => [...current, assistant]); setSelectedID(assistant.assistantId); setName(""); setCreating(false);
     const greeting = response.data?.greeting as Record<string,unknown> | undefined;
-	setMessages(greeting?.state === "processing" ? [{ id:String(greeting.messageId), role:"assistant", kind:"processing", text:"正在准备…", workSummary:JSON.stringify({startedAt:greeting.startedAt,state:"running"}) }] : []);
+	const greetingMessages: Message[] = greeting?.state === "processing" ? [{ id:String(greeting.messageId), assistantId:assistant.assistantId, role:"assistant", kind:"processing", text:"正在准备…", workSummary:JSON.stringify({startedAt:greeting.startedAt,state:"running"}) }] : [];
+    setAssistants(current => [...current, assistant]); selectAssistant(assistant.assistantId, greetingMessages); setName(""); setCreating(false);
   }
   async function send() {
     const text = draft.trim(); if (!selected || (!text && screenshots.length === 0)) return;
     if (screenshots.length === 0 && ["停", "停止"].includes(text)) { setDraft(""); await stop(); return; }
     const images = screenshots.map(image => image.dataUri);
+    const assistantID = selected.assistantId;
     const clientMessageId = crypto.randomUUID(); setDraft(""); setScreenshots([]); if (screenshotInputRef.current) screenshotInputRef.current.value = ""; const localStartedAt = new Date().toISOString();
-    setMessages(current => [...current, { id: clientMessageId, role: "user", kind: "text", text, cardJSON: images.length ? JSON.stringify({ images }) : "" }, { id: `${clientMessageId}-processing`, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
-    const response = await request("puck.message.send", "relay", { assistantId: selected.assistantId, clientMessageId, text, images });
-    if (response.outcome !== "accepted") setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response), cardJSON:JSON.stringify({retry:{text,images}}), workSummary:"" } : item));
-	else setMessages(current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, workSummary:JSON.stringify({startedAt:response.data?.startedAt || localStartedAt,state:"running"}) } : item));
+    updateScopedMessages(assistantID, current => [...current, { id: clientMessageId, assistantId:assistantID, role: "user", kind: "text", text, cardJSON: images.length ? JSON.stringify({ images }) : "" }, { id: `${clientMessageId}-processing`, assistantId:assistantID, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
+    const response = await request("puck.message.send", "relay", { assistantId: assistantID, clientMessageId, text, images });
+    if (response.outcome !== "accepted") updateScopedMessages(assistantID, current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response), cardJSON:JSON.stringify({retry:{text,images}}), workSummary:"" } : item));
+	else updateScopedMessages(assistantID, current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, workSummary:JSON.stringify({startedAt:response.data?.startedAt || localStartedAt,state:"running"}) } : item));
   }
   function restoreRetry(message: Message) {
     const retry = retryPayload(message); if (!retry) return;
@@ -295,9 +319,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   }
   async function stop() {
     if (!selected) return;
-    const response = await request("puck.stop", "relay", { assistantId: selected.assistantId });
-    if (response.outcome === "accepted" && response.data?.message) setMessages(current => [...current.filter(item => item.kind !== "processing"), normalizeMessage(response.data!.message as Record<string, unknown>)]);
-    else if (response.outcome !== "accepted") setMessages(current => [...current, { id: crypto.randomUUID(), role: "assistant", kind: "error", text: responseError(response) }]);
+    const assistantID = selected.assistantId;
+    const response = await request("puck.stop", "relay", { assistantId: assistantID });
+    if (response.outcome === "accepted" && response.data?.message) updateScopedMessages(assistantID, current => [...current.filter(item => item.kind !== "processing"), normalizeMessage(response.data!.message as Record<string, unknown>)]);
+    else if (response.outcome !== "accepted") updateScopedMessages(assistantID, current => [...current, { id: crypto.randomUUID(), assistantId:assistantID, role: "assistant", kind: "error", text: responseError(response) }]);
   }
 	async function respondCard(kind:string,data:Record<string,unknown>,value:string) {
 		if (!selected) return;
@@ -306,12 +331,13 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 			return;
 		}
 		const identity = String(data.authorizationId || data.questionId || "");
+		const assistantID = selected.assistantId;
 		if (submittingCard === identity) return;
 		setSubmittingCard(identity);
 		const response = kind === "authorization"
-			? await request("puck.authorization.decide","relay",{assistantId:selected.assistantId,authorizationId:String(data.authorizationId||""),decision:value})
-			: await request("puck.question.answer","relay",{assistantId:selected.assistantId,questionId:String(data.questionId||""),answer:value});
-		if (response.outcome === "accepted") setMessages(current => current.map(message => {
+			? await request("puck.authorization.decide","relay",{assistantId:assistantID,authorizationId:String(data.authorizationId||""),decision:value})
+			: await request("puck.question.answer","relay",{assistantId:assistantID,questionId:String(data.questionId||""),answer:value});
+		if (response.outcome === "accepted") updateScopedMessages(assistantID, current => current.map(message => {
 			const card = cardData(message);
 			if (String(card.authorizationId || card.questionId || "") !== identity) return message;
 			return {...message, cardJSON: JSON.stringify({...card, cardState: kind === "question" ? "answered" : value === "reject" ? "rejected" : "consumed", ...(kind === "question" ? {answer:value} : {})})};
@@ -344,9 +370,9 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, description }) : item)); setEditingDescription(false);
 	}
 	async function reactTo(message: Message, emoji: string) {
-		if (!selected) return; const response = await request("puck.message.react", "relay", { assistantId:selected.assistantId, messageId:message.id, emoji });
+		if (!selected) return; const assistantID = selected.assistantId; const response = await request("puck.message.react", "relay", { assistantId:assistantID, messageId:message.id, emoji });
 		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
-		setMessages(current => current.map(item => item.id === message.id ? { ...item, reaction:String(response.data?.reaction || "") } : item)); setReactionTarget("");
+		updateScopedMessages(assistantID, current => current.map(item => item.id === message.id ? { ...item, reaction:String(response.data?.reaction || "") } : item)); if (selectedRef.current === assistantID) setReactionTarget("");
 	}
 
 	useEffect(() => {
@@ -374,7 +400,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     {mobilePanel && <button className="puck-panel-backdrop" aria-label="关闭面板" onClick={()=>setMobilePanel("")}/>}
     <aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}>
       <header><b>Puck</b><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理">＋</button></header>
-      <div className="puck-assistant-list">{assistants.map(item => <button className={`puck-assistant-row${item.assistantId === selectedID ? " active" : ""}`} key={item.assistantId} onClick={() => { setSelectedID(item.assistantId); setMobilePanel(""); }}>
+      <div className="puck-assistant-list">{assistants.map(item => <button className={`puck-assistant-row${item.assistantId === selectedID ? " active" : ""}`} key={item.assistantId} onClick={() => { selectAssistant(item.assistantId); setMobilePanel(""); }}>
         <PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={Boolean(item.unreadCount) || item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/>
         <span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || item.lastMessagePreview || (item.status === "ready" ? "在线" : "准备中")}</small></span>
         {Boolean(item.unreadCount) && <span className="puck-unread-count" aria-label={`${item.name}有 ${item.unreadCount} 条未读消息`}>{Math.min(99,item.unreadCount || 0)}</span>}

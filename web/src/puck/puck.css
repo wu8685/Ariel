@@ -50,10 +50,11 @@
   --puck-control-icon: 32px;
   --puck-composer-height: 44px;
   --puck-header-height: 52px;
-  --puck-row-height: 56px;
+  --puck-row-height: 112px;
   --puck-status-height: 20px;
-  --puck-avatar-msg: 28px;
-  --puck-avatar-row: 32px;
+  --puck-avatar-msg: 56px;
+  --puck-avatar-picker: 28px;
+  --puck-avatar-row: 96px;
   --puck-avatar-header: 32px;
   --puck-avatar-hero: 96px;
   --puck-empty-avatar: 64px;
@@ -66,7 +67,7 @@
   --puck-content-width: 720px;
   --puck-card-width: 420px;
   --puck-dialog-width: 400px;
-  --puck-sidebar-width: 248px;
+  --puck-sidebar-width: 296px;
   --puck-info-width: 288px;
   --puck-drawer-width: 320px;
   font-family: -apple-system, "PingFang SC", system-ui, sans-serif;
@@ -835,8 +836,8 @@
 .puck-workspace .puck-shape-option:hover { background: var(--puck-hover); }
 .puck-workspace .puck-shape-option.selected { background: var(--puck-selected); box-shadow: 0 0 0 var(--puck-ring) #fff inset; }
 .puck-workspace .puck-shape-option .puck-avatar {
-  width: var(--puck-avatar-msg);
-  height: var(--puck-avatar-msg);
+  width: var(--puck-avatar-picker);
+  height: var(--puck-avatar-picker);
   pointer-events: none;
 }
 .puck-workspace .puck-shape-option .puck-avatar-head { transform: none !important; transition: none; }
@@ -1094,7 +1095,7 @@
   .puck-workspace .puck-mobile-menu { display: grid; }
   .puck-workspace .puck-conversation > header { padding-inline: var(--puck-space-3); }
   .puck-workspace .puck-transcript { padding: var(--puck-space-4) var(--puck-space-3); }
-  .puck-workspace .puck-message.assistant .puck-message-content { max-width: calc(100% - var(--puck-avatar-msg) - var(--puck-space-3)); }
+  .puck-workspace .puck-message.assistant.with-avatar .puck-message-content { max-width: calc(100% - var(--puck-avatar-msg) - var(--puck-space-3)); }
   .puck-workspace .puck-message.user .puck-message-content { max-width: 82%; }
   .puck-workspace .puck-card { width: 100%; }
   .puck-workspace .puck-conversation > footer { padding: 0 var(--puck-space-3) calc(var(--puck-space-3) + env(safe-area-inset-bottom)); }

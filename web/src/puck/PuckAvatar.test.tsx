@@ -46,8 +46,13 @@ describe("PuckAvatar", () => {
 		const face = container.querySelector(".puck-avatar-face");
 		const eyes = Array.from(face?.querySelectorAll(".puck-avatar-eye-shape") || []);
 		expect(eyes).toHaveLength(2);
-		expect(eyes.map(eye => [eye.getAttribute("cx"), eye.getAttribute("rx"), eye.getAttribute("ry")])).toEqual([["43", "4", "8"], ["57", "4", "8"]]);
-		expect(Number(eyes[1].getAttribute("cx")) - Number(eyes[0].getAttribute("cx"))).toBe(14);
+		expect(eyes.every(eye => eye.tagName.toLowerCase() === "rect")).toBe(true);
+		expect(eyes.map(eye => [eye.getAttribute("x"), eye.getAttribute("y"), eye.getAttribute("width"), eye.getAttribute("height"), eye.getAttribute("rx")])).toEqual([
+			["39", "47", "8", "16", "3"],
+			["53", "47", "8", "16", "3"],
+		]);
+		expect(Number(eyes[1].getAttribute("x")) - Number(eyes[0].getAttribute("x"))).toBe(14);
+		expect(face?.querySelector("ellipse")).toBeNull();
 		expect(container.querySelector(".puck-avatar-eye-white, .puck-avatar-pupil, clipPath")).toBeNull();
 		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();
 	});

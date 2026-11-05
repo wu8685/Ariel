@@ -70,6 +70,37 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
 for (const width of [390, 1280]) {
   test.describe(`Puck fixed workspace ${width}px`, () => {
     test.use({ viewport: { width, height: 844 }, isMobile: width < 700, hasTouch: width < 700, colorScheme: "dark" });
+    test("gives the processing row a large avatar without overflowing the conversation", async ({ page }) => {
+      await openPuck(page, [
+        ...initialMessages,
+        { id: "working", role: "assistant", kind: "processing", text: "正在处理一项需要持续关注的工作…", createdAt: "2026-11-03T12:00:04Z" },
+      ]);
+
+      const processingRow = page.locator('[data-message-id="working"]');
+      const avatarBox = await processingRow.locator(":scope > .puck-avatar").boundingBox();
+      expect(avatarBox).toBeTruthy();
+      expect(avatarBox!.width).toBeGreaterThanOrEqual(56);
+      expect(avatarBox!.height).toBeGreaterThanOrEqual(56);
+      expect(await processingRow.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await expect(page.locator(".puck-conversation > header .puck-avatar")).toHaveCSS("width", "32px");
+      const listAvatarBox = await page.locator(".puck-assistant-row .puck-avatar").first().boundingBox();
+      expect(listAvatarBox).toBeTruthy();
+      expect(listAvatarBox!.width).toBeGreaterThanOrEqual(90);
+      expect(listAvatarBox!.height).toBeGreaterThanOrEqual(90);
+      const listRowBox = await page.locator(".puck-assistant-row").first().boundingBox();
+      expect(listRowBox!.height).toBeGreaterThan(listAvatarBox!.height);
+      await expect(page.locator(".puck-shape-option .puck-avatar").first()).toHaveCSS("width", "28px");
+      await expect(page.locator(".puck-info .puck-avatar-large")).toHaveCSS("width", "96px");
+      await expect(processingRow).toHaveScreenshot(`puck-processing-avatar-${width}.png`, { animations: "disabled", caret: "hide" });
+      const assistantList = page.locator(".puck-assistants");
+      if (width < 700) {
+        await page.getByRole("button", { name: "打开助理列表" }).click();
+        await expect(assistantList).toHaveClass(/mobile-open/);
+      }
+      await expect(assistantList).toHaveScreenshot(`puck-assistant-list-${width}.png`, { animations: "disabled", caret: "hide" });
+    });
+
     test("keeps the header and desktop side panels fixed while only the transcript scrolls", async ({ page }) => {
       const longHistory = [
         ...initialMessages,
@@ -218,7 +249,7 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 				expect(Math.max(...headerBottoms) - Math.min(...headerBottoms)).toBeLessThanOrEqual(1);
       }
 			await expect(page.locator(".puck-conversation > header")).toHaveCSS("height", "52px");
-			if (width >= 700) await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "56px");
+			if (width >= 700) await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "112px");
 			const gaps = await page.locator(".puck-message").evaluateAll(elements => ({
 				group: elements[1].getBoundingClientRect().top - elements[0].getBoundingClientRect().bottom,
 				inside: elements[2].getBoundingClientRect().top - elements[1].getBoundingClientRect().bottom,

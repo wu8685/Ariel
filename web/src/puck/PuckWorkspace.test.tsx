@@ -90,7 +90,10 @@ describe("PuckWorkspace", () => {
         calls.set(id, count);
         if (id === "a-1" && count > 1) return new Promise<ReturnType<typeof accepted>>(resolve => { resolveLate = resolve; });
         return accepted({ messages: id === "a-1"
-          ? [{ id: "old", assistantId: "a-1", role: "assistant", kind: "text", text: "旧助理历史" }]
+          ? [
+              { id: "old", assistantId: "a-1", role: "assistant", kind: "text", text: "旧助理历史" },
+              { id: "old-user", assistantId: "a-1", role: "user", kind: "text", text: "旧助理用户消息" },
+            ]
           : [{ id: "new", assistantId: "a-2", role: "assistant", kind: "text", text: "新助理问候" }] });
       }
       return accepted({});
@@ -102,6 +105,7 @@ describe("PuckWorkspace", () => {
     fireEvent.click(screen.getAllByText("新助理")[0].closest("button")!);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(screen.getAllByText("新助理问候").length).toBeGreaterThan(0);
+    expect(document.querySelector(".puck-transcript")?.textContent).not.toContain("旧助理用户消息");
     await act(async () => { resolveLate?.(accepted({ messages: [
       { id: "leaked-1", assistantId: "a-1", role: "user", kind: "text", text: "看下目前你能看到哪几个主机？" },
       { id: "leaked-2", assistantId: "a-1", role: "user", kind: "text", text: "看下那本书的总结完成了吗" },
@@ -109,6 +113,48 @@ describe("PuckWorkspace", () => {
     expect(screen.queryByText("看下目前你能看到哪几个主机？")).toBeNull();
     expect(screen.queryByText("看下那本书的总结完成了吗")).toBeNull();
     expect(screen.getAllByText("新助理问候").length).toBeGreaterThan(0);
+  });
+
+  it("starts a newly created assistant with an isolated conversation and drops the previous assistant's late history", async () => {
+    vi.useFakeTimers();
+    let assistants: Record<string, unknown>[] = [{ assistantId: "old", name: "旧助理", brainDeviceId: "brain-a", status: "ready" }];
+    let oldHistoryCalls = 0;
+    let resolveLate: ((value: ReturnType<typeof accepted>) => void) | undefined;
+    const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+      if (method === "puck.list") return accepted({ assistants });
+      if (method === "puck.history") {
+        if (params.assistantId === "old") {
+          oldHistoryCalls += 1;
+          if (oldHistoryCalls > 1) return new Promise<ReturnType<typeof accepted>>(resolve => { resolveLate = resolve; });
+          return accepted({ messages: [{ id: "old-user", assistantId: "old", role: "user", kind: "text", text: "只属于旧助理" }] });
+        }
+        return accepted({ messages: [] });
+      }
+      if (method === "puck.create") {
+        const assistant = { assistantId: "new", name: params.name, brainDeviceId: "brain-a", status: "ready" };
+        assistants = [...assistants, assistant];
+        return accepted({ assistant, greeting: { state: "processing", messageId: "new-greeting", startedAt: "2026-11-05T00:00:00Z" } });
+      }
+      return accepted({});
+    });
+
+    render(<PuckWorkspace request={request} state="ready" devices={[{ deviceId: "brain-a", name: "Mac mini", capabilities: { puckBrainReady: true } }]} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(document.querySelector(".puck-transcript")?.textContent).toContain("只属于旧助理");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    fireEvent.click(screen.getByRole("button", { name: "新建助理" }));
+    fireEvent.change(screen.getByLabelText("助理名称"), { target: { value: "个人心得" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(document.querySelector(".puck-transcript")?.textContent).not.toContain("只属于旧助理");
+    expect(screen.getAllByText("正在准备…").length).toBeGreaterThan(0);
+    await act(async () => {
+      resolveLate?.(accepted({ messages: [{ id: "late-old", role: "user", kind: "text", text: "旧轮询晚到的用户消息" }] }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("旧轮询晚到的用户消息")).toBeNull();
+    expect(screen.getAllByText("正在准备…").length).toBeGreaterThan(0);
   });
 
   it("shows an avatar only on an active processing row, never on completed assistant history", async () => {
@@ -266,6 +312,7 @@ describe("PuckWorkspace", () => {
     });
     const view = render(<PuckWorkspace request={request} subscribeEvents={subscribeEvents} state="ready" devices={[]} />);
     await screen.findAllByText("小帕");
+    await waitFor(() => expect(subscribeEvents).toHaveBeenCalledTimes(1));
     await act(async () => {
       listener?.({ type: "event", v: 1, event: "puck.event", assistantId: "a-1", seq: 1, kind: "history", payload: { messages: [{ id: "durable-a", role: "assistant", kind: "text", text: "增量更新已落库" }] } });
     });

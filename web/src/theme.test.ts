@@ -40,7 +40,7 @@ describe("fixed Night appearance", () => {
 	});
 
 	it("defines and consumes the Puck layout type and spacing tokens", () => {
-		for (const tokenName of ["puck-space-1", "puck-space-2", "puck-space-3", "puck-space-4", "puck-space-5", "puck-space-6", "puck-space-8", "puck-text-body", "puck-text-ui", "puck-text-secondary", "puck-text-caption", "puck-radius-card", "puck-control-sm", "puck-control-md", "puck-avatar-msg", "puck-avatar-hero"]) {
+		for (const tokenName of ["puck-space-1", "puck-space-2", "puck-space-3", "puck-space-4", "puck-space-5", "puck-space-6", "puck-space-8", "puck-text-body", "puck-text-ui", "puck-text-secondary", "puck-text-caption", "puck-radius-card", "puck-control-sm", "puck-control-md", "puck-avatar-msg", "puck-avatar-picker", "puck-avatar-row", "puck-avatar-header", "puck-avatar-hero"]) {
 			expect(puckStyle, tokenName).toContain(`--${tokenName}:`);
 		}
 		expect(puckStyle).not.toMatch(/font-weight:\s*(?:700|750|800|900)/);
