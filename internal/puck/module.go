@@ -569,6 +569,19 @@ func retryableBrainRejection(response relay.PuckResponse) bool {
 	return response.Outcome == "rejected" && response.Error != nil && (response.Error.Code == "BRAIN_UNAVAILABLE" || response.Error.Code == "RESYNC_REQUIRED")
 }
 
+func (m *Module) startBrainTurn(ctx context.Context, a Assistant, request json.RawMessage) relay.PuckResponse {
+	origin := relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}
+	result := m.bridge.Forward(ctx, origin, a.BrainDeviceID, "puck.brain.turn.start", request)
+	if !retryableBrainRejection(result) {
+		return result
+	}
+	resumed := m.resumeBrain(ctx, a)
+	if resumed.Outcome != "accepted" {
+		return resumed
+	}
+	return m.bridge.Forward(ctx, origin, a.BrainDeviceID, "puck.brain.turn.start", request)
+}
+
 func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
 		AssistantID string `json:"assistantId"`
@@ -622,15 +635,7 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	turnRequest := mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a, input.Text), "images": input.Images, "model": a.BrainModel, "effort": a.BrainReasoning})
-	origin := relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}
-	result := m.bridge.Forward(ctx, origin, a.BrainDeviceID, "puck.brain.turn.start", turnRequest)
-	if retryableBrainRejection(result) {
-		resumed := m.resumeBrain(ctx, a)
-		if resumed.Outcome != "accepted" {
-			return resumed
-		}
-		result = m.bridge.Forward(ctx, origin, a.BrainDeviceID, "puck.brain.turn.start", turnRequest)
-	}
+	result := m.startBrainTurn(ctx, a, turnRequest)
 	if result.Error != nil {
 		return result
 	}
@@ -833,7 +838,7 @@ func (m *Module) answerQuestion(ctx context.Context, raw json.RawMessage) relay.
 	if err != nil {
 		return notFound()
 	}
-	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a, "问题 "+input.QuestionID+" 的回答："+input.Answer)}))
+	result := m.startBrainTurn(ctx, a, mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a, "问题 "+input.QuestionID+" 的回答："+input.Answer), "model": a.BrainModel, "effort": a.BrainReasoning}))
 	if result.Error != nil {
 		return result
 	}

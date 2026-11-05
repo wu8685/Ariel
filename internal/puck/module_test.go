@@ -97,6 +97,86 @@ func TestMessageResumesBrainAndRetriesOneDefinitelyRejectedTurn(t *testing.T) {
 	}
 }
 
+func TestAnswerQuestionResumesBrainAndRetriesOneDefinitelyRejectedTurn(t *testing.T) {
+	for _, failureCode := range []string{"BRAIN_UNAVAILABLE", "RESYNC_REQUIRED"} {
+		t.Run(failureCode, func(t *testing.T) {
+			bridge := &fakeModuleBridge{turnFailureCode: failureCode}
+			module, err := NewModule(t.TempDir(), bridge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer module.Close()
+			created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+			id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+			module.clearPending(id)
+			if err := module.store.AppendMessage(context.Background(), Message{ID: "question-card:rag-scope", AssistantID: id, Role: "assistant", Kind: "question", Text: "RAG 进度范围？", CardJSON: `{"cardState":"pending"}`}); err != nil {
+				t.Fatal(err)
+			}
+			bridge.mu.Lock()
+			bridge.calls, bridge.params, bridge.turnFailures = nil, nil, 1
+			bridge.mu.Unlock()
+
+			result := module.Handle(context.Background(), "puck.question.answer", mustJSON(map[string]any{"assistantId": id, "questionId": "rag-scope", "answer": "本周"}))
+			if result.Error != nil {
+				t.Fatalf("result=%+v", result)
+			}
+			bridge.mu.Lock()
+			calls := append([]string(nil), bridge.calls...)
+			params := append([]json.RawMessage(nil), bridge.params...)
+			bridge.mu.Unlock()
+			if !slices.Equal(calls, []string{"puck.brain.turn.start", "puck.brain.ensure", "puck.brain.turn.start"}) {
+				t.Fatalf("calls=%v", calls)
+			}
+			resumeParams := params[1]
+			var resumed struct {
+				ThreadID string `json:"threadId"`
+			}
+			if err := json.Unmarshal(resumeParams, &resumed); err != nil || resumed.ThreadID != "brain-thread-a" {
+				t.Fatalf("resume params=%s thread=%q err=%v", resumeParams, resumed.ThreadID, err)
+			}
+			history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+			found := false
+			for _, message := range history {
+				if message.ID == "question-card:rag-scope" {
+					found = true
+					if !strings.Contains(message.CardJSON, `"cardState":"answered"`) {
+						t.Fatalf("question card not finalized: %s", message.CardJSON)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("question card missing")
+			}
+		})
+	}
+}
+
+func TestAnswerQuestionRetriesBrainTurnAtMostOnce(t *testing.T) {
+	bridge := &fakeModuleBridge{turnFailureCode: "BRAIN_UNAVAILABLE"}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	bridge.mu.Lock()
+	bridge.calls, bridge.params, bridge.turnFailures = nil, nil, 2
+	bridge.mu.Unlock()
+
+	result := module.Handle(context.Background(), "puck.question.answer", mustJSON(map[string]any{"assistantId": id, "questionId": "rag-scope", "answer": "本周"}))
+	if result.Error == nil || result.Error.Code != "BRAIN_UNAVAILABLE" {
+		t.Fatalf("result=%+v", result)
+	}
+	bridge.mu.Lock()
+	calls := append([]string(nil), bridge.calls...)
+	bridge.mu.Unlock()
+	if !slices.Equal(calls, []string{"puck.brain.turn.start", "puck.brain.ensure", "puck.brain.turn.start"}) {
+		t.Fatalf("calls=%v", calls)
+	}
+}
+
 func TestBrainErrorCodeIsNeverPersistedAsRawAssistantText(t *testing.T) {
 	bridge := &fakeModuleBridge{}
 	module, err := NewModule(t.TempDir(), bridge)
