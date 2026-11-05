@@ -432,11 +432,11 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     <section className="puck-conversation">
       <header>
         <button className="puck-mobile-menu puck-icon-btn puck-glass-chip" type="button" aria-label="打开助理列表" onClick={()=>setMobilePanel("assistants")}>☰</button>
-        <div className="puck-header-title puck-glass-chip">
+        <button className="puck-header-title puck-glass-chip" type="button" aria-label="查看助理信息" disabled={!selected} onClick={event=>{ if ((event.target as HTMLElement).closest(".puck-avatar")) return; setMobilePanel("info"); }}>
           {selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState}/>}
-          <div className="puck-conversation-title"><strong>{selected?.name || "Puck"}</strong><small>{selected ? "你的个人助理" : "创建一个助理开始"}</small></div>
-        </div>
-        {selected && <div className={`puck-header-actions puck-glass-chip${busy ? "" : " idle"}`}><button className="puck-mobile-menu puck-icon-btn" type="button" aria-label="查看助理信息" onClick={()=>setMobilePanel("info")}>ⓘ</button>{busy && <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button>}</div>}
+          <div className="puck-conversation-title"><strong>{selected?.name || "Puck"}</strong></div>
+        </button>
+        {selected && <div className="puck-header-actions puck-glass-chip">{busy ? <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button> : <button className="puck-icon-btn" type="button" aria-label="更多助理操作" onClick={()=>setMobilePanel("info")}><span className="puck-more" aria-hidden="true">•••</span></button>}</div>}
       </header>
       <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty">
         <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button>

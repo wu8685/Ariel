@@ -64,10 +64,10 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   await page.goto("/");
   await expect(page.getByRole("button", { name: "打开 Puck" })).toBeVisible();
   await page.getByRole("button", { name: "打开 Puck" }).click();
-  await expect(page.getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
+  await expect(page.locator(".puck-transcript").getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
 
-for (const width of [390, 1280]) {
+for (const width of [320, 390, 1280]) {
   test.describe(`Puck fixed workspace ${width}px`, () => {
     test.use({ viewport: { width, height: 844 }, isMobile: width < 700, hasTouch: width < 700, colorScheme: "dark" });
     test("gives the processing row a large avatar without overflowing the conversation", async ({ page }) => {
@@ -123,8 +123,18 @@ for (const width of [390, 1280]) {
         page.locator(".puck-info").boundingBox(),
       ]) : [];
 			const initialHeaderBox = await header.boundingBox();
+			const conversationBox = await page.locator(".puck-conversation").boundingBox();
+			const transcriptBox = await transcript.boundingBox();
+			await expect(header).toHaveCSS("position", "absolute");
+			expect(transcriptBox!.y).toBe(conversationBox!.y);
+			expect(initialHeaderBox!.y).toBe(conversationBox!.y);
+			await transcript.evaluate(element => { element.scrollTop = 0; });
 			const initialMessageBox = await page.locator(".puck-message").first().boundingBox();
 			expect(initialMessageBox!.y).toBeGreaterThanOrEqual(initialHeaderBox!.y + initialHeaderBox!.height);
+			await transcript.evaluate(element => { element.scrollTop = 48; });
+			const scrolledMessageBox = await page.locator(".puck-message").first().boundingBox();
+			expect(scrolledMessageBox!.y).toBeLessThan(initialHeaderBox!.y + initialHeaderBox!.height);
+			expect(scrolledMessageBox!.y + scrolledMessageBox!.height).toBeGreaterThan(initialHeaderBox!.y);
 
       await transcript.evaluate(element => {
         element.scrollTop = element.scrollHeight;
@@ -136,17 +146,26 @@ for (const width of [390, 1280]) {
 			await expect(header).toHaveCSS("border-bottom-width", "0px");
 			const titleChip = header.locator(".puck-header-title");
 			const actionChip = header.locator(".puck-header-actions");
-			await expect(titleChip).toHaveCSS("backdrop-filter", /blur\(18px\)/);
-			await expect(titleChip).toHaveCSS("background-color", "rgba(24, 24, 27, 0.72)");
+			await expect(titleChip).toHaveCSS("backdrop-filter", /blur\(20px\)/);
+			await expect(titleChip).toHaveCSS("background-color", "rgba(32, 32, 36, 0.48)");
 			await expect(titleChip).toHaveCSS("border-radius", "999px");
-			await expect(actionChip).toHaveCSS("backdrop-filter", /blur\(18px\)/);
+			await expect(actionChip).toHaveCSS("backdrop-filter", /blur\(20px\)/);
 			const chipGeometry = await header.locator(".puck-glass-chip").evaluateAll(chips => chips.map(chip => {
 				const box = chip.getBoundingClientRect();
 				return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
-			}));
+			}).filter(chip => chip.right > chip.left));
+			if (width < 700) expect(chipGeometry).toHaveLength(3);
 			for (let index = 1; index < chipGeometry.length; index++) expect(chipGeometry[index].left).toBeGreaterThanOrEqual(chipGeometry[index - 1].right);
 			const headerBox = await header.boundingBox();
 			expect(chipGeometry.every(chip => chip.top >= headerBox!.y && chip.bottom <= headerBox!.y + headerBox!.height)).toBe(true);
+			const clusterLeft = chipGeometry[0].left;
+			const clusterRight = chipGeometry.at(-1)!.right;
+			expect(Math.abs((clusterLeft + clusterRight) / 2 - (headerBox!.x + headerBox!.width / 2))).toBeLessThanOrEqual(1);
+			if (width < 700) {
+				expect(chipGeometry[0].right - chipGeometry[0].left).toBe(chipGeometry[2].right - chipGeometry[2].left);
+				 expect(Math.abs((chipGeometry[1].left + chipGeometry[1].right) / 2 - (headerBox!.x + headerBox!.width / 2))).toBeLessThanOrEqual(1);
+			}
+			await expect(page).toHaveScreenshot(`puck-floating-header-${width}.png`, { animations: "disabled", caret: "hide" });
       expect(await page.evaluate(() => document.scrollingElement?.scrollTop || 0)).toBe(0);
       if (width < 700) {
         await expect(menu).toBeVisible();
@@ -312,7 +331,7 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await expect(page.locator(".puck-conversation > header")).toHaveCSS("height", "52px");
 			await expect(page.locator(".puck-assistants")).toHaveCSS("backdrop-filter", "none");
 			if (width < 700) {
-				await expect(page.locator(".puck-info")).toHaveCSS("backdrop-filter", /blur\(18px\)/);
+				await expect(page.locator(".puck-info")).toHaveCSS("backdrop-filter", /blur\(20px\)/);
 			}
 			if (width >= 700) {
 				await expect(page.locator(".puck-assistants")).toHaveCSS("width", "280px");
@@ -366,11 +385,24 @@ test.describe("Puck frosted dialog", () => {
 		await page.getByRole("button", { name: "新建助理" }).click();
 		const dialog = page.locator(".puck-dialog");
 		await expect(dialog).toBeVisible();
-		await expect(dialog).toHaveCSS("backdrop-filter", /blur\(18px\)/);
-		await expect(dialog).toHaveCSS("background-color", "rgba(24, 24, 27, 0.72)");
+		await expect(dialog).toHaveCSS("backdrop-filter", /blur\(20px\)/);
+		await expect(dialog).toHaveCSS("background-color", "rgba(32, 32, 36, 0.48)");
 		await expect(dialog).toHaveCSS("border-radius", "20px");
 		await expect(page.locator(".puck-transcript")).toHaveCSS("backdrop-filter", "none");
 		await expect(dialog).toHaveScreenshot("puck-dialog-390-dark.png", { animations: "disabled", caret: "hide" });
+	});
+});
+
+test.describe("Puck idle floating header", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+	test("keeps a balanced right glass chip when there is no stop action", async ({ page }) => {
+		await openPuck(page, initialMessages.slice(0, 2));
+		const header = page.locator(".puck-conversation > header");
+		await expect(header.locator(".puck-glass-chip")).toHaveCount(3);
+		await expect(page.getByRole("button", { name: "更多助理操作" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "停止全部工作" })).toHaveCount(0);
+		await page.getByRole("button", { name: "更多助理操作" }).click();
+		await expect(page.locator(".puck-info")).toHaveClass(/mobile-open/);
 	});
 });
 
