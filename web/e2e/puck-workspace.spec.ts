@@ -122,6 +122,9 @@ for (const width of [390, 1280]) {
         page.locator(".puck-assistants").boundingBox(),
         page.locator(".puck-info").boundingBox(),
       ]) : [];
+			const initialHeaderBox = await header.boundingBox();
+			const initialMessageBox = await page.locator(".puck-message").first().boundingBox();
+			expect(initialMessageBox!.y).toBeGreaterThanOrEqual(initialHeaderBox!.y + initialHeaderBox!.height);
 
       await transcript.evaluate(element => {
         element.scrollTop = element.scrollHeight;
@@ -129,6 +132,21 @@ for (const width of [390, 1280]) {
       });
 
       await expect(header).toBeInViewport();
+			await expect(header).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+			await expect(header).toHaveCSS("border-bottom-width", "0px");
+			const titleChip = header.locator(".puck-header-title");
+			const actionChip = header.locator(".puck-header-actions");
+			await expect(titleChip).toHaveCSS("backdrop-filter", /blur\(18px\)/);
+			await expect(titleChip).toHaveCSS("background-color", "rgba(24, 24, 27, 0.72)");
+			await expect(titleChip).toHaveCSS("border-radius", "999px");
+			await expect(actionChip).toHaveCSS("backdrop-filter", /blur\(18px\)/);
+			const chipGeometry = await header.locator(".puck-glass-chip").evaluateAll(chips => chips.map(chip => {
+				const box = chip.getBoundingClientRect();
+				return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+			}));
+			for (let index = 1; index < chipGeometry.length; index++) expect(chipGeometry[index].left).toBeGreaterThanOrEqual(chipGeometry[index - 1].right);
+			const headerBox = await header.boundingBox();
+			expect(chipGeometry.every(chip => chip.top >= headerBox!.y && chip.bottom <= headerBox!.y + headerBox!.height)).toBe(true);
       expect(await page.evaluate(() => document.scrollingElement?.scrollTop || 0)).toBe(0);
       if (width < 700) {
         await expect(menu).toBeVisible();
@@ -292,6 +310,10 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 				expect(Math.max(...headerBottoms) - Math.min(...headerBottoms)).toBeLessThanOrEqual(1);
       }
 			await expect(page.locator(".puck-conversation > header")).toHaveCSS("height", "52px");
+			await expect(page.locator(".puck-assistants")).toHaveCSS("backdrop-filter", "none");
+			if (width < 700) {
+				await expect(page.locator(".puck-info")).toHaveCSS("backdrop-filter", /blur\(18px\)/);
+			}
 			if (width >= 700) {
 				await expect(page.locator(".puck-assistants")).toHaveCSS("width", "280px");
 				await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "96px");
@@ -335,6 +357,22 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
     });
   });
 }
+
+test.describe("Puck frosted dialog", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+	test("uses the shared glass surface without blurring the transcript", async ({ page }) => {
+		await openPuck(page);
+		await page.getByRole("button", { name: "打开助理列表" }).click();
+		await page.getByRole("button", { name: "新建助理" }).click();
+		const dialog = page.locator(".puck-dialog");
+		await expect(dialog).toBeVisible();
+		await expect(dialog).toHaveCSS("backdrop-filter", /blur\(18px\)/);
+		await expect(dialog).toHaveCSS("background-color", "rgba(24, 24, 27, 0.72)");
+		await expect(dialog).toHaveCSS("border-radius", "20px");
+		await expect(page.locator(".puck-transcript")).toHaveCSS("backdrop-filter", "none");
+		await expect(dialog).toHaveScreenshot("puck-dialog-390-dark.png", { animations: "disabled", caret: "hide" });
+	});
+});
 
 test.describe("Puck composer attachments", () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });

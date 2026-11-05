@@ -22,6 +22,10 @@
   --puck-action: #fff;
   --puck-action-hover: #e5e5e5;
   --puck-on-action: #0a0a0a;
+  --puck-glass-bg: rgba(24, 24, 27, .72);
+  --puck-glass-filter: blur(18px) saturate(135%);
+  --puck-glass-border: rgba(255, 255, 255, .13);
+  --puck-glass-shadow: 0 8px 28px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .05);
   --puck-space-1: 4px;
   --puck-space-2: 8px;
   --puck-space-3: 12px;
@@ -293,10 +297,32 @@
 }
 .puck-workspace .puck-conversation > header {
   gap: calc(var(--puck-space-2) + var(--puck-space-1) / 2);
-  padding: 0 var(--puck-space-4);
-  background: var(--color-page);
+  padding: calc(var(--puck-space-1) + var(--puck-space-1) / 2) var(--puck-space-4);
+  border-bottom: 0;
+  background: transparent;
 }
-.puck-workspace .puck-conversation-title { min-width: 0; margin-right: auto; }
+.puck-workspace .puck-glass-chip,
+.puck-dialog {
+  border: var(--puck-border) solid var(--puck-glass-border);
+  background: var(--puck-glass-bg);
+  box-shadow: var(--puck-glass-shadow);
+  -webkit-backdrop-filter: var(--puck-glass-filter);
+  backdrop-filter: var(--puck-glass-filter);
+}
+.puck-workspace .puck-header-title {
+  min-width: 0;
+  height: calc(var(--puck-header-height) - var(--puck-space-3));
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: calc(var(--puck-space-2) + var(--puck-space-1) / 2);
+  margin-right: auto;
+  padding: calc(var(--puck-space-1) / 2) var(--puck-space-3) calc(var(--puck-space-1) / 2) calc(var(--puck-space-1) + var(--puck-space-1) / 2);
+  overflow: hidden;
+  border-radius: var(--puck-radius-full);
+}
+.puck-workspace .puck-conversation-title { min-width: 0; }
 .puck-workspace .puck-conversation-title strong,
 .puck-workspace .puck-conversation-title small {
   display: block;
@@ -314,7 +340,17 @@
   font-size: var(--puck-text-caption);
   line-height: var(--puck-leading-caption);
 }
-.puck-workspace .puck-header-actions { display: flex; align-items: center; gap: var(--puck-space-2); }
+.puck-workspace .puck-header-actions {
+  min-width: 0;
+  height: calc(var(--puck-header-height) - var(--puck-space-3));
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--puck-space-1);
+  padding: calc(var(--puck-space-1) / 2);
+  border-radius: var(--puck-radius-full);
+}
+.puck-workspace .puck-header-actions.idle { display: none; }
 .puck-workspace .puck-stop { background: var(--puck-selected); color: var(--color-text); }
 .puck-workspace .puck-stop > span {
   width: var(--puck-stop-glyph);
@@ -1037,9 +1073,7 @@
   width: min(var(--puck-dialog-width), calc(100vw - var(--puck-space-8)));
   box-sizing: border-box;
   padding: var(--puck-space-5);
-  border: var(--puck-border) solid var(--color-border);
-  border-radius: var(--puck-radius-dialog);
-  background: var(--color-surface);
+  border-radius: calc(var(--puck-radius-dialog) + var(--puck-space-1));
   color: var(--color-text);
 }
 .puck-dialog h2 {
@@ -1113,6 +1147,13 @@
     transition: transform .16s ease;
   }
   .puck-workspace .puck-info { left: auto; right: 0; transform: translateX(105%); }
+  .puck-workspace .puck-info {
+    border-color: var(--puck-glass-border);
+    background: var(--puck-glass-bg);
+    box-shadow: var(--puck-glass-shadow);
+    -webkit-backdrop-filter: var(--puck-glass-filter);
+    backdrop-filter: var(--puck-glass-filter);
+  }
   .puck-workspace .puck-assistants.mobile-open,
   .puck-workspace .puck-info.mobile-open { transform: translateX(0); }
   .puck-workspace .puck-panel-backdrop {
@@ -1129,6 +1170,13 @@
     background: #0009;
   }
   .puck-workspace .puck-mobile-menu { display: grid; }
+  .puck-workspace .puck-conversation > header > .puck-mobile-menu {
+    width: calc(var(--puck-header-height) - var(--puck-space-3));
+    min-width: calc(var(--puck-header-height) - var(--puck-space-3));
+    height: calc(var(--puck-header-height) - var(--puck-space-3));
+    min-height: calc(var(--puck-header-height) - var(--puck-space-3));
+  }
+  .puck-workspace .puck-header-actions.idle { display: flex; }
   .puck-workspace .puck-conversation > header { padding-inline: var(--puck-space-3); }
   .puck-workspace .puck-transcript { padding: var(--puck-space-4) var(--puck-space-3); }
   .puck-workspace .puck-message.assistant.with-avatar .puck-message-content { max-width: calc(100% - var(--puck-avatar-msg) - var(--puck-space-3)); }
