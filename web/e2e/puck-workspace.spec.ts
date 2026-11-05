@@ -150,21 +150,35 @@ for (const width of [320, 390, 1280]) {
 			await expect(titleChip).toHaveCSS("background-color", "rgba(32, 32, 36, 0.48)");
 			await expect(titleChip).toHaveCSS("border-radius", "999px");
 			await expect(actionChip).toHaveCSS("backdrop-filter", /blur\(20px\)/);
-			const chipGeometry = await header.locator(".puck-glass-chip").evaluateAll(chips => chips.map(chip => {
+			const chipGeometry = await header.locator(":scope > .puck-glass-chip").evaluateAll(chips => chips.map(chip => {
 				const box = chip.getBoundingClientRect();
 				return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
 			}).filter(chip => chip.right > chip.left));
-			if (width < 700) expect(chipGeometry).toHaveLength(3);
+			expect(chipGeometry).toHaveLength(3);
 			for (let index = 1; index < chipGeometry.length; index++) expect(chipGeometry[index].left).toBeGreaterThanOrEqual(chipGeometry[index - 1].right);
 			const headerBox = await header.boundingBox();
 			expect(chipGeometry.every(chip => chip.top >= headerBox!.y && chip.bottom <= headerBox!.y + headerBox!.height)).toBe(true);
-			const clusterLeft = chipGeometry[0].left;
-			const clusterRight = chipGeometry.at(-1)!.right;
-			expect(Math.abs((clusterLeft + clusterRight) / 2 - (headerBox!.x + headerBox!.width / 2))).toBeLessThanOrEqual(1);
-			if (width < 700) {
-				expect(chipGeometry[0].right - chipGeometry[0].left).toBe(chipGeometry[2].right - chipGeometry[2].left);
-				 expect(Math.abs((chipGeometry[1].left + chipGeometry[1].right) / 2 - (headerBox!.x + headerBox!.width / 2))).toBeLessThanOrEqual(1);
-			}
+			const headerPadding = width < 700 ? 12 : 16;
+			expect(Math.abs(chipGeometry[0].left - (headerBox!.x + headerPadding))).toBeLessThanOrEqual(1);
+			expect(Math.abs(chipGeometry[2].right - (headerBox!.x + headerBox!.width - headerPadding))).toBeLessThanOrEqual(1);
+			expect(chipGeometry[0].right - chipGeometry[0].left).toBe(chipGeometry[2].right - chipGeometry[2].left);
+			expect(Math.abs((chipGeometry[1].left + chipGeometry[1].right) / 2 - (headerBox!.x + headerBox!.width / 2))).toBeLessThanOrEqual(1);
+			expect(chipGeometry[1].left - chipGeometry[0].right).toBeGreaterThan(width < 700 ? 8 : 32);
+			expect(chipGeometry[2].left - chipGeometry[1].right).toBeGreaterThan(width < 700 ? 8 : 32);
+
+			const footer = page.locator(".puck-conversation > footer");
+			const composer = page.locator(".puck-composer");
+			await expect(footer).toHaveCSS("position", "absolute");
+			await expect(footer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+			await expect(footer).toHaveCSS("pointer-events", "none");
+			await expect(composer).toHaveCSS("backdrop-filter", /blur\(20px\)/);
+			await expect(composer).toHaveCSS("background-color", "rgba(32, 32, 36, 0.48)");
+			const footerBox = await footer.boundingBox();
+			const composerBox = await composer.boundingBox();
+			expect(Math.abs(footerBox!.y + footerBox!.height - (conversationBox!.y + conversationBox!.height))).toBeLessThanOrEqual(1);
+			expect(transcriptBox!.y + transcriptBox!.height).toBe(conversationBox!.y + conversationBox!.height);
+			const lastMessageBox = await page.locator(".puck-message").last().boundingBox();
+			expect(lastMessageBox!.y + lastMessageBox!.height).toBeLessThanOrEqual(composerBox!.y - 8);
 			await expect(page).toHaveScreenshot(`puck-floating-header-${width}.png`, { animations: "disabled", caret: "hide" });
       expect(await page.evaluate(() => document.scrollingElement?.scrollTop || 0)).toBe(0);
       if (width < 700) {

@@ -202,6 +202,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	const avatarUpdateSequence = useRef(0);
   const listSequence = useRef(0);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
+  const conversationRef = useRef<HTMLElement>(null);
+  const composerFooterRef = useRef<HTMLElement>(null);
   const selectedRef = useRef("");
   const messageAssistantRef = useRef("");
   const [clock, setClock] = useState(() => Date.now());
@@ -210,6 +212,20 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    const footer = composerFooterRef.current;
+    if (!conversation || !footer || typeof ResizeObserver === "undefined") return;
+    const updateHeight = () => conversation.style.setProperty("--puck-footer-overlay-height", `${footer.getBoundingClientRect().height}px`);
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(footer);
+    updateHeight();
+    return () => {
+      observer.disconnect();
+      conversation.style.removeProperty("--puck-footer-overlay-height");
+    };
+  }, [selectedID]);
   const readyBrains = useMemo(() => devices.filter(device => device.capabilities?.puckBrainReady), [devices]);
   const selected = assistants.find(assistant => assistant.assistantId === selectedID);
   const puckState = messageState(messages);
@@ -429,7 +445,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       <button className="puck-back" type="button" onClick={onBack}><span aria-hidden="true">←</span> Codex 会话</button>
     </aside>
 
-    <section className="puck-conversation">
+    <section className="puck-conversation" ref={conversationRef}>
       <header>
         <button className="puck-mobile-menu puck-icon-btn puck-glass-chip" type="button" aria-label="打开助理列表" onClick={()=>setMobilePanel("assistants")}>☰</button>
         <button className="puck-header-title puck-glass-chip" type="button" aria-label="查看助理信息" disabled={!selected} onClick={event=>{ if ((event.target as HTMLElement).closest(".puck-avatar")) return; setMobilePanel("info"); }}>
@@ -459,7 +475,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </article>;
       })}</PuckConversationErrorBoundary>}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
-      {selected && <footer><div className="puck-composer-shell">{screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
+      {selected && <footer ref={composerFooterRef}><div className="puck-composer-shell">{screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
     </section>
 
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>
