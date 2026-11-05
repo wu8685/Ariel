@@ -50,11 +50,11 @@
   --puck-control-icon: 32px;
   --puck-composer-height: 44px;
   --puck-header-height: 52px;
-  --puck-row-height: 112px;
+  --puck-row-height: 96px;
   --puck-status-height: 20px;
   --puck-avatar-msg: 56px;
   --puck-avatar-picker: 28px;
-  --puck-avatar-row: 96px;
+  --puck-avatar-row: 80px;
   --puck-avatar-header: 32px;
   --puck-avatar-hero: 96px;
   --puck-empty-avatar: 64px;
@@ -67,7 +67,7 @@
   --puck-content-width: 720px;
   --puck-card-width: 420px;
   --puck-dialog-width: 400px;
-  --puck-sidebar-width: 296px;
+  --puck-sidebar-width: 280px;
   --puck-info-width: 288px;
   --puck-drawer-width: 320px;
   font-family: -apple-system, "PingFang SC", system-ui, sans-serif;

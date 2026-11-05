@@ -86,10 +86,12 @@ for (const width of [390, 1280]) {
       await expect(page.locator(".puck-conversation > header .puck-avatar")).toHaveCSS("width", "32px");
       const listAvatarBox = await page.locator(".puck-assistant-row .puck-avatar").first().boundingBox();
       expect(listAvatarBox).toBeTruthy();
-      expect(listAvatarBox!.width).toBeGreaterThanOrEqual(90);
-      expect(listAvatarBox!.height).toBeGreaterThanOrEqual(90);
+      expect(listAvatarBox!.width).toBeGreaterThanOrEqual(78);
+      expect(listAvatarBox!.width).toBeLessThanOrEqual(82);
+      expect(listAvatarBox!.height).toBeGreaterThanOrEqual(78);
+      expect(listAvatarBox!.height).toBeLessThanOrEqual(82);
       const listRowBox = await page.locator(".puck-assistant-row").first().boundingBox();
-      expect(listRowBox!.height).toBeGreaterThan(listAvatarBox!.height);
+      expect(listRowBox!.height).toBe(96);
       await expect(page.locator(".puck-shape-option .puck-avatar").first()).toHaveCSS("width", "28px");
       await expect(page.locator(".puck-info .puck-avatar-large")).toHaveCSS("width", "96px");
       await expect(processingRow).toHaveScreenshot(`puck-processing-avatar-${width}.png`, { animations: "disabled", caret: "hide" });
@@ -249,7 +251,10 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 				expect(Math.max(...headerBottoms) - Math.min(...headerBottoms)).toBeLessThanOrEqual(1);
       }
 			await expect(page.locator(".puck-conversation > header")).toHaveCSS("height", "52px");
-			if (width >= 700) await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "112px");
+			if (width >= 700) {
+				await expect(page.locator(".puck-assistants")).toHaveCSS("width", "280px");
+				await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "96px");
+			}
 			const gaps = await page.locator(".puck-message").evaluateAll(elements => ({
 				group: elements[1].getBoundingClientRect().top - elements[0].getBoundingClientRect().bottom,
 				inside: elements[2].getBoundingClientRect().top - elements[1].getBoundingClientRect().bottom,
