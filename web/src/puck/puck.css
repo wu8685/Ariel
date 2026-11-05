@@ -16,6 +16,7 @@
   --puck-card-bg: #151517;
   --puck-hover: rgba(255, 255, 255, .06);
   --puck-selected: rgba(255, 255, 255, .08);
+  --puck-assistant-bubble: var(--color-panel);
   --puck-user-bubble: var(--color-primary);
   --puck-on-user-bubble: var(--color-on-primary);
   --puck-action: #fff;
@@ -344,11 +345,20 @@
 .puck-workspace .puck-message.assistant .puck-message-content {
   width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
+  color: var(--color-text);
+}
+.puck-workspace .puck-message.assistant:not(.question, .authorization, .task) .puck-message-content {
+  padding: 11px 15px;
+  border: 0;
+  border-radius: var(--puck-radius-bubble) var(--puck-radius-bubble) var(--puck-radius-bubble) 5px;
+  background: var(--puck-assistant-bubble);
+}
+.puck-workspace .puck-message.assistant:is(.question, .authorization, .task) .puck-message-content {
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--color-text);
 }
 .puck-workspace .puck-message.assistant.with-avatar .puck-message-content {
   width: calc(100% - var(--puck-avatar-msg) - var(--puck-space-3));

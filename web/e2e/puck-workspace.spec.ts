@@ -238,8 +238,11 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			await expect(page.locator(".puck-workspace")).toHaveCSS("background-color", "rgb(5, 5, 5)");
       expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 			const assistantContent = page.locator(".puck-message.assistant.text .puck-message-content").first();
-			await expect(assistantContent).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(assistantContent).toHaveCSS("padding", "0px");
+			await expect(assistantContent).toHaveCSS("background-color", "rgb(28, 28, 30)");
+			await expect(assistantContent).toHaveCSS("padding", "11px 15px");
+			await expect(assistantContent).toHaveCSS("border-radius", "18px 18px 18px 5px");
+			await expect(page.locator(".puck-message.question .puck-message-content")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+			await expect(page.locator(".puck-message.question .puck-message-content")).toHaveCSS("padding", "0px");
 			await expect(page.locator(".puck-message.user .puck-message-content")).toHaveCSS("background-color", "rgb(29, 93, 198)");
 			await expect(page.locator(".puck-message.message, .puck-message .message-body, .puck-message .message-text, .puck-message .markdown-body")).toHaveCount(0);
 			await expect(page.locator(".puck-transcript .puck-message.assistant .puck-avatar")).toHaveCount(0);
