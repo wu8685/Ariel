@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { readScreenshotFiles, type ScreenshotDraft } from "../screenshots";
@@ -37,6 +37,19 @@ function friendlyAssistantText(role: string, text: string): string {
   return /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(code) ? "操作暂时未完成，请重试。" : text;
 }
 function arrayData<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+type QuestionOption = { value: string; label: string; description?: string };
+function questionOptions(value: unknown): QuestionOption[] {
+  return arrayData<unknown>(value).flatMap(option => {
+    if (typeof option === "string") return option ? [{ value: option, label: option }] : [];
+    if (!option || typeof option !== "object" || Array.isArray(option)) return [];
+    const record = option as Record<string, unknown>;
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    if (!label) return [];
+    const value = typeof record.value === "string" && record.value.trim() ? record.value : label;
+    const description = typeof record.description === "string" && record.description.trim() ? record.description.trim() : undefined;
+    return [{ value, label, description }];
+  });
+}
 function normalizeMessage(value: Record<string, unknown>): Message {
   const role = String(value.role ?? value.Role ?? "assistant");
   const rawText = String(value.text ?? value.Text ?? "");
@@ -133,6 +146,14 @@ function decisionLabel(data: Record<string, unknown>): string {
   const decidedAt = data.decidedAt ? new Date(String(data.decidedAt)).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }) : "";
   return `${rejected ? "已拒绝" : "已允许一次"}${decidedAt ? ` · ${decidedAt}` : ""}`;
 }
+class PuckConversationErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) return <div className="puck-conversation-error" role="alert"><strong>这段对话暂时无法显示</strong><p>助理列表仍可使用。请切换助理，或稍后重试。</p></div>;
+    return this.props.children;
+  }
+}
 const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"等待回复", awaiting_authorization:"等待授权", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败" };
 function Card({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:string)=>void }) {
   const data = cardData(message);
@@ -140,7 +161,7 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
   if (message.kind === "question") return <section className={`puck-card puck-question-card${terminal ? " terminal" : ""}`} role="group" aria-label="问题卡片">
     <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">?</span><strong>{terminal ? "已回答" : "需要你决定"}</strong></div>
     <p>{message.text}</p>
-    {!terminal && <div className="puck-card-actions puck-options">{arrayData<string>(data.options).map(option => <button className="puck-chip" key={option} type="button" disabled={submitting} onClick={()=>onAction("question",data,option)}>{option}</button>)}</div>}
+    {!terminal && <div className="puck-card-actions puck-options">{questionOptions(data.options).map((option, index) => <button className={`puck-chip${option.description ? " structured" : ""}`} key={`${option.value}:${index}`} type="button" disabled={submitting} onClick={()=>onAction("question",data,option.value)}><span>{option.label}</span>{option.description && <small>{option.description}</small>}</button>)}</div>}
     {data.answer != null && <p className="puck-card-result"><span aria-hidden="true">✓</span> 你选择了 <strong>{String(data.answer)}</strong></p>}
   </section>;
   const expiresAt = data.expiresAt ? new Date(String(data.expiresAt)).getTime() : Number.POSITIVE_INFINITY;
@@ -417,7 +438,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       </header>
       <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty">
         <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button>
-	      </div> : messages.map((message,index) => {
+	      </div> : <PuckConversationErrorBoundary key={selectedID}>{messages.map((message,index) => {
         const continued = index > 0 && messages[index - 1].role === message.role;
         const groupEnd = index === messages.length - 1 || messages[index + 1].role !== message.role;
 	        const working = message.role === "assistant" && ["processing", "greeting_processing", "acknowledged"].includes(message.kind);
@@ -434,7 +455,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
             {groupEnd && message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}
           </div>
         </article>;
-      })}</div>
+      })}</PuckConversationErrorBoundary>}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
       {selected && <footer><div className="puck-composer-shell">{screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
     </section>

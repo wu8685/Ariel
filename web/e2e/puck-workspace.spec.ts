@@ -17,8 +17,8 @@ const initialMessages = [
 ];
 let messages = initialMessages;
 
-async function openPuck(page: Page, history: typeof initialMessages = initialMessages) {
-  assistants = initialAssistants;
+async function openPuck(page: Page, history: typeof initialMessages = initialMessages, assistantFixture = initialAssistants, historyByAssistant?: Record<string, typeof initialMessages>) {
+  assistants = assistantFixture;
 	avatarUpdates = [];
   sentMessages = [];
   messages = history;
@@ -35,7 +35,7 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
     if (message.method === "device.list") data = { devices: [{ deviceId: "brain-a", deviceName: "Mac mini", agentOnline: true, codexReady: true, capabilities: { autoLoad: true, puckBrain: true, puckBrainReady: true } }] };
     if (message.method === "thread.list") data = { threads: [], nextCursor: "" };
     if (message.method === "puck.list") data = { assistants };
-    if (message.method === "puck.history") data = { messages };
+    if (message.method === "puck.history") data = { messages: historyByAssistant?.[String(message.params.assistantId)] ?? messages };
 		if (message.method === "puck.update") {
 			avatarUpdates.push(message.params);
 			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, ...(message.params.avatar ? { avatar: JSON.stringify(message.params.avatar) } : {}), ...(typeof message.params.description === "string" ? { description: message.params.description } : {}) } : item);
@@ -176,6 +176,44 @@ test.describe("Puck HTTP availability normalization", () => {
 			await expect(page.getByRole("textbox", { name: "给 Puck 发消息" })).toHaveCount(0);
 		});
 	}
+});
+
+test.describe("Puck malformed assistant data isolation", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+
+	test("opens MindPowers structured question options without a black screen", async ({ page }) => {
+		const pageErrors: string[] = [];
+		page.on("pageerror", error => pageErrors.push(error.message));
+		const history = [
+			...initialMessages,
+			{
+				id: "question-card:rag-scope",
+				role: "assistant",
+				kind: "question",
+				text: "RAG 进度关注范围要覆盖到哪一层？",
+				cardJSON: JSON.stringify({
+					questionId: "rag-scope",
+					cardState: "pending",
+					options: [
+						{ label: "RAG 全链路（推荐）", description: "覆盖 RAG/VDB、知识库导入/分析、检索验证和相关部署。" },
+						{ label: "仅 RAG - VDB 线程", description: "只跟踪当前研发线程。" },
+					],
+				}),
+			},
+		] as typeof initialMessages;
+		await openPuck(page, initialMessages, [
+			initialAssistants[0],
+			{ ...initialAssistants[1], assistantId: "mindpowers", name: "MindPowers 研发" },
+		], { "puck-one": initialMessages, mindpowers: history });
+		await page.getByRole("button", { name: "打开助理列表" }).click();
+		await page.getByRole("button", { name: /MindPowers 研发/ }).click();
+
+		await expect(page.locator(".puck-workspace")).toBeVisible();
+		await expect(page.getByRole("button", { name: /RAG 全链路（推荐）/ })).toBeVisible();
+		await page.getByRole("button", { name: "打开助理列表" }).click();
+		await expect(page.locator(".puck-assistants")).toBeVisible();
+		expect(pageErrors).toEqual([]);
+	});
 });
 
 test.describe("Puck touch reactions", () => {

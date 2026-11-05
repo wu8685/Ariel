@@ -75,6 +75,58 @@ describe("PuckWorkspace", () => {
 		expect(composer.value).toBe("继续刚才的问题");
 	});
 
+  it("opens an assistant whose question card contains structured options without crashing the workspace", async () => {
+    const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+      if (method === "puck.list") return accepted({ assistants: [
+        { assistantId: "safe", name: "小帕", brainDeviceId: "brain-a", status: "ready" },
+        { assistantId: "mindpowers", name: "MindPowers 研发", brainDeviceId: "brain-a", status: "ready" },
+      ] });
+      if (method === "puck.history") return accepted({ messages: params.assistantId === "mindpowers" ? [{
+        id: "question-card:rag-scope",
+        assistantId: "mindpowers",
+        role: "assistant",
+        kind: "question",
+        text: "RAG 进度关注范围要覆盖到哪一层？",
+        cardJSON: JSON.stringify({
+          questionId: "rag-scope",
+          cardState: "pending",
+          options: [
+            { label: "RAG 全链路（推荐）", description: "覆盖 RAG/VDB、知识库导入/分析、检索验证和相关部署。" },
+            { label: "仅 RAG - VDB 线程", description: "只跟踪当前研发线程。" },
+          ],
+        }),
+      }] : [] });
+      return accepted({});
+    });
+
+    render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+    await screen.findAllByText("小帕");
+    fireEvent.click(screen.getAllByText("MindPowers 研发")[0].closest("button")!);
+
+    expect(await screen.findByRole("button", { name: /RAG 全链路（推荐）/ })).toBeTruthy();
+    expect(screen.getByText("覆盖 RAG/VDB、知识库导入/分析、检索验证和相关部署。")).toBeTruthy();
+    expect(document.querySelector(".puck-assistants")).toBeTruthy();
+  });
+
+  it("keeps the assistant list visible and shows a local error when one conversation cannot render", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => method === "puck.list"
+      ? accepted({ assistants: [
+          { assistantId: "broken", name: "损坏历史", brainDeviceId: "brain-a", status: "ready" },
+          { assistantId: "safe", name: "正常助理", brainDeviceId: "brain-a", status: "ready" },
+        ] })
+      : method === "puck.history" ? accepted({ messages: [{
+          id: "bad-reaction", role: "assistant", kind: "text", text: "仍应保留导航", reaction: JSON.stringify({ assistant: { invalid: true } }),
+        }] }) : accepted({}));
+
+    render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("这段对话暂时无法显示");
+    expect(screen.getAllByText("损坏历史").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("正常助理").length).toBeGreaterThan(0);
+    expect(document.querySelector(".puck-workspace")).toBeTruthy();
+  });
+
   it("ignores a previous assistant's late polling history after switching assistants", async () => {
     vi.useFakeTimers();
     let resolveLate: ((value: ReturnType<typeof accepted>) => void) | undefined;
