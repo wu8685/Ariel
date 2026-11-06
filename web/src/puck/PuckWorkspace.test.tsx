@@ -6,9 +6,62 @@ import { PuckWorkspace } from "./PuckWorkspace";
 
 const accepted = (data: Record<string, unknown>) => ({ type: "response", v: 1, requestId: crypto.randomUUID(), outcome: "accepted", data } as const);
 const rejected = (code: string) => ({ type: "response", v: 1, requestId: crypto.randomUUID(), outcome: "rejected", error: { code, message: code } } as const);
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); localStorage.clear(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("PuckWorkspace", () => {
+	it("restores the last used assistant and falls back when the saved assistant no longer exists", async () => {
+		localStorage.setItem("ariel.puck.lastAssistantId.v1", "a-2");
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [
+				{ assistantId: "a-1", name: "第一个", brainDeviceId: "brain-a", status: "ready" },
+				{ assistantId: "a-2", name: "最近使用", brainDeviceId: "brain-a", status: "ready" },
+			] });
+			if (method === "puck.history") return accepted({ messages: [{ id: `history-${params.assistantId}`, assistantId: params.assistantId, role: "assistant", kind: "text", text: `history-${params.assistantId}` }] });
+			return accepted({});
+		});
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("history-a-2");
+		expect(view.container.querySelector(".puck-assistant-row.active")?.textContent).toContain("最近使用");
+		expect(request).toHaveBeenCalledWith("puck.history", "relay", { assistantId: "a-2" });
+
+		cleanup();
+		localStorage.setItem("ariel.puck.lastAssistantId.v1", "deleted");
+		const fallback = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("history-a-1");
+		expect(fallback.container.querySelector(".puck-assistant-row.active")?.textContent).toContain("第一个");
+		expect(localStorage.getItem("ariel.puck.lastAssistantId.v1")).toBe("a-1");
+	});
+
+	it("scrolls switched assistants to the latest message and preserves manual history reading", async () => {
+		let eventListener: ((event: Record<string, unknown>) => void) | undefined;
+		const subscribeEvents = vi.fn((listener: (event: Record<string, unknown>) => void) => { eventListener = listener; return () => undefined; });
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [
+				{ assistantId: "a-1", name: "助理一", brainDeviceId: "brain-a", status: "ready" },
+				{ assistantId: "a-2", name: "助理二", brainDeviceId: "brain-a", status: "ready" },
+			] });
+			if (method === "puck.history") return accepted({ messages: [{ id: `latest-${params.assistantId}`, assistantId: params.assistantId, role: "assistant", kind: "text", text: `latest-${params.assistantId}` }] });
+			if (method === "puck.watch") return accepted({ watchId: `watch-${params.assistantId}` });
+			return accepted({});
+		});
+		const view = render(<PuckWorkspace request={request} subscribeEvents={subscribeEvents} state="ready" devices={[]} />);
+		await screen.findAllByText("latest-a-1");
+		const transcript = view.container.querySelector<HTMLElement>(".puck-transcript")!;
+		Object.defineProperties(transcript, { scrollHeight: { configurable: true, get: () => 1000 }, clientHeight: { configurable: true, get: () => 200 } });
+		fireEvent.click(screen.getAllByText("助理二")[0].closest("button")!);
+		await screen.findAllByText("latest-a-2");
+		await waitFor(() => expect(transcript.scrollTop).toBe(800));
+
+		transcript.scrollTop = 300;
+		fireEvent.scroll(transcript);
+		await act(async () => eventListener?.({ event: "puck.event", assistantId: "a-2", kind: "history", payload: { messages: [
+			{ id: "latest-a-2", assistantId: "a-2", role: "assistant", kind: "text", text: "latest-a-2" },
+			{ id: "new-a-2", assistantId: "a-2", role: "assistant", kind: "text", text: "new-a-2" },
+		] } }));
+		await screen.findAllByText("new-a-2");
+		expect(transcript.scrollTop).toBe(300);
+	});
+
   it("uses only the selected avatar color for the accessible composer send control and updates it immediately", async () => {
     const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => method === "puck.list"
       ? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "cloud", color: "#ff2f92" }) }] })

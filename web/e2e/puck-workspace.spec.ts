@@ -67,6 +67,43 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   await expect(page.locator(".puck-transcript").getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
 
+test.describe("Puck recent assistant and latest-message navigation", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+
+	test("restores the recent assistant, scrolls switches to the bottom, and preserves manual reading", async ({ page }) => {
+		const firstHistory = [
+			...initialMessages,
+			...Array.from({ length: 30 }, (_, index) => ({ id: `first-${index}`, role: index % 2 ? "user" : "assistant", kind: "text", text: `一号历史消息 ${index + 1} ${"较长内容用于形成真实滚动区域。".repeat(4)}`, createdAt: `2026-11-03T13:${String(index).padStart(2, "0")}:00Z` })),
+		] as typeof initialMessages;
+		const secondHistory = [
+			...initialMessages,
+			...Array.from({ length: 30 }, (_, index) => ({ id: `second-${index}`, role: index % 2 ? "user" : "assistant", kind: "text", text: `二号历史消息 ${index + 1} ${"较长内容用于形成真实滚动区域。".repeat(4)}`, createdAt: `2026-11-03T14:${String(index).padStart(2, "0")}:00Z` })),
+		] as typeof initialMessages;
+		const histories = { "puck-one": firstHistory, "puck-two": secondHistory };
+		await page.addInitScript(() => localStorage.setItem("ariel.puck.lastAssistantId.v1", "puck-two"));
+		await openPuck(page, firstHistory, initialAssistants, histories);
+
+		const transcript = page.locator(".puck-transcript");
+		await expect(page.locator(".puck-conversation-title")).toHaveText("罗宾");
+		await expect(transcript.getByText("二号历史消息 30", { exact: false })).toHaveCount(1);
+		expect(await transcript.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+
+		await page.getByRole("button", { name: "打开助理列表" }).click();
+		await page.getByRole("button", { name: /小帕/ }).click();
+		await expect(page.locator(".puck-conversation-title")).toHaveText("小帕");
+		await expect(transcript.getByText("一号历史消息 30", { exact: false })).toHaveCount(1);
+		expect(await transcript.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+		const lastMessageBox = await page.locator(".puck-message").last().boundingBox();
+		const composerBox = await page.locator(".puck-composer").boundingBox();
+		expect(lastMessageBox!.y + lastMessageBox!.height).toBeLessThanOrEqual(composerBox!.y - 8);
+
+		await transcript.evaluate(element => { element.scrollTop = 120; element.dispatchEvent(new Event("scroll")); });
+		firstHistory.push({ id: "first-new", role: "assistant", kind: "text", text: "一号轮询新增消息", createdAt: "2026-11-03T13:31:00Z" });
+		await expect(transcript.getByText("一号轮询新增消息")).toBeVisible({ timeout: 12_000 });
+		expect(await transcript.evaluate(element => element.scrollTop)).toBe(120);
+	});
+});
+
 for (const width of [320, 390, 1280]) {
   test.describe(`Puck fixed workspace ${width}px`, () => {
     test.use({ viewport: { width, height: 844 }, isMobile: width < 700, hasTouch: width < 700, colorScheme: "dark" });

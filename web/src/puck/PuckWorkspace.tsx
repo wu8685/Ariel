@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { readScreenshotFiles, type ScreenshotDraft } from "../screenshots";
@@ -12,6 +12,16 @@ type Device = { deviceId: string; name?: string; capabilities?: Record<string, b
 type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; unreadCount?: number; lastMessagePreview?: string };
 type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
+const lastAssistantStorageKey = "ariel.puck.lastAssistantId.v1";
+const latestScrollThreshold = 48;
+
+function storedLastAssistant(): string {
+  try { return window.localStorage.getItem(lastAssistantStorageKey)?.trim() || ""; } catch { return ""; }
+}
+function storeLastAssistant(assistantID: string) {
+  if (!assistantID) return;
+  try { window.localStorage.setItem(lastAssistantStorageKey, assistantID); } catch { /* preference storage is best-effort */ }
+}
 
 const puckErrorText: Record<string, string> = {
   RESYNC_REQUIRED: "实时连接暂时失效，请重试。",
@@ -203,9 +213,12 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const listSequence = useRef(0);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const conversationRef = useRef<HTMLElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
   const composerFooterRef = useRef<HTMLElement>(null);
   const selectedRef = useRef("");
   const messageAssistantRef = useRef("");
+  const lastAssistantRef = useRef(storedLastAssistant());
+  const followLatestRef = useRef(true);
   const [clock, setClock] = useState(() => Date.now());
   const [reactionTarget, setReactionTarget] = useState("");
   const reactionLongPressTimer = useRef<number | undefined>(undefined);
@@ -217,7 +230,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     const conversation = conversationRef.current;
     const footer = composerFooterRef.current;
     if (!conversation || !footer || typeof ResizeObserver === "undefined") return;
-    const updateHeight = () => conversation.style.setProperty("--puck-footer-overlay-height", `${footer.getBoundingClientRect().height}px`);
+    const updateHeight = () => {
+      conversation.style.setProperty("--puck-footer-overlay-height", `${footer.getBoundingClientRect().height}px`);
+      if (followLatestRef.current) scrollTranscriptToLatest();
+    };
     const observer = new ResizeObserver(updateHeight);
     observer.observe(footer);
     updateHeight();
@@ -235,8 +251,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   function selectAssistant(assistantID: string, initialMessages: Message[] = []) {
     if (assistantID === selectedRef.current && messageAssistantRef.current === assistantID && initialMessages.length === 0) return;
     cancelReactionLongPress();
+    followLatestRef.current = true;
     selectedRef.current = assistantID;
     messageAssistantRef.current = assistantID;
+    if (assistantID) { lastAssistantRef.current = assistantID; storeLastAssistant(assistantID); }
     setMessages(initialMessages);
     setReactionTarget("");
     setSelectedID(assistantID);
@@ -245,6 +263,20 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (selectedRef.current !== assistantID || messageAssistantRef.current !== assistantID) return;
     setMessages(current => selectedRef.current === assistantID && messageAssistantRef.current === assistantID ? update(current) : current);
   }
+  function scrollTranscriptToLatest() {
+    const transcript = transcriptRef.current;
+    if (transcript) transcript.scrollTop = Math.max(0, transcript.scrollHeight - transcript.clientHeight);
+  }
+  function trackTranscriptScroll() {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    const distance = Math.max(0, transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop);
+    followLatestRef.current = distance <= latestScrollThreshold;
+  }
+
+  useLayoutEffect(() => {
+    if (followLatestRef.current) scrollTranscriptToLatest();
+  }, [selectedID, messages]);
 
   useEffect(() => {
 	if (!messages.some(message => workData(message).state === "running")) return;
@@ -259,7 +291,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     const next = arrayData<Assistant>(response.data?.assistants);
     const currentID = selectedRef.current;
-    const nextID = currentID && next.some(item => item.assistantId === currentID) ? currentID : next[0]?.assistantId || "";
+    const preferredID = lastAssistantRef.current;
+    const nextID = currentID && next.some(item => item.assistantId === currentID)
+      ? currentID
+      : preferredID && next.some(item => item.assistantId === preferredID) ? preferredID : next[0]?.assistantId || "";
     setAssistants(next.map(item => item.assistantId === nextID ? { ...item, unreadCount: 0 } : item));
     if (nextID !== currentID) selectAssistant(nextID);
   }
@@ -327,6 +362,9 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (screenshots.length === 0 && ["停", "停止"].includes(text)) { setDraft(""); await stop(); return; }
     const images = screenshots.map(image => image.dataUri);
     const assistantID = selected.assistantId;
+    followLatestRef.current = true;
+    lastAssistantRef.current = assistantID;
+    storeLastAssistant(assistantID);
     const clientMessageId = crypto.randomUUID(); setDraft(""); setScreenshots([]); if (screenshotInputRef.current) screenshotInputRef.current.value = ""; const localStartedAt = new Date().toISOString();
     updateScopedMessages(assistantID, current => [...current, { id: clientMessageId, assistantId:assistantID, role: "user", kind: "text", text, cardJSON: images.length ? JSON.stringify({ images }) : "" }, { id: `${clientMessageId}-processing`, assistantId:assistantID, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
     const response = await request("puck.message.send", "relay", { assistantId: assistantID, clientMessageId, text, images });
@@ -454,7 +492,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </button>
         {selected && <div className="puck-header-actions puck-glass-chip">{busy ? <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button> : <button className="puck-icon-btn" type="button" aria-label="更多助理操作" onClick={()=>setMobilePanel("info")}><span className="puck-more" aria-hidden="true">•••</span></button>}</div>}
       </header>
-      <div className="puck-transcript" aria-live="polite">{assistants.length === 0 ? <div className="puck-empty">
+	      <div className="puck-transcript" ref={transcriptRef} aria-live="polite" onScroll={trackTranscriptScroll}>{assistants.length === 0 ? <div className="puck-empty">
         <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button>
 	      </div> : <PuckConversationErrorBoundary key={selectedID}>{messages.map((message,index) => {
         const continued = index > 0 && messages[index - 1].role === message.role;
