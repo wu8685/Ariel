@@ -15,17 +15,18 @@ import (
 )
 
 type fakeModuleBridge struct {
-	mu              sync.Mutex
-	calls           []string
-	brains          map[relay.BrainThread]string
-	ensureFailures  int
-	turnFailures    int
-	turnFailureCode string
-	emptyTurn       bool
-	ensureThreads   []string
-	events          chan relay.BrainEvent
-	params          []json.RawMessage
-	origins         []relay.Origin
+	mu                sync.Mutex
+	calls             []string
+	brains            map[relay.BrainThread]string
+	ensureFailures    int
+	turnFailures      int
+	turnFailureCode   string
+	toolResultFailure bool
+	emptyTurn         bool
+	ensureThreads     []string
+	events            chan relay.BrainEvent
+	params            []json.RawMessage
+	origins           []relay.Origin
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
@@ -71,6 +72,9 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 	}
 	if method == "turn.start" {
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-a"}}
+	}
+	if method == "puck.brain.toolResult" && f.toolResultFailure {
+		return relay.PuckResponse{Outcome: "unknown", Error: &relay.PuckError{Code: "OUTCOME_UNKNOWN", Message: "fixture receipt lost"}}
 	}
 	return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
 }
@@ -451,6 +455,15 @@ func TestUpdatedDescriptionIsIncludedInNextTrustedTurn(t *testing.T) {
 	}
 }
 
+func TestBrainInstructionsRequireToolCallInSameTurnAndForbidDuplicateStart(t *testing.T) {
+	instructions := brainInstructions("assistant-a", "Helper", "检查任务")
+	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task"} {
+		if !strings.Contains(instructions, required) {
+			t.Fatalf("brain instructions missing %q", required)
+		}
+	}
+}
+
 func (f *fakeModuleBridge) hasToolResult(callID string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -513,6 +526,34 @@ func TestModuleExecutesTrustedBrainToolCallAndReturnsResult(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("tool result was not returned")
+}
+
+func TestModuleAuditsFailedBrainToolResultDeliveryWithoutReplay(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1), toolResultFailure: true}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-a","tool":"list_devices","arguments":{}}`)}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		_ = module.store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_log WHERE assistant_id=? AND action='brain_tool_result' AND target='list_devices' AND result='OUTCOME_UNKNOWN'`, id).Scan(&count)
+		if count == 1 {
+			bridge.mu.Lock()
+			calls := append([]string(nil), bridge.calls...)
+			bridge.mu.Unlock()
+			if !slices.Equal(calls[len(calls)-1:], []string{"puck.brain.toolResult"}) {
+				t.Fatalf("unexpected replay calls=%v", calls)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("failed tool-result delivery was not audited")
 }
 
 func TestModuleRecordsCompletedBrainMessage(t *testing.T) {
@@ -648,7 +689,7 @@ func TestFullModeHighRiskTaskDoesNotCreateAuthorizationCard(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatal("full task was not dispatched")
 	}
-	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-full-send","tool":"send_turn","arguments":{"taskId":"00000000-0000-4000-8000-000000000242","text":"deploy now","riskTags":["deploy"],"clientMessageId":"00000000-0000-4000-8000-000000000243"}}`)}
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: mustJSON(map[string]any{"callId": "call-full-send", "tool": "send_turn", "arguments": map[string]any{"taskId": tasks[0].ID, "text": "deploy now", "riskTags": []string{"deploy"}, "clientMessageId": "00000000-0000-4000-8000-000000000243"}})}
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		bridge.mu.Lock()
@@ -700,6 +741,8 @@ func TestFirstMessageStartTaskHonorsFullAndAskModes(t *testing.T) {
 			}
 			arguments := `{"deviceId":"exec-a","cwd":"/fixture","goal":"test","prompt":"run isolated tests","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000244"}`
 			bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"first-call-` + mode + `","tool":"start_task","arguments":` + arguments + `}`)}
+			duplicateArguments := `{"deviceId":"exec-a","cwd":"/fixture","goal":"test again","prompt":"run isolated tests again","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000245"}`
+			bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"duplicate-call-` + mode + `","tool":"start_task","arguments":` + duplicateArguments + `}`)}
 
 			authorizationCount := func() int {
 				var count int
@@ -711,7 +754,7 @@ func TestFirstMessageStartTaskHonorsFullAndAskModes(t *testing.T) {
 			deadline := time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
 				tasks, _ := module.store.Tasks(context.Background(), id)
-				if len(tasks) > 0 || authorizationCount() > 0 {
+				if (len(tasks) > 0 || authorizationCount() > 0) && bridge.hasToolResult("duplicate-call-"+mode) {
 					break
 				}
 				time.Sleep(time.Millisecond)

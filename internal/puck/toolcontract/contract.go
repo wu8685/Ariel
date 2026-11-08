@@ -11,7 +11,8 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 2
+const Version = 3
+const canonicalMutationToolVersion = 2
 
 const (
 	maxIDLength   = 128
@@ -63,7 +64,7 @@ type Definition struct {
 }
 
 func DefinitionFor(version int, name string) (Definition, bool) {
-	if version < Version {
+	if version < canonicalMutationToolVersion {
 		return Definition{}, false
 	}
 	switch name {

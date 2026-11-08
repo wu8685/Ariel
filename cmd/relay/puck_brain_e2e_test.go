@@ -20,7 +20,15 @@ import (
 
 // This opt-in smoke owns a new Relay state directory, Puck brain workspace,
 // Bot and execution thread. It never resumes or mutates an existing thread.
-func TestPuckBrainFirstMessageStartsTaskInFullAndAsksInAskMode(t *testing.T) {
+func TestPuckBrainFirstMessageFullModeRemainsOneTask(t *testing.T) {
+	runPuckBrainFirstMessageMode(t, "full")
+}
+
+func TestPuckBrainFirstMessageAskModeRemainsOneAuthorization(t *testing.T) {
+	runPuckBrainFirstMessageMode(t, "ask")
+}
+
+func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	if os.Getenv("ARIEL_TEST_REAL_PUCK_E2E") != "1" {
 		t.Skip("set ARIEL_TEST_REAL_PUCK_E2E=1 for the isolated release smoke")
 	}
@@ -99,83 +107,84 @@ func TestPuckBrainFirstMessageStartsTaskInFullAndAsksInAskMode(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 
-	for _, mode := range []string{"full", "ask"} {
-		t.Run(mode, func(t *testing.T) {
-			created := e2eRequest(t, web, nextRequestID(), "puck.create", "relay", map[string]any{
-				"name": "Fixture " + mode, "brainDeviceId": "fixture-device", "permissionMode": mode,
-			}, 3*time.Minute)
-			assistant := responseData(created)["assistant"].(map[string]any)
-			assistantID := assistant["assistantId"].(string)
-			greetingDeadline := time.Now().Add(4 * time.Minute)
-			for {
-				history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
-				if e2eGreetingCompleted(history) {
-					break
-				}
-				if time.Now().After(greetingDeadline) {
-					t.Fatal("isolated Bot greeting did not complete")
-				}
-				time.Sleep(2 * time.Second)
-			}
-			// The durable assistant bubble precedes app-server turn/completed by a
-			// small interval. Avoid turning that presentation event into a busy-turn
-			// race in this release smoke.
-			time.Sleep(10 * time.Second)
-			reconnectedDeadline := time.Now().Add(90 * time.Second)
-			consecutiveReady := 0
-			for {
-				devices := e2eRequest(t, web, nextRequestID(), "device.list", "relay", map[string]any{}, 15*time.Second)
-				if hasReadyFixtureDevice(devices) {
-					consecutiveReady++
-					if consecutiveReady == 3 {
-						break
-					}
-				} else {
-					consecutiveReady = 0
-				}
-				if time.Now().After(reconnectedDeadline) {
-					t.Fatal("isolated Desktop Agent did not become ready after greeting")
-				}
-				time.Sleep(time.Second)
-			}
-			messageID := "00000000-0000-4000-8000-0000000009" + map[string]string{"full": "11", "ask": "12"}[mode]
-			prompt := "请在 fixture-device 的目录 " + fixture + " 实际检查 marker.txt 是否存在并报告结果；必须交给目标设备执行，不得猜测，不读取其他目录、不修改文件。"
-			sent := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{
-				"assistantId": assistantID, "clientMessageId": messageID, "text": prompt,
-			}, 3*time.Minute)
-			if sent["outcome"] != "accepted" {
-				select {
-				case agentErr := <-agentDone:
-					t.Fatalf("message rejected after Agent stopped (%v): %v", agentErr, sent["error"])
-				default:
-					t.Fatalf("message rejected: %v", sent["error"])
-				}
-			}
-
-			deadline := time.Now().Add(6 * time.Minute)
-			for {
-				history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
-				tasks, authorizations := e2eMessageKinds(history)
-				if mode == "full" && tasks == 1 {
-					if authorizations != 0 {
-						t.Fatalf("full mode produced %d authorization cards", authorizations)
-					}
-					break
-				}
-				if mode == "ask" && authorizations == 1 {
-					if tasks != 0 {
-						t.Fatalf("ask mode started %d tasks before approval", tasks)
-					}
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("mode=%s did not reach expected task/authorization state", mode)
-				}
-				time.Sleep(2 * time.Second)
-			}
-			_ = e2eRequest(t, web, nextRequestID(), "puck.stop", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
-		})
+	created := e2eRequest(t, web, nextRequestID(), "puck.create", "relay", map[string]any{
+		"name": "Fixture " + mode, "brainDeviceId": "fixture-device", "permissionMode": mode,
+	}, 3*time.Minute)
+	assistant := responseData(created)["assistant"].(map[string]any)
+	assistantID := assistant["assistantId"].(string)
+	greetingDeadline := time.Now().Add(4 * time.Minute)
+	for {
+		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		if e2eGreetingCompleted(history) {
+			break
+		}
+		if time.Now().After(greetingDeadline) {
+			t.Fatal("isolated Bot greeting did not complete")
+		}
+		time.Sleep(2 * time.Second)
 	}
+	// The durable assistant bubble precedes app-server turn/completed by a
+	// small interval. Avoid turning that presentation event into a busy-turn
+	// race in this release smoke.
+	time.Sleep(10 * time.Second)
+	reconnectedDeadline := time.Now().Add(90 * time.Second)
+	consecutiveReady := 0
+	for {
+		devices := e2eRequest(t, web, nextRequestID(), "device.list", "relay", map[string]any{}, 15*time.Second)
+		if hasReadyFixtureDevice(devices) {
+			consecutiveReady++
+			if consecutiveReady == 3 {
+				break
+			}
+		} else {
+			consecutiveReady = 0
+		}
+		if time.Now().After(reconnectedDeadline) {
+			t.Fatal("isolated Desktop Agent did not become ready after greeting")
+		}
+		time.Sleep(time.Second)
+	}
+	messageID := "00000000-0000-4000-8000-0000000009" + map[string]string{"full": "11", "ask": "12"}[mode]
+	prompt := "请在 fixture-device 的目录 " + fixture + " 实际检查 marker.txt 是否存在并报告结果；必须交给目标设备执行，不得猜测，不读取其他目录、不修改文件。"
+	sent := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{
+		"assistantId": assistantID, "clientMessageId": messageID, "text": prompt,
+	}, 3*time.Minute)
+	if sent["outcome"] != "accepted" {
+		select {
+		case agentErr := <-agentDone:
+			t.Fatalf("message rejected after Agent stopped (%v): %v", agentErr, sent["error"])
+		default:
+			t.Fatalf("message rejected: %v", sent["error"])
+		}
+	}
+
+	deadline := time.Now().Add(6 * time.Minute)
+	var firstExpectedAt time.Time
+	lastTasks, lastAuthorizations := 0, 0
+	var lastAssistantKinds []string
+	for {
+		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		tasks, authorizations := e2eMessageKinds(history)
+		lastTasks, lastAuthorizations = tasks, authorizations
+		lastAssistantKinds = e2eAssistantKinds(history)
+		expected := mode == "full" && tasks == 1 && authorizations == 0 || mode == "ask" && tasks == 0 && authorizations == 1
+		if expected && firstExpectedAt.IsZero() {
+			firstExpectedAt = time.Now()
+			deadline = firstExpectedAt.Add(3*time.Minute + 30*time.Second)
+		}
+		if !firstExpectedAt.IsZero() && !expected {
+			t.Fatalf("mode=%s changed after first expected state: tasks=%d authorizations=%d", mode, tasks, authorizations)
+		}
+		if !firstExpectedAt.IsZero() && time.Since(firstExpectedAt) >= 3*time.Minute {
+			t.Logf("mode=%s stable for full behavior window: tasks=%d authorizations=%d", mode, tasks, authorizations)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mode=%s did not reach expected state: tasks=%d authorizations=%d assistantKinds=%v", mode, lastTasks, lastAuthorizations, lastAssistantKinds)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	_ = e2eRequest(t, web, nextRequestID(), "puck.stop", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
 	cancel()
 	select {
 	case <-agentDone:
@@ -243,6 +252,18 @@ func e2eMessageKinds(response map[string]any) (tasks, authorizations int) {
 		}
 	}
 	return tasks, authorizations
+}
+
+func e2eAssistantKinds(response map[string]any) []string {
+	messages, _ := responseData(response)["messages"].([]any)
+	var kinds []string
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] == "assistant" {
+			kinds = append(kinds, fmt.Sprint(message["kind"]))
+		}
+	}
+	return kinds
 }
 
 func e2eGreetingCompleted(response map[string]any) bool {

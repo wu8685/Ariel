@@ -110,13 +110,17 @@ func TestStoreTracksServerUnreadPreviewAndActorReactions(t *testing.T) {
 	}
 }
 
-func TestStoreSchemaIncludesV1ToV2UnreadMigration(t *testing.T) {
+func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "puck-v1.db")
 	db, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`CREATE TABLE assistants (id TEXT PRIMARY KEY); PRAGMA user_version = 1`); err != nil {
+	if _, err = db.Exec(`
+		CREATE TABLE assistants (id TEXT PRIMARY KEY);
+		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, device_id TEXT NOT NULL, cwd TEXT NOT NULL, native_thread_id TEXT NOT NULL, goal TEXT NOT NULL, status TEXT NOT NULL, risk_tags TEXT NOT NULL DEFAULT '[]', created_by TEXT NOT NULL DEFAULT 'puck', last_turn_id TEXT NOT NULL DEFAULT '', last_seen_revision TEXT NOT NULL DEFAULT '', last_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+		CREATE TABLE authorizations (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, action_json TEXT NOT NULL, action_hash TEXT NOT NULL, rules_hit TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT, created_at TEXT NOT NULL);
+		PRAGMA user_version = 1`); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.Close(); err != nil {
@@ -150,6 +154,12 @@ func TestStoreSchemaIncludesV1ToV2UnreadMigration(t *testing.T) {
 	if !columns["unread_count"] || !columns["last_message_preview"] {
 		t.Fatalf("columns=%v", columns)
 	}
+	for table, column := range map[string]string{"tasks": "source_message_id", "authorizations": "source_message_id"} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s.%s count=%d err=%v", table, column, count, err)
+		}
+	}
 }
 
 func TestStoreRejectsDatabaseFromNewerSchema(t *testing.T) {
@@ -164,6 +174,34 @@ func TestStoreRejectsDatabaseFromNewerSchema(t *testing.T) {
 	store.Close()
 	if _, err := OpenStore(path); err == nil {
 		t.Fatal("newer schema accepted")
+	}
+}
+
+func TestStoreMigratesV2TaskIdempotencyColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "puck-v2.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`
+		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL);
+		CREATE TABLE authorizations (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, status TEXT NOT NULL);
+		PRAGMA user_version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for table, column := range map[string]string{"tasks": "source_message_id", "authorizations": "source_message_id"} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s.%s count=%d err=%v", table, column, count, err)
+		}
 	}
 }
 

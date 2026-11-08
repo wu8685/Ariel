@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,8 +19,9 @@ var (
 )
 
 type FrozenAction struct {
-	Tool      string          `json:"tool"`
-	Arguments json.RawMessage `json:"arguments"`
+	Tool            string          `json:"tool"`
+	SourceMessageID string          `json:"sourceMessageId,omitempty"`
+	Arguments       json.RawMessage `json:"arguments"`
 }
 
 type AuthorizationService struct {
@@ -48,6 +50,20 @@ func (s *AuthorizationService) Request(ctx context.Context, assistantID string, 
 	if lifetime <= 0 {
 		lifetime = 30 * time.Minute
 	}
+	if action.SourceMessageID != "" {
+		var existing Authorization
+		var expires string
+		err := s.store.db.QueryRowContext(ctx, `SELECT id,assistant_id,source_message_id,action_json,action_hash,rules_hit,status,expires_at FROM authorizations WHERE assistant_id=? AND source_message_id=? AND status='pending'`, assistantID, action.SourceMessageID).Scan(&existing.ID, &existing.AssistantID, &existing.SourceMessageID, &existing.ActionJSON, &existing.ActionHash, &existing.RulesHit, &existing.Status, &expires)
+		if err == nil {
+			existing.ExpiresAt, _ = time.Parse(time.RFC3339Nano, expires)
+			if s.now().Before(existing.ExpiresAt) {
+				return existing, nil
+			}
+			_, _ = s.store.db.ExecContext(ctx, `UPDATE authorizations SET status='expired',decided_at=? WHERE id=? AND status='pending'`, nowText(s.now()), existing.ID)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return Authorization{}, err
+		}
+	}
 	actionJSON, err := json.Marshal(action)
 	if err != nil {
 		return Authorization{}, err
@@ -56,7 +72,7 @@ func (s *AuthorizationService) Request(ctx context.Context, assistantID string, 
 	if err != nil {
 		return Authorization{}, err
 	}
-	authorization := Authorization{ID: randomID("auth"), AssistantID: assistantID, ActionJSON: string(actionJSON), ActionHash: HashAction(action), RulesHit: string(rulesJSON), Status: "pending", ExpiresAt: s.now().Add(lifetime)}
+	authorization := Authorization{ID: randomID("auth"), AssistantID: assistantID, SourceMessageID: action.SourceMessageID, ActionJSON: string(actionJSON), ActionHash: HashAction(action), RulesHit: string(rulesJSON), Status: "pending", ExpiresAt: s.now().Add(lifetime)}
 	if err := s.store.InsertAuthorization(ctx, authorization); err != nil {
 		return Authorization{}, err
 	}

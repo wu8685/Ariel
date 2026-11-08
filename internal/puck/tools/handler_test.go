@@ -98,6 +98,14 @@ func (f *fakeBackend) Task(_ context.Context, assistantID, taskID string) (Task,
 	}
 	return task, nil
 }
+func (f *fakeBackend) TaskBySourceMessage(_ context.Context, assistantID, sourceMessageID string) (Task, error) {
+	for _, task := range f.tasks {
+		if task.AssistantID == assistantID && task.SourceMessageID == sourceMessageID {
+			return task, nil
+		}
+	}
+	return Task{}, ErrNotFound
+}
 func (f *fakeBackend) Emit(_ context.Context, event Event) error {
 	f.events = append(f.events, event)
 	return nil
@@ -126,6 +134,20 @@ func TestStartTaskIsIdempotentAndUnknownIsNeverReplayed(t *testing.T) {
 	}
 	if len(unknownOrchestrator.calls) != 1 {
 		t.Fatalf("unknown write replayed: %v", unknownOrchestrator.calls)
+	}
+}
+
+func TestStartTaskIsIdempotentAcrossBrainIDsForOneUserMessage(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	backend := &fakeBackend{tasks: map[string]Task{}}
+	handler := New(orchestrator, backend)
+	first := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000101"}`)})
+	second := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work/changed","goal":"test again","prompt":"do it again","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000102"}`)})
+	if !first.Success || !second.Success || len(orchestrator.calls) != 1 {
+		t.Fatalf("first=%+v second=%+v calls=%v", first, second, orchestrator.calls)
+	}
+	if first.Data["taskId"] != second.Data["taskId"] {
+		t.Fatalf("task ids differ: first=%v second=%v", first.Data["taskId"], second.Data["taskId"])
 	}
 }
 

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,9 +29,10 @@ type Result struct {
 }
 
 type Call struct {
-	AssistantID string
-	Tool        string
-	Arguments   json.RawMessage
+	AssistantID     string
+	SourceMessageID string
+	Tool            string
+	Arguments       json.RawMessage
 }
 
 type ToolResult struct {
@@ -44,12 +46,13 @@ type ToolResult struct {
 }
 
 type Action struct {
-	Tool      string
-	Arguments json.RawMessage
+	Tool            string
+	SourceMessageID string
+	Arguments       json.RawMessage
 }
 
 type Task struct {
-	ID, AssistantID, DeviceID, CWD, NativeThreadID, Goal, Status, LastTurnID string
+	ID, AssistantID, SourceMessageID, DeviceID, CWD, NativeThreadID, Goal, Status, LastTurnID string
 }
 
 type Event struct {
@@ -67,6 +70,7 @@ type Backend interface {
 	PermissionMode(context.Context, string) string
 	SaveTask(context.Context, Task) error
 	Task(context.Context, string, string) (Task, error)
+	TaskBySourceMessage(context.Context, string, string) (Task, error)
 	Emit(context.Context, Event) error
 }
 
@@ -151,6 +155,12 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	if len(details) != 0 {
 		return invalidArguments("invalid start_task arguments", details)
 	}
+	if call.SourceMessageID != "" {
+		if existing, err := h.backend.TaskBySourceMessage(ctx, call.AssistantID, call.SourceMessageID); err == nil {
+			return ToolResult{Success: true, Data: taskData(existing)}
+		}
+		input.ClientTaskID = stableTaskID(call.AssistantID, call.SourceMessageID)
+	}
 	if existing, err := h.backend.Task(ctx, call.AssistantID, input.ClientTaskID); err == nil {
 		return ToolResult{Success: true, Data: taskData(existing)}
 	}
@@ -162,7 +172,8 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 		return toolError("PROTOCOL_UNSUPPORTED", "target device does not support atomic thread bootstrap")
 	}
 	if !authorized {
-		authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, Arguments: call.Arguments})
+		effectiveArguments, _ := json.Marshal(input)
+		authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, SourceMessageID: call.SourceMessageID, Arguments: effectiveArguments})
 		if err != nil {
 			if errors.Is(err, ErrAuthorizationRequired) {
 				return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
@@ -187,11 +198,18 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	if threadID == "" || turnID == "" {
 		return toolError("OUTCOME_UNKNOWN", "thread bootstrap response lacks authoritative identities")
 	}
-	task := Task{ID: input.ClientTaskID, AssistantID: call.AssistantID, DeviceID: input.DeviceID, CWD: input.CWD, NativeThreadID: threadID, Goal: input.Goal, Status: "running", LastTurnID: turnID}
+	task := Task{ID: input.ClientTaskID, AssistantID: call.AssistantID, SourceMessageID: call.SourceMessageID, DeviceID: input.DeviceID, CWD: input.CWD, NativeThreadID: threadID, Goal: input.Goal, Status: "running", LastTurnID: turnID}
 	if err := h.backend.SaveTask(ctx, task); err != nil {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return ToolResult{Success: true, Data: taskData(task)}
+}
+
+func stableTaskID(assistantID, sourceMessageID string) string {
+	digest := sha256.Sum256([]byte(assistantID + "\x00" + sourceMessageID))
+	digest[6] = digest[6]&0x0f | 0x50
+	digest[8] = digest[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", digest[:4], digest[4:6], digest[6:8], digest[8:10], digest[10:16])
 }
 
 func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) ToolResult {

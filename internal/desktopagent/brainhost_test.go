@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 type fakeBrainProcess struct {
@@ -97,7 +99,7 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 }
 
 func TestBrainHostPublishesCanonicalMutationToolSchemas(t *testing.T) {
-	tools := puckDynamicTools(2)
+	tools := puckDynamicTools(toolcontract.Version)
 	byName := map[string]map[string]any{}
 	for _, tool := range tools {
 		byName[tool["name"].(string)] = tool
@@ -203,8 +205,16 @@ func TestBrainHostRejectsUnknownFutureToolset(t *testing.T) {
 		return newFakeBrainProcess(), nil
 	}})
 	defer host.Close()
-	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 3}); err == nil {
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: toolcontract.Version + 1}); err == nil {
 		t.Fatal("future toolset was accepted")
+	}
+}
+
+func TestBrainHostDefaultToolTimeoutCoversSlowMutationWindow(t *testing.T) {
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir()})
+	defer host.Close()
+	if host.cfg.ToolTimeout <= 3*time.Minute {
+		t.Fatalf("tool timeout=%s; must exceed three-minute mutation window", host.cfg.ToolTimeout)
 	}
 }
 

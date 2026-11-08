@@ -57,3 +57,32 @@ func TestBrainCannotDecideAuthorization(t *testing.T) {
 		t.Fatal("authorization actor boundary changed")
 	}
 }
+
+func TestAuthorizationRequestIsIdempotentForSourceMessage(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateAssistant(ctx, Assistant{ID: "assistant-a", Name: "Puck", BrainDeviceID: "brain", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewAuthorizationService(store)
+	action := FrozenAction{Tool: "start_task", SourceMessageID: "user-message-a", Arguments: []byte(`{"goal":"ship","deviceId":"exec"}`)}
+	first, err := service.Request(ctx, "assistant-a", action, []string{"B5"}, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Request(ctx, "assistant-a", action, []string{"B5"}, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM authorizations WHERE assistant_id=?`, "assistant-a").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || count != 1 {
+		t.Fatalf("first=%s second=%s count=%d", first.ID, second.ID, count)
+	}
+}

@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 2
+const storeSchemaVersion = 3
 
 type Store struct{ db *sql.DB }
 
@@ -42,12 +42,12 @@ type Message struct {
 }
 
 type Task struct {
-	ID, AssistantID, DeviceID, CWD, NativeThreadID, Goal, Status, RiskTags, CreatedBy, LastTurnID, LastSeenRevision, LastSummary string
+	ID, AssistantID, SourceMessageID, DeviceID, CWD, NativeThreadID, Goal, Status, RiskTags, CreatedBy, LastTurnID, LastSeenRevision, LastSummary string
 }
 
 type Authorization struct {
-	ID, AssistantID, ActionJSON, ActionHash, RulesHit, Status string
-	ExpiresAt, DecidedAt                                      time.Time
+	ID, AssistantID, SourceMessageID, ActionJSON, ActionHash, RulesHit, Status string
+	ExpiresAt, DecidedAt                                                       time.Time
 }
 
 type AuditEntry struct {
@@ -114,22 +114,32 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE TABLE tasks (
             task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), device_id TEXT NOT NULL, cwd TEXT NOT NULL, native_thread_id TEXT NOT NULL,
             goal TEXT NOT NULL, status TEXT NOT NULL, risk_tags TEXT NOT NULL DEFAULT '[]', created_by TEXT NOT NULL DEFAULT 'puck', last_turn_id TEXT NOT NULL DEFAULT '',
-            last_seen_revision TEXT NOT NULL DEFAULT '', last_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+			source_message_id TEXT NOT NULL DEFAULT '', last_seen_revision TEXT NOT NULL DEFAULT '', last_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 			`CREATE INDEX tasks_assistant ON tasks(assistant_id)`,
+			`CREATE UNIQUE INDEX tasks_assistant_source_message ON tasks(assistant_id,source_message_id) WHERE source_message_id<>''`,
 			`CREATE TABLE authorizations (
             id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), action_json TEXT NOT NULL, action_hash TEXT NOT NULL,
-            rules_hit TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT, created_at TEXT NOT NULL)`,
+			source_message_id TEXT NOT NULL DEFAULT '', rules_hit TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT, created_at TEXT NOT NULL)`,
 			`CREATE INDEX authorizations_assistant ON authorizations(assistant_id, status)`,
+			`CREATE UNIQUE INDEX authorizations_pending_source_message ON authorizations(assistant_id,source_message_id) WHERE source_message_id<>'' AND status='pending'`,
 			`CREATE TABLE audit_log (
             id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), actor TEXT NOT NULL, action TEXT NOT NULL,
             target TEXT NOT NULL DEFAULT '', result TEXT NOT NULL, at TEXT NOT NULL)`,
 			`CREATE INDEX audit_log_assistant_at ON audit_log(assistant_id, at)`,
 		)
 	}
-	if version == 1 {
+	if version > 0 && version < 2 {
 		statements = append(statements,
 			`ALTER TABLE assistants ADD COLUMN unread_count INTEGER NOT NULL DEFAULT 0`,
 			`ALTER TABLE assistants ADD COLUMN last_message_preview TEXT NOT NULL DEFAULT ''`,
+		)
+	}
+	if version > 0 && version < 3 {
+		statements = append(statements,
+			`ALTER TABLE tasks ADD COLUMN source_message_id TEXT NOT NULL DEFAULT ''`,
+			`CREATE UNIQUE INDEX tasks_assistant_source_message ON tasks(assistant_id,source_message_id) WHERE source_message_id<>''`,
+			`ALTER TABLE authorizations ADD COLUMN source_message_id TEXT NOT NULL DEFAULT ''`,
+			`CREATE UNIQUE INDEX authorizations_pending_source_message ON authorizations(assistant_id,source_message_id) WHERE source_message_id<>'' AND status='pending'`,
 		)
 	}
 	for _, statement := range statements {
@@ -137,7 +147,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 3`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -374,20 +384,26 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 
 func (s *Store) UpsertTask(ctx context.Context, task Task) error {
 	now := nowText(time.Time{})
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET status=excluded.status,last_turn_id=excluded.last_turn_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
-        WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.LastSeenRevision, task.LastSummary, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET status=excluded.status,last_turn_id=excluded.last_turn_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
+        WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
 	return err
 }
 
 func (s *Store) Task(ctx context.Context, assistantID, taskID string) (Task, error) {
 	var task Task
-	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND task_id=?`, assistantID, taskID).Scan(&task.ID, &task.AssistantID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
+	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND task_id=?`, assistantID, taskID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
+	return task, err
+}
+
+func (s *Store) TaskBySourceMessage(ctx context.Context, assistantID, sourceMessageID string) (Task, error) {
+	var task Task
+	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND source_message_id=?`, assistantID, sourceMessageID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
 	return task, err
 }
 
 func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? ORDER BY created_at,task_id`, assistantID)
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? ORDER BY created_at,task_id`, assistantID)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +411,7 @@ func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		if err := rows.Scan(&task.ID, &task.AssistantID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, task)
@@ -409,7 +425,7 @@ func (s *Store) SetTaskStatus(ctx context.Context, assistantID, taskID, status s
 }
 
 func (s *Store) InsertAuthorization(ctx context.Context, a Authorization) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO authorizations(id,assistant_id,action_json,action_hash,rules_hit,status,expires_at,decided_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, a.ID, a.AssistantID, a.ActionJSON, a.ActionHash, a.RulesHit, a.Status, nowText(a.ExpiresAt), nullTimeText(a.DecidedAt), nowText(time.Time{}))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO authorizations(id,assistant_id,action_json,action_hash,source_message_id,rules_hit,status,expires_at,decided_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.AssistantID, a.ActionJSON, a.ActionHash, a.SourceMessageID, a.RulesHit, a.Status, nowText(a.ExpiresAt), nullTimeText(a.DecidedAt), nowText(time.Time{}))
 	return err
 }
 
@@ -417,12 +433,18 @@ func (s *Store) Authorization(ctx context.Context, assistantID, authorizationID 
 	var a Authorization
 	var expires string
 	var decided sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id,assistant_id,action_json,action_hash,rules_hit,status,expires_at,decided_at FROM authorizations WHERE assistant_id=? AND id=?`, assistantID, authorizationID).Scan(&a.ID, &a.AssistantID, &a.ActionJSON, &a.ActionHash, &a.RulesHit, &a.Status, &expires, &decided)
+	err := s.db.QueryRowContext(ctx, `SELECT id,assistant_id,source_message_id,action_json,action_hash,rules_hit,status,expires_at,decided_at FROM authorizations WHERE assistant_id=? AND id=?`, assistantID, authorizationID).Scan(&a.ID, &a.AssistantID, &a.SourceMessageID, &a.ActionJSON, &a.ActionHash, &a.RulesHit, &a.Status, &expires, &decided)
 	a.ExpiresAt, _ = time.Parse(time.RFC3339Nano, expires)
 	if decided.Valid {
 		a.DecidedAt, _ = time.Parse(time.RFC3339Nano, decided.String)
 	}
 	return a, err
+}
+
+func (s *Store) LatestUserMessageID(ctx context.Context, assistantID string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM conversation_messages WHERE assistant_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1`, assistantID).Scan(&id)
+	return id, err
 }
 
 func (s *Store) Audit(ctx context.Context, entry AuditEntry) error {

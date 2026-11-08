@@ -74,7 +74,7 @@ func NewBrainHost(cfg BrainHostConfig) *BrainHost {
 		cfg.MaxInFlight = 4
 	}
 	if cfg.ToolTimeout <= 0 {
-		cfg.ToolTimeout = 60 * time.Second
+		cfg.ToolTimeout = 4 * time.Minute
 	}
 	if cfg.RestartBackoff <= 0 {
 		cfg.RestartBackoff = time.Second
