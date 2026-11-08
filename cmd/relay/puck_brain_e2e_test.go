@@ -109,9 +109,11 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		time.Sleep(time.Second)
 	}
 
+	createStarted := time.Now()
 	created := e2eRequest(t, web, nextRequestID(), "puck.create", "relay", map[string]any{
 		"name": "Fixture Assistant", "brainDeviceId": "fixture-device", "permissionMode": mode,
 	}, 3*time.Minute)
+	createElapsed := time.Since(createStarted)
 	assistant, ok := responseData(created)["assistant"].(map[string]any)
 	if !ok {
 		problem, _ := created["error"].(map[string]any)
@@ -121,6 +123,7 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	if !ok || assistantID == "" {
 		t.Fatal("puck.create returned an assistant without an id")
 	}
+	greetingStarted := time.Now()
 	greetingDeadline := time.Now().Add(4 * time.Minute)
 	for {
 		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
@@ -132,6 +135,8 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		}
 		time.Sleep(2 * time.Second)
 	}
+	greetingElapsed := time.Since(greetingStarted)
+	t.Logf("preflight mode=%s create=%s greeting=%s", mode, createElapsed.Round(time.Millisecond), greetingElapsed.Round(time.Millisecond))
 	// The durable assistant bubble precedes app-server turn/completed by a
 	// small interval. Avoid turning that presentation event into a busy-turn
 	// race in this release smoke.
@@ -155,6 +160,7 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	}
 	messageID := "00000000-0000-4000-8000-0000000009" + map[string]string{"full": "11", "ask": "12"}[mode]
 	prompt := "请在 fixture-device 的目录 " + fixture + " 实际检查 marker.txt 是否存在并报告结果；必须交给目标设备执行，不得猜测，不读取其他目录、不修改文件。"
+	firstToolStarted := time.Now()
 	sent := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{
 		"assistantId": assistantID, "clientMessageId": messageID, "text": prompt,
 	}, 3*time.Minute)
@@ -179,6 +185,7 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		expected := mode == "full" && tasks == 1 && authorizations == 0 || mode == "ask" && tasks == 0 && authorizations == 1
 		if expected && firstExpectedAt.IsZero() {
 			firstExpectedAt = time.Now()
+			t.Logf("preflight mode=%s first-tool-or-card=%s", mode, time.Since(firstToolStarted).Round(time.Millisecond))
 			if mode == "ask" {
 				break
 			}
@@ -195,6 +202,9 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 			t.Fatalf("mode=%s did not reach expected state: tasks=%d authorizations=%d assistantKinds=%v", mode, lastTasks, lastAuthorizations, lastAssistantKinds)
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if mode == "full" {
+		t.Logf("preflight scenario=full-access elapsed=%s", time.Since(firstToolStarted).Round(time.Millisecond))
 	}
 	if mode == "ask" {
 		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
@@ -231,8 +241,10 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		}
 		e2eWaitForPuckCounts(t, web, nextRequestID, assistantID, 2, 2, true, 6*time.Minute)
 		t.Log("mode=ask persistent authorization flow: first=0 task/1 authorization, approved=1/1, automatic=2/1, revoked=2/2")
+		t.Logf("preflight scenario=ask-authorization elapsed=%s", time.Since(firstToolStarted).Round(time.Millisecond))
 	}
 	if mode == "full" {
+		replyStarted := time.Now()
 		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
 		assistantMessageID := e2eLatestMessageID(history, "assistant", "text")
 		taskMessageID := e2eLatestMessageID(history, "assistant", "task")
@@ -265,8 +277,41 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 			time.Sleep(2 * time.Second)
 		}
 		t.Log("reply smoke: assistant reply persisted; task-card reply stayed on one task")
+		t.Logf("preflight scenario=quoted-replies elapsed=%s", time.Since(replyStarted).Round(time.Millisecond))
+
+		questionStarted := time.Now()
+		questionID := "00000000-0000-4000-8000-000000000917"
+		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{
+			"assistantId":     assistantID,
+			"clientMessageId": questionID,
+			"text":            "不要派发任务。请只调用 ask_user，询问我选择 A 或 B；使用一个 single-select 结构化问题，不要用普通文本提问。",
+		}, 3*time.Minute); response["outcome"] != "accepted" {
+			t.Fatalf("ask_user smoke rejected: %v", response["error"])
+		}
+		questionDeadline := time.Now().Add(4 * time.Minute)
+		for {
+			history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+			if e2eHasCanonicalQuestion(history) {
+				break
+			}
+			if time.Now().After(questionDeadline) {
+				t.Fatal("ask_user did not produce a canonical question card")
+			}
+			time.Sleep(2 * time.Second)
+		}
+		t.Logf("preflight scenario=ask_user elapsed=%s", time.Since(questionStarted).Round(time.Millisecond))
 	}
+	deleteStarted := time.Now()
 	_ = e2eRequest(t, web, nextRequestID(), "puck.stop", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
+	deleted := e2eRequest(t, web, nextRequestID(), "puck.delete", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
+	if deleted["outcome"] != "accepted" {
+		t.Fatalf("temporary Bot deletion rejected: %v", deleted["error"])
+	}
+	listed := e2eRequest(t, web, nextRequestID(), "puck.list", "relay", map[string]any{}, 15*time.Second)
+	if e2eAssistantListed(listed, assistantID) {
+		t.Fatal("temporary Bot remained listed after deletion")
+	}
+	t.Logf("preflight scenario=delete-bot elapsed=%s", time.Since(deleteStarted).Round(time.Millisecond))
 	cancel()
 	select {
 	case <-agentDone:
@@ -425,6 +470,45 @@ func e2eGreetingCompleted(response map[string]any) bool {
 	for _, raw := range messages {
 		message, _ := raw.(map[string]any)
 		if message["role"] == "assistant" && message["kind"] == "text" {
+			return true
+		}
+	}
+	return false
+}
+
+func e2eHasCanonicalQuestion(response map[string]any) bool {
+	messages, _ := responseData(response)["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] != "assistant" || message["kind"] != "question" {
+			continue
+		}
+		var card struct {
+			QuestionID string `json:"questionId"`
+			CardState  string `json:"cardState"`
+			Questions  []struct {
+				ID       string `json:"id"`
+				Question string `json:"question"`
+				Options  []struct {
+					Label string `json:"label"`
+					Value string `json:"value"`
+				} `json:"options"`
+			} `json:"questions"`
+		}
+		if json.Unmarshal([]byte(fmt.Sprint(message["cardJSON"])), &card) != nil || card.QuestionID == "" || card.CardState != "pending" || len(card.Questions) != 1 {
+			return false
+		}
+		question := card.Questions[0]
+		return question.ID != "" && question.Question != "" && len(question.Options) >= 2 && question.Options[0].Label != "" && question.Options[0].Value != ""
+	}
+	return false
+}
+
+func e2eAssistantListed(response map[string]any, assistantID string) bool {
+	assistants, _ := responseData(response)["assistants"].([]any)
+	for _, raw := range assistants {
+		assistant, _ := raw.(map[string]any)
+		if assistant["assistantId"] == assistantID {
 			return true
 		}
 	}

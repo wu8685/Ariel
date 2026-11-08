@@ -63,6 +63,42 @@ func TestAskUserNormalizesSingleAndMultipleQuestions(t *testing.T) {
 	}
 }
 
+func TestAskUserNormalizesObservedSelectionTypeDrift(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		multiSelect bool
+	}{
+		{"single select", `{"questions":[{"id":"choice","question":"Q","type":"single-select","options":[{"label":"A"}]}]}`, false},
+		{"multi select", `{"questions":[{"id":"choice","question":"Q","type":"multi-select","options":[{"label":"A"}]}]}`, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, details := DecodeAskUser(json.RawMessage(test.raw))
+			if len(details) != 0 || len(value.Questions) != 1 || value.Questions[0].MultiSelect != test.multiSelect {
+				t.Fatalf("value=%+v details=%+v", value, details)
+			}
+		})
+	}
+}
+
+func TestAskUserRejectsSelectionTypeConflictsAndUnknownDrift(t *testing.T) {
+	for _, test := range []struct {
+		name, raw string
+	}{
+		{"conflict", `{"questions":[{"question":"Q","type":"single-select","multiSelect":true,"options":[{"label":"A"}]}]}`},
+		{"unknown type", `{"questions":[{"question":"Q","type":"dropdown","options":[{"label":"A"}]}]}`},
+		{"unrelated unknown", `{"questions":[{"question":"Q","widget":"radio","options":[{"label":"A"}]}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, details := DecodeAskUser(json.RawMessage(test.raw))
+			if len(details) == 0 {
+				t.Fatal("drift unexpectedly accepted")
+			}
+		})
+	}
+}
+
 func TestStructuredCardDecodersRejectInvalidInput(t *testing.T) {
 	tests := []struct{ tool, raw, field string }{
 		{"ask_user", `{"question":"Q","options":[],"questions":[]}`, "question"},

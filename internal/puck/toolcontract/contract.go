@@ -203,6 +203,23 @@ func DecodeAskUser(raw json.RawMessage) (AskUserRequest, []FieldError) {
 
 func decodeQuestion(fields map[string]json.RawMessage, prefix, questionField string) (Question, []FieldError) {
 	var result Question
+	var selectionType *bool
+	if rawType, ok := fields["type"]; ok {
+		delete(fields, "type")
+		var value string
+		if json.Unmarshal(rawType, &value) != nil {
+			return result, fieldError(prefix+"type", "value has invalid type", "single-select or multi-select")
+		}
+		multi := false
+		switch value {
+		case "single-select":
+		case "multi-select":
+			multi = true
+		default:
+			return result, fieldError(prefix+"type", "value is not supported", "single-select or multi-select")
+		}
+		selectionType = &multi
+	}
 	if details := rejectUnknown(fields, "id", "question", "options", "allowCustom", "multiSelect"); len(details) != 0 {
 		details[0].Field = prefix + details[0].Field
 		return result, details
@@ -218,6 +235,12 @@ func decodeQuestion(fields map[string]json.RawMessage, prefix, questionField str
 		if value, ok := fields[name]; ok && json.Unmarshal(value, target) != nil {
 			return result, fieldError(prefix+name, "value has invalid type", "boolean")
 		}
+	}
+	if selectionType != nil {
+		if _, explicit := fields["multiSelect"]; explicit && result.MultiSelect != *selectionType {
+			return result, fieldError(prefix+"type", "value conflicts with multiSelect", "selection type matching multiSelect")
+		}
+		result.MultiSelect = *selectionType
 	}
 	var options []map[string]json.RawMessage
 	if rawOptions, ok := fields["options"]; !ok || json.Unmarshal(rawOptions, &options) != nil || len(options) > 20 || (len(options) == 0 && !result.AllowCustom) {

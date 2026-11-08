@@ -550,16 +550,19 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	}
 	threadID, _ := result.Data["threadId"].(string)
 	if threadID == "" {
+		_ = m.store.SoftDeleteAssistant(ctx, id)
 		return moduleError("BRAIN_UNAVAILABLE", "brain thread identity missing")
 	}
 	if err := m.store.SetAssistantBrain(ctx, id, threadID, "ready"); err != nil {
+		_ = m.store.SoftDeleteAssistant(ctx, id)
+		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: id, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.retire", mustJSON(map[string]any{"threadId": threadID}))
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	a.BrainThreadID, a.Status = threadID, "ready"
 	m.syncBrainThreads(ctx)
 	greetingID := newUUID()
 	startedAt := m.now()
-	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。"), "model": a.BrainModel, "effort": a.BrainReasoning}))
+	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。"), "model": a.BrainModel, "effort": "low"}))
 	if greeting.Error != nil {
 		_ = m.store.AppendMessage(ctx, Message{ID: greetingID, AssistantID: a.ID, Role: "assistant", Kind: "notice", Text: fmt.Sprintf("你好，我是 %s。大脑暂时无法生成问候，你仍可以直接告诉我想做什么。", a.Name)})
 		return accepted(map[string]any{"assistant": assistantData(a), "greeting": map[string]any{"state": "fallback", "messageId": greetingID}})

@@ -3,9 +3,11 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -217,6 +219,36 @@ func TestBrainHostDefaultToolTimeoutCoversSlowMutationWindow(t *testing.T) {
 	defer host.Close()
 	if host.cfg.ToolTimeout <= 3*time.Minute {
 		t.Fatalf("tool timeout=%s; must exceed three-minute mutation window", host.cfg.ToolTimeout)
+	}
+}
+
+func TestBrainHostLogsSanitizedPhaseLatency(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	process := newFakeBrainProcess()
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) {
+		return process, nil
+	}})
+	defer host.Close()
+	const assistantID = "assistant-secret-id"
+	threadID, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: assistantID, Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message", "secret prompt", nil, "", "low"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(capture.phases(), ",")
+	for _, phase := range []string{"brain-process-start", "brain-thread-ensure", "brain-turn-start"} {
+		if !strings.Contains(joined, phase) {
+			t.Fatalf("missing phase %q in %s", phase, joined)
+		}
+	}
+	for _, record := range capture.records {
+		if strings.Contains(record.Message, assistantID) || strings.Contains(record.Message, "secret prompt") {
+			t.Fatalf("brain phase log leaked sensitive input: %v", record)
+		}
 	}
 }
 

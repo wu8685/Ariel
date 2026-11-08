@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -259,12 +260,46 @@ func StartInteractive(ctx context.Context, binary, cwd string) (*InteractiveProc
 }
 
 func StartBrainInteractive(ctx context.Context, binary, cwd string) (*InteractiveProcess, error) {
-	cmd := exec.CommandContext(ctx, binary, brainAppServerArgs()...)
+	discoveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	discovery := exec.CommandContext(discoveryCtx, binary, "features", "list")
+	discovery.Dir = cwd
+	featureOutput, err := discovery.Output()
+	if err != nil {
+		return nil, errors.New("failed to inspect configured Codex features")
+	}
+	args, err := brainAppServerArgs(featureOutput)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, binary, args...)
 	return startInteractiveCommand(ctx, cmd, cwd)
 }
 
-func brainAppServerArgs() []string {
-	return []string{"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "view_image", "--disable", "image_generation", "--disable", "goals", "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "computer_use", "--disable", "in_app_browser", "--disable", "sleep_tool", "--disable", "multi_agent", "--disable", "apps", "--disable", "plugins", "--disable", "tool_suggest", "--disable", "skill_search", "app-server", "--listen", "stdio://"}
+func brainAppServerArgs(featureOutput []byte) ([]string, error) {
+	features := map[string]bool{}
+	for _, line := range strings.Split(string(featureOutput), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			features[fields[0]] = fields[1] != "removed"
+		}
+	}
+	required := []string{"shell_tool", "unified_exec", "image_generation", "goals", "browser_use", "browser_use_external", "computer_use", "in_app_browser", "multi_agent", "apps", "plugins", "tool_suggest", "skill_search"}
+	for _, feature := range required {
+		if enabled, known := features[feature]; !known || !enabled {
+			return nil, errors.New("configured Codex is missing a required Brain feature control")
+		}
+	}
+	// These controls existed in older Codex builds. Disable them when the
+	// inventory advertises them, but do not pass removed/unknown feature names.
+	disable := append(required, "view_image", "sleep_tool")
+	args := make([]string, 0, len(disable)*2+3)
+	for _, feature := range disable {
+		if features[feature] {
+			args = append(args, "--disable", feature)
+		}
+	}
+	return append(args, "app-server", "--listen", "stdio://"), nil
 }
 
 func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*InteractiveProcess, error) {

@@ -14,11 +14,18 @@ function retryableRead(method: Method): boolean {
   return method === "thread.list" || method === "thread.read" || method === "thread.history" || method === "thread.history.items" || method === "thread.image" || method === "thread.activity.read" || method === "thread.cache.read" || method === "thread.cache.watch" || method === "file.context.changes" || method === "file.context.read" || method === "file.context.asset.read" || method === "file.context.reference.read" || method === "workspace.files.list" || method === "workspace.file.read";
 }
 
+function puckMutation(method: Method): boolean {
+  return method === "puck.create" || method === "puck.update" || method === "puck.delete"
+    || method === "puck.message.send" || method === "puck.message.react" || method === "puck.stop"
+    || method === "puck.question.answer" || method === "puck.authorization.decide";
+}
+
 export function timeoutFor(method: Method, _params: Record<string, unknown> = {}): number {
 	if(method==="turn.edit")return 50000;
 	if(method==="thread.settings.update")return 50000;
   if (retryableRead(method)) return 40000;
   if (method === "thread.subscribe") return 60000;
+  if (puckMutation(method)) return 50000;
   if (method === "thread.create" || method === "thread.bootstrap" || method.startsWith("thread.archive.") || method === "thread.name.update" || method === "thread.pin.update" || method === "turn.start" || method === "turn.interrupt" || method.startsWith("queue.") || method === "interaction.respond") return 50000;
   return 12000;
 }

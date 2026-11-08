@@ -62,6 +62,7 @@ type BrainHost struct {
 	threads      map[string]string
 	pending      map[string]pendingBrainCall
 	ensures      map[string]BrainEnsure
+	turnStarted  map[string]time.Time
 	failures     []time.Time
 	circuitUntil time.Time
 }
@@ -85,7 +86,7 @@ func NewBrainHost(cfg BrainHostConfig) *BrainHost {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}}
+	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}, turnStarted: map[string]time.Time{}}
 }
 
 func (h *BrainHost) Ready() bool {
@@ -108,8 +109,14 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 	if err := os.Chmod(workspace, 0700); err != nil {
 		return "", err
 	}
+	startedAt := time.Now()
+	logID := request.ThreadID
+	if logID == "" {
+		logID = request.AssistantID
+	}
 	process, err := h.ensureProcess(ctx)
 	if err != nil {
+		logPhase("brain-thread-ensure", logID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", false, "error", requestErrorCode("puck.brain.ensure", err))
 		return "", err
 	}
 	params := brainThreadParams(workspace, request)
@@ -119,12 +126,14 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 			Thread struct{ ID, CWD string } `json:"thread"`
 		}
 		if err := process.Call(ctx, "thread/start", params, &started); err != nil || started.Thread.ID == "" || started.Thread.CWD != workspace {
+			logPhase("brain-thread-ensure", logID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", false, "error", "BRAIN_UNAVAILABLE")
 			return "", errors.New("BRAIN_UNAVAILABLE")
 		}
 		threadID = started.Thread.ID
 	} else {
 		params["threadId"] = threadID
 		if err := process.Call(ctx, "thread/resume", params, nil); err != nil {
+			logPhase("brain-thread-ensure", logID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", false, "error", "BRAIN_UNAVAILABLE")
 			return "", errors.New("BRAIN_UNAVAILABLE")
 		}
 	}
@@ -133,6 +142,7 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 	request.ThreadID = threadID
 	h.ensures[threadID] = request
 	h.mu.Unlock()
+	logPhase("brain-thread-ensure", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true)
 	return threadID, nil
 }
 
@@ -153,6 +163,7 @@ func puckDynamicTools(version int) []map[string]any {
 }
 
 func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text string, images []string, model, effort string) (string, error) {
+	startedAt := time.Now()
 	h.mu.Lock()
 	process, known := h.process, h.threads[threadID]
 	h.mu.Unlock()
@@ -177,8 +188,13 @@ func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text st
 		Turn struct{ ID string } `json:"turn"`
 	}
 	if err := process.Call(ctx, "turn/start", params, &started); err != nil || started.Turn.ID == "" {
+		logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", false, "error", "BRAIN_UNAVAILABLE")
 		return "", errors.New("BRAIN_UNAVAILABLE")
 	}
+	h.mu.Lock()
+	h.turnStarted[started.Turn.ID] = startedAt
+	h.mu.Unlock()
+	logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true, "effort", effort)
 	return started.Turn.ID, nil
 }
 
@@ -193,6 +209,7 @@ func (h *BrainHost) Interrupt(ctx context.Context, threadID, turnID string) erro
 }
 
 func (h *BrainHost) ToolResult(ctx context.Context, threadID, callID string, success bool, content []map[string]any) error {
+	started := time.Now()
 	h.mu.Lock()
 	pending, ok := h.pending[callID]
 	if ok && pending.thread == threadID {
@@ -201,10 +218,17 @@ func (h *BrainHost) ToolResult(ctx context.Context, threadID, callID string, suc
 	process := h.process
 	h.mu.Unlock()
 	if !ok || pending.thread != threadID || process == nil {
+		logPhase("brain-tool-result", threadID, "durationMs", time.Since(started).Milliseconds(), "ok", false, "error", "INVALID_ARGUMENT")
 		return errors.New("INVALID_ARGUMENT")
 	}
 	pending.timer.Stop()
-	return process.Reply(ctx, pending.id, map[string]any{"contentItems": content, "success": success}, nil)
+	err := process.Reply(ctx, pending.id, map[string]any{"contentItems": content, "success": success}, nil)
+	attrs := []any{"durationMs", time.Since(started).Milliseconds(), "ok", err == nil, "toolSuccess", success}
+	if err != nil {
+		attrs = append(attrs, "error", requestErrorCode("puck.brain.toolResult", err))
+	}
+	logPhase("brain-tool-result", threadID, attrs...)
+	return err
 }
 
 func (h *BrainHost) Retire(threadID string) { h.mu.Lock(); delete(h.threads, threadID); h.mu.Unlock() }
@@ -230,10 +254,13 @@ func (h *BrainHost) ensureProcess(ctx context.Context) (brainProcess, error) {
 	if err := os.MkdirAll(h.cfg.Root, 0700); err != nil {
 		return nil, err
 	}
+	started := time.Now()
 	p, err := h.cfg.Start(h.ctx, h.cfg.Binary, h.cfg.Root)
 	if err != nil {
+		logPhase("brain-process-start", "", "durationMs", time.Since(started).Milliseconds(), "ok", false, "error", requestErrorCode("puck.brain.process", err))
 		return nil, err
 	}
+	logPhase("brain-process-start", "", "durationMs", time.Since(started).Milliseconds(), "ok", true)
 	h.mu.Lock()
 	if h.process != nil {
 		existing := h.process
@@ -261,6 +288,7 @@ func (h *BrainHost) run(process brainProcess) {
 				p.timer.Stop()
 				delete(h.pending, id)
 			}
+			h.turnStarted = map[string]time.Time{}
 			now := time.Now()
 			kept := h.failures[:0]
 			for _, at := range h.failures {
@@ -348,10 +376,20 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 		timer := time.AfterFunc(h.cfg.ToolTimeout, func() { h.timeoutCall(call.CallID) })
 		h.pending[call.CallID] = pendingBrainCall{id: append(json.RawMessage(nil), frame.ID...), timer: timer, thread: call.ThreadID, callID: call.CallID}
 		h.mu.Unlock()
+		logPhase("brain-tool-call", call.ThreadID, "ok", true, "tool", call.Tool, "argumentBytes", len(call.Arguments))
 		if h.cfg.Emit != nil {
 			h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.toolCall", AssistantID: assistant, ThreadID: call.ThreadID, CallID: call.CallID, Tool: call.Tool, Arguments: call.Arguments})
 		}
 		return
+	}
+	if frame.Method == "turn/completed" && identity.TurnID != "" {
+		h.mu.Lock()
+		started, ok := h.turnStarted[identity.TurnID]
+		delete(h.turnStarted, identity.TurnID)
+		h.mu.Unlock()
+		if ok {
+			logPhase("brain-turn-complete", identity.ThreadID, "durationMs", time.Since(started).Milliseconds(), "ok", true)
+		}
 	}
 	if strings.Contains(frame.Method, "commandExecution") || strings.Contains(frame.Method, "fileChange") || strings.Contains(frame.Method, "collabAgent") {
 		if frame.IsRequest() {

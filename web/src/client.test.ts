@@ -202,6 +202,12 @@ describe("Ariel WebSocket client", () => {
     expect(timeoutFor("thread.pin.update")).toBe(timeoutFor("turn.start"));
     expect(timeoutFor("thread.list", { searchTerm: "Ariel" })).toBe(40000);
   });
+  it("keeps Puck mutation deadlines beyond the Relay mutation budget", () => {
+    for (const method of ["puck.create", "puck.update", "puck.delete", "puck.message.send", "puck.message.react", "puck.stop", "puck.question.answer", "puck.authorization.decide"] as const) {
+      expect(timeoutFor(method)).toBe(50000);
+    }
+    expect(timeoutFor("puck.history")).toBe(12000);
+  });
   it("sends token only in hello, not the URL, and correlates replies", async () => {
     const socket = new FakeSocket();
     const factory = vi.fn((_url: string) => socket as unknown as WebSocket);

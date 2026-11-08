@@ -442,19 +442,23 @@ func TestModuleStartsRealGreetingAndPersistsFallbackWhenTurnUnavailable(t *testi
 	methods := append([]string(nil), bridge.calls...)
 	params := append([]json.RawMessage(nil), bridge.params...)
 	bridge.mu.Unlock()
-	var greetingPrompt string
+	var greetingPrompt, greetingEffort string
 	for index, method := range methods {
 		if method == "puck.brain.turn.start" {
 			var input struct {
-				Text string `json:"text"`
+				Text   string `json:"text"`
+				Effort string `json:"effort"`
 			}
 			_ = json.Unmarshal(params[index], &input)
-			greetingPrompt = input.Text
+			greetingPrompt, greetingEffort = input.Text, input.Effort
 			break
 		}
 	}
 	if !strings.Contains(greetingPrompt, "介绍自己") || !strings.Contains(greetingPrompt, "想先做什么") {
 		t.Fatalf("greeting=%q calls=%v", greetingPrompt, methods)
+	}
+	if greetingEffort != "low" {
+		t.Fatalf("greeting effort=%q, want low", greetingEffort)
 	}
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
 	greetingMessages := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
@@ -476,6 +480,24 @@ func TestModuleStartsRealGreetingAndPersistsFallbackWhenTurnUnavailable(t *testi
 	messages := fallback.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
 	if len(messages) != 1 || messages[0].Kind != "notice" || !strings.Contains(messages[0].Text, "大脑") {
 		t.Fatalf("messages=%+v", messages)
+	}
+}
+
+func TestModuleFailedBrainProvisionDoesNotLeaveCapacityConsumingAssistant(t *testing.T) {
+	bridge := &fakeModuleBridge{ensureThreads: []string{""}}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Ghost","brainDeviceId":"brain-a"}`))
+	if created.Error == nil || created.Error.Code != "BRAIN_UNAVAILABLE" {
+		t.Fatalf("create=%+v", created)
+	}
+	listed := module.Handle(context.Background(), "puck.list", json.RawMessage(`{}`))
+	assistants, _ := listed.Data["assistants"].([]map[string]any)
+	if len(assistants) != 0 {
+		t.Fatalf("failed provisioning left assistants=%+v", assistants)
 	}
 }
 
