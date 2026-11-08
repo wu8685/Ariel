@@ -104,9 +104,11 @@ func TestBrainHostPublishesCanonicalMutationToolSchemas(t *testing.T) {
 	for _, tool := range tools {
 		byName[tool["name"].(string)] = tool
 	}
-	for _, name := range []string{"start_task", "send_turn"} {
+	for _, name := range []string{"start_task", "send_turn", "ask_user", "share_result", "request_authorization"} {
 		schema := byName[name]["inputSchema"].(map[string]any)
-		if schema["additionalProperties"] != false || len(schema["required"].([]string)) == 0 {
+		required, _ := schema["required"].([]string)
+		_, hasOneOf := schema["oneOf"]
+		if schema["additionalProperties"] != false || len(required) == 0 && !hasOneOf {
 			t.Fatalf("%s schema=%+v", name, schema)
 		}
 	}

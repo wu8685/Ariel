@@ -50,6 +50,19 @@ func TestRequestAuthorizationCanBeAutoApprovedByPersistentMode(t *testing.T) {
 	}
 }
 
+func TestAskUserEmitsNormalizedQuestionsAndRejectsMalformedArguments(t *testing.T) {
+	backend := &fakeBackend{tasks: map[string]Task{}}
+	handler := New(&fakeOrchestrator{}, backend)
+	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "ask_user", Arguments: json.RawMessage(`{"questions":[{"id":"entry","question":"从哪里进入？","options":[{"label":"Desktop","description":"桌面应用"}]}]}`)})
+	if !result.Success || len(backend.events) != 1 || !strings.Contains(string(backend.events[0].Payload), `"value":"Desktop"`) {
+		t.Fatalf("result=%+v events=%+v", result, backend.events)
+	}
+	invalid := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "ask_user", Arguments: json.RawMessage(`{"questions":[]}`)})
+	if invalid.Success || invalid.Code != "INVALID_ARGUMENT" || len(backend.events) != 1 {
+		t.Fatalf("invalid=%+v events=%+v", invalid, backend.events)
+	}
+}
+
 func TestReadToolRetriesOneRejectedResyncButMutationDoesNot(t *testing.T) {
 	readAttempts := 0
 	readOrchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {

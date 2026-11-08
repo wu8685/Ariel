@@ -71,6 +71,26 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   await expect(page.locator(".puck-transcript").getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
 
+test.describe("Puck structured question cards", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+	test("renders single, multi-question, described and answered mobile cards", async ({ page }) => {
+		const history = [
+			...initialMessages.slice(0, 2),
+			{ id: "question-card:single", role: "assistant", kind: "question", text: "从哪里进入？", cardJSON: JSON.stringify({ questionId:"single", questions:[{ id:"entry", question:"从哪里进入？", options:[{ label:"Codex Desktop", value:"desktop" }] }], cardState:"pending" }), createdAt:"2026-11-03T12:00:01Z" },
+			{ id: "question-card:described", role: "assistant", kind: "question", text: "选择工作方式", cardJSON: JSON.stringify({ questionId:"described", questions:[{ id:"mode", question:"选择工作方式", options:[{ label:"Puck / Ariel", description:"适合从手机远程操作，说明文字可以自然换行", value:"puck" }] }], cardState:"pending" }), createdAt:"2026-11-03T12:00:02Z" },
+			{ id: "question-card:multiple", role: "assistant", kind: "question", text: "请回答以下 2 个问题", cardJSON: JSON.stringify({ questionId:"multiple", questions:[{ id:"entry", question:"入口？", options:[{ label:"Desktop", value:"desktop" }] },{ id:"features", question:"能力？", options:[{ label:"浏览器", value:"browser" },{ label:"文件", value:"files" }], multiSelect:true, allowCustom:true }], cardState:"pending" }), createdAt:"2026-11-03T12:00:03Z" },
+			{ id: "question-card:answered", role: "assistant", kind: "question", text: "选择入口", cardJSON: JSON.stringify({ questionId:"answered", questions:[{ id:"entry", question:"选择入口", options:[{ label:"Codex CLI", value:"cli" }] }], cardState:"answered", answers:[{ questionId:"entry", values:["cli"] }] }), createdAt:"2026-11-03T12:00:04Z" },
+		] as typeof initialMessages;
+		await openPuck(page, history);
+		for (const id of ["single","described","multiple","answered"]) {
+			const row = page.locator(`[data-message-id="question-card:${id}"]`);
+			expect(await row.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+			await expect(row).toHaveScreenshot(`puck-question-${id}-390-dark.png`, { animations:"disabled", caret:"hide" });
+		}
+		expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+	});
+});
+
 test.describe("Puck recent assistant and latest-message navigation", () => {
 	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
 

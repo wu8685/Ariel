@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -292,8 +293,8 @@ type toolBackend struct{ module *Module }
 
 func (b toolBackend) Authorize(ctx context.Context, assistantID string, action pucktools.Action) (string, error) {
 	var arguments struct {
-		TaskID, DeviceID, CWD, ThreadID, Prompt, Text string
-		RiskTags                                      []string
+		TaskID, DeviceID, CWD, ThreadID, Prompt, Text, Action, Reason, Summary string
+		RiskTags                                                               []string
 	}
 	_ = json.Unmarshal(action.Arguments, &arguments)
 	a, err := b.module.store.Assistant(ctx, assistantID)
@@ -332,8 +333,16 @@ func (b toolBackend) Authorize(ctx context.Context, assistantID string, action p
 	if err != nil {
 		return "", err
 	}
-	card, _ := json.Marshal(map[string]any{"authorizationId": auth.ID, "rules": decision.Rules, "actionHash": auth.ActionHash, "action": action.Tool, "deviceId": arguments.DeviceID, "cwd": arguments.CWD, "riskTags": arguments.RiskTags, "expiresAt": auth.ExpiresAt, "cardState": "pending"})
-	_ = b.module.store.AppendMessage(ctx, Message{ID: "authorization-card:" + auth.ID, AssistantID: assistantID, Role: "assistant", Kind: "authorization", Text: "这个操作需要你确认后才能继续。", CardJSON: string(card)})
+	actionLabel := arguments.Action
+	if actionLabel == "" {
+		actionLabel = action.Tool
+	}
+	card, _ := json.Marshal(map[string]any{"authorizationId": auth.ID, "rules": decision.Rules, "actionHash": auth.ActionHash, "action": actionLabel, "reason": arguments.Reason, "summary": arguments.Summary, "deviceId": arguments.DeviceID, "cwd": arguments.CWD, "riskTags": arguments.RiskTags, "expiresAt": auth.ExpiresAt, "cardState": "pending"})
+	text := arguments.Summary
+	if text == "" {
+		text = "这个操作需要你确认后才能继续。"
+	}
+	_ = b.module.store.AppendMessage(ctx, Message{ID: "authorization-card:" + auth.ID, AssistantID: assistantID, Role: "assistant", Kind: "authorization", Text: text, CardJSON: string(card)})
 	return auth.ID, pucktools.ErrAuthorizationRequired
 }
 
@@ -375,30 +384,33 @@ func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
 		_, err := b.module.store.UpdateMessageReaction(ctx, event.AssistantID, input.MessageID, "assistant", input.Emoji)
 		return err
 	}
-	kind := strings.TrimPrefix(event.Kind, "post_")
-	if kind == "ask_user" {
-		kind = "question"
+	if event.Kind == "ask_user" {
+		card, text, err := normalizeQuestionCard(event.Payload)
+		if err != nil {
+			log.Printf("puck structured card normalization failed: assistant=%s kind=question reason=invalid_payload", event.AssistantID)
+			return b.module.store.UpsertMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: unrecognizedQuestionText, CardJSON: `{"cardState":"invalid"}`})
+		}
+		card.QuestionID = randomID("question")
+		encoded, _ := json.Marshal(card)
+		return b.module.store.UpsertMessage(ctx, Message{ID: "question-card:" + card.QuestionID, AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: text, CardJSON: string(encoded)})
 	}
+	kind := strings.TrimPrefix(event.Kind, "post_")
 	var payload map[string]any
-	_ = json.Unmarshal(event.Payload, &payload)
+	if json.Unmarshal(event.Payload, &payload) != nil {
+		payload = map[string]any{}
+	}
 	text, _ := payload["text"].(string)
 	if text == "" {
 		text, _ = payload["question"].(string)
 	}
 	if text == "" {
-		text = string(event.Payload)
+		text, _ = payload["summary"].(string)
+	}
+	if text == "" {
+		text = "助手发来了一张暂时无法完整显示的卡片"
+		log.Printf("puck structured card text missing: assistant=%s kind=%s reason=missing_text", event.AssistantID, kind)
 	}
 	messageID := newUUID()
-	if kind == "question" {
-		questionID, _ := payload["questionId"].(string)
-		if questionID == "" {
-			questionID = randomID("question")
-			payload["questionId"] = questionID
-		}
-		payload["cardState"] = "pending"
-		encoded, _ := json.Marshal(payload)
-		event.Payload, messageID = encoded, "question-card:"+questionID
-	}
 	return b.module.store.UpsertMessage(ctx, Message{ID: messageID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(event.Payload)})
 }
 
@@ -961,9 +973,10 @@ func (m *Module) stop(ctx context.Context, raw json.RawMessage) relay.PuckRespon
 
 func (m *Module) answerQuestion(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
-		AssistantID string `json:"assistantId"`
-		QuestionID  string `json:"questionId"`
-		Answer      string `json:"answer"`
+		AssistantID string           `json:"assistantId"`
+		QuestionID  string           `json:"questionId"`
+		Answer      string           `json:"answer"`
+		Answers     []QuestionAnswer `json:"answers"`
 	}
 	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" || input.QuestionID == "" {
 		return moduleError("INVALID_ARGUMENT", "invalid question answer")
@@ -976,11 +989,40 @@ func (m *Module) answerQuestion(ctx context.Context, raw json.RawMessage) relay.
 	if toolsetError != nil {
 		return relay.PuckResponse{Outcome: "rejected", Error: toolsetError}
 	}
-	result := m.startBrainTurn(ctx, a, mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a, "问题 "+input.QuestionID+" 的回答："+input.Answer), "model": a.BrainModel, "effort": a.BrainReasoning}))
+	messageID := "question-card:" + input.QuestionID
+	var rawCard string
+	var card QuestionCard
+	cardErr := m.store.db.QueryRowContext(ctx, `SELECT card_json FROM conversation_messages WHERE assistant_id=? AND id=?`, a.ID, messageID).Scan(&rawCard)
+	if errors.Is(cardErr, sql.ErrNoRows) && input.Answer != "" {
+		card = QuestionCard{Questions: []toolcontract.Question{{ID: input.QuestionID, Options: []toolcontract.QuestionOption{{Label: input.Answer, Value: input.Answer}}}}}
+	} else if cardErr != nil {
+		return notFound()
+	} else if json.Unmarshal([]byte(rawCard), &card) != nil {
+		return moduleError("INVALID_ARGUMENT", "question card is invalid")
+	} else if len(card.Questions) == 0 && input.Answer != "" {
+		card.Questions = []toolcontract.Question{{ID: input.QuestionID, Options: []toolcontract.QuestionOption{{Label: input.Answer, Value: input.Answer}}}}
+	} else if len(card.Questions) == 0 {
+		return moduleError("INVALID_ARGUMENT", "question card is invalid")
+	}
+	if len(input.Answers) == 0 && input.Answer != "" {
+		if len(card.Questions) != 1 {
+			return moduleError("INVALID_ARGUMENT", "legacy answer only supports one question")
+		}
+		input.Answers = []QuestionAnswer{{QuestionID: card.Questions[0].ID, Values: []string{input.Answer}}}
+	}
+	if details := validateQuestionAnswers(card, input.Answers); len(details) != 0 {
+		return moduleError("INVALID_ARGUMENT", "invalid question answers")
+	}
+	answerJSON, _ := json.Marshal(map[string]any{"questionId": input.QuestionID, "answers": input.Answers})
+	result := m.startBrainTurn(ctx, a, mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a, "问题卡回答（JSON）："+string(answerJSON)), "model": a.BrainModel, "effort": a.BrainReasoning}))
 	if result.Error != nil {
 		return result
 	}
-	if err := m.finalizeCard(ctx, a.ID, "question-card:"+input.QuestionID, "answered", map[string]any{"answer": input.Answer}); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	extra := map[string]any{"answers": input.Answers}
+	if len(input.Answers) == 1 && len(input.Answers[0].Values) == 1 && input.Answers[0].Custom == "" {
+		extra["answer"] = input.Answers[0].Values[0]
+	}
+	if err := m.finalizeCard(ctx, a.ID, messageID, "answered", extra); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return accepted(map[string]any{})

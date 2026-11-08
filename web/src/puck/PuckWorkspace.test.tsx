@@ -396,6 +396,45 @@ describe("PuckWorkspace", () => {
     expect(calls.filter(method => method === "puck.message.send")).toHaveLength(1);
   });
 
+	it("normalizes historical questions JSON, supports multi-select and custom answers, and keeps ids", async () => {
+		let answerParams: Record<string, unknown> | undefined;
+		const raw = JSON.stringify({ questions: [
+			{ id: "entry", question: "从哪里进入？", options: [{ label: "Codex Desktop", description: "桌面应用", value: "desktop" }] },
+			{ id: "features", question: "需要哪些能力？", options: [{ label: "浏览器", value: "browser" }, { label: "文件", value: "files" }], multiSelect: true, allowCustom: true },
+		] });
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] });
+			if (method === "puck.history") return accepted({ messages: [{ id: "question-card:legacy", role: "assistant", kind: "question", text: raw, cardJSON: raw }] });
+			if (method === "puck.question.answer") answerParams = params;
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		expect(await screen.findByText("从哪里进入？")).toBeTruthy();
+		expect(screen.queryByText(raw)).toBeNull();
+		expect(screen.getByText("桌面应用")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Codex Desktop/ }));
+		fireEvent.click(screen.getByRole("button", { name: "浏览器" }));
+		fireEvent.click(screen.getByRole("button", { name: "文件" }));
+		fireEvent.change(screen.getByRole("textbox", { name: "自定义回答：需要哪些能力？" }), { target: { value: "终端" } });
+		fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
+		await waitFor(() => expect(answerParams).toBeTruthy());
+		expect(answerParams).toMatchObject({ questionId: "legacy", answers: [
+			{ questionId: "entry", values: ["desktop"] },
+			{ questionId: "features", values: ["browser", "files"], custom: "终端" },
+		] });
+		expect(await screen.findByText("已回答")).toBeTruthy();
+	});
+
+	it("never renders malformed structured JSON as question text", async () => {
+		const raw = `{"questions":[}`;
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [{ id: "bad", role: "assistant", kind: "question", text: raw, cardJSON: raw }] }) : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		expect(await screen.findByText("助手发来了一个无法识别的问题")).toBeTruthy();
+		expect(screen.queryByText(raw)).toBeNull();
+	});
+
 	it("isolates Puck message typography from Ariel globals while retaining the Ariel bubble colors", async () => {
 		const request = vi.fn(async (method: string) => method === "puck.list"
 			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })

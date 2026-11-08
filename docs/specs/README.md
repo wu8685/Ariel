@@ -135,6 +135,7 @@
 | 0134 | [Puck `start_task` / `send_turn` 契约修复](0134-puck-start-task-send-turn-contract.md) | Implemented（2026-11-08；Go／race／vet／build、Web 412 项与 build 已验；未部署） | canonical typed schema、字段级错误、原子 `thread.bootstrap`、双 locator、toolset version 与 capability gate |
 | 0135 | [Puck 自建 Bot 默认 Full Access](0135-puck-default-full-access.md) | Implemented（2026-11-08；Go／race／vet／build、Web unit／browser／build 已验；未部署） | Bot 持久权限模式；默认 full；Codex `never + danger-full-access`；保留 ask 与硬安全边界 |
 | 0137 | [Puck `start_task` 用户消息级幂等](0137-puck-start-task-message-idempotency.md) | Implemented（2026-11-08；Full 真实 E2E 已通过，ask 真实 Brain 未派发，暂不可部署） | assistant + 用户消息稳定任务键；重复调用返回既有 task；ask 授权去重；完整行为窗口冒烟 |
+| 0136 | [Puck 结构化问题与结果卡契约](0136-puck-structured-card-contract.md) | Implemented（2026-11-08） | ask_user 单题／多题归一化、带 id 回答、历史裸 JSON 恢复；authorization／share_result 类型化 schema 与友好兜底 |
 
 ## 设计基线
 

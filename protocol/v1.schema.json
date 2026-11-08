@@ -172,7 +172,15 @@
     "puckImages": { "type": "array", "maxItems": 3, "items": { "type": "string", "pattern": "^data:image/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$", "maxLength": 5592431 } },
     "puckMessageParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "clientMessageId", "text"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "clientMessageId": { "$ref": "#/$defs/requestId" }, "text": { "type": "string", "maxLength": 65536 }, "images": { "$ref": "#/$defs/puckImages" } }, "anyOf": [{ "properties": { "text": { "type": "string", "minLength": 1 } } }, { "required": ["images"], "properties": { "images": { "type": "array", "minItems": 1 } } }] },
     "puckReactionParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "messageId", "emoji"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "messageId": { "$ref": "#/$defs/id" }, "emoji": { "enum": ["👍", "❤️", "😂", "🎉", "👀"] } } },
-    "puckQuestionParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "questionId", "answer"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "questionId": { "$ref": "#/$defs/id" }, "answer": { "type": "string", "maxLength": 65536 } } },
+    "puckQuestionParams": {
+      "type": "object", "additionalProperties": false, "required": ["assistantId", "questionId"],
+      "oneOf": [{ "required": ["answer"], "not": { "required": ["answers"] } }, { "required": ["answers"], "not": { "required": ["answer"] } }],
+      "properties": {
+        "assistantId": { "$ref": "#/$defs/id" }, "questionId": { "$ref": "#/$defs/id" },
+        "answer": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "answers": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "object", "additionalProperties": false, "required": ["questionId", "values"], "properties": { "questionId": { "$ref": "#/$defs/id" }, "values": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 256 } }, "custom": { "type": "string", "maxLength": 65536 } } } }
+      }
+    },
     "puckAuthorizationParams": { "type": "object", "additionalProperties": false, "required": ["assistantId", "authorizationId", "decision"], "properties": { "assistantId": { "$ref": "#/$defs/id" }, "authorizationId": { "$ref": "#/$defs/id" }, "decision": { "enum": ["approve_once", "reject"] } } },
     "puckDecisionParams": { "type": "object", "additionalProperties": false, "required": ["interactionId", "decision"], "properties": { "interactionId": { "$ref": "#/$defs/id" }, "decision": { "type": "string", "minLength": 1, "maxLength": 128 }, "answers": { "type": "object", "maxProperties": 32 } } },
     "puckBrainThreadParams": { "type": "object", "additionalProperties": false, "required": ["threadId"], "properties": { "threadId": { "$ref": "#/$defs/id" } } },

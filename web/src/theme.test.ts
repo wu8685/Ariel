@@ -33,8 +33,8 @@ describe("fixed Night appearance", () => {
 		expect(puckStyle).not.toMatch(/--color-primary\s*:/);
 		expect(puckStyle).toMatch(/--puck-assistant-bubble:\s*var\(--color-panel\)/);
 		expect(puckStyle).toMatch(/--puck-user-bubble:\s*var\(--color-primary\)/);
-		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.assistant:not\(\.question, \.authorization, \.task\) \.puck-message-content\s*\{[^}]*padding:\s*11px 15px;[^}]*border-radius:\s*var\(--puck-radius-bubble\) var\(--puck-radius-bubble\) var\(--puck-radius-bubble\) 5px;[^}]*background:\s*var\(--puck-assistant-bubble\)/s);
-		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.assistant:is\(\.question, \.authorization, \.task\) \.puck-message-content\s*\{[^}]*padding:\s*0;[^}]*background:\s*transparent/s);
+		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.assistant:not\(\.question, \.authorization, \.share_result, \.task\) \.puck-message-content\s*\{[^}]*padding:\s*11px 15px;[^}]*border-radius:\s*var\(--puck-radius-bubble\) var\(--puck-radius-bubble\) var\(--puck-radius-bubble\) 5px;[^}]*background:\s*var\(--puck-assistant-bubble\)/s);
+		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.assistant:is\(\.question, \.authorization, \.share_result, \.task\) \.puck-message-content\s*\{[^}]*padding:\s*0;[^}]*background:\s*transparent/s);
 		expect(puckStyle).toMatch(/\.puck-workspace \.puck-message\.user \.puck-message-content\s*\{[^}]*background:\s*var\(--puck-user-bubble\)/s);
 		for (const globalClass of ['className="message', 'className="message-body', 'className="message-text', 'className="markdown-body']) {
 			expect(puckWorkspace).not.toContain(globalClass);

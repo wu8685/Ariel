@@ -50,6 +50,8 @@ function friendlyAssistantText(role: string, text: string): string {
 }
 function arrayData<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 type QuestionOption = { value: string; label: string; description?: string };
+type Question = { id: string; question: string; options: QuestionOption[]; allowCustom: boolean; multiSelect: boolean };
+type QuestionAnswer = { questionId: string; values: string[]; custom?: string };
 function questionOptions(value: unknown): QuestionOption[] {
   return arrayData<unknown>(value).flatMap(option => {
     if (typeof option === "string") return option ? [{ value: option, label: option }] : [];
@@ -62,14 +64,47 @@ function questionOptions(value: unknown): QuestionOption[] {
     return [{ value, label, description }];
   });
 }
+function questionList(value: unknown): Question[] {
+  return arrayData<unknown>(value).flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    const question = typeof record.question === "string" ? record.question.trim() : "";
+    const options = questionOptions(record.options);
+    const allowCustom = record.allowCustom === true || record.allowFreeText === true;
+    if (!question || (options.length === 0 && !allowCustom)) return [];
+    return [{ id: String(record.id || `question-${index + 1}`), question, options, allowCustom, multiSelect: record.multiSelect === true }];
+  });
+}
+function parsedObject(value: string): Record<string, unknown> | undefined {
+  try { const parsed = JSON.parse(value) as unknown; return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined; } catch { return undefined; }
+}
+function normalizeQuestionData(message: Message): Record<string, unknown> & { questions: Question[] } {
+  let data = cardData(message);
+  let questions = questionList(data.questions);
+  if (questions.length === 0 && typeof data.question === "string") questions = questionList([{ id: data.id || "question-1", question: data.question, options: data.options, allowCustom: data.allowCustom ?? data.allowFreeText, multiSelect: data.multiSelect }]);
+  if (questions.length === 0) {
+    const historical = parsedObject(message.text);
+    if (historical) {
+      data = { ...historical, ...data };
+      questions = questionList(data.questions);
+      if (questions.length === 0 && typeof data.question === "string") questions = questionList([{ id: data.id || "question-1", question: data.question, options: data.options, allowCustom: data.allowCustom ?? data.allowFreeText, multiSelect: data.multiSelect }]);
+    }
+  }
+  if (questions.length === 0 && questionOptions(data.options).length > 0) questions = questionList([{ id: "question-1", question: message.text, options: data.options, allowCustom: data.allowCustom ?? data.allowFreeText, multiSelect: data.multiSelect }]);
+  const fallbackID = message.id.startsWith("question-card:") ? message.id.slice("question-card:".length) : message.id;
+  return { ...data, questionId: String(data.questionId || fallbackID), questions };
+}
 function normalizeMessage(value: Record<string, unknown>): Message {
   const role = String(value.role ?? value.Role ?? "assistant");
   const rawText = String(value.text ?? value.Text ?? "");
-  const text = friendlyAssistantText(role, rawText);
+  const rawKind = String(value.kind ?? value.Kind ?? "text");
+  const structuredJSON = role === "assistant" && ["question","authorization","share_result","task"].includes(rawKind) && rawText.trimStart().startsWith("{");
+  const structuredFallback: Record<string,string> = { question:"助手发来了一个需要你决定的问题", authorization:"助手发来了一个授权请求", share_result:"助手分享了一项结果", task:"助手更新了一项任务" };
+  const text = structuredJSON ? structuredFallback[rawKind] : friendlyAssistantText(role, rawText);
   return {
     id: String(value.id ?? value.ID ?? crypto.randomUUID()), assistantId: String(value.assistantId ?? value.AssistantID ?? "") || undefined, role,
-    kind: text !== rawText ? "error" : String(value.kind ?? value.Kind ?? "text"), text,
-    cardJSON: String(value.cardJSON ?? value.CardJSON ?? ""), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""),
+    kind: text !== rawText && !structuredJSON ? "error" : rawKind, text,
+    cardJSON: String(value.cardJSON ?? value.CardJSON ?? (structuredJSON ? rawText : "")), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""),
   };
 }
 function historyMessages(value: unknown, assistantID: string): Message[] {
@@ -167,15 +202,47 @@ class PuckConversationErrorBoundary extends Component<{ children: ReactNode }, {
   }
 }
 const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"等待回复", awaiting_authorization:"等待授权", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败" };
-function Card({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:string)=>void }) {
+function QuestionCard({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:unknown)=>void }) {
+  const data = normalizeQuestionData(message);
+  const questions = data.questions;
+  const terminal = String(data.cardState || "pending") !== "pending";
+  const [selected, setSelected] = useState<Record<string,string[]>>({});
+  const [custom, setCustom] = useState<Record<string,string>>({});
+  const answers = arrayData<Record<string,unknown>>(data.answers);
+  const requiresSubmit = questions.length > 1 || questions.some(question => question.multiSelect || question.allowCustom);
+  function choose(question: Question, value: string) {
+    if (!requiresSubmit) { onAction("question", data, [{ questionId: question.id, values: [value] } satisfies QuestionAnswer]); return; }
+    setSelected(current => {
+      const values = current[question.id] || [];
+      const next = question.multiSelect ? (values.includes(value) ? values.filter(item => item !== value) : [...values, value]) : [value];
+      return { ...current, [question.id]: next };
+    });
+  }
+  const pendingAnswers = questions.map(question => ({ questionId: question.id, values: selected[question.id] || [], ...(custom[question.id]?.trim() ? { custom: custom[question.id].trim() } : {}) }));
+  const canSubmit = pendingAnswers.every(answer => answer.values.length > 0 || Boolean(answer.custom));
+  return <section className={`puck-card puck-question-card${terminal ? " terminal" : ""}`} role="group" aria-label="问题卡片">
+    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">?</span><strong>{terminal ? "已回答" : "需要你决定"}</strong></div>
+    {questions.length === 0 ? <p>{"助手发来了一个无法识别的问题"}</p> : questions.map((question, questionIndex) => {
+      const saved = answers.find(answer => String(answer.questionId) === question.id);
+      const savedValues = arrayData<string>(saved?.values);
+      return <fieldset className="puck-question" key={question.id}>
+        <legend>{questions.length > 1 && <span>{questionIndex + 1}.</span>} {question.question}</legend>
+        {!terminal && <div className="puck-card-actions puck-options">{question.options.map(option => {
+          const active = (selected[question.id] || []).includes(option.value);
+          return <button className={`puck-chip${option.description ? " structured" : ""}${active ? " selected" : ""}`} aria-pressed={requiresSubmit ? active : undefined} key={option.value} type="button" disabled={submitting} onClick={()=>choose(question,option.value)}><span>{option.label}</span>{option.description && <small>{option.description}</small>}</button>;
+        })}</div>}
+        {!terminal && question.allowCustom && <label className="puck-custom-answer"><span>自定义回答</span><input aria-label={`自定义回答：${question.question}`} value={custom[question.id] || ""} disabled={submitting} onChange={event=>setCustom(current=>({...current,[question.id]:event.target.value}))}/></label>}
+        {terminal && saved && <p className="puck-card-result"><span aria-hidden="true">✓</span> 你选择了 <strong>{[...savedValues.map(value => question.options.find(option => option.value === value)?.label || value), String(saved.custom || "")].filter(Boolean).join("、")}</strong></p>}
+      </fieldset>;
+    })}
+    {!terminal && questions.length > 0 && requiresSubmit && <div className="puck-card-actions"><button className="puck-btn primary" type="button" disabled={submitting || !canSubmit} onClick={()=>onAction("question",data,pendingAnswers)}>提交回答</button></div>}
+    {terminal && answers.length === 0 && data.answer != null && <p className="puck-card-result"><span aria-hidden="true">✓</span> 你选择了 <strong>{String(data.answer)}</strong></p>}
+  </section>;
+}
+function Card({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:unknown)=>void }) {
   const data = cardData(message);
   const terminal = String(data.cardState || "pending") !== "pending";
-  if (message.kind === "question") return <section className={`puck-card puck-question-card${terminal ? " terminal" : ""}`} role="group" aria-label="问题卡片">
-    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">?</span><strong>{terminal ? "已回答" : "需要你决定"}</strong></div>
-    <p>{message.text}</p>
-    {!terminal && <div className="puck-card-actions puck-options">{questionOptions(data.options).map((option, index) => <button className={`puck-chip${option.description ? " structured" : ""}`} key={`${option.value}:${index}`} type="button" disabled={submitting} onClick={()=>onAction("question",data,option.value)}><span>{option.label}</span>{option.description && <small>{option.description}</small>}</button>)}</div>}
-    {data.answer != null && <p className="puck-card-result"><span aria-hidden="true">✓</span> 你选择了 <strong>{String(data.answer)}</strong></p>}
-  </section>;
+  if (message.kind === "question") return <QuestionCard message={message} submitting={submitting} onAction={onAction}/>;
   const expiresAt = data.expiresAt ? new Date(String(data.expiresAt)).getTime() : Number.POSITIVE_INFINITY;
   const expired = message.kind === "authorization" && Number.isFinite(expiresAt) && expiresAt <= Date.now();
   if (message.kind === "authorization" && expired && !terminal) return <section className="puck-card puck-authorization-card terminal compact" role="group" aria-label="授权卡片">
@@ -186,8 +253,16 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
     <p>{message.text}</p>
     <dl>{data.action != null && <><dt>动作</dt><dd>{String(data.action)}</dd></>}{data.deviceId != null && <><dt>主机</dt><dd>{String(data.deviceId)}</dd></>}{data.cwd != null && <><dt>目录</dt><dd className="puck-mono">{String(data.cwd)}</dd></>}{data.expiresAt != null && <><dt>有效期</dt><dd title={new Date(String(data.expiresAt)).toLocaleString("zh-CN")}>{expiryLabel(data.expiresAt)}</dd></>}</dl>
     {(data.risk != null || data.riskTags != null) && <p className="puck-risk"><span aria-hidden="true">△</span>风险：{String(data.risk || arrayData<string>(data.riskTags).join("、") || "无额外风险")}</p>}
+    {data.reason != null && <p className="puck-risk"><span aria-hidden="true">△</span>原因：{String(data.reason)}</p>}
     {!terminal ? <div className="puck-card-actions"><button className="puck-btn" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div> : <p className="puck-card-result">{decisionLabel(data)}</p>}
   </section>;
+  if (message.kind === "share_result") {
+    const items = arrayData<Record<string,unknown>>(data.items).filter(item => item && typeof item === "object");
+    return <section className="puck-card puck-result-card" role="group" aria-label="结果卡片">
+      <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">✓</span><strong>{String(data.summary || message.text || "助手分享了一项结果")}</strong></div>
+      {items.length > 0 ? <ul>{items.map((item,index)=><li key={`${String(item.kind)}-${index}`}><strong>{String(item.title || "未命名结果")}</strong>{item.description != null && <small>{String(item.description)}</small>}</li>)}</ul> : <p>结果详情暂时无法显示</p>}
+    </section>;
+  }
   if (message.kind === "task") {
     const status = String(data.status || "pending");
     return <section className="puck-card puck-task-card" role="group" aria-label="任务卡片">
@@ -408,7 +483,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (response.outcome === "accepted" && response.data?.message) updateScopedMessages(assistantID, current => [...current.filter(item => item.kind !== "processing"), normalizeMessage(response.data!.message as Record<string, unknown>)]);
     else if (response.outcome !== "accepted") updateScopedMessages(assistantID, current => [...current, { id: crypto.randomUUID(), assistantId:assistantID, role: "assistant", kind: "error", text: responseError(response) }]);
   }
-	async function respondCard(kind:string,data:Record<string,unknown>,value:string) {
+	async function respondCard(kind:string,data:Record<string,unknown>,value:unknown) {
 		if (!selected) return;
 		if (kind === "task") {
 			onOpenThread?.(String(data.deviceId || ""), String(data.threadId || ""));
@@ -419,12 +494,12 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (submittingCard === identity) return;
 		setSubmittingCard(identity);
 		const response = kind === "authorization"
-			? await request("puck.authorization.decide","relay",{assistantId:assistantID,authorizationId:String(data.authorizationId||""),decision:value})
-			: await request("puck.question.answer","relay",{assistantId:assistantID,questionId:String(data.questionId||""),answer:value});
+			? await request("puck.authorization.decide","relay",{assistantId:assistantID,authorizationId:String(data.authorizationId||""),decision:String(value)})
+			: await request("puck.question.answer","relay",{assistantId:assistantID,questionId:String(data.questionId||""),answers:value});
 		if (response.outcome === "accepted") updateScopedMessages(assistantID, current => current.map(message => {
-			const card = cardData(message);
+			const card = kind === "question" ? normalizeQuestionData(message) : cardData(message);
 			if (String(card.authorizationId || card.questionId || "") !== identity) return message;
-			return {...message, cardJSON: JSON.stringify({...card, cardState: kind === "question" ? "answered" : value === "reject" ? "rejected" : "consumed", ...(kind === "question" ? {answer:value} : {})})};
+			return {...message, cardJSON: JSON.stringify({...card, cardState: kind === "question" ? "answered" : value === "reject" ? "rejected" : "consumed", ...(kind === "question" ? {answers:value} : {})})};
 		})); else setNotice(responseError(response));
 		setSubmittingCard("__none__");
 	}
@@ -546,7 +621,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
           {working && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
           <div className="puck-message-content">
 	            <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
-	            {!["question", "authorization", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
+	            {!["question", "authorization", "share_result", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
 	            {message.kind === "error" && retryPayload(message) && <button className="puck-error-retry" type="button" aria-label="重试发送" onClick={()=>restoreRetry(message)}>重试</button>}
             {messageImages(message).length > 0 && <div className="puck-message-images" aria-label="已发送图片">{messageImages(message).map((image, imageIndex) => <a href={image} target="_blank" rel="noreferrer" key={imageIndex} aria-label={`放大已发送图片 ${imageIndex + 1}`}><img className="puck-message-image" src={image} alt={`已发送图片 ${imageIndex + 1}`}/></a>)}</div>}
             {workLabel(message,clock) && <div className="puck-work-summary">{workLabel(message,clock)}</div>}
