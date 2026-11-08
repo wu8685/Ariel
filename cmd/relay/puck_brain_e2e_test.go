@@ -112,8 +112,15 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	created := e2eRequest(t, web, nextRequestID(), "puck.create", "relay", map[string]any{
 		"name": "Fixture Assistant", "brainDeviceId": "fixture-device", "permissionMode": mode,
 	}, 3*time.Minute)
-	assistant := responseData(created)["assistant"].(map[string]any)
-	assistantID := assistant["assistantId"].(string)
+	assistant, ok := responseData(created)["assistant"].(map[string]any)
+	if !ok {
+		problem, _ := created["error"].(map[string]any)
+		t.Fatalf("puck.create did not return an assistant: outcome=%v code=%v message=%v", created["outcome"], problem["code"], problem["message"])
+	}
+	assistantID, ok := assistant["assistantId"].(string)
+	if !ok || assistantID == "" {
+		t.Fatal("puck.create returned an assistant without an id")
+	}
 	greetingDeadline := time.Now().Add(4 * time.Minute)
 	for {
 		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
@@ -224,6 +231,40 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		}
 		e2eWaitForPuckCounts(t, web, nextRequestID, assistantID, 2, 2, true, 6*time.Minute)
 		t.Log("mode=ask persistent authorization flow: first=0 task/1 authorization, approved=1/1, automatic=2/1, revoked=2/2")
+	}
+	if mode == "full" {
+		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		assistantMessageID := e2eLatestMessageID(history, "assistant", "text")
+		taskMessageID := e2eLatestMessageID(history, "assistant", "task")
+		if assistantMessageID == "" || taskMessageID == "" {
+			t.Fatalf("reply smoke targets missing: assistant=%q task=%q", assistantMessageID, taskMessageID)
+		}
+		assistantReplyID := "00000000-0000-4000-8000-000000000915"
+		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{"assistantId": assistantID, "clientMessageId": assistantReplyID, "text": "请简短确认你理解我是在回复刚才那条消息，不要创建新任务。", "replyTo": assistantMessageID}, 3*time.Minute); response["outcome"] != "accepted" {
+			t.Fatalf("assistant reply rejected: %v", response["error"])
+		}
+		e2eWaitForBrainIdle(t, web, nextRequestID, assistantID, 3*time.Minute)
+		e2eRequireReplyPersisted(t, web, nextRequestID, assistantID, assistantReplyID, assistantMessageID)
+
+		taskReplyID := "00000000-0000-4000-8000-000000000916"
+		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{"assistantId": assistantID, "clientMessageId": taskReplyID, "text": "请对引用任务继续检查 marker.txt，并使用已有 taskId 的 send_turn 跟进；不要新建任务。", "replyTo": taskMessageID}, 3*time.Minute); response["outcome"] != "accepted" {
+			t.Fatalf("task reply rejected: %v", response["error"])
+		}
+		e2eWaitForBrainIdle(t, web, nextRequestID, assistantID, 4*time.Minute)
+		e2eRequireReplyPersisted(t, web, nextRequestID, assistantID, taskReplyID, taskMessageID)
+		stableUntil := time.Now().Add(30 * time.Second)
+		for {
+			checked := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+			tasks, _ := e2eMessageKinds(checked)
+			if tasks != 1 {
+				t.Fatalf("task-card reply created a duplicate task: tasks=%d", tasks)
+			}
+			if time.Now().After(stableUntil) {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+		t.Log("reply smoke: assistant reply persisted; task-card reply stayed on one task")
 	}
 	_ = e2eRequest(t, web, nextRequestID(), "puck.stop", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
 	cancel()
@@ -388,4 +429,31 @@ func e2eGreetingCompleted(response map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func e2eLatestMessageID(response map[string]any, role, kind string) string {
+	messages, _ := responseData(response)["messages"].([]any)
+	for index := len(messages) - 1; index >= 0; index-- {
+		message, _ := messages[index].(map[string]any)
+		if message["role"] == role && message["kind"] == kind {
+			return fmt.Sprint(message["id"])
+		}
+	}
+	return ""
+}
+
+func e2eRequireReplyPersisted(t *testing.T, web *websocket.Conn, nextRequestID func() string, assistantID, messageID, replyTo string) {
+	t.Helper()
+	history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+	messages, _ := responseData(history)["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["id"] == messageID {
+			if message["replyTo"] != replyTo {
+				t.Fatalf("reply target mismatch: got=%v want=%s", message["replyTo"], replyTo)
+			}
+			return
+		}
+	}
+	t.Fatalf("reply message %s not found", messageID)
 }

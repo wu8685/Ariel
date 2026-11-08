@@ -11,7 +11,7 @@ type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => (
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
 type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string };
 type AuthorizationRule = { id: string; assistantId: string; actionType: string; deviceId: string; cwd: string; createdAt: string };
-type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
+type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string; replyTo?: string };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 const lastAssistantStorageKey = "ariel.puck.lastAssistantId.v1";
 const latestScrollThreshold = 48;
@@ -105,7 +105,7 @@ function normalizeMessage(value: Record<string, unknown>): Message {
   return {
     id: String(value.id ?? value.ID ?? crypto.randomUUID()), assistantId: String(value.assistantId ?? value.AssistantID ?? "") || undefined, role,
     kind: text !== rawText && !structuredJSON ? "error" : rawKind, text,
-    cardJSON: String(value.cardJSON ?? value.CardJSON ?? (structuredJSON ? rawText : "")), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""),
+    cardJSON: String(value.cardJSON ?? value.CardJSON ?? (structuredJSON ? rawText : "")), createdAt: String(value.createdAt ?? value.CreatedAt ?? ""), workSummary: String(value.workSummary ?? value.WorkSummary ?? ""), reaction: String(value.reaction ?? value.Reaction ?? ""), replyTo: String(value.replyTo ?? value.ReplyTo ?? "") || undefined,
   };
 }
 function historyMessages(value: unknown, assistantID: string): Message[] {
@@ -167,6 +167,15 @@ function cardData(message: Message): Record<string, unknown> {
   try { return message.cardJSON ? JSON.parse(message.cardJSON) as Record<string, unknown> : {}; } catch { return {}; }
 }
 function messageImages(message: Message): string[] { return arrayData<string>(cardData(message).images); }
+function messageSummary(message: Message): string {
+	const data = cardData(message);
+	const source = String(data.title || data.summary || message.text || (message.kind === "task" ? "任务" : "消息"));
+	const firstLine = source.split(/\r?\n/).find(line => line.trim())?.trim() || "消息";
+	return Array.from(firstLine).slice(0, 120).join("");
+}
+function replyAuthor(message: Message): { short: string; possessive: string } {
+	return message.role === "user" ? { short: "你", possessive: "你的" } : { short: "助理", possessive: "助理" };
+}
 function retryPayload(message: Message): { text:string; images:string[] } | undefined {
   const retry = cardData(message).retry;
   if (!retry || typeof retry !== "object") return undefined;
@@ -305,6 +314,9 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [clock, setClock] = useState(() => Date.now());
   const [reactionTarget, setReactionTarget] = useState("");
   const reactionLongPressTimer = useRef<number | undefined>(undefined);
+  const [replyTarget, setReplyTarget] = useState<Message | undefined>(undefined);
+  const messagePointer = useRef<{ id: string; x: number; y: number } | undefined>(undefined);
+  const highlightTimer = useRef<number | undefined>(undefined);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
@@ -344,6 +356,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	}
     setMessages(initialMessages);
     setReactionTarget("");
+    setReplyTarget(undefined);
     setSelectedID(assistantID);
   }
   function updateScopedMessages(assistantID: string, update: (current: Message[]) => Message[]) {
@@ -456,9 +469,12 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     followLatestRef.current = true;
     lastAssistantRef.current = assistantID;
     storeLastAssistant(assistantID);
-    const clientMessageId = crypto.randomUUID(); setDraft(""); setScreenshots([]); if (screenshotInputRef.current) screenshotInputRef.current.value = ""; const localStartedAt = new Date().toISOString();
-    updateScopedMessages(assistantID, current => [...current, { id: clientMessageId, assistantId:assistantID, role: "user", kind: "text", text, cardJSON: images.length ? JSON.stringify({ images }) : "" }, { id: `${clientMessageId}-processing`, assistantId:assistantID, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
-    const response = await request("puck.message.send", "relay", { assistantId: assistantID, clientMessageId, text, images });
+    const replyTo = replyTarget?.id;
+    const clientMessageId = crypto.randomUUID(); setDraft(""); setScreenshots([]); setReplyTarget(undefined); if (screenshotInputRef.current) screenshotInputRef.current.value = ""; const localStartedAt = new Date().toISOString();
+    updateScopedMessages(assistantID, current => [...current, { id: clientMessageId, assistantId:assistantID, role: "user", kind: "text", text, cardJSON: images.length ? JSON.stringify({ images }) : "", replyTo }, { id: `${clientMessageId}-processing`, assistantId:assistantID, role: "assistant", kind: "processing", text: "正在处理…", workSummary:JSON.stringify({startedAt:localStartedAt,state:"running"}) }]);
+    const params: Record<string, unknown> = { assistantId: assistantID, clientMessageId, text, images };
+    if (replyTo) params.replyTo = replyTo;
+    const response = await request("puck.message.send", "relay", params);
     if (response.outcome !== "accepted") updateScopedMessages(assistantID, current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, kind: "error", text: responseError(response), cardJSON:JSON.stringify({retry:{text,images}}), workSummary:"" } : item));
 	else updateScopedMessages(assistantID, current => current.map(item => item.id === `${clientMessageId}-processing` ? { ...item, workSummary:JSON.stringify({startedAt:response.data?.startedAt || localStartedAt,state:"running"}) } : item));
   }
@@ -476,6 +492,34 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   function cancelReactionLongPress() {
     if (reactionLongPressTimer.current !== undefined) window.clearTimeout(reactionLongPressTimer.current);
     reactionLongPressTimer.current = undefined;
+  }
+  function beginMessagePointer(message: Message, pointerType: string, x: number, y: number) {
+	messagePointer.current = pointerType === "touch" ? { id: message.id, x, y } : undefined;
+	beginReactionLongPress(message.id, pointerType);
+  }
+  function endMessagePointer(message: Message, pointerType: string, x: number, y: number) {
+	const start = messagePointer.current;
+	messagePointer.current = undefined;
+	cancelReactionLongPress();
+	if (pointerType === "touch" && start?.id === message.id && start.x - x >= 56 && Math.abs(start.y - y) <= 44) setReplyTarget(message);
+  }
+  async function jumpToReply(messageID: string) {
+	if (!selected) return;
+	let target = messages.find(message => message.id === messageID);
+	if (!target) {
+		const assistantID = selected.assistantId;
+		const response = await request("puck.message.get", "relay", { assistantId: assistantID, messageId: messageID });
+		if (response.outcome !== "accepted" || !response.data?.message) { setNotice("原消息暂不可用"); return; }
+		target = normalizeMessage(response.data.message as Record<string, unknown>);
+		updateScopedMessages(assistantID, current => current.some(message => message.id === target!.id) ? current : [target!, ...current]);
+		await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
+	}
+	const element = transcriptRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageID)}"]`);
+	if (!element) { setNotice("原消息暂不可用"); return; }
+	element.scrollIntoView({ behavior: "smooth", block: "center" });
+	element.classList.add("reply-highlight");
+	if (highlightTimer.current !== undefined) window.clearTimeout(highlightTimer.current);
+	highlightTimer.current = window.setTimeout(() => { element.classList.remove("reply-highlight"); highlightTimer.current = undefined; }, 1500);
   }
   async function addScreenshots(files: FileList | null) {
     if (!files?.length) return;
@@ -592,7 +636,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (!faviconOriginal.current) faviconOriginal.current = { href:link.getAttribute("href") || "", type:link.getAttribute("type") || "" };
 		return () => { const original=faviconOriginal.current; if (original) { link.href=original.href; link.type=original.type; } };
 	}, []);
-	useEffect(() => () => cancelReactionLongPress(), []);
+	useEffect(() => () => { cancelReactionLongPress(); if (highlightTimer.current !== undefined) window.clearTimeout(highlightTimer.current); }, []);
 	useEffect(() => {
 		if (!selected || navigator.userAgent.includes("jsdom")) return;
 		let cancelled=false; const svg=document.querySelector<SVGSVGElement>(".puck-conversation > header .puck-avatar svg"); if (!svg) return;
@@ -636,9 +680,11 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         const groupEnd = index === messages.length - 1 || messages[index + 1].role !== message.role;
 	        const working = message.role === "assistant" && ["processing", "greeting_processing", "acknowledged"].includes(message.kind);
 	        const reactionEntries = Object.entries(reactions(message));
-	        return <article key={message.id} data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`} onPointerDown={event=>beginReactionLongPress(message.id,event.pointerType)} onPointerUp={cancelReactionLongPress} onPointerCancel={cancelReactionLongPress}>
+	        const quoted = message.replyTo ? messages.find(candidate => candidate.id === message.replyTo) : undefined;
+	        return <article key={message.id} data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`} onPointerDown={event=>beginMessagePointer(message,event.pointerType,event.clientX,event.clientY)} onPointerUp={event=>endMessagePointer(message,event.pointerType,event.clientX,event.clientY)} onPointerCancel={()=>{messagePointer.current=undefined;cancelReactionLongPress();}}>
           {working && selected && <PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="small"/>}
           <div className="puck-message-content">
+	            {message.replyTo && <button className="puck-reply-quote" type="button" aria-label={quoted ? "跳到被引用的消息" : "加载并跳到被引用的消息"} onClick={()=>void jumpToReply(message.replyTo!)}><strong>{quoted ? replyAuthor(quoted).short : "引用消息"}</strong><span>{quoted ? messageSummary(quoted) : "点按加载原消息"}</span></button>}
 	            <Card message={message} submitting={submittingCard === String(cardData(message).authorizationId || cardData(message).questionId || "")} onAction={(kind,data,value)=>void respondCard(kind,data,value)}/>
 	            {!["question", "authorization", "share_result", "task"].includes(message.kind) && <div className="puck-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>{["processing", "greeting_processing", "acknowledged"].includes(message.kind) && <span className="puck-thinking-dots" aria-hidden="true"><i/><i/><i/></span>}</div>}
 	            {message.kind === "error" && retryPayload(message) && <button className="puck-error-retry" type="button" aria-label="重试发送" onClick={()=>restoreRetry(message)}>重试</button>}
@@ -647,10 +693,11 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	            <div className={`puck-reactions${reactionEntries.length ? " has-reactions" : ""}${reactionTarget === message.id ? " picker-open" : ""}`}>{reactionEntries.map(([actor,emoji]) => <button type="button" className="puck-reaction-pill" aria-label={`${actor === "user" ? "你" : "助理"}回应 ${emoji}，1 个`} key={actor} onClick={()=>actor === "user" && void reactTo(message,emoji)}>{emoji} <span>1</span></button>)}<button type="button" className="puck-reaction-add" aria-label="给消息添加回应" onClick={()=>setReactionTarget(current=>current === message.id ? "" : message.id)}>＋</button>{reactionTarget === message.id && <div className="puck-reaction-picker">{reactionChoices.map(emoji=><button type="button" key={emoji} aria-label={`回应 ${emoji}`} onClick={()=>void reactTo(message,emoji)}>{emoji}</button>)}</div>}</div>
             {groupEnd && message.createdAt && <time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" })}</time>}
           </div>
+	          <button className="puck-reply-action" type="button" aria-label={`回复${replyAuthor(message).possessive}消息：${messageSummary(message)}`} onClick={()=>setReplyTarget(message)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 6 4.5 10l4 4M5 10h5.5c3 0 5 1.5 5 4.5"/></svg></button>
         </article>;
       })}</PuckConversationErrorBoundary>}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
-      {selected && <footer ref={composerFooterRef}><div className="puck-composer-shell">{screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
+      {selected && <footer ref={composerFooterRef}><div className="puck-composer-shell">{replyTarget && <div className="puck-reply-preview" aria-label={`正在回复${replyAuthor(replyTarget).possessive}消息`}><span aria-hidden="true" className="puck-reply-preview-mark"/><div><strong>{replyAuthor(replyTarget).short}</strong><span>{messageSummary(replyTarget)}</span></div><button type="button" aria-label="取消回复" onClick={()=>setReplyTarget(undefined)}>×</button></div>}{screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="说说你想做什么…"/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={!draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
     </section>
 
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>

@@ -80,6 +80,7 @@ export type Request = {
     | "puck.update"
     | "puck.delete"
     | "puck.message.send"
+    | "puck.message.get"
     | "puck.message.react"
     | "puck.read"
     | "puck.stop"

@@ -456,6 +456,8 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.delete(ctx, params)
 		case "puck.message.send":
 			response = m.message(ctx, params)
+		case "puck.message.get":
+			response = m.getMessage(ctx, params)
 		case "puck.history":
 			response = m.history(ctx, params)
 		case "puck.read":
@@ -769,8 +771,9 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 		ClientMessageID string   `json:"clientMessageId"`
 		Text            string   `json:"text"`
 		Images          []string `json:"images"`
+		ReplyTo         string   `json:"replyTo"`
 	}
-	if json.Unmarshal(raw, &input) != nil || (input.Text == "" && len(input.Images) == 0) || validateMessageImages(input.Images) != nil {
+	if json.Unmarshal(raw, &input) != nil || (input.Text == "" && len(input.Images) == 0) || validateMessageImages(input.Images) != nil || len(input.ReplyTo) > 128 {
 		return moduleError("INVALID_ARGUMENT", "invalid message")
 	}
 	a, err := m.store.Assistant(ctx, input.AssistantID)
@@ -780,6 +783,14 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	a, toolsetError := m.ensureCurrentToolset(ctx, a)
 	if toolsetError != nil {
 		return relay.PuckResponse{Outcome: "rejected", Error: toolsetError}
+	}
+	var replyTarget *Message
+	if input.ReplyTo != "" {
+		target, targetErr := m.store.Message(ctx, a.ID, input.ReplyTo)
+		if targetErr != nil {
+			return moduleError("INVALID_REPLY_TARGET", "reply target is not available in this assistant")
+		}
+		replyTarget = &target
 	}
 	previous := m.clearPending(a.ID)
 	if previous.turnID != "" {
@@ -795,15 +806,15 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 		encoded, _ := json.Marshal(map[string]any{"images": input.Images})
 		cardJSON = string(encoded)
 	}
-	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text, CardJSON: cardJSON}); err != nil {
+	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text, CardJSON: cardJSON, ReplyTo: input.ReplyTo}); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	if len(input.Images) == 0 {
+	if len(input.Images) == 0 && input.ReplyTo == "" {
 		if deviceID, cwd := explicitExecutionTarget(input.Text, m.bridge.Devices()); deviceID != "" {
 			return m.dispatchExplicitExecution(ctx, a, input.ClientMessageID, input.Text, deviceID, cwd)
 		}
 	}
-	turnParams := map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelope(a, input.Text), "model": a.BrainModel, "effort": a.BrainReasoning}
+	turnParams := map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelopeWithReply(a, input.Text, replyTarget), "model": a.BrainModel, "effort": a.BrainReasoning}
 	if len(input.Images) > 0 {
 		turnParams["images"] = input.Images
 	}
@@ -821,6 +832,24 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	}
 	m.setPending(a, turnID, input.ClientMessageID, responseID, startedAt, true)
 	return accepted(map[string]any{"messageId": input.ClientMessageID, "responseId": responseID, "state": "processing", "startedAt": startedAt.UTC(), "templateAfterMs": 3000})
+}
+
+func (m *Module) getMessage(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
+	var input struct {
+		AssistantID string `json:"assistantId"`
+		MessageID   string `json:"messageId"`
+	}
+	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" || input.MessageID == "" || len(input.MessageID) > 128 {
+		return moduleError("INVALID_ARGUMENT", "invalid message lookup")
+	}
+	if _, err := m.store.Assistant(ctx, input.AssistantID); err != nil {
+		return notFound()
+	}
+	message, err := m.store.Message(ctx, input.AssistantID, input.MessageID)
+	if err != nil {
+		return moduleError("PUCK_MESSAGE_NOT_FOUND", "message not found")
+	}
+	return accepted(map[string]any{"message": message})
 }
 
 func (m *Module) dispatchExplicitExecution(ctx context.Context, a Assistant, messageID, text, deviceID, cwd string) relay.PuckResponse {
@@ -1262,11 +1291,35 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
 func brainEnvelope(a Assistant, text string) string {
+	return brainEnvelopeWithReply(a, text, nil)
+}
+
+func brainEnvelopeWithReply(a Assistant, text string, reply *Message) string {
 	description := strings.TrimSpace(a.Description)
 	if description == "" {
 		description = "作为个人助理，先澄清目标，再可靠地完成用户交代的事项。"
 	}
-	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n长期说明：%s\n\n用户请求：%s", a.ID, newUUID(), description, text)
+	context := ""
+	if reply != nil {
+		author := "用户"
+		if reply.Role == "assistant" {
+			author = "助理"
+		}
+		runes := []rune(strings.TrimSpace(reply.Text))
+		if len(runes) > 800 {
+			runes = runes[:800]
+		}
+		context = fmt.Sprintf("\n\n引用上下文：用户正在回复消息 %s。\n作者：%s\n类型：%s\n内容：%s", reply.ID, author, reply.Kind, string(runes))
+		if reply.Kind == "task" {
+			var card struct {
+				TaskID string `json:"taskId"`
+			}
+			if json.Unmarshal([]byte(reply.CardJSON), &card) == nil && card.TaskID != "" {
+				context += fmt.Sprintf("\ntaskId：%s\n这是已有任务的跟进；优先调用 send_turn(taskId)，不得新建任务，除非用户明确要求独立任务。", card.TaskID)
+			}
+		}
+	}
+	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n长期说明：%s%s\n\n用户请求：%s", a.ID, newUUID(), description, context, text)
 }
 
 func explicitExecutionTarget(text string, devices []map[string]any) (string, string) {

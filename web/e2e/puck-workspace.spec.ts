@@ -14,7 +14,7 @@ const initialMessages = [
 	{ id: "hello", role: "assistant", kind: "text", text: "晚上好。测试已经开始，我会在有结果时告诉你。", workSummary: JSON.stringify({ elapsedMs: 12400, steps: 3 }), createdAt: "2026-11-03T12:00:00Z" },
   { id: "question", role: "assistant", kind: "question", text: "先运行哪组测试？", cardJSON: JSON.stringify({ questionId: "question-a", options: ["Go", "Web"], cardState: "pending" }), createdAt: "2026-11-03T12:00:01Z" },
   { id: "authorization", role: "assistant", kind: "authorization", text: "这次操作需要你的确认。", cardJSON: JSON.stringify({ authorizationId: "authorization-a", action: "start_task", deviceId: "brain-a", cwd: "/work/ariel", expiresAt: "2026-11-03T12:30:00Z", risk: "目标主机无法证明审批策略", cardState: "pending" }), createdAt: "2026-11-03T12:00:02Z" },
-  { id: "task", role: "assistant", kind: "task", text: "运行 Ariel 测试", cardJSON: JSON.stringify({ status: "running", deviceId: "brain-a", threadId: "thread-a" }), createdAt: "2026-11-03T12:00:03Z" },
+  { id: "task", role: "assistant", kind: "task", text: "运行 Ariel 测试", cardJSON: JSON.stringify({ taskId: "task-a", status: "running", deviceId: "brain-a", threadId: "thread-a" }), createdAt: "2026-11-03T12:00:03Z" },
 ];
 let messages = initialMessages;
 
@@ -38,6 +38,7 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
     if (message.method === "thread.list") data = { threads: [], nextCursor: "" };
     if (message.method === "puck.list") data = { assistants };
     if (message.method === "puck.history") data = { messages: historyByAssistant?.[String(message.params.assistantId)] ?? messages };
+		if (message.method === "puck.message.get") data = { message: messages.find(item => item.id === message.params.messageId) };
 		if (message.method === "puck.update") {
 			avatarUpdates.push(message.params);
 			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, ...(message.params.avatar ? { avatar: JSON.stringify(message.params.avatar) } : {}), ...(typeof message.params.description === "string" ? { description: message.params.description } : {}), ...(typeof message.params.permissionMode === "string" ? { permissionMode: message.params.permissionMode } : {}) } : item);
@@ -77,6 +78,44 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   await page.getByRole("button", { name: "打开 Puck" }).click();
   await expect(page.locator(".puck-transcript").getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
+
+test.describe("Puck reply to message desktop", () => {
+	test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false, colorScheme: "dark" });
+	test("reveals reply on hover, sends replyTo and jumps back to the quoted message", async ({ page }) => {
+		await openPuck(page);
+		const source = page.locator('[data-message-id="hello"]');
+		await source.hover();
+		const reply = page.getByRole("button", { name: /回复助理消息：晚上好/ });
+		await expect(reply).toHaveCSS("opacity", "1");
+		await reply.click();
+		await expect(page.getByLabel("正在回复助理消息")).toContainText("晚上好");
+		await page.getByRole("textbox", { name: "给 Puck 发消息" }).fill("继续检查失败项");
+		await page.getByRole("button", { name: "发送" }).click();
+		await expect.poll(() => sentMessages.at(-1)?.replyTo).toBe("hello");
+		const quote = page.getByRole("button", { name: "跳到被引用的消息" });
+		await quote.click();
+		await expect(source).toHaveClass(/reply-highlight/);
+	});
+});
+
+test.describe("Puck reply to message mobile", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+	test("starts a reply with a left swipe and keeps the frosted preview clear at 390px", async ({ page }) => {
+		await openPuck(page);
+		const source = page.locator('[data-message-id="task"]');
+		await source.dispatchEvent("pointerdown", { pointerType: "touch", clientX: 330, clientY: 320 });
+		await source.dispatchEvent("pointerup", { pointerType: "touch", clientX: 245, clientY: 322 });
+		const preview = page.getByLabel("正在回复助理消息");
+		await expect(preview).toContainText("运行 Ariel 测试");
+		await expect(preview).toHaveCSS("backdrop-filter", /blur\(20px\)/);
+		expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+		await expect(page).toHaveScreenshot("puck-reply-preview-390-dark.png", { animations: "disabled", caret: "hide" });
+		await page.getByRole("textbox", { name: "给 Puck 发消息" }).fill("继续跑失败项");
+		await page.getByRole("button", { name: "发送" }).click();
+		await expect.poll(() => sentMessages.at(-1)?.replyTo).toBe("task");
+		await expect(page.getByRole("button", { name: "跳到被引用的消息" })).toContainText("运行 Ariel 测试");
+	});
+});
 
 test.describe("Puck structured question cards", () => {
 	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });

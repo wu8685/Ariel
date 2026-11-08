@@ -147,6 +147,62 @@ describe("PuckWorkspace", () => {
     await waitFor(() => expect(screen.queryByLabelText("待发送截图")).toBeNull());
   });
 
+	it("replies to a specific message, sends replyTo, renders the quote and jumps to the source", async () => {
+		const messages = [
+			{ id: "assistant-source", assistantId: "a-1", role: "assistant", kind: "text", text: "先检查失败测试", createdAt: "2026-11-08T08:00:00Z" },
+			{ id: "task-card", assistantId: "a-1", role: "assistant", kind: "task", text: "Ariel 测试", cardJSON: JSON.stringify({ taskId: "task-a", status: "running" }) },
+		];
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages })
+			: method === "puck.message.send" ? accepted({ state: "processing", startedAt: "2026-11-08T08:01:00Z" }) : accepted({}));
+		const scrollIntoView = vi.fn();
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByText("先检查失败测试");
+		fireEvent.click(screen.getByRole("button", { name: "回复助理消息：先检查失败测试" }));
+		expect(screen.getByLabelText("正在回复助理消息").textContent).toContain("先检查失败测试");
+		fireEvent.change(screen.getByLabelText("给 Puck 发消息"), { target: { value: "继续" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.message.send", "relay", expect.objectContaining({ replyTo: "assistant-source", text: "继续" })));
+		const quote = await screen.findByRole("button", { name: "跳到被引用的消息" });
+		expect(quote.textContent).toContain("先检查失败测试");
+		fireEvent.click(quote);
+		expect(scrollIntoView).toHaveBeenCalled();
+		expect(view.container.querySelector('[data-message-id="assistant-source"]')?.classList.contains("reply-highlight")).toBe(true);
+	});
+
+	it("cancels a reply, clears it on assistant switch, supports touch swipe, and loads a missing source on demand", async () => {
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [
+				{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" },
+				{ assistantId: "a-2", name: "罗宾", brainDeviceId: "brain-a", status: "ready" },
+			] });
+			if (method === "puck.history") return accepted({ messages: params.assistantId === "a-1" ? [
+				{ id: "swipe-source", assistantId: "a-1", role: "user", kind: "text", text: "移动端原消息" },
+				{ id: "reply-with-missing-source", assistantId: "a-1", role: "assistant", kind: "text", text: "已有回复", replyTo: "not-loaded" },
+			] : [] });
+			if (method === "puck.message.get") return accepted({ message: { id: "not-loaded", assistantId: "a-1", role: "assistant", kind: "text", text: "按需加载的原消息" } });
+			return accepted({});
+		});
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByText("移动端原消息");
+		const source = view.container.querySelector<HTMLElement>('[data-message-id="swipe-source"]')!;
+		fireEvent.pointerDown(source, { pointerType: "touch", clientX: 220, clientY: 20 });
+		fireEvent.pointerUp(source, { pointerType: "touch", clientX: 130, clientY: 22 });
+		expect(screen.getByLabelText("正在回复你的消息").textContent).toContain("移动端原消息");
+		fireEvent.click(screen.getByRole("button", { name: "取消回复" }));
+		expect(screen.queryByLabelText("正在回复你的消息")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "回复你的消息：移动端原消息" }));
+		fireEvent.click(screen.getAllByText("罗宾")[0].closest("button")!);
+		await waitFor(() => expect(screen.queryByLabelText("正在回复你的消息")).toBeNull());
+		fireEvent.click(screen.getAllByText("小帕")[0].closest("button")!);
+		const missingQuote = await screen.findByRole("button", { name: "加载并跳到被引用的消息" });
+		fireEvent.click(missingQuote);
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.message.get", "relay", { assistantId: "a-1", messageId: "not-loaded" }));
+		expect((await screen.findAllByText("按需加载的原消息")).length).toBeGreaterThan(0);
+	});
+
   it("never displays a raw error code and restores a failed send for explicit retry", async () => {
 		const request = vi.fn(async (method: string) => method === "puck.list"
 			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })

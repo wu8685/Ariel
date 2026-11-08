@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 4
+const storeSchemaVersion = 5
 
 type Store struct{ db *sql.DB }
 
@@ -38,6 +38,7 @@ type Message struct {
 	Reaction    string    `json:"reaction,omitempty"`
 	WorkSummary string    `json:"workSummary,omitempty"`
 	BrainTurnID string    `json:"brainTurnId,omitempty"`
+	ReplyTo     string    `json:"replyTo,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -118,7 +119,7 @@ func (s *Store) migrate(ctx context.Context) error {
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)`,
 			`CREATE TABLE conversation_messages (
             id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), role TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
-            card_json TEXT NOT NULL DEFAULT '', reaction TEXT NOT NULL DEFAULT '', work_summary TEXT NOT NULL DEFAULT '', brain_turn_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
+            card_json TEXT NOT NULL DEFAULT '', reaction TEXT NOT NULL DEFAULT '', work_summary TEXT NOT NULL DEFAULT '', brain_turn_id TEXT NOT NULL DEFAULT '', reply_to TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
 			`CREATE INDEX conversation_messages_assistant_at ON conversation_messages(assistant_id, created_at)`,
 			`CREATE TABLE tasks (
             task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), device_id TEXT NOT NULL, cwd TEXT NOT NULL, native_thread_id TEXT NOT NULL,
@@ -163,12 +164,15 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE INDEX authorization_rules_assistant ON authorization_rules(assistant_id, created_at)`,
 		)
 	}
+	if version > 0 && version < 5 {
+		statements = append(statements, `ALTER TABLE conversation_messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''`)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 4`); err != nil {
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 5`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -272,9 +276,9 @@ func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
 	}
 	var previousKind string
 	_ = s.db.QueryRowContext(ctx, `SELECT kind FROM conversation_messages WHERE assistant_id=? AND id=?`, m.AssistantID, m.ID).Scan(&previousKind)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO conversation_messages(id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,text=excluded.text,card_json=excluded.card_json,reaction=CASE WHEN excluded.reaction='' THEN conversation_messages.reaction ELSE excluded.reaction END,work_summary=excluded.work_summary,brain_turn_id=excluded.brain_turn_id
-		WHERE conversation_messages.assistant_id=excluded.assistant_id`, m.ID, m.AssistantID, m.Role, m.Kind, m.Text, m.CardJSON, m.Reaction, m.WorkSummary, m.BrainTurnID, nowText(m.CreatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversation_messages(id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,text=excluded.text,card_json=excluded.card_json,reaction=CASE WHEN excluded.reaction='' THEN conversation_messages.reaction ELSE excluded.reaction END,work_summary=excluded.work_summary,brain_turn_id=excluded.brain_turn_id,reply_to=CASE WHEN excluded.reply_to='' THEN conversation_messages.reply_to ELSE excluded.reply_to END
+		WHERE conversation_messages.assistant_id=excluded.assistant_id`, m.ID, m.AssistantID, m.Role, m.Kind, m.Text, m.CardJSON, m.Reaction, m.WorkSummary, m.BrainTurnID, m.ReplyTo, nowText(m.CreatedAt))
 	if err == nil {
 		err = s.updateAssistantMessageState(ctx, m, previousKind == "" || !messageCountsUnread(previousKind))
 	}
@@ -309,7 +313,7 @@ func (s *Store) AppendMessage(ctx context.Context, m Message) error {
 	if len(m.Text) > 64<<10 || len(m.CardJSON) > 8<<10 {
 		return errors.New("Puck message exceeds storage limit")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO conversation_messages(id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, m.ID, m.AssistantID, m.Role, m.Kind, m.Text, m.CardJSON, m.Reaction, m.WorkSummary, m.BrainTurnID, nowText(m.CreatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversation_messages(id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, m.ID, m.AssistantID, m.Role, m.Kind, m.Text, m.CardJSON, m.Reaction, m.WorkSummary, m.BrainTurnID, m.ReplyTo, nowText(m.CreatedAt))
 	if err == nil {
 		err = s.updateAssistantMessageState(ctx, m, true)
 	}
@@ -388,7 +392,7 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,created_at FROM conversation_messages WHERE assistant_id=? ORDER BY created_at,id LIMIT ?`, assistantID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at FROM conversation_messages WHERE assistant_id=? ORDER BY created_at,id LIMIT ?`, assistantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -397,13 +401,25 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 	for rows.Next() {
 		var message Message
 		var created string
-		if err := rows.Scan(&message.ID, &message.AssistantID, &message.Role, &message.Kind, &message.Text, &message.CardJSON, &message.Reaction, &message.WorkSummary, &message.BrainTurnID, &created); err != nil {
+		if err := rows.Scan(&message.ID, &message.AssistantID, &message.Role, &message.Kind, &message.Text, &message.CardJSON, &message.Reaction, &message.WorkSummary, &message.BrainTurnID, &message.ReplyTo, &created); err != nil {
 			return nil, err
 		}
 		message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 		messages = append(messages, message)
 	}
 	return messages, rows.Err()
+}
+
+func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Message, error) {
+	var message Message
+	var created string
+	err := s.db.QueryRowContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at FROM conversation_messages WHERE assistant_id=? AND id=?`, assistantID, messageID).Scan(
+		&message.ID, &message.AssistantID, &message.Role, &message.Kind, &message.Text, &message.CardJSON, &message.Reaction, &message.WorkSummary, &message.BrainTurnID, &message.ReplyTo, &created,
+	)
+	if err == nil {
+		message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	}
+	return message, err
 }
 
 func (s *Store) UpsertTask(ctx context.Context, task Task) error {

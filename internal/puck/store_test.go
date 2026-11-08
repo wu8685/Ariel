@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,6 +111,37 @@ func TestStoreTracksServerUnreadPreviewAndActorReactions(t *testing.T) {
 	}
 }
 
+func TestStorePersistsReplyTargetsAndScopesSingleMessageReads(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	for _, id := range []string{"assistant-a", "assistant-b"} {
+		if err := store.CreateAssistant(ctx, Assistant{ID: id, Name: id, BrainDeviceID: "brain-a", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.AppendMessage(ctx, Message{ID: "original-a", AssistantID: "assistant-a", Role: "assistant", Kind: "text", Text: "原消息"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, Message{ID: "reply-a", AssistantID: "assistant-a", Role: "user", Kind: "text", Text: "继续", ReplyTo: "original-a"}); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := store.Messages(ctx, "assistant-a", 10)
+	if err != nil || len(messages) != 2 || messages[1].ReplyTo != "original-a" {
+		t.Fatalf("messages=%+v err=%v", messages, err)
+	}
+	got, err := store.Message(ctx, "assistant-a", "reply-a")
+	if err != nil || got.ReplyTo != "original-a" {
+		t.Fatalf("message=%+v err=%v", got, err)
+	}
+	if _, err := store.Message(ctx, "assistant-b", "reply-a"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-assistant read err=%v", err)
+	}
+}
+
 func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "puck-v1.db")
 	db, err := sql.Open("sqlite", "file:"+path)
@@ -118,6 +150,7 @@ func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 	}
 	if _, err = db.Exec(`
 		CREATE TABLE assistants (id TEXT PRIMARY KEY);
+		CREATE TABLE conversation_messages (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, role TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', card_json TEXT NOT NULL DEFAULT '', reaction TEXT NOT NULL DEFAULT '', work_summary TEXT NOT NULL DEFAULT '', brain_turn_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, device_id TEXT NOT NULL, cwd TEXT NOT NULL, native_thread_id TEXT NOT NULL, goal TEXT NOT NULL, status TEXT NOT NULL, risk_tags TEXT NOT NULL DEFAULT '[]', created_by TEXT NOT NULL DEFAULT 'puck', last_turn_id TEXT NOT NULL DEFAULT '', last_seen_revision TEXT NOT NULL DEFAULT '', last_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 		CREATE TABLE authorizations (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, action_json TEXT NOT NULL, action_hash TEXT NOT NULL, rules_hit TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT, created_at TEXT NOT NULL);
 		PRAGMA user_version = 1`); err != nil {
@@ -160,6 +193,10 @@ func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 			t.Fatalf("%s.%s count=%d err=%v", table, column, count, err)
 		}
 	}
+	var replyToCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name='reply_to'`).Scan(&replyToCount); err != nil || replyToCount != 1 {
+		t.Fatalf("conversation_messages.reply_to count=%d err=%v", replyToCount, err)
+	}
 }
 
 func TestStoreRejectsDatabaseFromNewerSchema(t *testing.T) {
@@ -184,6 +221,7 @@ func TestStoreMigratesV2TaskIdempotencyColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`
+		CREATE TABLE conversation_messages (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, role TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', card_json TEXT NOT NULL DEFAULT '', reaction TEXT NOT NULL DEFAULT '', work_summary TEXT NOT NULL DEFAULT '', brain_turn_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL);
 		CREATE TABLE authorizations (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, status TEXT NOT NULL);
 		PRAGMA user_version = 2`); err != nil {

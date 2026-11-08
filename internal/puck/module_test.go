@@ -122,6 +122,133 @@ func TestTextMessageOmitsNullImagesFromBrainTurn(t *testing.T) {
 	}
 }
 
+func TestReplyMessageValidatesScopeAndBuildsBoundedBrainContext(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	first := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	second := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Other","brainDeviceId":"brain-a"}`))
+	firstID := first.Data["assistant"].(map[string]any)["assistantId"].(string)
+	secondID := second.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(firstID)
+	module.clearPending(secondID)
+	long := strings.Repeat("界", 900)
+	if err := module.store.AppendMessage(ctx, Message{ID: "assistant-answer", AssistantID: firstID, Role: "assistant", Kind: "text", Text: long}); err != nil {
+		t.Fatal(err)
+	}
+	bridge.mu.Lock()
+	bridge.calls, bridge.params = nil, nil
+	bridge.mu.Unlock()
+	result := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": firstID, "clientMessageId": "reply-message", "text": "请继续", "replyTo": "assistant-answer"}))
+	if result.Error != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	history := module.Handle(ctx, "puck.history", mustJSON(map[string]any{"assistantId": firstID})).Data["messages"].([]Message)
+	if history[len(history)-2].ReplyTo != "assistant-answer" {
+		t.Fatalf("history=%+v", history)
+	}
+	bridge.mu.Lock()
+	var turnText string
+	for index, method := range bridge.calls {
+		if method == "puck.brain.turn.start" {
+			var params struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(bridge.params[index], &params)
+			turnText = params.Text
+		}
+	}
+	bridge.mu.Unlock()
+	if !strings.Contains(turnText, "回复消息 assistant-answer") || !strings.Contains(turnText, "作者：助理") || strings.Count(turnText, "界") != 800 {
+		t.Fatalf("unexpected brain context: %q", turnText)
+	}
+
+	before, _ := module.store.Messages(ctx, secondID, 200)
+	rejected := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": secondID, "clientMessageId": "cross-reply", "text": "越界", "replyTo": "assistant-answer"}))
+	if rejected.Error == nil || rejected.Error.Code != "INVALID_REPLY_TARGET" {
+		t.Fatalf("cross reply=%+v", rejected)
+	}
+	after, _ := module.store.Messages(ctx, secondID, 200)
+	if len(after) != len(before) {
+		t.Fatalf("rejected reply was persisted: before=%d after=%d", len(before), len(after))
+	}
+}
+
+func TestReplyToTaskCardGuidesBrainToSendTurnWithoutCreatingTask(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	task := Task{ID: "task-existing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-existing", Goal: "检查测试", Status: "running"}
+	if err := module.store.UpsertTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.AppendMessage(ctx, Message{ID: "task-card:task-existing", AssistantID: id, Role: "assistant", Kind: "task", Text: "检查测试", CardJSON: `{"taskId":"task-existing","status":"running"}`}); err != nil {
+		t.Fatal(err)
+	}
+	bridge.mu.Lock()
+	bridge.calls, bridge.params = nil, nil
+	bridge.mu.Unlock()
+	result := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "reply-task", "text": "再检查一下失败项", "replyTo": "task-card:task-existing"}))
+	if result.Error != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	bridge.mu.Lock()
+	var turnText string
+	for index, method := range bridge.calls {
+		if method == "puck.brain.turn.start" {
+			var params struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(bridge.params[index], &params)
+			turnText = params.Text
+		}
+	}
+	bridge.mu.Unlock()
+	if !strings.Contains(turnText, "taskId：task-existing") || !strings.Contains(turnText, "send_turn") || !strings.Contains(turnText, "不得新建任务") {
+		t.Fatalf("task reply context=%q", turnText)
+	}
+	module.handleBrainEvent(ctx, relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: mustJSON(map[string]any{"callId": "call-follow-up", "tool": "send_turn", "arguments": map[string]any{"taskId": "task-existing", "text": "再检查一下失败项", "riskTags": []string{}, "clientMessageId": "00000000-0000-4000-8000-000000000251"}})})
+	tasks, _ := module.store.Tasks(ctx, id)
+	bridge.mu.Lock()
+	calls := append([]string(nil), bridge.calls...)
+	bridge.mu.Unlock()
+	if len(tasks) != 1 || !slices.Contains(calls, "turn.start") || slices.Contains(calls, "thread.bootstrap") {
+		t.Fatalf("tasks=%+v calls=%v", tasks, calls)
+	}
+}
+
+func TestMessageGetDoesNotRevealCrossAssistantTargets(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	first := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"One","brainDeviceId":"brain-a"}`)).Data["assistant"].(map[string]any)["assistantId"].(string)
+	second := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Two","brainDeviceId":"brain-a"}`)).Data["assistant"].(map[string]any)["assistantId"].(string)
+	if err := module.store.AppendMessage(ctx, Message{ID: "private-message", AssistantID: first, Role: "assistant", Kind: "text", Text: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := module.Handle(ctx, "puck.message.get", mustJSON(map[string]any{"assistantId": first, "messageId": "private-message"})); got.Error != nil || got.Data["message"].(Message).Text != "secret" {
+		t.Fatalf("same assistant get=%+v", got)
+	}
+	if got := module.Handle(ctx, "puck.message.get", mustJSON(map[string]any{"assistantId": second, "messageId": "private-message"})); got.Error == nil || got.Error.Code != "PUCK_MESSAGE_NOT_FOUND" {
+		t.Fatalf("cross assistant get=%+v", got)
+	}
+}
+
 func TestExplicitExecutionTargetDispatchesDeterministicallyBeforeBrainPlanning(t *testing.T) {
 	for _, mode := range []string{"full", "ask"} {
 		t.Run(mode, func(t *testing.T) {
