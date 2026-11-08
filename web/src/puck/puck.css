@@ -407,13 +407,13 @@
   box-sizing: border-box;
   color: var(--color-text);
 }
-.puck-workspace .puck-message.assistant:not(.question, .authorization, .task) .puck-message-content {
+.puck-workspace .puck-message.assistant:not(.question, .authorization, .share_result, .task) .puck-message-content {
   padding: 11px 15px;
   border: 0;
   border-radius: var(--puck-radius-bubble) var(--puck-radius-bubble) var(--puck-radius-bubble) 5px;
   background: var(--puck-assistant-bubble);
 }
-.puck-workspace .puck-message.assistant:is(.question, .authorization, .task) .puck-message-content {
+.puck-workspace .puck-message.assistant:is(.question, .authorization, .share_result, .task) .puck-message-content {
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -618,6 +618,16 @@
   margin-top: var(--puck-space-3);
 }
 .puck-workspace .puck-question-card .puck-options { justify-content: flex-start; }
+.puck-workspace .puck-question { min-width: 0; margin: var(--puck-space-3) 0 0; padding: 0; border: 0; }
+.puck-workspace .puck-question legend { max-width: 100%; padding: 0; color: var(--color-text); font-weight: var(--puck-weight-medium); overflow-wrap: anywhere; }
+.puck-workspace .puck-question legend span { color: var(--color-muted); }
+.puck-workspace .puck-question-card .puck-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.puck-workspace .puck-question-card .puck-chip.selected { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
+.puck-workspace .puck-custom-answer { display: grid; gap: var(--puck-space-1); margin-top: var(--puck-space-3); color: var(--color-muted); font-size: var(--puck-text-caption); }
+.puck-workspace .puck-custom-answer input { width: 100%; min-width: 0; box-sizing: border-box; min-height: var(--puck-control-sm); padding: 0 var(--puck-space-2); border: var(--puck-border) solid var(--color-border); border-radius: var(--puck-radius-sm); background: var(--color-surface); color: var(--color-text); }
+.puck-workspace .puck-result-card ul { display: grid; gap: var(--puck-space-2); margin: var(--puck-space-3) 0 0; padding: 0; list-style: none; }
+.puck-workspace .puck-result-card li { min-width: 0; display: grid; gap: var(--puck-space-1); padding: var(--puck-space-2); border-radius: var(--puck-radius-sm); background: var(--puck-hover); overflow-wrap: anywhere; }
+.puck-workspace .puck-result-card li small { color: var(--color-muted); }
 .puck-workspace .puck-question-card .puck-chip.structured {
   height: auto;
   min-height: var(--puck-control-sm);

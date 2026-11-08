@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"unicode/utf8"
 )
 
-const Version = 2
+const Version = 3
 
 const (
 	maxIDLength   = 128
@@ -56,6 +57,34 @@ type SendTurnRequest struct {
 	ClientMessageID string   `json:"clientMessageId"`
 }
 
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Value       string `json:"value"`
+}
+
+type Question struct {
+	ID          string           `json:"id"`
+	Question    string           `json:"question"`
+	Options     []QuestionOption `json:"options"`
+	AllowCustom bool             `json:"allowCustom"`
+	MultiSelect bool             `json:"multiSelect"`
+}
+
+type AskUserRequest struct {
+	Questions []Question `json:"questions"`
+}
+
+type ResultItem struct{ Kind, Title, Description, DeviceID, ThreadID, Path, URL string }
+type ShareResultRequest struct {
+	Summary string       `json:"summary"`
+	Items   []ResultItem `json:"items"`
+}
+
+type AuthorizationRequest struct {
+	Action, Reason, DeviceID, CWD, Summary string
+}
+
 type Definition struct {
 	Name        string
 	Description string
@@ -71,6 +100,12 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 		return Definition{Name: name, Description: "在指定设备和绝对 workspace 中创建执行任务，并原子发送首条输入。", InputSchema: startTaskSchema()}, true
 	case "send_turn":
 		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。", InputSchema: sendTurnSchema()}, true
+	case "ask_user":
+		return Definition{Name: name, Description: "向用户展示结构化问题卡。通常只传 question 与 options；确需同时决定多个相关事项时才传 questions。必须使用本工具，不要调用 Codex request_user_input。", InputSchema: askUserSchema()}, true
+	case "share_result":
+		return Definition{Name: name, Description: "以结构化结果卡分享已经验证的文件、Diff、PR、thread 或 URL，不要在正文倾倒原始 JSON。", InputSchema: shareResultSchema()}, true
+	case "request_authorization":
+		return Definition{Name: name, Description: "请求用户授权敏感动作；说明 action、reason，并尽量提供 deviceId、绝对 cwd 与摘要供卡片展示。", InputSchema: authorizationSchema()}, true
 	default:
 		return Definition{}, false
 	}
@@ -98,9 +133,204 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 	case "send_turn":
 		value, details := DecodeSendTurn(raw)
 		return value, details
+	case "ask_user":
+		value, details := DecodeAskUser(raw)
+		return value, details
+	case "share_result":
+		value, details := DecodeShareResult(raw)
+		return value, details
+	case "request_authorization":
+		value, details := DecodeAuthorization(raw)
+		return value, details
 	default:
-		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "start_task or send_turn"}}
+		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "documented Puck tool"}}
 	}
+}
+
+func DecodeAskUser(raw json.RawMessage) (AskUserRequest, []FieldError) {
+	var result AskUserRequest
+	fields, detail := decodeObject(raw)
+	if detail != nil {
+		return result, []FieldError{*detail}
+	}
+	if details := rejectUnknown(fields, "question", "options", "allowCustom", "multiSelect", "questions"); len(details) != 0 {
+		return result, details
+	}
+	_, hasSingle := fields["question"]
+	_, hasMany := fields["questions"]
+	if hasSingle == hasMany {
+		return result, fieldError("question", "single question and questions are mutually exclusive", "question or questions, but not both")
+	}
+	if hasSingle {
+		question, details := decodeQuestion(fields, "", "question")
+		if len(details) != 0 {
+			return result, details
+		}
+		question.ID = "question-1"
+		result.Questions = []Question{question}
+		return result, nil
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(fields["questions"], &entries) != nil || len(entries) == 0 || len(entries) > 10 {
+		return result, fieldError("questions", "value has invalid type or length", "array with 1 to 10 questions")
+	}
+	seen := map[string]struct{}{}
+	for index, entry := range entries {
+		questionFields, itemDetail := decodeObject(entry)
+		if itemDetail != nil {
+			return result, fieldError(fmt.Sprintf("questions[%d]", index), itemDetail.Reason, "question object")
+		}
+		question, details := decodeQuestion(questionFields, fmt.Sprintf("questions[%d].", index), "question")
+		if len(details) != 0 {
+			return result, details
+		}
+		if rawID, ok := questionFields["id"]; ok {
+			if json.Unmarshal(rawID, &question.ID) != nil || strings.TrimSpace(question.ID) == "" || utf8.RuneCountInString(question.ID) > maxIDLength {
+				return result, fieldError(fmt.Sprintf("questions[%d].id", index), "value has invalid type or length", "non-empty string with at most 128 characters")
+			}
+		} else {
+			question.ID = fmt.Sprintf("question-%d", index+1)
+		}
+		if _, duplicate := seen[question.ID]; duplicate {
+			return result, fieldError(fmt.Sprintf("questions[%d].id", index), "duplicate value", "unique question id")
+		}
+		seen[question.ID] = struct{}{}
+		result.Questions = append(result.Questions, question)
+	}
+	return result, nil
+}
+
+func decodeQuestion(fields map[string]json.RawMessage, prefix, questionField string) (Question, []FieldError) {
+	var result Question
+	if details := rejectUnknown(fields, "id", "question", "options", "allowCustom", "multiSelect"); len(details) != 0 {
+		details[0].Field = prefix + details[0].Field
+		return result, details
+	}
+	if detail := requiredString(fields, questionField, &result.Question, "non-empty string with at most 2048 characters"); detail != nil {
+		detail.Field = prefix + detail.Field
+		return result, []FieldError{*detail}
+	}
+	if utf8.RuneCountInString(result.Question) > 2048 {
+		return result, fieldError(prefix+"question", "value is too long", "at most 2048 characters")
+	}
+	for name, target := range map[string]*bool{"allowCustom": &result.AllowCustom, "multiSelect": &result.MultiSelect} {
+		if value, ok := fields[name]; ok && json.Unmarshal(value, target) != nil {
+			return result, fieldError(prefix+name, "value has invalid type", "boolean")
+		}
+	}
+	var options []map[string]json.RawMessage
+	if rawOptions, ok := fields["options"]; !ok || json.Unmarshal(rawOptions, &options) != nil || len(options) > 20 || (len(options) == 0 && !result.AllowCustom) {
+		return result, fieldError(prefix+"options", "value has invalid type or length", "1 to 20 options, or empty when allowCustom is true")
+	}
+	seen := map[string]struct{}{}
+	for index, optionFields := range options {
+		if details := rejectUnknown(optionFields, "label", "description", "value"); len(details) != 0 {
+			return result, fieldError(fmt.Sprintf("%soptions[%d].%s", prefix, index, details[0].Field), details[0].Reason, details[0].Expected)
+		}
+		var option QuestionOption
+		if detail := requiredString(optionFields, "label", &option.Label, "non-empty string with at most 256 characters"); detail != nil {
+			return result, fieldError(fmt.Sprintf("%soptions[%d].label", prefix, index), detail.Reason, detail.Expected)
+		}
+		if rawValue, ok := optionFields["value"]; ok {
+			if json.Unmarshal(rawValue, &option.Value) != nil || option.Value == "" {
+				return result, fieldError(fmt.Sprintf("%soptions[%d].value", prefix, index), "value has invalid type or is empty", "non-empty string")
+			}
+		} else {
+			option.Value = option.Label
+		}
+		if rawDescription, ok := optionFields["description"]; ok && json.Unmarshal(rawDescription, &option.Description) != nil {
+			return result, fieldError(fmt.Sprintf("%soptions[%d].description", prefix, index), "value has invalid type", "string")
+		}
+		if _, duplicate := seen[option.Value]; duplicate {
+			return result, fieldError(fmt.Sprintf("%soptions[%d].value", prefix, index), "duplicate value", "unique option value")
+		}
+		seen[option.Value] = struct{}{}
+		result.Options = append(result.Options, option)
+	}
+	return result, nil
+}
+
+func DecodeShareResult(raw json.RawMessage) (ShareResultRequest, []FieldError) {
+	var result ShareResultRequest
+	fields, detail := decodeObject(raw)
+	if detail != nil {
+		return result, []FieldError{*detail}
+	}
+	if details := rejectUnknown(fields, "summary", "items"); len(details) != 0 {
+		return result, details
+	}
+	if detail := requiredString(fields, "summary", &result.Summary, "non-empty string"); detail != nil {
+		return result, []FieldError{*detail}
+	}
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(fields["items"], &items) != nil || len(items) == 0 || len(items) > 20 {
+		return result, fieldError("items", "value has invalid type or length", "array with 1 to 20 result items")
+	}
+	allowedKinds := map[string]bool{"diff": true, "file": true, "pr": true, "thread": true, "url": true}
+	for index, item := range items {
+		if details := rejectUnknown(item, "kind", "title", "description", "deviceId", "threadId", "path", "url"); len(details) != 0 {
+			return result, fieldError(fmt.Sprintf("items[%d].%s", index, details[0].Field), details[0].Reason, details[0].Expected)
+		}
+		value := ResultItem{}
+		for name, target := range map[string]*string{"kind": &value.Kind, "title": &value.Title, "description": &value.Description, "deviceId": &value.DeviceID, "threadId": &value.ThreadID, "path": &value.Path, "url": &value.URL} {
+			if rawValue, ok := item[name]; ok {
+				if json.Unmarshal(rawValue, target) != nil {
+					return result, fieldError(fmt.Sprintf("items[%d].%s", index, name), "value has invalid type", "string")
+				}
+			}
+		}
+		if !allowedKinds[value.Kind] {
+			return result, fieldError(fmt.Sprintf("items[%d].kind", index), "unknown enum value", "diff, file, pr, thread, or url")
+		}
+		if value.Title == "" {
+			return result, fieldError(fmt.Sprintf("items[%d].title", index), "required field is missing or empty", "non-empty string")
+		}
+		if value.Kind == "url" || value.Kind == "pr" {
+			if value.URL == "" {
+				return result, fieldError(fmt.Sprintf("items[%d].url", index), "required locator is missing", "URL")
+			}
+		}
+		if value.Kind == "thread" && (value.DeviceID == "" || value.ThreadID == "") {
+			return result, fieldError(fmt.Sprintf("items[%d].threadId", index), "required locator is missing", "deviceId and threadId")
+		}
+		if (value.Kind == "file" || value.Kind == "diff") && (value.DeviceID == "" || value.Path == "") {
+			return result, fieldError(fmt.Sprintf("items[%d].path", index), "required locator is missing", "deviceId and path")
+		}
+		result.Items = append(result.Items, value)
+	}
+	return result, nil
+}
+
+func DecodeAuthorization(raw json.RawMessage) (AuthorizationRequest, []FieldError) {
+	var result AuthorizationRequest
+	fields, detail := decodeObject(raw)
+	if detail != nil {
+		return result, []FieldError{*detail}
+	}
+	if details := rejectUnknown(fields, "action", "reason", "deviceId", "cwd", "summary"); len(details) != 0 {
+		return result, details
+	}
+	if detail := requiredString(fields, "action", &result.Action, "non-empty string"); detail != nil {
+		return result, []FieldError{*detail}
+	}
+	for name, target := range map[string]*string{"deviceId": &result.DeviceID, "cwd": &result.CWD, "summary": &result.Summary} {
+		if value, ok := fields[name]; ok && (json.Unmarshal(value, target) != nil || *target == "") {
+			return result, fieldError(name, "value has invalid type or is empty", "non-empty string")
+		}
+	}
+	if rawReason, ok := fields["reason"]; ok {
+		if json.Unmarshal(rawReason, &result.Reason) != nil || result.Reason == "" {
+			return result, fieldError("reason", "value has invalid type or is empty", "non-empty string")
+		}
+	} else if result.Summary != "" {
+		result.Reason = result.Summary // v2 compatibility; v3 schema still requires reason.
+	} else {
+		return result, fieldError("reason", "required field is missing", "non-empty string")
+	}
+	if result.CWD != "" && !filepath.IsAbs(result.CWD) {
+		return result, fieldError("cwd", "value must be absolute", "absolute path")
+	}
+	return result, nil
 }
 
 func DecodeStartTask(raw json.RawMessage) (StartTaskRequest, []FieldError) {
@@ -319,4 +549,59 @@ func sendTurnSchema() map[string]any {
 			map[string]any{"deviceId": "desktop-local", "threadId": "thread-a", "text": "继续检查失败测试", "riskTags": []any{}, "clientMessageId": "00000000-0000-4000-8000-000000000003"},
 		},
 	}
+}
+
+func questionProperties(includeID bool) map[string]any {
+	properties := map[string]any{
+		"question":    stringProperty(1, 2048),
+		"options":     map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"label"}, "properties": map[string]any{"label": stringProperty(1, 256), "description": stringProperty(1, 1024), "value": stringProperty(1, 256)}}},
+		"allowCustom": map[string]any{"type": "boolean"},
+		"multiSelect": map[string]any{"type": "boolean"},
+	}
+	if includeID {
+		properties["id"] = stringProperty(1, maxIDLength)
+	}
+	return properties
+}
+
+func askUserSchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"question":    stringProperty(1, 2048),
+			"options":     questionProperties(false)["options"],
+			"allowCustom": map[string]any{"type": "boolean"},
+			"multiSelect": map[string]any{"type": "boolean"},
+			"questions":   map[string]any{"type": "array", "minItems": 1, "maxItems": 10, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"question", "options"}, "properties": questionProperties(true)}},
+		},
+		"oneOf": []any{
+			map[string]any{"required": []string{"question", "options"}, "not": map[string]any{"required": []string{"questions"}}},
+			map[string]any{"required": []string{"questions"}, "not": map[string]any{"required": []string{"question"}}},
+		},
+		"required": []string{},
+		"examples": []any{map[string]any{"question": "选择执行入口", "options": []any{map[string]any{"label": "Codex Desktop", "description": "桌面应用", "value": "desktop"}}, "allowCustom": true}},
+	}
+}
+
+func shareResultSchema() map[string]any {
+	item := map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"kind", "title"},
+		"properties": map[string]any{
+			"kind":  map[string]any{"type": "string", "enum": []any{"diff", "file", "pr", "thread", "url"}},
+			"title": stringProperty(1, 512), "description": stringProperty(1, 2048),
+			"deviceId": stringProperty(1, maxIDLength), "threadId": stringProperty(1, maxIDLength),
+			"path": stringProperty(1, maxCWDLength), "url": stringProperty(1, 4096),
+		},
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"summary", "items"},
+		"properties": map[string]any{"summary": stringProperty(1, 2048), "items": map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": item}},
+		"examples":   []any{map[string]any{"summary": "已生成结果", "items": []any{map[string]any{"kind": "url", "title": "查看结果", "url": "https://example.invalid"}}}},
+	}
+}
+
+func authorizationSchema() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action", "reason"}, "properties": map[string]any{
+		"action": stringProperty(1, 512), "reason": stringProperty(1, 2048), "deviceId": stringProperty(1, maxIDLength), "cwd": map[string]any{"type": "string", "minLength": 1, "maxLength": maxCWDLength, "pattern": "^/"}, "summary": stringProperty(1, 2048),
+	}, "examples": []any{map[string]any{"action": "deploy", "reason": "需要发布已验证版本", "deviceId": "desktop-local", "cwd": "/workspace", "summary": "部署测试环境"}}}
 }

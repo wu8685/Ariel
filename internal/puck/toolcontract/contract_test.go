@@ -9,7 +9,7 @@ import (
 )
 
 func TestMutationSchemasAreStrictAndMachineReadable(t *testing.T) {
-	for _, name := range []string{"start_task", "send_turn"} {
+	for _, name := range []string{"start_task", "send_turn", "ask_user", "share_result", "request_authorization"} {
 		definition, ok := DefinitionFor(Version, name)
 		if !ok {
 			t.Fatalf("missing definition for %s", name)
@@ -32,8 +32,47 @@ func TestMutationSchemasAreStrictAndMachineReadable(t *testing.T) {
 		if definition.InputSchema["additionalProperties"] != false {
 			t.Fatalf("%s accepts arbitrary properties: %+v", name, definition.InputSchema)
 		}
-		if len(definition.InputSchema["required"].([]string)) == 0 || len(definition.InputSchema["examples"].([]any)) == 0 {
+		required, _ := definition.InputSchema["required"].([]string)
+		_, hasOneOf := definition.InputSchema["oneOf"]
+		if (len(required) == 0 && !hasOneOf) || len(definition.InputSchema["examples"].([]any)) == 0 {
 			t.Fatalf("%s lacks required/examples", name)
+		}
+	}
+}
+
+func TestAskUserNormalizesSingleAndMultipleQuestions(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"single", `{"question":"部署到哪里？","options":[{"label":"测试","description":"先验证","value":"staging"}],"allowCustom":true}`, 1},
+		{"multiple", `{"questions":[{"id":"entry","question":"从哪里进入？","options":[{"label":"Desktop"}]},{"id":"mode","question":"选择模式","options":[{"label":"安全"}],"multiSelect":true}]}`, 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, details := DecodeAskUser(json.RawMessage(test.raw))
+			if len(details) != 0 || len(value.Questions) != test.want {
+				t.Fatalf("value=%+v details=%+v", value, details)
+			}
+			if value.Questions[0].ID == "" || value.Questions[0].Options[0].Value == "" {
+				t.Fatalf("normalization did not fill ids and values: %+v", value)
+			}
+		})
+	}
+}
+
+func TestStructuredCardDecodersRejectInvalidInput(t *testing.T) {
+	tests := []struct{ tool, raw, field string }{
+		{"ask_user", `{"question":"Q","options":[],"questions":[]}`, "question"},
+		{"ask_user", `{"questions":[{"id":"same","question":"Q1","options":[{"label":"A"}]},{"id":"same","question":"Q2","options":[{"label":"B"}]}]}`, "questions[1].id"},
+		{"share_result", `{"summary":"完成","items":[{"kind":"url","title":"结果"}]}`, "items[0].url"},
+		{"request_authorization", `{"action":"deploy","reason":"需要部署","cwd":"relative"}`, "cwd"},
+	}
+	for _, test := range tests {
+		_, details := Decode(test.tool, json.RawMessage(test.raw))
+		if len(details) == 0 || details[0].Field != test.field {
+			t.Fatalf("%s details=%+v", test.tool, details)
 		}
 	}
 }

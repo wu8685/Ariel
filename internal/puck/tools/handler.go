@@ -115,8 +115,31 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 	case "get_task_status":
 		result = h.taskStatus(ctx, call)
 	case "request_authorization":
-		result = h.requestAuthorization(ctx, call)
-	case "ask_user", "share_result", "react":
+		if _, details := toolcontract.DecodeAuthorization(call.Arguments); len(details) != 0 {
+			result = invalidArguments("invalid request_authorization arguments", details)
+		} else {
+			result = h.requestAuthorization(ctx, call)
+		}
+	case "ask_user":
+		value, details := toolcontract.DecodeAskUser(call.Arguments)
+		if len(details) != 0 {
+			result = invalidArguments("invalid ask_user arguments", details)
+		} else if payload, err := json.Marshal(value); err != nil {
+			result = toolError("PUCK_UNAVAILABLE", err.Error())
+		} else if err := h.backend.Emit(ctx, Event{AssistantID: call.AssistantID, Kind: call.Tool, Payload: payload}); err != nil {
+			result = toolError("PUCK_UNAVAILABLE", err.Error())
+		} else {
+			result = ToolResult{Success: true}
+		}
+	case "share_result":
+		if _, details := toolcontract.DecodeShareResult(call.Arguments); len(details) != 0 {
+			result = invalidArguments("invalid share_result arguments", details)
+		} else if err := h.backend.Emit(ctx, Event{AssistantID: call.AssistantID, Kind: call.Tool, Payload: append(json.RawMessage(nil), call.Arguments...)}); err != nil {
+			result = toolError("PUCK_UNAVAILABLE", err.Error())
+		} else {
+			result = ToolResult{Success: true}
+		}
+	case "react":
 		if err := h.backend.Emit(ctx, Event{AssistantID: call.AssistantID, Kind: call.Tool, Payload: append(json.RawMessage(nil), call.Arguments...)}); err != nil {
 			result = toolError("PUCK_UNAVAILABLE", err.Error())
 		} else {

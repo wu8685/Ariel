@@ -856,7 +856,7 @@ func TestAgentHelloDeclaresPuckContractAndAtomicBootstrapCapabilities(t *testing
 	}()
 	hello := <-helloSeen
 	caps := hello["capabilities"].(map[string]any)
-	if hello["adapterVersion"] != "desktop-ipc-0.160.0+puck-toolset-2" || hello["puckToolsetVersion"] != nil || caps["threadBootstrap"] != true || caps["executionPolicy"] != true || caps["puckBrain"] != true {
+	if hello["adapterVersion"] != "desktop-ipc-0.160.0+puck-toolset-3" || hello["puckToolsetVersion"] != nil || caps["threadBootstrap"] != true || caps["executionPolicy"] != true || caps["puckBrain"] != true {
 		t.Fatalf("hello=%+v", hello)
 	}
 	cancel()
