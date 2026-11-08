@@ -283,8 +283,11 @@ func puckRejected(code, message string) PuckResponse {
 func decodePuckResponse(response map[string]any) PuckResponse {
 	result := PuckResponse{Outcome: stringValue(response["outcome"])}
 	result.Data, _ = response["data"].(map[string]any)
-	if raw, ok := response["error"].(map[string]any); ok {
+	switch raw := response["error"].(type) {
+	case map[string]any:
 		result.Error = &PuckError{Code: stringValue(raw["code"]), Message: stringValue(raw["message"])}
+	case map[string]string:
+		result.Error = &PuckError{Code: raw["code"], Message: raw["message"]}
 	}
 	return result
 }

@@ -85,7 +85,7 @@ func DynamicTools(version int) []map[string]any {
 		if definition, ok := DefinitionFor(version, name); ok {
 			description, schema = definition.Description, definition.InputSchema
 		}
-		tools = append(tools, map[string]any{"name": name, "description": description, "inputSchema": schema})
+		tools = append(tools, map[string]any{"type": "function", "name": name, "description": description, "inputSchema": schema})
 	}
 	return tools
 }

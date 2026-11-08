@@ -38,6 +38,21 @@ func TestMutationSchemasAreStrictAndMachineReadable(t *testing.T) {
 	}
 }
 
+func TestDynamicToolsMatchAppServerFunctionWireContract(t *testing.T) {
+	tools := DynamicTools(Version)
+	if len(tools) == 0 {
+		t.Fatal("dynamic tool registry is empty")
+	}
+	for _, tool := range tools {
+		if tool["type"] != "function" {
+			t.Fatalf("tool %q is not an app-server function: %+v", tool["name"], tool)
+		}
+		if tool["name"] == "" || tool["description"] == "" || tool["inputSchema"] == nil {
+			t.Fatalf("incomplete app-server function tool: %+v", tool)
+		}
+	}
+}
+
 func TestCanonicalDecodersRejectDriftWithFieldDetails(t *testing.T) {
 	tests := []struct {
 		name, tool, raw, field string

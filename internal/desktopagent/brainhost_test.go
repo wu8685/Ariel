@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -109,6 +110,91 @@ func TestBrainHostPublishesCanonicalMutationToolSchemas(t *testing.T) {
 	}
 	if byName["list_devices"]["inputSchema"].(map[string]any)["type"] != "object" {
 		t.Fatal("read-only tool disappeared")
+	}
+}
+
+// This opt-in compatibility test exercises the installed Codex app-server.
+// It deliberately uses a new isolated workspace and never resumes an existing
+// thread. Release smoke runs it with ARIEL_TEST_REAL_BRAIN=1.
+func TestBrainHostRealAppServerRegistersDynamicTools(t *testing.T) {
+	if os.Getenv("ARIEL_TEST_REAL_BRAIN") != "1" {
+		t.Skip("set ARIEL_TEST_REAL_BRAIN=1 for the installed Codex compatibility smoke")
+	}
+	binary := os.Getenv("ARIEL_CODEX_BINARY")
+	if binary == "" {
+		var err error
+		binary, err = exec.LookPath("codex")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	events := make(chan BrainHostEvent, 16)
+	host := NewBrainHost(BrainHostConfig{
+		Enabled: true,
+		Binary:  binary,
+		Root:    filepath.Join(t.TempDir(), "puck"),
+		Emit:    func(event BrainHostEvent) { events <- event },
+	})
+	defer host.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	threadID, err := host.Ensure(ctx, BrainEnsure{
+		AssistantID:           "fixture-assistant",
+		Name:                  "Fixture",
+		DeveloperInstructions: "这是隔离兼容性测试。收到请求后必须调用 list_devices；不要输出普通文本。",
+		ToolsetVersion:        2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(ctx, threadID, "00000000-0000-4000-8000-000000000901", "调用 list_devices。", nil, "", "low"); err != nil {
+		t.Fatal(err)
+	}
+	firstCallID := ""
+	for firstCallID == "" {
+		select {
+		case event := <-events:
+			if event.Kind == "puck.brain.toolCall" {
+				if event.Tool != "list_devices" {
+					t.Fatalf("unexpected first tool call %q", event.Tool)
+				}
+				firstCallID = event.CallID
+			}
+		case <-ctx.Done():
+			t.Fatal("installed Codex did not expose the dynamic tool before timeout")
+		}
+	}
+	if err := host.ToolResult(ctx, threadID, firstCallID, true, []map[string]any{{"type": "inputText", "text": `{"devices":[]}`}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		select {
+		case event := <-events:
+			if event.Kind == "puck.brain.event" && event.Payload["method"] == "turn/completed" {
+				goto secondTurn
+			}
+		case <-ctx.Done():
+			t.Fatal("first installed Codex turn did not complete")
+		}
+	}
+
+secondTurn:
+	secondTurnID, err := host.Turn(ctx, threadID, "00000000-0000-4000-8000-000000000902", "再次调用 list_devices。", nil, "", "low")
+	if err != nil || secondTurnID == "" {
+		t.Fatalf("second turn id=%q err=%v", secondTurnID, err)
+	}
+	for {
+		select {
+		case event := <-events:
+			if event.Kind == "puck.brain.toolCall" {
+				if event.Tool != "list_devices" || event.TurnID != "" && event.TurnID != secondTurnID {
+					t.Fatalf("unexpected second tool call: %+v", event)
+				}
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("installed Codex did not expose the dynamic tool on the second turn")
+		}
 	}
 }
 

@@ -21,6 +21,7 @@ type fakeModuleBridge struct {
 	ensureFailures  int
 	turnFailures    int
 	turnFailureCode string
+	emptyTurn       bool
 	ensureThreads   []string
 	events          chan relay.BrainEvent
 	params          []json.RawMessage
@@ -60,6 +61,9 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 			}
 			return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: code, Message: code}}
 		}
+		if f.emptyTurn {
+			return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
+		}
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
 	if method == "thread.bootstrap" {
@@ -69,6 +73,49 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-a"}}
 	}
 	return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
+}
+
+func TestMessageRejectsAcceptedBrainTurnWithoutAuthoritativeID(t *testing.T) {
+	bridge := &fakeModuleBridge{emptyTurn: true}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "检查测试"}))
+	if result.Error == nil || result.Error.Code != "BRAIN_UNAVAILABLE" {
+		t.Fatalf("result=%+v", result)
+	}
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	for _, message := range history {
+		if message.Kind == "processing" || message.Kind == "acknowledged" {
+			t.Fatalf("missing turn identity was presented as running: %+v", message)
+		}
+	}
+}
+
+func TestTextMessageOmitsNullImagesFromBrainTurn(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "检查测试"}))
+	if result.Error != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	for index, method := range bridge.calls {
+		if method == "puck.brain.turn.start" && strings.Contains(string(bridge.params[index]), `"images":null`) {
+			t.Fatalf("text-only brain turn contains schema-invalid null images: %s", bridge.params[index])
+		}
+	}
 }
 
 func TestMessageResumesBrainAndRetriesOneDefinitelyRejectedTurn(t *testing.T) {
@@ -630,6 +677,67 @@ func TestFullModeHighRiskTaskDoesNotCreateAuthorizationCard(t *testing.T) {
 	}
 }
 
+func TestFirstMessageStartTaskHonorsFullAndAskModes(t *testing.T) {
+	for _, mode := range []string{"full", "ask"} {
+		t.Run(mode, func(t *testing.T) {
+			bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
+			module, err := NewModule(t.TempDir(), bridge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer module.Close()
+			created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Fixture","brainDeviceId":"brain-a"}`))
+			id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+			if mode == "ask" {
+				updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "permissionMode": "ask"}))
+				if updated.Error != nil {
+					t.Fatalf("update=%+v", updated)
+				}
+			}
+			sent := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "first-message-" + mode, "text": "在隔离目录执行测试"}))
+			if sent.Error != nil {
+				t.Fatalf("send=%+v", sent)
+			}
+			arguments := `{"deviceId":"exec-a","cwd":"/fixture","goal":"test","prompt":"run isolated tests","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000244"}`
+			bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"first-call-` + mode + `","tool":"start_task","arguments":` + arguments + `}`)}
+
+			authorizationCount := func() int {
+				var count int
+				if err := module.store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM authorizations WHERE assistant_id=? AND status='pending'`, id).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				return count
+			}
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				tasks, _ := module.store.Tasks(context.Background(), id)
+				if len(tasks) > 0 || authorizationCount() > 0 {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			tasks, _ := module.store.Tasks(context.Background(), id)
+			authorizations := authorizationCount()
+			bridge.mu.Lock()
+			calls := append([]string(nil), bridge.calls...)
+			origins := append([]relay.Origin(nil), bridge.origins...)
+			bridge.mu.Unlock()
+			if mode == "full" {
+				if len(tasks) != 1 || authorizations != 0 || !slices.Contains(calls, "thread.bootstrap") {
+					t.Fatalf("tasks=%d authorizations=%d calls=%v", len(tasks), authorizations, calls)
+				}
+				for index, call := range calls {
+					if call == "thread.bootstrap" && origins[index].PermissionMode != "full" {
+						t.Fatalf("bootstrap origin=%+v", origins[index])
+					}
+				}
+			} else if len(tasks) != 0 || authorizations != 1 || slices.Contains(calls, "thread.bootstrap") {
+				t.Fatalf("tasks=%d authorizations=%d calls=%v", len(tasks), authorizations, calls)
+			}
+		})
+	}
+}
+
 func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {
 	bridge := &fakeModuleBridge{ensureThreads: []string{"brain-old", "brain-new"}}
 	module, err := NewModule(t.TempDir(), bridge)
@@ -755,7 +863,7 @@ func TestModuleCreateMessageHistoryAndDelete(t *testing.T) {
 
 func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
 	got := brainInstructions("assistant-a", "小帕", "开发助理")
-	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop"} {
+	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "禁止调用 exec", "直接调用 Puck tool"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions missing %q:\n%s", want, got)
 		}

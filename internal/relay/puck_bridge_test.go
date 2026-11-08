@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+func TestDecodePuckResponsePreservesInternalTimeoutError(t *testing.T) {
+	response := decodePuckResponse(responseError("request-a", "unknown", "OUTCOME_UNKNOWN", "agent response timeout"))
+	if response.Outcome != "unknown" || response.Error == nil || response.Error.Code != "OUTCOME_UNKNOWN" {
+		t.Fatalf("internal timeout lost its error payload: %+v", response)
+	}
+}
+
 func TestPuckBridgeWhitelistsMethodsAndInjectsTrustedOrigin(t *testing.T) {
 	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
 	if err != nil {
