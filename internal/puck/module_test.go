@@ -861,6 +861,106 @@ func TestModuleCreateMessageHistoryAndDelete(t *testing.T) {
 	}
 }
 
+func TestDeleteRejectsPendingAuthorizationClearsBrainWorkAndPreservesExecutionTask(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","allowedScope":{}}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	if result := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000131", "text": "continue"})); result.Error != nil {
+		t.Fatalf("message=%+v", result)
+	}
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-a", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-a", Goal: "keep running", Status: "running", LastTurnID: "exec-turn-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.InsertAuthorization(ctx, Authorization{ID: "auth-a", AssistantID: id, ActionJSON: `{"tool":"start_task","arguments":{}}`, ActionHash: "hash", RulesHit: `[]`, Status: "pending", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	watchEvents, stopWatch, watchErr := module.Watch(ctx, id)
+	if watchErr != nil {
+		t.Fatal(watchErr)
+	}
+	defer stopWatch()
+	select {
+	case <-watchEvents:
+	case <-time.After(time.Second):
+		t.Fatal("initial watch snapshot timed out")
+	}
+
+	deleted := module.Handle(ctx, "puck.delete", mustJSON(map[string]any{"assistantId": id}))
+	if deleted.Error != nil {
+		t.Fatalf("delete=%+v", deleted)
+	}
+	if pending := module.clearPending(id); pending.turnID != "" || pending.timer != nil {
+		t.Fatalf("pending brain work survived delete: %+v", pending)
+	}
+	authorization, err := module.store.Authorization(ctx, id, "auth-a")
+	if err != nil || authorization.Status != "rejected" || authorization.DecidedAt.IsZero() {
+		t.Fatalf("authorization=%+v err=%v", authorization, err)
+	}
+	task, err := module.store.Task(ctx, id, "task-a")
+	if err != nil || task.Status != "running" || task.NativeThreadID != "exec-thread-a" {
+		t.Fatalf("execution task was changed: %+v err=%v", task, err)
+	}
+	bridge.mu.Lock()
+	calls := append([]string(nil), bridge.calls...)
+	bridge.mu.Unlock()
+	if !slices.Contains(calls, "puck.brain.retire") || slices.Contains(calls, "turn.interrupt") {
+		t.Fatalf("delete calls=%v", calls)
+	}
+	listed := module.Handle(ctx, "puck.list", nil)
+	if got := listed.Data["assistants"].([]map[string]any); len(got) != 0 {
+		t.Fatalf("deleted assistant remains listed: %+v", got)
+	}
+	if _, _, watchErr := module.Watch(ctx, id); watchErr == nil || watchErr.Code != "PUCK_ASSISTANT_NOT_FOUND" {
+		t.Fatalf("deleted assistant watch error=%+v", watchErr)
+	}
+	select {
+	case _, ok := <-watchEvents:
+		if ok {
+			t.Fatal("existing watch emitted after assistant deletion")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("existing watch remained open after assistant deletion")
+	}
+	if again := module.Handle(ctx, "puck.delete", mustJSON(map[string]any{"assistantId": id})); again.Error == nil || again.Error.Code != "PUCK_ASSISTANT_NOT_FOUND" {
+		t.Fatalf("second delete=%+v", again)
+	}
+}
+
+func TestDeletedAssistantIgnoresQueuedBrainToolCall(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","allowedScope":{}}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	if deleted := module.Handle(ctx, "puck.delete", mustJSON(map[string]any{"assistantId": id})); deleted.Error != nil {
+		t.Fatal(deleted.Error)
+	}
+	bridge.mu.Lock()
+	before := len(bridge.calls)
+	bridge.mu.Unlock()
+	module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"CallID":"late-call","Tool":"request_authorization","Arguments":{"summary":"late","action":"deploy"}}`)})
+	bridge.mu.Lock()
+	after := len(bridge.calls)
+	bridge.mu.Unlock()
+	if after != before {
+		t.Fatalf("queued tool call forwarded after delete: before=%d after=%d", before, after)
+	}
+	var authorizations int
+	if err := module.store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM authorizations WHERE assistant_id=?`, id).Scan(&authorizations); err != nil || authorizations != 0 {
+		t.Fatalf("late authorizations=%d err=%v", authorizations, err)
+	}
+}
+
 func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
 	got := brainInstructions("assistant-a", "小帕", "开发助理")
 	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "禁止调用 exec", "直接调用 Puck tool"} {

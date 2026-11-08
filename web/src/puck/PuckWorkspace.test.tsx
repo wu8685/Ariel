@@ -32,6 +32,41 @@ describe("PuckWorkspace", () => {
 		expect(localStorage.getItem("ariel.puck.lastAssistantId.v1")).toBe("a-1");
 	});
 
+	it("confirms deletion, removes the bot, selects a survivor, and reports failures", async () => {
+		let assistants = [
+			{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" },
+			{ assistantId: "a-2", name: "罗宾", brainDeviceId: "brain-a", status: "ready" },
+		];
+		localStorage.setItem("ariel.puck.lastAssistantId.v1", "a-2");
+		let failDelete = false;
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.delete") {
+				if (failDelete) return rejected("BRAIN_UNAVAILABLE");
+				assistants = assistants.filter(item => item.assistantId !== params.assistantId);
+				return accepted({});
+			}
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("罗宾");
+		fireEvent.click(screen.getByRole("button", { name: "删除 Bot" }));
+		expect(screen.getByRole("dialog", { name: "删除 Bot" }).textContent).toContain("停止该 Bot 的后台大脑");
+		expect(screen.getByRole("dialog", { name: "删除 Bot" }).textContent).toContain("历史不再显示");
+		fireEvent.click(screen.getByRole("button", { name: "确认删除罗宾" }));
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.delete", "relay", { assistantId: "a-2" }));
+		await waitFor(() => expect(screen.queryByText("罗宾")).toBeNull());
+		expect(document.querySelector(".puck-assistant-row.active")?.textContent).toContain("小帕");
+		expect(localStorage.getItem("ariel.puck.lastAssistantId.v1")).toBe("a-1");
+
+		failDelete = true;
+		fireEvent.click(screen.getByRole("button", { name: "删除 Bot" }));
+		fireEvent.click(screen.getByRole("button", { name: "确认删除小帕" }));
+		expect((await screen.findByRole("alert")).textContent).toContain("助理暂时无法思考");
+		expect(screen.getAllByText("小帕").length).toBeGreaterThan(0);
+	});
+
 	it("scrolls switched assistants to the latest message and preserves manual history reading", async () => {
 		let eventListener: ((event: Record<string, unknown>) => void) | undefined;
 		const subscribeEvents = vi.fn((listener: (event: Record<string, unknown>) => void) => { eventListener = listener; return () => undefined; });

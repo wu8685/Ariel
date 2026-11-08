@@ -251,7 +251,13 @@ func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
 }
 
 func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET status='deleted',deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL`, nowText(time.Time{}), nowText(time.Time{}), assistantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := nowText(time.Time{})
+	result, err := tx.ExecContext(ctx, `UPDATE assistants SET status='deleted',deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL`, now, now, assistantID)
 	if err != nil {
 		return err
 	}
@@ -259,7 +265,10 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `UPDATE authorizations SET status='rejected',decided_at=? WHERE assistant_id=? AND status='pending'`, now, assistantID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) AppendMessage(ctx context.Context, m Message) error {

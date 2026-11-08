@@ -45,6 +45,10 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
 			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, unreadCount: 0 } : item);
 			data = { unreadCount: 0 };
 		}
+		if (message.method === "puck.delete") {
+			assistants = assistants.filter(item => item.assistantId !== message.params.assistantId);
+			data = {};
+		}
 		if (message.method === "puck.message.react") {
 			const reaction = JSON.stringify({ user: message.params.emoji });
 			messages = messages.map(item => item.id === message.params.messageId ? { ...item, reaction } : item);
@@ -101,6 +105,25 @@ test.describe("Puck recent assistant and latest-message navigation", () => {
 		firstHistory.push({ id: "first-new", role: "assistant", kind: "text", text: "一号轮询新增消息", createdAt: "2026-11-03T13:31:00Z" });
 		await expect(transcript.getByText("一号轮询新增消息")).toBeVisible({ timeout: 12_000 });
 		expect(await transcript.evaluate(element => element.scrollTop)).toBe(120);
+	});
+});
+
+test.describe("Puck delete assistant", () => {
+	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+
+	test("confirms the destructive action and switches to a surviving Bot", async ({ page }) => {
+		await openPuck(page);
+		await page.getByRole("button", { name: "查看助理信息" }).click();
+		await page.getByRole("button", { name: "删除 Bot" }).click();
+		const dialog = page.getByRole("dialog", { name: "删除 Bot" });
+		await expect(dialog).toContainText("停止该 Bot 的后台大脑");
+		await expect(dialog).toContainText("历史不再显示");
+		await expect(dialog).toHaveCSS("backdrop-filter", /blur\(20px\)/);
+		await expect(page).toHaveScreenshot("puck-delete-confirm-390-dark.png", { animations: "disabled", caret: "hide" });
+		await page.getByRole("button", { name: "确认删除小帕" }).click();
+		await expect(page.locator(".puck-conversation-title")).toHaveText("罗宾");
+		await expect(page.getByRole("button", { name: /小帕/ })).toHaveCount(0);
+		await expect.poll(() => page.evaluate(() => localStorage.getItem("ariel.puck.lastAssistantId.v1"))).toBe("puck-two");
 	});
 });
 

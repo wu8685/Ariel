@@ -19,8 +19,10 @@ function storedLastAssistant(): string {
   try { return window.localStorage.getItem(lastAssistantStorageKey)?.trim() || ""; } catch { return ""; }
 }
 function storeLastAssistant(assistantID: string) {
-  if (!assistantID) return;
-  try { window.localStorage.setItem(lastAssistantStorageKey, assistantID); } catch { /* preference storage is best-effort */ }
+	try {
+		if (assistantID) window.localStorage.setItem(lastAssistantStorageKey, assistantID);
+		else window.localStorage.removeItem(lastAssistantStorageKey);
+	} catch { /* preference storage is best-effort */ }
 }
 
 const puckErrorText: Record<string, string> = {
@@ -205,6 +207,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [screenshots, setScreenshots] = useState<ScreenshotDraft[]>([]);
   const [notice, setNotice] = useState("");
   const [creating, setCreating] = useState(false);
+	const [deleteTarget, setDeleteTarget] = useState<Assistant | undefined>(undefined);
+	const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState("");
   const [brainDeviceID, setBrainDeviceID] = useState("");
 	const [submittingCard, setSubmittingCard] = useState("__none__");
@@ -217,7 +221,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const composerFooterRef = useRef<HTMLElement>(null);
   const selectedRef = useRef("");
   const messageAssistantRef = useRef("");
-  const lastAssistantRef = useRef(storedLastAssistant());
+	const lastAssistantRef = useRef(storedLastAssistant());
+	const assistantHistoryRef = useRef<string[]>(lastAssistantRef.current ? [lastAssistantRef.current] : []);
   const followLatestRef = useRef(true);
   const [clock, setClock] = useState(() => Date.now());
   const [reactionTarget, setReactionTarget] = useState("");
@@ -254,7 +259,11 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     followLatestRef.current = true;
     selectedRef.current = assistantID;
     messageAssistantRef.current = assistantID;
-    if (assistantID) { lastAssistantRef.current = assistantID; storeLastAssistant(assistantID); }
+	if (assistantID) {
+		lastAssistantRef.current = assistantID;
+		assistantHistoryRef.current = [assistantID, ...assistantHistoryRef.current.filter(id => id !== assistantID)];
+		storeLastAssistant(assistantID);
+	}
     setMessages(initialMessages);
     setReactionTarget("");
     setSelectedID(assistantID);
@@ -451,6 +460,33 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		const confirmed = response.data?.assistant as Assistant | undefined;
 		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, permissionMode }) : item));
 	}
+	async function deleteAssistant() {
+		if (!deleteTarget || deleting) return;
+		setDeleting(true);
+		const target = deleteTarget;
+		const response = await request("puck.delete", "relay", { assistantId: target.assistantId });
+		if (response.outcome !== "accepted") {
+			setNotice(responseError(response));
+			setDeleting(false);
+			return;
+		}
+		listSequence.current += 1;
+		const survivors = assistants.filter(item => item.assistantId !== target.assistantId);
+		assistantHistoryRef.current = assistantHistoryRef.current.filter(id => id !== target.assistantId);
+		const nextID = assistantHistoryRef.current.find(id => survivors.some(item => item.assistantId === id)) || survivors[0]?.assistantId || "";
+		setAssistants(survivors);
+		setDeleteTarget(undefined);
+		setDeleting(false);
+		setMobilePanel("");
+		if (selectedRef.current === target.assistantId) {
+			if (nextID) selectAssistant(nextID);
+			else {
+				lastAssistantRef.current = "";
+				storeLastAssistant("");
+				selectAssistant("");
+			}
+		}
+	}
 	async function reactTo(message: Message, emoji: string) {
 		if (!selected) return; const assistantID = selected.assistantId; const response = await request("puck.message.react", "relay", { assistantId:assistantID, messageId:message.id, emoji });
 		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
@@ -530,10 +566,12 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color}} size="small" animated={false}/></button>; })}</div></div>
           <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/></button>; })}</div></div>
         </div>
-        <section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
+		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
+		<section className="puck-danger-zone"><h4>危险操作</h4><p>删除后，这个 Bot 及其历史将不再显示。</p><button className="puck-btn danger" type="button" onClick={()=>setDeleteTarget(selected)}>删除 Bot</button></section>
       </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}
     </aside>
 
     {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreating(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit">创建</button></div></form></div>}
+		{deleteTarget && <div className="puck-dialog-backdrop" role="presentation"><section className="puck-dialog puck-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="puck-delete-title"><h2 id="puck-delete-title">删除 Bot</h2><p>将删除“{deleteTarget.name}”，停止该 Bot 的后台大脑，历史不再显示。</p><p className="puck-dialog-note">已派发的 Codex 任务不会被强制停止，仍可在 Ariel 会话中继续查看。</p><div><button className="puck-btn puck-btn-md" type="button" disabled={deleting} onClick={()=>setDeleteTarget(undefined)}>取消</button><button className="puck-btn puck-btn-md danger" type="button" aria-label={`确认删除${deleteTarget.name}`} disabled={deleting} onClick={()=>void deleteAssistant()}>{deleting ? "正在删除…" : "删除"}</button></div></section></div>}
   </main>;
 }

@@ -13,6 +13,9 @@
   --color-subtle: #71717a;
   --color-accent: #fff;
   --color-warning: #ff9f0a;
+	--color-danger: #ff453a;
+	--color-danger-surface: rgba(255, 69, 58, .12);
+	--color-danger-border: rgba(255, 69, 58, .45);
   --puck-card-bg: #151517;
   --puck-hover: rgba(255, 255, 255, .06);
   --puck-selected: rgba(255, 255, 255, .08);
@@ -1020,6 +1023,31 @@
 .puck-workspace .puck-info-status[data-state="awaiting_authorization"] i { background: #ff9f0a; }
 .puck-workspace .puck-info-status[data-state="error"] i { background: #ff453a; }
 .puck-workspace .puck-info-empty { margin: var(--puck-space-4); color: var(--color-muted); }
+.puck-workspace .puck-danger-zone {
+	margin-top: var(--puck-space-6);
+	padding-top: var(--puck-space-4);
+	border-top: var(--puck-border) solid var(--color-border);
+}
+.puck-workspace .puck-danger-zone h4 {
+	margin: 0;
+	color: var(--color-danger);
+	font-size: var(--puck-text-caption);
+	font-weight: var(--puck-weight-semibold);
+}
+.puck-workspace .puck-danger-zone p {
+	margin: var(--puck-space-2) 0 var(--puck-space-3);
+	color: var(--color-muted);
+	font-size: var(--puck-text-caption);
+	line-height: var(--puck-leading-caption);
+}
+.puck-workspace .puck-btn.danger,
+.puck-dialog .puck-btn.danger {
+	border-color: var(--color-danger-border);
+	background: var(--color-danger-surface);
+	color: var(--color-danger);
+}
+.puck-workspace .puck-btn.danger:hover:not(:disabled),
+.puck-dialog .puck-btn.danger:hover:not(:disabled) { background: rgba(255, 69, 58, .2); }
 
 /* Grok-like motion: one rigid head, one parallel-eye face, transform-only transitions. */
 .puck-workspace .puck-avatar {
@@ -1126,6 +1154,17 @@
   margin: 0 0 var(--puck-space-4);
   font-size: var(--puck-space-4);
   font-weight: var(--puck-weight-semibold);
+}
+.puck-delete-dialog > p {
+	margin: 0;
+	color: var(--color-text);
+	font-size: var(--puck-text-ui);
+	line-height: var(--puck-leading-body);
+}
+.puck-delete-dialog > .puck-dialog-note {
+	margin-top: var(--puck-space-3);
+	color: var(--color-muted);
+	font-size: var(--puck-text-caption);
 }
 .puck-dialog label {
   display: grid;

@@ -36,6 +36,7 @@ type Module struct {
 	wg         sync.WaitGroup
 	pendingMu  sync.Mutex
 	pending    map[string]pendingBrainTurn
+	lifecycle  sync.RWMutex
 	ackDelay   time.Duration
 	now        func() time.Time
 }
@@ -100,6 +101,9 @@ func (m *Module) Watch(ctx context.Context, assistantID string) (<-chan relay.Pu
 		defer ticker.Stop()
 		lastSnapshot := ""
 		emit := func() bool {
+			if _, err := m.store.Assistant(watchCtx, assistantID); err != nil {
+				return false
+			}
 			messages, err := m.store.Messages(watchCtx, assistantID, 200)
 			if err != nil {
 				return false
@@ -149,6 +153,12 @@ func (m *Module) runBrainEvents(ctx context.Context) {
 }
 
 func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
+	m.lifecycle.RLock()
+	defer m.lifecycle.RUnlock()
+	a, err := m.store.Assistant(ctx, event.AssistantID)
+	if err != nil || a.BrainDeviceID != event.DeviceID || a.BrainThreadID != event.ThreadID {
+		return
+	}
 	if event.Name != "puck.brain.toolCall" {
 		m.recordBrainMessage(ctx, event)
 		return
@@ -375,6 +385,13 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 	}
 	var response relay.PuckResponse
 	err := m.supervisor.Call(ctx, func(ctx context.Context) error {
+		if method == "puck.delete" {
+			m.lifecycle.Lock()
+			defer m.lifecycle.Unlock()
+		} else {
+			m.lifecycle.RLock()
+			defer m.lifecycle.RUnlock()
+		}
 		switch method {
 		case "puck.list":
 			response = m.list(ctx)
@@ -675,13 +692,17 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if err != nil {
 		return notFound()
 	}
+	if err := m.store.SoftDeleteAssistant(ctx, a.ID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return notFound()
+		}
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	m.clearPending(a.ID)
+	m.syncBrainThreads(ctx)
 	if a.BrainThreadID != "" {
 		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.retire", mustJSON(map[string]any{"threadId": a.BrainThreadID}))
 	}
-	if err := m.store.SoftDeleteAssistant(ctx, a.ID); err != nil {
-		return moduleError("PUCK_UNAVAILABLE", err.Error())
-	}
-	m.syncBrainThreads(ctx)
 	return accepted(map[string]any{})
 }
 
