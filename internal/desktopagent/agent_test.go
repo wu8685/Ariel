@@ -2,11 +2,14 @@ package desktopagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -853,11 +856,100 @@ func TestAgentHelloDeclaresPuckContractAndAtomicBootstrapCapabilities(t *testing
 	}()
 	hello := <-helloSeen
 	caps := hello["capabilities"].(map[string]any)
-	if hello["adapterVersion"] != "desktop-ipc-0.160.0+puck-toolset-2" || hello["puckToolsetVersion"] != nil || caps["threadBootstrap"] != true || caps["executionPolicy"] == true || caps["puckBrain"] != true {
+	if hello["adapterVersion"] != "desktop-ipc-0.160.0+puck-toolset-2" || hello["puckToolsetVersion"] != nil || caps["threadBootstrap"] != true || caps["executionPolicy"] != true || caps["puckBrain"] != true {
 		t.Fatalf("hello=%+v", hello)
 	}
 	cancel()
 	<-done
+}
+
+func TestNewAgentAndRelayEnforcePuckExecutionPolicyModes(t *testing.T) {
+	r, err := relay.New(relay.Config{Token: "test-secret", WebPIN: "012345", AllowedOrigins: []string{"http://localhost:5173"}, PuckState: "ready", MutationTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+
+	cwd, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "00000000-0000-4000-8000-000000000241"
+	live := &normalizedBootstrapLive{thread: map[string]any{
+		"threadId": threadID, "cwd": cwd, "runtime": "idle", "turns": []any{}, "pendingInteractions": []any{},
+	}, updates: make(chan struct{}, 1), done: make(chan struct{}), terminal: make(chan struct{})}
+	bootstrapper := &fakeBootstrapper{result: BootstrapResult{ThreadID: threadID, TurnID: "bootstrap-turn", Live: live}}
+	service := NewService(fakeHistory{}, nil)
+	service.SetThreadBootstrapper(bootstrapper)
+	defer service.Close()
+
+	ready := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() {
+		stopped <- RunWithService(ctx, Config{
+			URL: "ws" + strings.TrimPrefix(server.URL, "http") + "/ws", Token: "test-secret", DeviceID: "policy-agent", DeviceName: "Policy Agent",
+			OnReady: func() error { close(ready); return nil }, HeartbeatInterval: time.Hour,
+		}, service)
+	}()
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Agent did not connect to Relay")
+	}
+
+	bridge := r.PuckBridge()
+	devices := bridge.Devices()
+	if len(devices) != 1 || devices[0]["capabilities"].(map[string]bool)["executionPolicy"] != true {
+		t.Fatalf("devices=%+v", devices)
+	}
+	full := relay.Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool", PermissionMode: "full"}
+	start := bridge.Forward(ctx, full, "policy-agent", "thread.bootstrap", mustRawJSON(t, map[string]any{
+		"cwd": cwd, "clientMessageId": "00000000-0000-4000-8000-000000000242", "text": "start",
+	}))
+	if start.Error != nil || start.Outcome != "accepted" {
+		t.Fatalf("full bootstrap=%+v", start)
+	}
+	if got := recordedPolicies(&bootstrapper.policyMu, &bootstrapper.policies); len(got) != 1 || got[0] != "full" {
+		t.Fatalf("bootstrap policies=%v", got)
+	}
+
+	for index, mode := range []string{"full", "ask"} {
+		origin := relay.Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool", PermissionMode: mode}
+		response := bridge.Forward(ctx, origin, "policy-agent", "turn.start", mustRawJSON(t, map[string]any{
+			"threadId": threadID, "clientMessageId": fmt.Sprintf("00000000-0000-4000-8000-%012d", 243+index), "text": mode,
+		}))
+		if response.Error != nil || response.Outcome != "accepted" {
+			t.Fatalf("%s turn=%+v", mode, response)
+		}
+	}
+	if got := recordedPolicies(&live.policyMu, &live.policies); len(got) != 2 || got[0] != "full" || got[1] != "ask" {
+		t.Fatalf("turn policies=%v", got)
+	}
+
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Agent did not stop")
+	}
+}
+
+func mustRawJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func recordedPolicies(mu *sync.Mutex, policies *[]string) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	return append([]string(nil), (*policies)...)
 }
 
 func TestTransportReconnectKeepsCodexFollowerWarm(t *testing.T) {

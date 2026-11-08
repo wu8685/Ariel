@@ -337,6 +337,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		}
 		capabilities["queue"] = service.QueueEnabled()
 		capabilities["threadBootstrap"] = service.ThreadBootstrapEnabled()
+		capabilities["executionPolicy"] = service.ExecutionPolicyEnabled()
 		capabilities["threadArchive"] = service.ThreadArchiveEnabled()
 		capabilities["threadArchiveUndo"] = service.ThreadArchiveEnabled()
 		capabilities["threadRename"] = service.ThreadRenameEnabled()

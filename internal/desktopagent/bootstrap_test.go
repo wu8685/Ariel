@@ -3,11 +3,14 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
+	"github.com/wu8685/Ariel/internal/modelsettings"
 )
 
 type bootstrapHistory struct {
@@ -32,6 +35,8 @@ type normalizedBootstrapLive struct {
 	updates  chan struct{}
 	done     chan struct{}
 	terminal chan struct{}
+	policyMu sync.Mutex
+	policies []string
 }
 
 func (l *normalizedBootstrapLive) Current() (json.RawMessage, error) { return nil, nil }
@@ -44,6 +49,12 @@ func (l *normalizedBootstrapLive) CurrentThread() (map[string]any, error) {
 func (l *normalizedBootstrapLive) Start(context.Context, string, string) (string, error) {
 	return "", appserver.ErrMethodUnavailable
 }
+func (l *normalizedBootstrapLive) StartWithExecutionPolicy(_ context.Context, _, _ string, _ []string, mode string) (string, error) {
+	l.policyMu.Lock()
+	defer l.policyMu.Unlock()
+	l.policies = append(l.policies, mode)
+	return fmt.Sprintf("policy-turn-%d", len(l.policies)), nil
+}
 func (l *normalizedBootstrapLive) Interrupt(context.Context, string) error { return nil }
 func (l *normalizedBootstrapLive) Respond(context.Context, string, string, map[string][]string) error {
 	return nil
@@ -55,14 +66,23 @@ func (l *normalizedBootstrapLive) Verify(context.Context) error { return nil }
 func (l *normalizedBootstrapLive) Close() error                 { return nil }
 
 type fakeBootstrapper struct {
-	result BootstrapResult
-	calls  int
+	result   BootstrapResult
+	calls    int
+	policyMu sync.Mutex
+	policies []string
 }
 
 func (f *fakeBootstrapper) Bootstrap(_ context.Context, cwd, messageID, text string, images []string) (BootstrapResult, error) {
 	f.calls++
 	f.result.CWD = cwd
 	return f.result, nil
+}
+
+func (f *fakeBootstrapper) BootstrapWithExecutionPolicy(ctx context.Context, cwd, messageID, text string, images []string, _ *modelsettings.Values, mode string) (BootstrapResult, error) {
+	f.policyMu.Lock()
+	f.policies = append(f.policies, mode)
+	f.policyMu.Unlock()
+	return f.Bootstrap(ctx, cwd, messageID, text, images)
 }
 
 func TestBootstrapThreadInstallsOwnerBeforeReceiptAndMigratesWithoutDroppingSubscription(t *testing.T) {

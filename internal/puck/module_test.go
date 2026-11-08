@@ -593,24 +593,41 @@ func TestFullModeHighRiskTaskDoesNotCreateAuthorizationCard(t *testing.T) {
 	for time.Now().Before(deadline) {
 		tasks, _ := module.store.Tasks(context.Background(), id)
 		if len(tasks) == 1 {
-			history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
-			for _, message := range history {
-				if message.Kind == "authorization" {
-					t.Fatalf("unexpected card=%s", message.CardJSON)
-				}
-			}
-			bridge.mu.Lock()
-			defer bridge.mu.Unlock()
-			for i, call := range bridge.calls {
-				if call == "thread.bootstrap" && bridge.origins[i].PermissionMode != "full" {
-					t.Fatalf("origin=%+v", bridge.origins[i])
-				}
-			}
-			return
+			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("full task was not dispatched")
+	tasks, _ := module.store.Tasks(context.Background(), id)
+	if len(tasks) != 1 {
+		t.Fatal("full task was not dispatched")
+	}
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-full-send","tool":"send_turn","arguments":{"taskId":"00000000-0000-4000-8000-000000000242","text":"deploy now","riskTags":["deploy"],"clientMessageId":"00000000-0000-4000-8000-000000000243"}}`)}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		bridge.mu.Lock()
+		sent := slices.Contains(bridge.calls, "turn.start")
+		bridge.mu.Unlock()
+		if sent {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	for _, message := range history {
+		if message.Kind == "authorization" {
+			t.Fatalf("unexpected card=%s", message.CardJSON)
+		}
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if !slices.Contains(bridge.calls, "turn.start") {
+		t.Fatalf("full send_turn was not dispatched: %v", bridge.calls)
+	}
+	for i, call := range bridge.calls {
+		if (call == "thread.bootstrap" || call == "turn.start") && bridge.origins[i].PermissionMode != "full" {
+			t.Fatalf("origin=%+v", bridge.origins[i])
+		}
+	}
 }
 
 func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {

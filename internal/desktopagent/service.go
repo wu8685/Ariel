@@ -220,7 +220,16 @@ func (s *Service) ThreadCreationEnabled() bool            { return s.creator != 
 func (s *Service) SetThreadBootstrapper(bootstrapper ThreadBootstrapper) {
 	s.bootstrapper = bootstrapper
 }
-func (s *Service) ThreadBootstrapEnabled() bool                        { return s.bootstrapper != nil }
+func (s *Service) ThreadBootstrapEnabled() bool { return s.bootstrapper != nil }
+func (s *Service) ExecutionPolicyEnabled() bool {
+	if s.bootstrapper == nil {
+		return false
+	}
+	_, ok := s.bootstrapper.(interface {
+		BootstrapWithExecutionPolicy(context.Context, string, string, string, []string, *modelsettings.Values, string) (BootstrapResult, error)
+	})
+	return ok
+}
 func (s *Service) SetThreadArchiver(archiver ThreadArchiver)           { s.archiver = archiver }
 func (s *Service) ThreadArchiveEnabled() bool                          { return s.archiver != nil }
 func (s *Service) SetThreadMetadataWriter(writer ThreadMetadataWriter) { s.metadata = writer }
