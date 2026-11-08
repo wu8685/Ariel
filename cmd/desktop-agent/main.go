@@ -209,6 +209,15 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		resolvedBinary, err := filepath.EvalSymlinks(selectedBinary)
+		if err != nil {
+			log.Fatal("selected Codex binary unavailable")
+		}
+		resolvedBinary, err = filepath.Abs(resolvedBinary)
+		if err != nil {
+			log.Fatal("selected Codex binary path unavailable")
+		}
+		log.Printf("Codex binary selected: path=%s version=%s", resolvedBinary, cliVersion)
 		profileStatus, err := probe.CheckIPCProfile(desktopVersion, cliVersion)
 		if err != nil {
 			log.Fatal(err)
@@ -224,7 +233,7 @@ func main() {
 		if taskExecutionCheck != nil {
 			log.Print("task writes disabled: native compatibility is unverified; management and read-only recovery remain available")
 		}
-		binary = selectedBinary
+		binary = resolvedBinary
 		if !desktopipc.SettingsProfileSupported(desktopVersion, cliVersion) {
 			*disableExecutionSettings = true
 			log.Print("execution settings disabled: this native version has not passed the isolated settings compatibility gate")

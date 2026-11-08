@@ -30,6 +30,27 @@ func TestBinarySelectionMatchesDesktopAndHonorsExplicitPath(t *testing.T) {
 	}
 }
 
+func TestPreflightRequiresSameResolvedCodexBinaryAndVersion(t *testing.T) {
+	resolved := map[string]string{"/prod-link": "/bundle/codex", "/smoke-link": "/bundle/codex", "/other": "/other/codex"}
+	versions := map[string]string{"/bundle/codex": "0.160.0", "/other/codex": "0.160.0"}
+	resolve := func(path string) (string, error) {
+		value, ok := resolved[path]
+		if !ok {
+			return "", errors.New("missing")
+		}
+		return value, nil
+	}
+	version := func(path string) (string, error) { return versions[path], nil }
+
+	identity, err := RequireMatchingBinary("/prod-link", "/smoke-link", resolve, version)
+	if err != nil || identity.Path != "/bundle/codex" || identity.Version != "0.160.0" {
+		t.Fatalf("identity=%+v err=%v", identity, err)
+	}
+	if _, err := RequireMatchingBinary("/prod-link", "/other", resolve, version); err == nil {
+		t.Fatal("different executable with the same version was accepted")
+	}
+}
+
 func TestIPCProfileUsesMinimumVersionsAndLabelsEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		desktop, cli string

@@ -40,6 +40,7 @@ type ToolResult struct {
 	Code            string                    `json:"code,omitempty"`
 	Message         string                    `json:"message,omitempty"`
 	Details         []toolcontract.FieldError `json:"details,omitempty"`
+	Diagnostic      *toolcontract.Diagnostic  `json:"diagnostic,omitempty"`
 	Data            map[string]any            `json:"data,omitempty"`
 	AuthorizationID string                    `json:"authorizationId,omitempty"`
 	Truncated       bool                      `json:"truncated,omitempty"`
@@ -119,15 +120,18 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 	case "get_task_status":
 		result = h.taskStatus(ctx, call)
 	case "request_authorization":
-		if _, details := toolcontract.DecodeAuthorization(call.Arguments); len(details) != 0 {
-			result = invalidArguments("invalid request_authorization arguments", details)
+		if value, details := toolcontract.DecodeAuthorization(call.Arguments); len(details) != 0 {
+			result = invalidStructuredArguments(call.Tool, call.Arguments, details)
+		} else if payload, err := json.Marshal(value); err != nil {
+			result = toolError("PUCK_UNAVAILABLE", err.Error())
 		} else {
+			call.Arguments = payload
 			result = h.requestAuthorization(ctx, call)
 		}
 	case "ask_user":
 		value, details := toolcontract.DecodeAskUser(call.Arguments)
 		if len(details) != 0 {
-			result = invalidArguments("invalid ask_user arguments", details)
+			result = invalidStructuredArguments(call.Tool, call.Arguments, details)
 		} else if payload, err := json.Marshal(value); err != nil {
 			result = toolError("PUCK_UNAVAILABLE", err.Error())
 		} else if err := h.backend.Emit(ctx, Event{AssistantID: call.AssistantID, Kind: call.Tool, Payload: payload}); err != nil {
@@ -136,9 +140,11 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 			result = ToolResult{Success: true}
 		}
 	case "share_result":
-		if _, details := toolcontract.DecodeShareResult(call.Arguments); len(details) != 0 {
-			result = invalidArguments("invalid share_result arguments", details)
-		} else if err := h.backend.Emit(ctx, Event{AssistantID: call.AssistantID, Kind: call.Tool, Payload: append(json.RawMessage(nil), call.Arguments...)}); err != nil {
+		if value, details := toolcontract.DecodeShareResult(call.Arguments); len(details) != 0 {
+			result = invalidStructuredArguments(call.Tool, call.Arguments, details)
+		} else if payload, err := json.Marshal(value); err != nil {
+			result = toolError("PUCK_UNAVAILABLE", err.Error())
+		} else if err := h.backend.Emit(ctx, Event{AssistantID: call.AssistantID, Kind: call.Tool, Payload: payload}); err != nil {
 			result = toolError("PUCK_UNAVAILABLE", err.Error())
 		} else {
 			result = ToolResult{Success: true}
@@ -356,6 +362,16 @@ func toolError(code, message string) ToolResult { return ToolResult{Code: code, 
 
 func invalidArguments(message string, details []toolcontract.FieldError) ToolResult {
 	return ToolResult{Code: "INVALID_ARGUMENT", Message: message, Details: details}
+}
+
+func invalidStructuredArguments(tool string, raw json.RawMessage, details []toolcontract.FieldError) ToolResult {
+	diagnostic := toolcontract.RejectionDiagnostic(tool, raw, details)
+	return ToolResult{
+		Code:       "INVALID_ARGUMENT",
+		Message:    "arguments do not match the canonical contract; correct the listed field paths and retry this tool once",
+		Details:    details,
+		Diagnostic: &diagnostic,
+	}
 }
 
 func mustJSON(value any) json.RawMessage {

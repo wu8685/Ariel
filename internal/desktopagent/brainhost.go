@@ -224,11 +224,38 @@ func (h *BrainHost) ToolResult(ctx context.Context, threadID, callID string, suc
 	pending.timer.Stop()
 	err := process.Reply(ctx, pending.id, map[string]any{"contentItems": content, "success": success}, nil)
 	attrs := []any{"durationMs", time.Since(started).Milliseconds(), "ok", err == nil, "toolSuccess", success}
+	if !success {
+		if diagnostic, ok := toolResultDiagnostic(content); ok {
+			shape, _ := json.Marshal(diagnostic.Shape)
+			attrs = append(attrs, "tool", diagnostic.Tool, "rejectedField", diagnostic.Details[0].Field, "reason", diagnostic.Details[0].Reason, "expected", diagnostic.Details[0].Expected, "argumentShape", string(shape))
+		}
+	}
 	if err != nil {
 		attrs = append(attrs, "error", requestErrorCode("puck.brain.toolResult", err))
 	}
 	logPhase("brain-tool-result", threadID, attrs...)
 	return err
+}
+
+func toolResultDiagnostic(content []map[string]any) (toolcontract.Diagnostic, bool) {
+	if len(content) != 1 || content[0]["type"] != "inputText" {
+		return toolcontract.Diagnostic{}, false
+	}
+	text, _ := content[0]["text"].(string)
+	if len(text) == 0 || len(text) > 64<<10 {
+		return toolcontract.Diagnostic{}, false
+	}
+	var envelope struct {
+		Diagnostic *toolcontract.Diagnostic `json:"diagnostic"`
+	}
+	if json.Unmarshal([]byte(text), &envelope) != nil || envelope.Diagnostic == nil || envelope.Diagnostic.Tool == "" || len(envelope.Diagnostic.Details) == 0 {
+		return toolcontract.Diagnostic{}, false
+	}
+	shape, _ := json.Marshal(envelope.Diagnostic.Shape)
+	if len(shape) > 4096 {
+		return toolcontract.Diagnostic{}, false
+	}
+	return *envelope.Diagnostic, true
 }
 
 func (h *BrainHost) Retire(threadID string) { h.mu.Lock(); delete(h.threads, threadID); h.mu.Unlock() }

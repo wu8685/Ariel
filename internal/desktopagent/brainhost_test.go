@@ -252,6 +252,41 @@ func TestBrainHostLogsSanitizedPhaseLatency(t *testing.T) {
 	}
 }
 
+func TestBrainHostLogsSafeStructuredToolRejectionDiagnostic(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	process := newFakeBrainProcess()
+	events := make(chan BrainHostEvent, 1)
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) { return process, nil }, Emit: func(event BrainHostEvent) { events <- event }})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	process.incoming <- brainFrame{ID: json.RawMessage(`1`), Method: "item/tool/call", Params: json.RawMessage(`{"threadId":"brain-thread","callId":"call-a","tool":"ask_user","arguments":{}}`)}
+	<-events
+	content := `{"code":"INVALID_ARGUMENT","diagnostic":{"tool":"ask_user","details":[{"field":"multiple","reason":"additional property is not allowed","expected":"only documented properties"}],"shape":{"type":"object","fields":{"multiple":{"type":"boolean"}}}},"untrusted":"private-user-text"}`
+	if err := host.ToolResult(context.Background(), "brain-thread", "call-a", false, []map[string]any{{"type": "inputText", "text": content}}); err != nil {
+		t.Fatal(err)
+	}
+	if capture.leaks("private-user-text") {
+		t.Fatal("tool result log leaked content outside the safe diagnostic")
+	}
+	var found bool
+	capture.mu.Lock()
+	for _, record := range capture.records {
+		fields := map[string]slog.Value{}
+		record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
+		if fields["phase"].String() == "brain-tool-result" && fields["tool"].String() == "ask_user" && fields["rejectedField"].String() == "multiple" {
+			found = true
+		}
+	}
+	capture.mu.Unlock()
+	if !found {
+		t.Fatalf("safe rejection diagnostic missing: phases=%v", capture.phases())
+	}
+}
+
 func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
 	first, second := newFakeBrainProcess(), newFakeBrainProcess()
 	starts := 0

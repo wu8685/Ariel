@@ -3,6 +3,7 @@ package toolcontract
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -82,6 +83,47 @@ func TestAskUserNormalizesObservedSelectionTypeDrift(t *testing.T) {
 	}
 }
 
+func TestAskUserNormalizesCodex0160ObservedTopLevelMultiple(t *testing.T) {
+	value, details := DecodeAskUser(json.RawMessage(`{"question":"Q","options":[{"label":"A","value":"a"},{"label":"B","value":"b"}],"multiple":false}`))
+	if len(details) != 0 || len(value.Questions) != 1 || value.Questions[0].MultiSelect {
+		t.Fatalf("value=%+v details=%+v", value, details)
+	}
+}
+
+func TestStructuredToolsNormalizeKnownEquivalentAliases(t *testing.T) {
+	ask, details := DecodeAskUser(json.RawMessage(`{"prompt":"Q","choices":["A",{"text":"B","id":"b","help":"second"}],"allowFreeText":true,"multiple":true}`))
+	if len(details) != 0 || len(ask.Questions) != 1 || !ask.Questions[0].AllowCustom || !ask.Questions[0].MultiSelect || ask.Questions[0].Options[0].Value != "A" || ask.Questions[0].Options[1].Description != "second" {
+		t.Fatalf("ask=%+v details=%+v", ask, details)
+	}
+
+	shared, details := DecodeShareResult(json.RawMessage(`{"message":"done","item":{"type":"url","label":"report","href":"https://example.invalid/result"}}`))
+	if len(details) != 0 || shared.Summary != "done" || len(shared.Items) != 1 || shared.Items[0].Kind != "url" || shared.Items[0].Title != "report" {
+		t.Fatalf("shared=%+v details=%+v", shared, details)
+	}
+
+	authorization, details := DecodeAuthorization(json.RawMessage(`{"operation":"deploy","justification":"needed","device_id":"device-a","workdir":"/workspace","text":"ship"}`))
+	if len(details) != 0 || authorization.Action != "deploy" || authorization.Reason != "needed" || authorization.DeviceID != "device-a" || authorization.CWD != "/workspace" || authorization.Summary != "ship" {
+		t.Fatalf("authorization=%+v details=%+v", authorization, details)
+	}
+}
+
+func TestStructuredToolsRejectConflictingAliases(t *testing.T) {
+	for _, test := range []struct {
+		name, tool, raw, field string
+	}{
+		{"ask", "ask_user", `{"question":"Q1","prompt":"Q2","options":["A"]}`, "question"},
+		{"share", "share_result", `{"summary":"one","message":"two","items":[{"kind":"url","title":"x","url":"https://example.invalid"}]}`, "summary"},
+		{"authorization", "request_authorization", `{"action":"deploy","operation":"delete","reason":"x"}`, "action"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, details := Decode(test.tool, json.RawMessage(test.raw))
+			if len(details) == 0 || details[0].Field != test.field {
+				t.Fatalf("details=%+v", details)
+			}
+		})
+	}
+}
+
 func TestAskUserRejectsSelectionTypeConflictsAndUnknownDrift(t *testing.T) {
 	for _, test := range []struct {
 		name, raw string
@@ -111,6 +153,50 @@ func TestStructuredCardDecodersRejectInvalidInput(t *testing.T) {
 		if len(details) == 0 || details[0].Field != test.field {
 			t.Fatalf("%s details=%+v", test.tool, details)
 		}
+	}
+}
+
+func TestRejectionDiagnosticContainsOnlyShapeAndFieldMetadata(t *testing.T) {
+	raw := json.RawMessage(`{"questions":[{"prompt":"private-user-text","options":["Alpha",{"label":"Beta","selected":true}],"count":57}],"token":"secret-value"}`)
+	details := []FieldError{{Field: "questions[0].prompt", Reason: "additional property is not allowed", Expected: "only documented properties"}}
+	diagnostic := RejectionDiagnostic("ask_user", raw, details)
+	encoded, err := json.Marshal(diagnostic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, secret := range []string{"private-user-text", "Alpha", "Beta", "secret-value", "57", "true"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("diagnostic leaked argument value %q: %s", secret, text)
+		}
+	}
+	for _, want := range []string{`"tool":"ask_user"`, `"field":"questions[0].prompt"`, `"questions"`, `"options"`, `"label"`, `"type":"string"`, `"length":2`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("diagnostic omitted %s: %s", want, text)
+		}
+	}
+}
+
+func TestRejectionDiagnosticBoundsMalformedAndDeepArguments(t *testing.T) {
+	diagnostic := RejectionDiagnostic("share_result", json.RawMessage(`{"items":`), []FieldError{{Field: "$", Reason: "invalid", Expected: "object"}})
+	encoded, _ := json.Marshal(diagnostic)
+	if strings.Contains(string(encoded), `{"items":`) || len(encoded) > 4096 {
+		t.Fatalf("malformed diagnostic is unsafe or unbounded: %s", encoded)
+	}
+
+	deep := json.RawMessage(strings.Repeat(`[`, 80) + strings.Repeat(`]`, 80))
+	encoded, _ = json.Marshal(RejectionDiagnostic("ask_user", deep, nil))
+	if len(encoded) > 4096 {
+		t.Fatalf("deep diagnostic is unbounded: %d", len(encoded))
+	}
+
+	wide := map[string]any{}
+	for index := 0; index < 32; index++ {
+		wide[fmt.Sprintf("field_%02d_%s", index, strings.Repeat("x", 180))] = map[string]any{"nested": strings.Repeat("private", 20)}
+	}
+	encoded, _ = json.Marshal(RejectionDiagnostic("ask_user", marshal(wide), nil))
+	if len(encoded) > 8192 || strings.Contains(string(encoded), "privateprivate") {
+		t.Fatalf("wide diagnostic is unsafe or unbounded: %d", len(encoded))
 	}
 }
 

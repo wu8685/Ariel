@@ -513,6 +513,22 @@ describe("PuckWorkspace", () => {
 		expect(screen.queryByText(raw)).toBeNull();
 	});
 
+	it("renders second-rejection fallback cards as friendly terminal notices", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [
+				{ id: "q", role: "assistant", kind: "question", text: "暂时无法生成问题卡，请直接发送消息回答。", cardJSON: JSON.stringify({ cardState: "invalid", tool: "ask_user" }) },
+				{ id: "a", role: "assistant", kind: "authorization", text: "暂时无法生成授权卡；尚未授权任何操作，请直接说明是否继续。", cardJSON: JSON.stringify({ cardState: "invalid", tool: "request_authorization" }) },
+				{ id: "r", role: "assistant", kind: "share_result", text: "暂时无法生成结果卡，请让助理重新整理结果。", cardJSON: JSON.stringify({ cardState: "invalid", tool: "share_result" }) },
+			] }) : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		expect(await screen.findByText("暂时无法生成问题卡，请直接发送消息回答。")).toBeTruthy();
+		expect(screen.getByText("暂时无法生成授权卡；尚未授权任何操作，请直接说明是否继续。")).toBeTruthy();
+		expect(screen.getAllByText("暂时无法生成结果卡，请让助理重新整理结果。").length).toBeGreaterThan(0);
+		expect(screen.queryByRole("button", { name: "仅这一次允许" })).toBeNull();
+		expect(screen.queryByText(/"cardState"/)).toBeNull();
+	});
+
 	it("isolates Puck message typography from Ariel globals while retaining the Ariel bubble colors", async () => {
 		const request = vi.fn(async (method: string) => method === "puck.list"
 			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })

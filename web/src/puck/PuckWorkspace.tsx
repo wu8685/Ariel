@@ -216,7 +216,8 @@ const taskLabels: Record<string, string> = { running:"进行中", dispatching:"�
 function QuestionCard({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:unknown)=>void }) {
   const data = normalizeQuestionData(message);
   const questions = data.questions;
-  const terminal = String(data.cardState || "pending") !== "pending";
+  const cardState = String(data.cardState || "pending");
+  const terminal = cardState !== "pending";
   const [selected, setSelected] = useState<Record<string,string[]>>({});
   const [custom, setCustom] = useState<Record<string,string>>({});
   const answers = arrayData<Record<string,unknown>>(data.answers);
@@ -231,6 +232,9 @@ function QuestionCard({ message, submitting, onAction }: { message: Message; sub
   }
   const pendingAnswers = questions.map(question => ({ questionId: question.id, values: selected[question.id] || [], ...(custom[question.id]?.trim() ? { custom: custom[question.id].trim() } : {}) }));
   const canSubmit = pendingAnswers.every(answer => answer.values.length > 0 || Boolean(answer.custom));
+  if (cardState === "invalid") return <section className="puck-card puck-question-card terminal" role="group" aria-label="问题卡片">
+    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">?</span><strong>问题卡未生成</strong></div><p>{message.text}</p>
+  </section>;
   return <section className={`puck-card puck-question-card${terminal ? " terminal" : ""}`} role="group" aria-label="问题卡片">
     <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">?</span><strong>{terminal ? "已回答" : "需要你决定"}</strong></div>
     {questions.length === 0 ? <p>{"助手发来了一个无法识别的问题"}</p> : questions.map((question, questionIndex) => {
@@ -252,8 +256,12 @@ function QuestionCard({ message, submitting, onAction }: { message: Message; sub
 }
 function Card({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:unknown)=>void }) {
   const data = cardData(message);
-  const terminal = String(data.cardState || "pending") !== "pending";
+  const cardState = String(data.cardState || "pending");
+  const terminal = cardState !== "pending";
   if (message.kind === "question") return <QuestionCard message={message} submitting={submitting} onAction={onAction}/>;
+  if (message.kind === "authorization" && cardState === "invalid") return <section className="puck-card puck-authorization-card terminal" role="group" aria-label="授权卡片">
+    <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">◇</span><strong>授权卡未生成</strong></div><p>{message.text}</p>
+  </section>;
   const expiresAt = data.expiresAt ? new Date(String(data.expiresAt)).getTime() : Number.POSITIVE_INFINITY;
   const expired = message.kind === "authorization" && Number.isFinite(expiresAt) && expiresAt <= Date.now();
   if (message.kind === "authorization" && expired && !terminal) return <section className="puck-card puck-authorization-card terminal compact" role="group" aria-label="授权卡片">
@@ -268,6 +276,9 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
     {!terminal ? <div className="puck-card-actions puck-authorization-actions"><button className="puck-btn" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_always")}>以后都允许</button></div> : <p className="puck-card-result">{decisionLabel(data)}</p>}
   </section>;
   if (message.kind === "share_result") {
+    if (cardState === "invalid") return <section className="puck-card puck-result-card terminal" role="group" aria-label="结果卡片">
+      <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">!</span><strong>结果卡未生成</strong></div><p>{message.text}</p>
+    </section>;
     const items = arrayData<Record<string,unknown>>(data.items).filter(item => item && typeof item === "object");
     return <section className="puck-card puck-result-card" role="group" aria-label="结果卡片">
       <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">✓</span><strong>{String(data.summary || message.text || "助手分享了一项结果")}</strong></div>

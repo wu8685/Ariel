@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -76,14 +77,26 @@ type AskUserRequest struct {
 	Questions []Question `json:"questions"`
 }
 
-type ResultItem struct{ Kind, Title, Description, DeviceID, ThreadID, Path, URL string }
+type ResultItem struct {
+	Kind        string `json:"kind"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	DeviceID    string `json:"deviceId,omitempty"`
+	ThreadID    string `json:"threadId,omitempty"`
+	Path        string `json:"path,omitempty"`
+	URL         string `json:"url,omitempty"`
+}
 type ShareResultRequest struct {
 	Summary string       `json:"summary"`
 	Items   []ResultItem `json:"items"`
 }
 
 type AuthorizationRequest struct {
-	Action, Reason, DeviceID, CWD, Summary string
+	Action   string `json:"action"`
+	Reason   string `json:"reason"`
+	DeviceID string `json:"deviceId,omitempty"`
+	CWD      string `json:"cwd,omitempty"`
+	Summary  string `json:"summary,omitempty"`
 }
 
 type Definition struct {
@@ -154,6 +167,14 @@ func DecodeAskUser(raw json.RawMessage) (AskUserRequest, []FieldError) {
 	if detail != nil {
 		return result, []FieldError{*detail}
 	}
+	if details := normalizeAliases(fields,
+		aliasSet{"question", []string{"prompt", "text"}},
+		aliasSet{"options", []string{"choices"}},
+		aliasSet{"multiSelect", []string{"multiple"}},
+		aliasSet{"allowCustom", []string{"allowFreeText", "allow_custom"}},
+	); len(details) != 0 {
+		return result, details
+	}
 	if details := rejectUnknown(fields, "question", "options", "allowCustom", "multiSelect", "questions"); len(details) != 0 {
 		return result, details
 	}
@@ -181,6 +202,10 @@ func DecodeAskUser(raw json.RawMessage) (AskUserRequest, []FieldError) {
 		if itemDetail != nil {
 			return result, fieldError(fmt.Sprintf("questions[%d]", index), itemDetail.Reason, "question object")
 		}
+		if details := normalizeQuestionAliases(questionFields); len(details) != 0 {
+			details[0].Field = fmt.Sprintf("questions[%d].%s", index, details[0].Field)
+			return result, details
+		}
 		question, details := decodeQuestion(questionFields, fmt.Sprintf("questions[%d].", index), "question")
 		if len(details) != 0 {
 			return result, details
@@ -203,6 +228,10 @@ func DecodeAskUser(raw json.RawMessage) (AskUserRequest, []FieldError) {
 
 func decodeQuestion(fields map[string]json.RawMessage, prefix, questionField string) (Question, []FieldError) {
 	var result Question
+	if details := normalizeQuestionAliases(fields); len(details) != 0 {
+		details[0].Field = prefix + details[0].Field
+		return result, details
+	}
 	var selectionType *bool
 	if rawType, ok := fields["type"]; ok {
 		delete(fields, "type")
@@ -242,12 +271,27 @@ func decodeQuestion(fields map[string]json.RawMessage, prefix, questionField str
 		}
 		result.MultiSelect = *selectionType
 	}
-	var options []map[string]json.RawMessage
-	if rawOptions, ok := fields["options"]; !ok || json.Unmarshal(rawOptions, &options) != nil || len(options) > 20 || (len(options) == 0 && !result.AllowCustom) {
+	var optionEntries []json.RawMessage
+	if rawOptions, ok := fields["options"]; !ok || json.Unmarshal(rawOptions, &optionEntries) != nil || len(optionEntries) > 20 || (len(optionEntries) == 0 && !result.AllowCustom) {
 		return result, fieldError(prefix+"options", "value has invalid type or length", "1 to 20 options, or empty when allowCustom is true")
 	}
 	seen := map[string]struct{}{}
-	for index, optionFields := range options {
+	for index, rawOption := range optionEntries {
+		var optionFields map[string]json.RawMessage
+		var label string
+		if json.Unmarshal(rawOption, &label) == nil {
+			encoded, _ := json.Marshal(label)
+			optionFields = map[string]json.RawMessage{"label": encoded, "value": encoded}
+		} else if json.Unmarshal(rawOption, &optionFields) != nil || optionFields == nil {
+			return result, fieldError(fmt.Sprintf("%soptions[%d]", prefix, index), "value has invalid type", "string or option object")
+		}
+		if details := normalizeAliases(optionFields,
+			aliasSet{"label", []string{"text", "name"}},
+			aliasSet{"value", []string{"id"}},
+			aliasSet{"description", []string{"help"}},
+		); len(details) != 0 {
+			return result, fieldError(fmt.Sprintf("%soptions[%d].%s", prefix, index, details[0].Field), details[0].Reason, details[0].Expected)
+		}
 		if details := rejectUnknown(optionFields, "label", "description", "value"); len(details) != 0 {
 			return result, fieldError(fmt.Sprintf("%soptions[%d].%s", prefix, index, details[0].Field), details[0].Reason, details[0].Expected)
 		}
@@ -280,6 +324,19 @@ func DecodeShareResult(raw json.RawMessage) (ShareResultRequest, []FieldError) {
 	if detail != nil {
 		return result, []FieldError{*detail}
 	}
+	if details := normalizeAliases(fields,
+		aliasSet{"summary", []string{"message", "text"}},
+		aliasSet{"items", []string{"results", "attachments"}},
+	); len(details) != 0 {
+		return result, details
+	}
+	if rawItem, ok := fields["item"]; ok {
+		if _, exists := fields["items"]; exists {
+			return result, fieldError("items", "canonical field conflicts with alias item", "one equivalent representation")
+		}
+		fields["items"] = append(json.RawMessage{'['}, append(rawItem, ']')...)
+		delete(fields, "item")
+	}
 	if details := rejectUnknown(fields, "summary", "items"); len(details) != 0 {
 		return result, details
 	}
@@ -292,6 +349,17 @@ func DecodeShareResult(raw json.RawMessage) (ShareResultRequest, []FieldError) {
 	}
 	allowedKinds := map[string]bool{"diff": true, "file": true, "pr": true, "thread": true, "url": true}
 	for index, item := range items {
+		if details := normalizeAliases(item,
+			aliasSet{"kind", []string{"type"}},
+			aliasSet{"title", []string{"label", "name"}},
+			aliasSet{"description", []string{"text"}},
+			aliasSet{"deviceId", []string{"device_id"}},
+			aliasSet{"threadId", []string{"thread_id"}},
+			aliasSet{"path", []string{"filePath", "file_path"}},
+			aliasSet{"url", []string{"href"}},
+		); len(details) != 0 {
+			return result, fieldError(fmt.Sprintf("items[%d].%s", index, details[0].Field), details[0].Reason, details[0].Expected)
+		}
 		if details := rejectUnknown(item, "kind", "title", "description", "deviceId", "threadId", "path", "url"); len(details) != 0 {
 			return result, fieldError(fmt.Sprintf("items[%d].%s", index, details[0].Field), details[0].Reason, details[0].Expected)
 		}
@@ -330,6 +398,15 @@ func DecodeAuthorization(raw json.RawMessage) (AuthorizationRequest, []FieldErro
 	fields, detail := decodeObject(raw)
 	if detail != nil {
 		return result, []FieldError{*detail}
+	}
+	if details := normalizeAliases(fields,
+		aliasSet{"action", []string{"operation"}},
+		aliasSet{"reason", []string{"justification", "message"}},
+		aliasSet{"summary", []string{"text", "description"}},
+		aliasSet{"deviceId", []string{"device_id"}},
+		aliasSet{"cwd", []string{"workdir", "workingDirectory"}},
+	); len(details) != 0 {
+		return result, details
 	}
 	if details := rejectUnknown(fields, "action", "reason", "deviceId", "cwd", "summary"); len(details) != 0 {
 		return result, details
@@ -480,6 +557,46 @@ func rejectUnknown(fields map[string]json.RawMessage, allowed ...string) []Field
 	}
 	sort.Strings(unknown)
 	return fieldError(unknown[0], "additional property is not allowed", "only documented properties")
+}
+
+type aliasSet struct {
+	canonical string
+	aliases   []string
+}
+
+func normalizeQuestionAliases(fields map[string]json.RawMessage) []FieldError {
+	return normalizeAliases(fields,
+		aliasSet{"question", []string{"prompt", "text"}},
+		aliasSet{"options", []string{"choices"}},
+		aliasSet{"multiSelect", []string{"multiple"}},
+		aliasSet{"allowCustom", []string{"allowFreeText", "allow_custom"}},
+	)
+}
+
+func normalizeAliases(fields map[string]json.RawMessage, sets ...aliasSet) []FieldError {
+	for _, set := range sets {
+		canonical, hasCanonical := fields[set.canonical]
+		for _, alias := range set.aliases {
+			value, exists := fields[alias]
+			if !exists {
+				continue
+			}
+			if hasCanonical && !jsonSemanticEqual(canonical, value) {
+				return fieldError(set.canonical, "canonical field conflicts with alias "+alias, "one equivalent representation")
+			}
+			if !hasCanonical {
+				fields[set.canonical] = value
+				canonical, hasCanonical = value, true
+			}
+			delete(fields, alias)
+		}
+	}
+	return nil
+}
+
+func jsonSemanticEqual(left, right json.RawMessage) bool {
+	var a, b any
+	return json.Unmarshal(left, &a) == nil && json.Unmarshal(right, &b) == nil && reflect.DeepEqual(a, b)
 }
 
 func requiredString(fields map[string]json.RawMessage, name string, target *string, expected string) *FieldError {

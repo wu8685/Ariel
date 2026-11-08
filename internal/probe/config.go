@@ -17,6 +17,10 @@ import (
 )
 
 type Config struct{ AppPath, Binary, Socket string }
+type BinaryIdentity struct {
+	Path    string
+	Version string
+}
 type Environment struct {
 	OSVersion             string `json:"osVersion"`
 	DesktopVersion        string `json:"desktopVersion"`
@@ -216,6 +220,31 @@ func SelectBinary(explicit, bundled string, version func(string) (string, error)
 		return "", "", errors.New("configured Codex version differs from Desktop bundle")
 	}
 	return explicit, selectedVersion, nil
+}
+
+// RequireMatchingBinary is the release-smoke boundary: version equality alone
+// is insufficient because production and preflight must execute the same file.
+func RequireMatchingBinary(expected, actual string, resolve func(string) (string, error), version func(string) (string, error)) (BinaryIdentity, error) {
+	expectedPath, err := resolve(expected)
+	if err != nil {
+		return BinaryIdentity{}, errors.New("expected production Codex binary unavailable")
+	}
+	actualPath, err := resolve(actual)
+	if err != nil {
+		return BinaryIdentity{}, errors.New("preflight Codex binary unavailable")
+	}
+	if filepath.Clean(expectedPath) != filepath.Clean(actualPath) {
+		return BinaryIdentity{}, errors.New("preflight Codex binary differs from production executable")
+	}
+	expectedVersion, err := version(expectedPath)
+	if err != nil {
+		return BinaryIdentity{}, errors.New("expected production Codex version unavailable")
+	}
+	actualVersion, err := version(actualPath)
+	if err != nil || actualVersion != expectedVersion {
+		return BinaryIdentity{}, errors.New("preflight Codex version differs from production version")
+	}
+	return BinaryIdentity{Path: actualPath, Version: actualVersion}, nil
 }
 func BinaryVersion(ctx context.Context, binary string) (string, error) {
 	output, err := command(ctx, binary, "--version")

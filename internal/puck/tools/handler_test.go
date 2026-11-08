@@ -58,8 +58,36 @@ func TestAskUserEmitsNormalizedQuestionsAndRejectsMalformedArguments(t *testing.
 		t.Fatalf("result=%+v events=%+v", result, backend.events)
 	}
 	invalid := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "ask_user", Arguments: json.RawMessage(`{"questions":[]}`)})
-	if invalid.Success || invalid.Code != "INVALID_ARGUMENT" || len(backend.events) != 1 {
+	if invalid.Success || invalid.Code != "INVALID_ARGUMENT" || invalid.Diagnostic == nil || len(backend.events) != 1 {
 		t.Fatalf("invalid=%+v events=%+v", invalid, backend.events)
+	}
+}
+
+func TestStructuredToolRejectionReturnsSafeRetryGuidance(t *testing.T) {
+	handler := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}})
+	raw := json.RawMessage(`{"question":"do-not-leak","options":["private-option"],"secret":"private-secret"}`)
+	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "ask_user", Arguments: raw})
+	encoded, _ := json.Marshal(result)
+	if result.Success || result.Code != "INVALID_ARGUMENT" || result.Diagnostic == nil || !strings.Contains(result.Message, "retry") {
+		t.Fatalf("result=%+v", result)
+	}
+	for _, secret := range []string{"do-not-leak", "private-option", "private-secret"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("tool result leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
+func TestStructuredToolAliasesEmitCanonicalPayloads(t *testing.T) {
+	backend := &fakeBackend{tasks: map[string]Task{}}
+	handler := New(&fakeOrchestrator{}, backend)
+	shared := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "share_result", Arguments: json.RawMessage(`{"message":"done","item":{"type":"url","label":"report","href":"https://example.invalid/result"}}`)})
+	if !shared.Success || len(backend.events) != 1 || !strings.Contains(string(backend.events[0].Payload), `"summary":"done"`) || strings.Contains(string(backend.events[0].Payload), `"message"`) {
+		t.Fatalf("shared=%+v events=%+v", shared, backend.events)
+	}
+	authorized := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "request_authorization", Arguments: json.RawMessage(`{"operation":"deploy","justification":"needed"}`)})
+	if !authorized.Success {
+		t.Fatalf("authorization=%+v", authorized)
 	}
 }
 

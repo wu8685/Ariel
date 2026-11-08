@@ -136,6 +136,7 @@
 | 0135 | [Puck 自建 Bot 默认 Full Access](0135-puck-default-full-access.md) | Implemented（2026-11-08；Go／race／vet／build、Web unit／browser／build 已验；未部署） | Bot 持久权限模式；默认 full；Codex `never + danger-full-access`；保留 ask 与硬安全边界 |
 | 0137 | [Puck `start_task` 用户消息级幂等](0137-puck-start-task-message-idempotency.md) | Implemented（2026-11-08；Full 真实 E2E 已通过，ask 真实 Brain 未派发，暂不可部署） | assistant + 用户消息稳定任务键；重复调用返回既有 task；ask 授权去重；完整行为窗口冒烟 |
 | 0136 | [Puck 结构化问题与结果卡契约](0136-puck-structured-card-contract.md) | Implemented（2026-11-08） | ask_user 单题／多题归一化、带 id 回答、历史裸 JSON 恢复；authorization／share_result 类型化 schema 与友好兜底 |
+| 0141 | [Puck 生产工具参数兼容与二进制一致性](0141-puck-production-tool-compatibility.md) | Implemented（2026-11-09；0.160.0 五项隔离预发通过） | 三个结构化工具的脱敏诊断、安全 alias 归一化、单次重试／友好降级，以及生产／预发 Codex binary 一致性门禁 |
 | 0138 | [Puck 持久授权规则与 ask 派发可靠性](0138-puck-persistent-authorization-rules.md) | Approved（2026-11-08；Turn 50） | `approve_always` 的 Bot+动作+主机+目录树规则、逐条撤销、可见自动执行记录、真实 Brain ask/full 门禁 |
 
 ## 设计基线

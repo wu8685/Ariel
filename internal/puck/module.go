@@ -46,6 +46,7 @@ type pendingBrainTurn struct {
 	threadID, turnID, messageID, responseID string
 	startedAt                               time.Time
 	steps                                   int
+	toolFailures                            map[string]int
 	ack                                     bool
 	timer                                   *time.Timer
 }
@@ -179,6 +180,15 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	m.pendingMu.Unlock()
 	sourceMessageID := m.sourceMessageID(ctx, event.AssistantID)
 	result := m.tools.Execute(ctx, pucktools.Call{AssistantID: event.AssistantID, SourceMessageID: sourceMessageID, Tool: input.Tool, Arguments: input.Arguments})
+	if result.Diagnostic != nil {
+		diagnostic, _ := json.Marshal(result.Diagnostic)
+		log.Printf("puck structured tool rejected: diagnostic=%s", diagnostic)
+		if m.recordStructuredToolRejection(ctx, event.AssistantID, input.Tool, result.Diagnostic) >= 2 {
+			result.Message = "arguments still do not match the canonical contract after one retry; do not retry this tool again in this turn; a friendly fallback card was shown"
+		}
+	} else if result.Success {
+		m.clearStructuredToolFailure(event.AssistantID, input.Tool)
+	}
 	content, _ := json.Marshal(result)
 	delivery := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: event.AssistantID, Trigger: "tool"}, event.DeviceID, "puck.brain.toolResult", mustJSON(map[string]any{"threadId": event.ThreadID, "callId": input.CallID, "success": result.Success, "contentItems": []map[string]any{{"type": "inputText", "text": string(content)}}, "truncated": result.Truncated}))
 	if delivery.Outcome != "accepted" || delivery.Error != nil {
@@ -199,6 +209,74 @@ func (m *Module) sourceMessageID(ctx context.Context, assistantID string) string
 	}
 	messageID, _ = m.store.LatestUserMessageID(ctx, assistantID)
 	return messageID
+}
+
+func (m *Module) recordStructuredToolRejection(ctx context.Context, assistantID, tool string, diagnostic *toolcontract.Diagnostic) int {
+	m.pendingMu.Lock()
+	pending, ok := m.pending[assistantID]
+	if !ok {
+		m.pendingMu.Unlock()
+		return 0
+	}
+	if pending.toolFailures == nil {
+		pending.toolFailures = map[string]int{}
+	}
+	pending.toolFailures[tool]++
+	attempt := pending.toolFailures[tool]
+	m.pending[assistantID] = pending
+	m.pendingMu.Unlock()
+	if attempt > 2 {
+		return attempt
+	}
+	field, reason := "$", "invalid arguments"
+	if diagnostic != nil && len(diagnostic.Details) != 0 {
+		field, reason = safeDiagnosticField(diagnostic.Details[0].Field), diagnostic.Details[0].Reason
+	}
+	if attempt == 1 {
+		text := fmt.Sprintf("%s 参数不兼容（字段 %s：%s）；助理已收到规范说明，正在重试一次。", tool, field, reason)
+		_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: assistantID, Role: "assistant", Kind: "notice", Text: text})
+		return attempt
+	}
+	kind, text := structuredToolFallback(tool)
+	card, _ := json.Marshal(map[string]any{"cardState": "invalid", "tool": tool})
+	_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: assistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(card)})
+	return attempt
+}
+
+func safeDiagnosticField(value string) string {
+	if value == "" || len(value) > 256 {
+		return "$"
+	}
+	for _, char := range value {
+		if char != '_' && char != '-' && char != '.' && char != '[' && char != ']' && (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') {
+			return "$"
+		}
+	}
+	return value
+}
+
+func (m *Module) clearStructuredToolFailure(assistantID, tool string) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	pending, ok := m.pending[assistantID]
+	if !ok || pending.toolFailures == nil {
+		return
+	}
+	delete(pending.toolFailures, tool)
+	m.pending[assistantID] = pending
+}
+
+func structuredToolFallback(tool string) (string, string) {
+	switch tool {
+	case "ask_user":
+		return "question", "暂时无法生成问题卡，请直接发送消息回答。"
+	case "request_authorization":
+		return "authorization", "暂时无法生成授权卡；尚未授权任何操作，请直接说明是否继续。"
+	case "share_result":
+		return "share_result", "暂时无法生成结果卡，请让助理重新整理结果。"
+	default:
+		return "notice", "助理暂时无法生成交互卡，请直接发送消息继续。"
+	}
 }
 
 func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent) {
@@ -877,7 +955,7 @@ func (m *Module) dispatchExplicitExecution(ctx context.Context, a Assistant, mes
 
 func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, startedAt time.Time, ack bool) {
 	m.clearPending(a.ID)
-	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, startedAt: startedAt, ack: ack}
+	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, startedAt: startedAt, toolFailures: map[string]int{}, ack: ack}
 	if !ack {
 		m.pendingMu.Lock()
 		m.pending[a.ID] = pending

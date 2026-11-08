@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/wu8685/Ariel/internal/desktopagent"
+	"github.com/wu8685/Ariel/internal/probe"
 	"github.com/wu8685/Ariel/internal/puck"
 	"github.com/wu8685/Ariel/internal/relay"
 )
@@ -37,6 +38,18 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	if binary == "" {
 		t.Fatal("ARIEL_CODEX_BINARY is required")
 	}
+	productionBinary := os.Getenv("ARIEL_PRODUCTION_CODEX_BINARY")
+	if productionBinary == "" {
+		t.Fatal("ARIEL_PRODUCTION_CODEX_BINARY is required; release smoke must identify the production executable")
+	}
+	identity, err := probe.RequireMatchingBinary(productionBinary, binary, filepath.EvalSymlinks, func(path string) (string, error) {
+		return probe.BinaryVersion(context.Background(), path)
+	})
+	if err != nil {
+		t.Fatalf("Codex binary parity gate rejected preflight: %v", err)
+	}
+	binary = identity.Path
+	t.Logf("preflight Codex binary=%s version=%s", filepath.Base(identity.Path), identity.Version)
 	socket := os.Getenv("ARIEL_IPC_SOCKET")
 	if socket == "" {
 		socket = filepath.Join(os.Getenv("HOME"), ".codex", "ipc", "ipc.sock")

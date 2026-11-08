@@ -570,6 +570,58 @@ func TestModulePersistsRealTurnDurationStepsUnreadAndReactions(t *testing.T) {
 	}
 }
 
+func TestStructuredToolRejectionIsVisibleThenFallsBackWithoutRawJSON(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	if sent := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000171", "text": "trigger"})); sent.Error != nil {
+		t.Fatalf("sent=%+v", sent)
+	}
+	payload := json.RawMessage(`{"callId":"bad-call","tool":"ask_user","arguments":{"question":"private-question","options":[],"unknown":"private-value"}}`)
+	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall", Payload: payload})
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	if !hasSafeToolNotice(history, "ask_user", "unknown") {
+		t.Fatalf("first rejection missing safe notice: %+v", history)
+	}
+	payload = json.RawMessage(`{"callId":"bad-call-2","tool":"ask_user","arguments":{"question":"another-private-question","options":[],"unknown":"another-private-value"}}`)
+	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall", Payload: payload})
+	history = module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	var fallback bool
+	encoded, _ := json.Marshal(history)
+	for _, message := range history {
+		fallback = fallback || message.Kind == "question" && strings.Contains(message.Text, "直接发送消息") && strings.Contains(message.CardJSON, `"cardState":"invalid"`)
+	}
+	if !fallback || strings.Contains(string(encoded), "private-question") || strings.Contains(string(encoded), "private-value") {
+		t.Fatalf("unsafe or missing fallback: %s", encoded)
+	}
+}
+
+func hasSafeToolNotice(messages []Message, tool, field string) bool {
+	for _, message := range messages {
+		if message.Kind == "notice" && strings.Contains(message.Text, tool) && strings.Contains(message.Text, field) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSafeDiagnosticFieldRejectsMarkdownAndBoundsLength(t *testing.T) {
+	if got := safeDiagnosticField("questions[0].options"); got != "questions[0].options" {
+		t.Fatalf("safe path changed: %q", got)
+	}
+	for _, unsafe := range []string{"[click](https://example.invalid)", strings.Repeat("x", 257)} {
+		if got := safeDiagnosticField(unsafe); got != "$" {
+			t.Fatalf("unsafe field accepted: %q", got)
+		}
+	}
+}
+
 func TestMessageAcceptsImagesPersistsThemOutsideTextAndForwardsToBrain(t *testing.T) {
 	bridge := &fakeModuleBridge{}
 	module, err := NewModule(t.TempDir(), bridge)
