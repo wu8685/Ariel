@@ -140,3 +140,54 @@ func TestSensitiveToolReturnsAuthorizationWithoutForwarding(t *testing.T) {
 		t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
 	}
 }
+
+func TestMutationValidationReturnsSafeFieldDetails(t *testing.T) {
+	handler := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}})
+	for _, test := range []struct {
+		tool, raw, field string
+	}{
+		{"start_task", `{}`, "deviceId"},
+		{"send_turn", `{"taskId":"task-a","text":"x","riskTags":[],"clientMessageId":"bad"}`, "clientMessageId"},
+	} {
+		result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: test.tool, Arguments: json.RawMessage(test.raw)})
+		if result.Code != "INVALID_ARGUMENT" || len(result.Details) == 0 || result.Details[0].Field != test.field {
+			t.Fatalf("tool=%s result=%+v", test.tool, result)
+		}
+		encoded, _ := json.Marshal(result)
+		if strings.Contains(string(encoded), test.raw) {
+			t.Fatalf("error echoed arguments: %s", encoded)
+		}
+	}
+}
+
+func TestStartTaskUsesAtomicBootstrapAdapter(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method != "thread.bootstrap" {
+			t.Fatalf("method=%s", method)
+		}
+		var input struct{ CWD, ClientMessageID, Text string }
+		if json.Unmarshal(params, &input) != nil || input.CWD != "/work" || input.Text != "do it" || input.ClientMessageID != "00000000-0000-4000-8000-000000000001" {
+			t.Fatalf("params=%s", params)
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a", "turnId": "turn-a"}}
+	}}
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001"}`)})
+	if !result.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" {
+		t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+	}
+}
+
+func TestSendTurnSupportsDirectThreadLocator(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method != "turn.start" || !strings.Contains(string(params), `"threadId":"thread-a"`) {
+			t.Fatalf("method=%s params=%s", method, params)
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-b"}}
+	}}
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(`{"deviceId":"exec-a","threadId":"thread-a","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002"}`)})
+	if !result.Success {
+		t.Fatalf("result=%+v", result)
+	}
+}

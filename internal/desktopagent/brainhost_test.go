@@ -95,6 +95,23 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 	}
 }
 
+func TestBrainHostPublishesCanonicalMutationToolSchemas(t *testing.T) {
+	tools := puckDynamicTools(2)
+	byName := map[string]map[string]any{}
+	for _, tool := range tools {
+		byName[tool["name"].(string)] = tool
+	}
+	for _, name := range []string{"start_task", "send_turn"} {
+		schema := byName[name]["inputSchema"].(map[string]any)
+		if schema["additionalProperties"] != false || len(schema["required"].([]string)) == 0 {
+			t.Fatalf("%s schema=%+v", name, schema)
+		}
+	}
+	if byName["list_devices"]["inputSchema"].(map[string]any)["type"] != "object" {
+		t.Fatal("read-only tool disappeared")
+	}
+}
+
 func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
 	first, second := newFakeBrainProcess(), newFakeBrainProcess()
 	starts := 0

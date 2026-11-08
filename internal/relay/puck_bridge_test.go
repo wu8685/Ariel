@@ -88,6 +88,30 @@ func TestPuckBridgeFailsClosedWhenExecutionPolicyIsUnverified(t *testing.T) {
 	}
 }
 
+func TestPuckBridgeForwardsAtomicThreadBootstrap(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	agent := dialTest(t, server.URL, "")
+	hello := agentHello()
+	hello["capabilities"].(map[string]bool)["threadBootstrap"] = true
+	hello["capabilities"].(map[string]bool)["executionPolicy"] = true
+	sendJSON(t, agent, hello)
+	readJSON(t, agent)
+	done := make(chan PuckResponse, 1)
+	go func() {
+		done <- r.PuckBridge().Forward(context.Background(), Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool"}, "mock-mac", "thread.bootstrap", json.RawMessage(`{"cwd":"/fixture","clientMessageId":"00000000-0000-4000-8000-000000000001","text":"run"}`))
+	}()
+	request := readJSON(t, agent)
+	if request["method"] != "thread.bootstrap" || request["origin"].(map[string]any)["assistantId"] != "assistant-a" {
+		t.Fatalf("request=%+v", request)
+	}
+	sendJSON(t, agent, map[string]any{"type": "response", "v": 1, "requestId": request["requestId"], "outcome": "accepted", "data": map[string]any{"threadId": "thread-a", "turnId": "turn-a"}})
+	if result := <-done; result.Outcome != "accepted" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestWebCannotCallPuckBrainMethods(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
 	server := httptest.NewServer(r.Handler())
