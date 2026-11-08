@@ -27,7 +27,10 @@ type fakeModuleBridge struct {
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
-	return []map[string]any{{"deviceId": "brain-a", "capabilities": map[string]bool{"puckBrainReady": true}}}
+	return []map[string]any{
+		{"deviceId": "brain-a", "agentOnline": true, "capabilities": map[string]bool{"puckBrainReady": true}},
+		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}},
+	}
 }
 func (f *fakeModuleBridge) BrainThreads(v map[relay.BrainThread]string) { f.brains = v }
 func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, method string, params json.RawMessage) relay.PuckResponse {
@@ -57,8 +60,8 @@ func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, 
 		}
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
-	if method == "thread.create" {
-		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"threadId": "exec-thread-a"}}
+	if method == "thread.bootstrap" {
+		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"threadId": "exec-thread-a", "turnId": "exec-turn-a"}}
 	}
 	if method == "turn.start" {
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-a"}}
@@ -493,7 +496,7 @@ func TestModuleConsumesAuthorizationAndStopsStartedTask(t *testing.T) {
 	defer module.Close()
 	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
-	arguments := `{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run tests","riskTags":[],"clientTaskId":"task-a"}`
+	arguments := `{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run tests","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000141"}`
 	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-task","tool":"start_task","arguments":` + arguments + `}`)}
 	var authorizationID string
 	deadline := time.Now().Add(time.Second)
@@ -591,6 +594,39 @@ func TestModuleRotatesBrainWhenStoredToolsetIsObsolete(t *testing.T) {
 	assistant := updated.Data["assistant"].(map[string]any)
 	if assistant["brainThreadId"] != "brain-new" || assistant["toolsetVersion"] != currentToolsetVersion {
 		t.Fatalf("assistant=%+v", assistant)
+	}
+}
+
+func TestModuleLazilyRotatesObsoleteToolsetBeforeNextUserTurn(t *testing.T) {
+	bridge := &fakeModuleBridge{ensureThreads: []string{"brain-old", "brain-new"}}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	if _, err := module.store.db.Exec(`UPDATE assistants SET toolset_version=1 WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	bridge.mu.Lock()
+	baseline := len(bridge.calls)
+	bridge.mu.Unlock()
+	result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000151", "text": "继续"}))
+	if result.Error != nil {
+		t.Fatalf("message=%+v", result)
+	}
+	a, err := module.store.Assistant(context.Background(), id)
+	if err != nil || a.ToolsetVersion != currentToolsetVersion || a.BrainThreadID != "brain-new" {
+		t.Fatalf("assistant=%+v err=%v", a, err)
+	}
+	bridge.mu.Lock()
+	calls := append([]string(nil), bridge.calls...)
+	bridge.mu.Unlock()
+	sequence := calls[baseline:]
+	ensure, retire, turn := slices.Index(sequence, "puck.brain.ensure"), slices.Index(sequence, "puck.brain.retire"), slices.Index(sequence, "puck.brain.turn.start")
+	if ensure < 0 || retire < 0 || turn < 0 || ensure > retire || retire > turn {
+		t.Fatalf("calls=%v", calls)
 	}
 }
 

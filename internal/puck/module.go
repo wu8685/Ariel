@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 	pucktools "github.com/wu8685/Ariel/internal/puck/tools"
 	"github.com/wu8685/Ariel/internal/relay"
 )
@@ -24,7 +25,7 @@ type Orchestrator interface {
 	BrainEvents() <-chan relay.BrainEvent
 }
 
-const currentToolsetVersion = 1
+const currentToolsetVersion = toolcontract.Version
 
 type Module struct {
 	store      *Store
@@ -262,8 +263,8 @@ type toolBackend struct{ module *Module }
 
 func (b toolBackend) Authorize(ctx context.Context, assistantID string, action pucktools.Action) (string, error) {
 	var arguments struct {
-		DeviceID, CWD, Prompt string
-		RiskTags              []string
+		TaskID, DeviceID, CWD, ThreadID, Prompt, Text string
+		RiskTags                                      []string
 	}
 	_ = json.Unmarshal(action.Arguments, &arguments)
 	a, err := b.module.store.Assistant(ctx, assistantID)
@@ -272,6 +273,18 @@ func (b toolBackend) Authorize(ctx context.Context, assistantID string, action p
 	}
 	allowed := map[string][]string{}
 	_ = json.Unmarshal([]byte(a.AllowedScope), &allowed)
+	ownedThread := false
+	if arguments.TaskID != "" {
+		task, taskErr := b.module.store.Task(ctx, assistantID, arguments.TaskID)
+		if taskErr != nil {
+			return "", taskErr
+		}
+		arguments.DeviceID, arguments.CWD, arguments.ThreadID = task.DeviceID, task.CWD, task.NativeThreadID
+		ownedThread = true
+	}
+	if arguments.Prompt == "" {
+		arguments.Prompt = arguments.Text
+	}
 	enforceable := false
 	for _, device := range b.module.bridge.Devices() {
 		if device["deviceId"] == arguments.DeviceID {
@@ -279,7 +292,7 @@ func (b toolBackend) Authorize(ctx context.Context, assistantID string, action p
 			enforceable = caps["executionPolicy"]
 		}
 	}
-	decision := EvaluatePolicy(PolicyInput{Tool: action.Tool, DeviceID: arguments.DeviceID, CWD: arguments.CWD, Prompt: arguments.Prompt, RiskTags: arguments.RiskTags, AllowedScope: allowed, ExecutionPolicyEnforceable: enforceable, AssistantWorkspaceRoot: "/agent-managed/puck/" + assistantID})
+	decision := EvaluatePolicy(PolicyInput{Tool: action.Tool, DeviceID: arguments.DeviceID, CWD: arguments.CWD, ThreadID: arguments.ThreadID, Prompt: arguments.Prompt, RiskTags: arguments.RiskTags, AllowedScope: allowed, OwnedThread: ownedThread, ExecutionPolicyEnforceable: enforceable, AssistantWorkspaceRoot: "/agent-managed/puck/" + assistantID})
 	if decision.DeniedCode != "" {
 		return "", errors.New(decision.DeniedCode)
 	}
@@ -560,6 +573,41 @@ func (m *Module) ensureBrain(ctx context.Context, a Assistant) relay.PuckRespons
 	return m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.ensure", mustJSON(request))
 }
 
+func (m *Module) ensureCurrentToolset(ctx context.Context, a Assistant) (Assistant, *relay.PuckError) {
+	if a.ToolsetVersion == currentToolsetVersion {
+		return a, nil
+	}
+	if a.ToolsetVersion > currentToolsetVersion {
+		return a, &relay.PuckError{Code: "BRAIN_UNAVAILABLE", Message: "assistant toolset is newer than this Relay"}
+	}
+	oldDevice, oldThread := a.BrainDeviceID, a.BrainThreadID
+	a.ToolsetVersion = currentToolsetVersion
+	result := m.ensureBrain(ctx, a)
+	if result.Error != nil {
+		return a, result.Error
+	}
+	threadID, _ := result.Data["threadId"].(string)
+	if threadID == "" {
+		return a, &relay.PuckError{Code: "BRAIN_UNAVAILABLE", Message: "upgraded brain thread identity missing"}
+	}
+	if oldThread != "" {
+		history := []string{}
+		_ = json.Unmarshal([]byte(defaultJSON(a.BrainThreadHistory, "[]")), &history)
+		history = append(history, oldThread)
+		encoded, _ := json.Marshal(history)
+		a.BrainThreadHistory = string(encoded)
+	}
+	a.BrainThreadID, a.Status = threadID, "ready"
+	if err := m.store.UpdateAssistant(ctx, a); err != nil {
+		return a, &relay.PuckError{Code: "PUCK_UNAVAILABLE", Message: err.Error()}
+	}
+	if oldThread != "" && oldThread != threadID {
+		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, oldDevice, "puck.brain.retire", mustJSON(map[string]any{"threadId": oldThread}))
+	}
+	m.syncBrainThreads(ctx)
+	return a, nil
+}
+
 func (m *Module) resumeBrain(ctx context.Context, a Assistant) relay.PuckResponse {
 	request := map[string]any{"assistantId": a.ID, "name": "[Puck] " + a.Name, "threadId": a.BrainThreadID, "cwd": "/agent-managed/puck/" + a.ID, "developerInstructions": brainInstructions(a.ID, a.Name, a.Description), "model": a.BrainModel, "effort": a.BrainReasoning, "toolsetVersion": a.ToolsetVersion}
 	return m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.ensure", mustJSON(request))
@@ -616,6 +664,10 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	a, err := m.store.Assistant(ctx, input.AssistantID)
 	if err != nil {
 		return notFound()
+	}
+	a, toolsetError := m.ensureCurrentToolset(ctx, a)
+	if toolsetError != nil {
+		return relay.PuckResponse{Outcome: "rejected", Error: toolsetError}
 	}
 	previous := m.clearPending(a.ID)
 	if previous.turnID != "" {
@@ -837,6 +889,10 @@ func (m *Module) answerQuestion(ctx context.Context, raw json.RawMessage) relay.
 	a, err := m.store.Assistant(ctx, input.AssistantID)
 	if err != nil {
 		return notFound()
+	}
+	a, toolsetError := m.ensureCurrentToolset(ctx, a)
+	if toolsetError != nil {
+		return relay.PuckResponse{Outcome: "rejected", Error: toolsetError}
 	}
 	result := m.startBrainTurn(ctx, a, mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": newUUID(), "text": brainEnvelope(a, "问题 "+input.QuestionID+" 的回答："+input.Answer), "model": a.BrainModel, "effort": a.BrainReasoning}))
 	if result.Error != nil {

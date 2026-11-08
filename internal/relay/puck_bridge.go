@@ -147,7 +147,11 @@ func (b *PuckBridge) Devices() []map[string]any {
 	defer b.server.mu.Unlock()
 	devices := make([]map[string]any, 0, len(b.server.agents))
 	for _, agent := range b.server.agents {
-		devices = append(devices, map[string]any{"deviceId": agent.deviceID, "deviceName": agent.deviceName, "agentOnline": true, "codexReady": agent.capabilities["codexReady"], "capabilities": agent.currentCapabilities(), "agentEpoch": agent.agentEpoch})
+		device := map[string]any{"deviceId": agent.deviceID, "deviceName": agent.deviceName, "agentOnline": true, "codexReady": agent.capabilities["codexReady"], "capabilities": agent.currentCapabilities(), "agentEpoch": agent.agentEpoch}
+		if agent.puckToolsetVersion > 0 {
+			device["puckToolsetVersion"] = agent.puckToolsetVersion
+		}
+		devices = append(devices, device)
 	}
 	return devices
 }
@@ -250,7 +254,7 @@ func (b *PuckBridge) takeWriteQuota() bool {
 
 func puckWriteMethod(method string) bool {
 	switch method {
-	case "thread.create", "turn.start", "turn.interrupt", "interaction.respond", "puck.brain.ensure", "puck.brain.turn.start", "puck.brain.turn.interrupt", "puck.brain.toolResult", "puck.brain.retire":
+	case "thread.create", "thread.bootstrap", "turn.start", "turn.interrupt", "interaction.respond", "puck.brain.ensure", "puck.brain.turn.start", "puck.brain.turn.interrupt", "puck.brain.toolResult", "puck.brain.retire":
 		return true
 	default:
 		return false
@@ -259,7 +263,7 @@ func puckWriteMethod(method string) bool {
 
 func puckMethodAllowed(method string) bool {
 	switch method {
-	case "device.list", "thread.list", "thread.read", "thread.history", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "thread.create", "turn.start", "turn.interrupt", "interaction.respond",
+	case "device.list", "thread.list", "thread.read", "thread.history", "thread.cache.read", "thread.cache.watch", "thread.cache.unwatch", "thread.cache.promote", "thread.cache.touch", "thread.create", "thread.bootstrap", "turn.start", "turn.interrupt", "interaction.respond",
 		"puck.brain.ensure", "puck.brain.turn.start", "puck.brain.turn.interrupt", "puck.brain.toolResult", "puck.brain.status", "puck.brain.retire":
 		return true
 	default:
@@ -331,6 +335,27 @@ func (s *Server) forwardPuck(ctx context.Context, origin Origin, deviceID, metho
 		s.mu.Unlock()
 		return puckRejected("FEATURE_DISABLED", "Puck brain is disabled on target device")
 	}
+	if method == "puck.brain.ensure" {
+		var contract struct {
+			ToolsetVersion int `json:"toolsetVersion"`
+		}
+		if json.Unmarshal(params, &contract) != nil || contract.ToolsetVersion < 1 {
+			s.mu.Unlock()
+			return puckRejected("INVALID_ARGUMENT", "valid Puck toolset version is required")
+		}
+		if agent.puckToolsetVersion < contract.ToolsetVersion {
+			s.mu.Unlock()
+			return puckRejected("PROTOCOL_UNSUPPORTED", "brain host does not support the requested Puck toolset")
+		}
+	}
+	if method == "thread.bootstrap" && !agent.capabilities["threadBootstrap"] {
+		s.mu.Unlock()
+		return puckRejected("PROTOCOL_UNSUPPORTED", "target Agent does not support atomic thread bootstrap")
+	}
+	if method == "turn.start" && !agent.capabilities["send"] {
+		s.mu.Unlock()
+		return puckRejected("PROTOCOL_UNSUPPORTED", "target Agent does not support sending turns")
+	}
 	if executionPolicyUnenforceable(method, origin, agent.capabilities) {
 		s.mu.Unlock()
 		return puckRejected("EXECUTION_POLICY_UNENFORCEABLE", "target Agent cannot prove on-request execution policy")
@@ -357,5 +382,5 @@ func (s *Server) forwardPuck(ctx context.Context, origin Origin, deviceID, metho
 }
 
 func executionPolicyUnenforceable(method string, origin Origin, capabilities map[string]bool) bool {
-	return (method == "thread.create" || method == "turn.start") && !capabilities["executionPolicy"] && origin.Trigger != "user_decision"
+	return (method == "thread.create" || method == "thread.bootstrap" || method == "turn.start") && !capabilities["executionPolicy"] && origin.Trigger != "user_decision"
 }

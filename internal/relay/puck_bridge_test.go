@@ -18,12 +18,16 @@ func TestPuckBridgeWhitelistsMethodsAndInjectsTrustedOrigin(t *testing.T) {
 	agent := dialTest(t, server.URL, "")
 	hello := agentHello()
 	hello["capabilities"].(map[string]bool)["puckBrain"] = true
+	hello["puckToolsetVersion"] = 2
 	sendJSON(t, agent, hello)
 	readJSON(t, agent)
 
 	bridge := r.PuckBridge()
 	if bridge == nil {
 		t.Fatal("ready Relay has no Puck bridge")
+	}
+	if devices := bridge.Devices(); len(devices) != 1 || devices[0]["puckToolsetVersion"] != 2 {
+		t.Fatalf("devices=%+v", devices)
 	}
 	if got := bridge.Forward(context.Background(), Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool"}, "mock-mac", "thread.archive.update", json.RawMessage(`{}`)); got.Error == nil || got.Error.Code != "UNAUTHORIZED" {
 		t.Fatalf("forbidden method: %+v", got)
@@ -123,6 +127,22 @@ func TestWebCannotCallPuckBrainMethods(t *testing.T) {
 	response := readJSON(t, web)
 	if response["outcome"] != "rejected" || response["error"].(map[string]any)["code"] != "UNAUTHORIZED" {
 		t.Fatalf("brain method response: %+v", response)
+	}
+}
+
+func TestPuckBridgeRejectsBrainToolsetNewerThanAgent(t *testing.T) {
+	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	agent := dialTest(t, server.URL, "")
+	hello := agentHello()
+	hello["capabilities"].(map[string]bool)["puckBrain"] = true
+	hello["puckToolsetVersion"] = 1
+	sendJSON(t, agent, hello)
+	readJSON(t, agent)
+	response := r.PuckBridge().Forward(context.Background(), Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool"}, "mock-mac", "puck.brain.ensure", json.RawMessage(`{"assistantId":"assistant-a","name":"Puck","cwd":"/fixture","developerInstructions":"guard","toolsetVersion":2}`))
+	if response.Error == nil || response.Error.Code != "PROTOCOL_UNSUPPORTED" {
+		t.Fatalf("response=%+v", response)
 	}
 }
 

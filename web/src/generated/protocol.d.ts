@@ -261,6 +261,7 @@ export interface AgentHello {
   deviceName: Id;
   agentEpoch: Id;
   adapterVersion: Id;
+  puckToolsetVersion?: number;
   taskStoreId?: Id;
   capabilities: Capabilities;
 }
@@ -368,6 +369,7 @@ export interface DeviceStatus {
   deviceId: Id;
   agentEpoch?: Id;
   taskStoreId?: Id;
+  puckToolsetVersion?: number;
   agentOnline: boolean;
   codexReady: boolean;
   capabilities?: Capabilities;

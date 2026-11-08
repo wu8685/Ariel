@@ -112,6 +112,16 @@ func TestBrainHostPublishesCanonicalMutationToolSchemas(t *testing.T) {
 	}
 }
 
+func TestBrainHostRejectsUnknownFutureToolset(t *testing.T) {
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) {
+		return newFakeBrainProcess(), nil
+	}})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 3}); err == nil {
+		t.Fatal("future toolset was accepted")
+	}
+}
+
 func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
 	first, second := newFakeBrainProcess(), newFakeBrainProcess()
 	starts := 0

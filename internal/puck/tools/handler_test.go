@@ -14,7 +14,7 @@ type fakeOrchestrator struct {
 }
 
 func (f *fakeOrchestrator) Devices() []map[string]any {
-	return []map[string]any{{"deviceId": "exec-a", "agentOnline": true}}
+	return []map[string]any{{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}}}
 }
 func (f *fakeOrchestrator) Forward(_ context.Context, origin Origin, _ string, method string, params json.RawMessage) Result {
 	f.calls = append(f.calls, method)
@@ -22,14 +22,17 @@ func (f *fakeOrchestrator) Forward(_ context.Context, origin Origin, _ string, m
 	if f.fn != nil {
 		return f.fn(method, params)
 	}
+	if method == "thread.bootstrap" {
+		return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a", "turnId": "turn-a"}}
+	}
 	return Result{Outcome: "accepted", Data: map[string]any{}}
 }
 
 func TestAuthorizedTaskCarriesConsumedUserDecisionOrigin(t *testing.T) {
 	orchestrator := &fakeOrchestrator{}
 	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
-	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"task-a"}`)})
-	if !result.Success || len(orchestrator.origins) != 2 {
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001"}`)})
+	if !result.Success || len(orchestrator.origins) != 1 {
 		t.Fatalf("result=%+v origins=%+v", result, orchestrator.origins)
 	}
 	for _, origin := range orchestrator.origins {
@@ -95,21 +98,21 @@ func TestStartTaskIsIdempotentAndUnknownIsNeverReplayed(t *testing.T) {
 	orchestrator := &fakeOrchestrator{}
 	backend := &fakeBackend{tasks: map[string]Task{}}
 	handler := New(orchestrator, backend)
-	call := Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"task-a"}`)}
+	call := Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001"}`)}
 	first := handler.Execute(context.Background(), call)
 	second := handler.Execute(context.Background(), call)
-	if !first.Success || !second.Success || len(orchestrator.calls) != 2 || orchestrator.calls[0] != "thread.create" || orchestrator.calls[1] != "turn.start" {
+	if !first.Success || !second.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" {
 		t.Fatalf("first=%+v second=%+v calls=%v", first, second, orchestrator.calls)
 	}
 
 	unknownOrchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
-		if method == "thread.create" {
+		if method == "thread.bootstrap" {
 			return Result{Outcome: "unknown", Code: "OUTCOME_UNKNOWN"}
 		}
 		return Result{Outcome: "accepted"}
 	}}
 	unknown := New(unknownOrchestrator, &fakeBackend{tasks: map[string]Task{}})
-	if result := unknown.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"task-b"}`)}); result.Success || result.Code != "OUTCOME_UNKNOWN" {
+	if result := unknown.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000002"}`)}); result.Success || result.Code != "OUTCOME_UNKNOWN" {
 		t.Fatalf("unknown result=%+v", result)
 	}
 	if len(unknownOrchestrator.calls) != 1 {
@@ -135,7 +138,7 @@ func TestToolsRequireTrustedAssistantAndBoundResults(t *testing.T) {
 func TestSensitiveToolReturnsAuthorizationWithoutForwarding(t *testing.T) {
 	orchestrator := &fakeOrchestrator{}
 	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
-	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"deploy","prompt":"deploy","riskTags":["deploy"],"clientTaskId":"task-a"}`)})
+	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"deploy","prompt":"deploy","riskTags":["deploy"],"clientTaskId":"00000000-0000-4000-8000-000000000001"}`)})
 	if result.Code != "AUTHORIZATION_REQUIRED" || result.AuthorizationID != "authorization-a" || len(orchestrator.calls) != 0 {
 		t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
 	}
@@ -189,5 +192,95 @@ func TestSendTurnSupportsDirectThreadLocator(t *testing.T) {
 	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(`{"deviceId":"exec-a","threadId":"thread-a","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002"}`)})
 	if !result.Success {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestSendTurnResolvesOwnedTaskAndAppliesRiskPolicy(t *testing.T) {
+	task := Task{ID: "task-a", AssistantID: "assistant-a", DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-a"}
+	backend := &fakeBackend{tasks: map[string]Task{"task-a": task}}
+	orchestrator := &fakeOrchestrator{}
+	handler := New(orchestrator, backend)
+	risky := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(`{"taskId":"task-a","text":"deploy","riskTags":["deploy"],"clientMessageId":"00000000-0000-4000-8000-000000000003"}`)})
+	if risky.Code != "AUTHORIZATION_REQUIRED" || len(orchestrator.calls) != 0 {
+		t.Fatalf("risky=%+v calls=%v", risky, orchestrator.calls)
+	}
+	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000004"}`)})
+	if !result.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "turn.start" {
+		t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+	}
+}
+
+func TestMutationsFailClosedWhenTargetCapabilityIsMissing(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	orchestrator.fn = func(string, json.RawMessage) Result { return Result{Outcome: "accepted"} }
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	orchestratorWithoutCapabilities := &capabilitylessOrchestrator{fakeOrchestrator: orchestrator}
+	handler = New(orchestratorWithoutCapabilities, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000005"}`)})
+	if result.Code != "PROTOCOL_UNSUPPORTED" || len(orchestrator.calls) != 0 {
+		t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+	}
+}
+
+func TestMutationDoesNotQueueOrReplayWhenDeviceIsOffline(t *testing.T) {
+	orchestrator := &offlineOrchestrator{fakeOrchestrator: &fakeOrchestrator{}}
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	call := Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000008"}`)}
+	for range 2 {
+		result := handler.ExecuteAuthorized(context.Background(), call)
+		if result.Code != "DEVICE_OFFLINE" {
+			t.Fatalf("result=%+v", result)
+		}
+	}
+	if len(orchestrator.calls) != 0 {
+		t.Fatalf("offline mutation was forwarded: %v", orchestrator.calls)
+	}
+}
+
+type capabilitylessOrchestrator struct{ *fakeOrchestrator }
+
+func (f *capabilitylessOrchestrator) Devices() []map[string]any {
+	return []map[string]any{{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{}}}
+}
+
+type offlineOrchestrator struct{ *fakeOrchestrator }
+
+func (f *offlineOrchestrator) Devices() []map[string]any {
+	return []map[string]any{{"deviceId": "exec-a", "agentOnline": false, "capabilities": map[string]bool{"threadBootstrap": true}}}
+}
+
+func TestMutationFlowCreatesTaskSendsFollowUpAndPreservesReadTools(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
+		switch method {
+		case "thread.bootstrap":
+			return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a", "turnId": "turn-a"}}
+		case "turn.start":
+			return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-b"}}
+		case "thread.list":
+			return Result{Outcome: "accepted", Data: map[string]any{"threads": []any{}}}
+		default:
+			return Result{Outcome: "rejected", Code: "INVALID_ARGUMENT"}
+		}
+	}}
+	backend := &fakeBackend{tasks: map[string]Task{}}
+	handler := New(orchestrator, backend)
+	start := Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000006"}`)}
+	if result := handler.ExecuteAuthorized(context.Background(), start); !result.Success || result.Data["threadId"] != "thread-a" {
+		t.Fatalf("start=%+v", result)
+	}
+	if result := handler.Execute(context.Background(), start); !result.Success || len(orchestrator.calls) != 1 {
+		t.Fatalf("idempotent start=%+v calls=%v", result, orchestrator.calls)
+	}
+	send := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(`{"taskId":"00000000-0000-4000-8000-000000000006","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000007"}`)})
+	if !send.Success || send.Data["turnId"] != "turn-b" {
+		t.Fatalf("send=%+v", send)
+	}
+	status := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "get_task_status", Arguments: json.RawMessage(`{"taskId":"00000000-0000-4000-8000-000000000006"}`)})
+	if !status.Success || status.Data["status"] != "running" {
+		t.Fatalf("status=%+v", status)
+	}
+	read := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "list_threads", Arguments: json.RawMessage(`{"deviceId":"exec-a","limit":1}`)})
+	if !read.Success {
+		t.Fatalf("read=%+v", read)
 	}
 }

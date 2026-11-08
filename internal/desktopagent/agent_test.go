@@ -820,6 +820,46 @@ func TestAgentHeartbeatDropsSilentRelay(t *testing.T) {
 	}
 }
 
+func TestAgentHelloDeclaresPuckContractAndAtomicBootstrapCapabilities(t *testing.T) {
+	helloSeen := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var hello map[string]any
+		if wsjson.Read(ctx, conn, &hello) != nil {
+			return
+		}
+		helloSeen <- hello
+		_ = wsjson.Write(ctx, conn, map[string]any{"type": "hello.ok", "v": 1, "connectionId": "c", "relayEpoch": "e"})
+		for {
+			var ignored map[string]any
+			if wsjson.Read(ctx, conn, &ignored) != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	service := NewService(fakeHistory{}, nil)
+	service.SetThreadBootstrapper(&fakeBootstrapper{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithService(ctx, Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http"), Token: "test-secret", DeviceID: "real-mac", DeviceName: "Real Mac", Binary: "/fixture/codex", PuckBrain: true, HeartbeatInterval: time.Hour}, service)
+	}()
+	hello := <-helloSeen
+	caps := hello["capabilities"].(map[string]any)
+	if hello["puckToolsetVersion"] != float64(2) || caps["threadBootstrap"] != true || caps["executionPolicy"] == true || caps["puckBrain"] != true {
+		t.Fatalf("hello=%+v", hello)
+	}
+	cancel()
+	<-done
+}
+
 func TestTransportReconnectKeepsCodexFollowerWarm(t *testing.T) {
 	var connections atomic.Int32
 	var opens atomic.Int32

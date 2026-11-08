@@ -1,6 +1,6 @@
 # 0134 Puck `start_task` / `send_turn` 契约修复
 
-状态：Approved（2026-11-08，用户在第 37 轮明确确认）
+状态：Implemented（2026-11-08；Go／race／vet／build、Web 412 项与 build 已验；未部署）
 
 ## 1. 问题
 
@@ -62,4 +62,3 @@ Puck 的只读工具可用，但 `start_task` 与 `send_turn` 在到达执行主
 
 实现完成后运行相关测试、race、`go vet ./...` 与全量 build。只 push 修复分支；本轮不
 merge、不部署、不创建 PR。
-

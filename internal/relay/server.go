@@ -132,23 +132,24 @@ type subscription struct {
 }
 
 type peer struct {
-	documentAssets bool // current connection only, protected by Server.mu
-	settingsOptIn  bool // protected by Server.mu
-	taskState      atomic.Pointer[taskPeerState]
-	taskStoreID    string
-	taskCredential *TaskDeviceCredential
-	conn           *websocket.Conn
-	id             string
-	role           string
-	deviceID       string
-	deviceName     string
-	agentEpoch     string
-	adapterVersion string
-	capabilities   map[string]bool
-	writeMu        sync.Mutex
-	cacheSendMu    sync.Mutex
-	cachePending   map[string]map[string]any
-	cacheWake      chan struct{}
+	documentAssets     bool // current connection only, protected by Server.mu
+	settingsOptIn      bool // protected by Server.mu
+	taskState          atomic.Pointer[taskPeerState]
+	taskStoreID        string
+	taskCredential     *TaskDeviceCredential
+	conn               *websocket.Conn
+	id                 string
+	role               string
+	deviceID           string
+	deviceName         string
+	agentEpoch         string
+	adapterVersion     string
+	puckToolsetVersion int
+	capabilities       map[string]bool
+	writeMu            sync.Mutex
+	cacheSendMu        sync.Mutex
+	cachePending       map[string]map[string]any
+	cacheWake          chan struct{}
 }
 
 func New(cfg Config) (*Server, error) {
@@ -392,15 +393,16 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hello struct {
-		Type           string          `json:"type"`
-		Role           string          `json:"role"`
-		Token          string          `json:"token"`
-		DeviceID       string          `json:"deviceId"`
-		DeviceName     string          `json:"deviceName"`
-		AgentEpoch     string          `json:"agentEpoch"`
-		AdapterVersion string          `json:"adapterVersion"`
-		Capabilities   map[string]bool `json:"capabilities"`
-		TaskStoreID    string          `json:"taskStoreId"`
+		Type               string          `json:"type"`
+		Role               string          `json:"role"`
+		Token              string          `json:"token"`
+		DeviceID           string          `json:"deviceId"`
+		DeviceName         string          `json:"deviceName"`
+		AgentEpoch         string          `json:"agentEpoch"`
+		AdapterVersion     string          `json:"adapterVersion"`
+		PuckToolsetVersion int             `json:"puckToolsetVersion"`
+		Capabilities       map[string]bool `json:"capabilities"`
+		TaskStoreID        string          `json:"taskStoreId"`
 	}
 	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || (hello.Role == "web" && origin == "") {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
@@ -411,7 +413,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
-	p := &peer{conn: conn, id: rand.Text(), role: hello.Role, deviceID: hello.DeviceID, deviceName: hello.DeviceName, agentEpoch: hello.AgentEpoch, adapterVersion: hello.AdapterVersion, capabilities: hello.Capabilities}
+	p := &peer{conn: conn, id: rand.Text(), role: hello.Role, deviceID: hello.DeviceID, deviceName: hello.DeviceName, agentEpoch: hello.AgentEpoch, adapterVersion: hello.AdapterVersion, puckToolsetVersion: hello.PuckToolsetVersion, capabilities: hello.Capabilities}
 	if p.role == "web" {
 		p.cachePending = map[string]map[string]any{}
 		p.cacheWake = make(chan struct{}, 1)
@@ -732,6 +734,9 @@ func (s *Server) currentDeviceStatus(deviceID string, departed *peer) map[string
 		if store := current.currentTaskStoreID(); store != "" {
 			status["taskStoreId"] = store
 		}
+		if current.puckToolsetVersion > 0 {
+			status["puckToolsetVersion"] = current.puckToolsetVersion
+		}
 		return status
 	}
 	status := map[string]any{"type": "event", "v": 1, "event": "device.status", "deviceId": deviceID, "agentOnline": false, "codexReady": false}
@@ -862,6 +867,9 @@ func (s *Server) handleMessage(ctx context.Context, p *peer, body []byte) bool {
 	devices := make([]map[string]any, 0, len(s.agents))
 	for _, agent := range s.agents {
 		device := map[string]any{"deviceId": agent.deviceID, "deviceName": agent.deviceName, "agentOnline": true, "codexReady": agent.capabilities["codexReady"], "capabilities": agent.currentCapabilities(), "agentEpoch": agent.agentEpoch, "adapterVersion": agent.adapterVersion}
+		if agent.puckToolsetVersion > 0 {
+			device["puckToolsetVersion"] = agent.puckToolsetVersion
+		}
 		if store := agent.currentTaskStoreID(); store != "" {
 			device["taskStoreId"] = store
 		}

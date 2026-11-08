@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 type brainFrame = appserver.IncomingFrame
@@ -97,7 +98,7 @@ func (h *BrainHost) Ready() bool {
 }
 
 func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, error) {
-	if !h.Ready() || request.AssistantID == "" || request.Name == "" || request.DeveloperInstructions == "" || request.ToolsetVersion < 1 || strings.ContainsAny(request.AssistantID, `/\\`) {
+	if !h.Ready() || request.AssistantID == "" || request.Name == "" || request.DeveloperInstructions == "" || request.ToolsetVersion < 1 || request.ToolsetVersion > toolcontract.Version || strings.ContainsAny(request.AssistantID, `/\\`) {
 		return "", errors.New("FEATURE_DISABLED")
 	}
 	workspace := filepath.Join(h.cfg.Root, request.AssistantID)
@@ -138,7 +139,7 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 func brainThreadParams(cwd string, request BrainEnsure) map[string]any {
 	params := map[string]any{
 		"cwd": cwd, "ephemeral": false, "serviceName": "ariel-puck", "threadSource": "chatgpt_hidden",
-		"developerInstructions": request.DeveloperInstructions, "dynamicTools": puckDynamicTools(), "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "read-only",
+		"developerInstructions": request.DeveloperInstructions, "dynamicTools": puckDynamicTools(request.ToolsetVersion), "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "read-only",
 		"config": map[string]any{"features.code_mode_host": true, "tools.shell": false, "tools.unified_exec": false, "web_search": "disabled", "include_apply_patch_tool": false},
 	}
 	if request.Model != "" {
@@ -147,13 +148,8 @@ func brainThreadParams(cwd string, request BrainEnsure) map[string]any {
 	return params
 }
 
-func puckDynamicTools() []map[string]any {
-	names := []string{"list_devices", "list_threads", "read_thread", "start_task", "send_turn", "interrupt", "respond_interaction", "get_task_status", "request_authorization", "ask_user", "share_result", "react"}
-	tools := make([]map[string]any, 0, len(names))
-	for _, name := range names {
-		tools = append(tools, map[string]any{"name": name, "description": "Ariel Puck tool: " + name, "inputSchema": map[string]any{"type": "object", "additionalProperties": true}})
-	}
-	return tools
+func puckDynamicTools(version int) []map[string]any {
+	return toolcontract.DynamicTools(version)
 }
 
 func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text string, images []string, model, effort string) (string, error) {

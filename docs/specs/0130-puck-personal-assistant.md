@@ -434,7 +434,7 @@ sequenceDiagram
 | `list_devices` | — | 本助理允许范围内的设备、在线、`codexReady`、能力 | `device.list` + 作用域过滤 |
 | `list_threads` | `deviceId`, `search?`, `limit≤50` | 会话元数据；brain thread 不出现 | `thread.list` |
 | `read_thread` | `deviceId`, `threadId`, `turns≤4` | 最近 turn 有界摘要、runtime、pendingInteractions | `thread.cache.read` 优先，回退 `thread.read`；越界读取需授权（B1） |
-| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId` | 新建执行 thread 并发首个 turn，写任务记录 | 策略引擎；放行后 `thread.create` + `turn.start` |
+| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId` | 新建执行 thread 并发首个 turn，写任务记录 | 策略引擎；放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射） |
 | `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId` | 续投同一执行 thread | 策略引擎（B2／B5／B6）→ `turn.start` |
 | `interrupt` | `taskId`／`threadId`, `turnId`, `reason` | 精确停止 | 策略引擎（B2／B3）→ `turn.interrupt` |
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
@@ -456,7 +456,7 @@ sequenceDiagram
 
 1. Relay 核心在 `internal/relay` 暴露窄接口（示意）：`Devices()`、`Forward(ctx, Origin, deviceID, method, payload) Response`、`Watch(ctx, Origin, threadKey) (<-chan Event, cancel)`、`DeviceStatus() <-chan Event`、`BrainThreads(set)`、`BrainEvents() <-chan BrainEvent`（Agent 上送的 `puck.brain.*` 事件，附连接认证的 `deviceId`）。实现复用现有 `forwardRequest`、路由表与 watcher，助理被视为一个**进程内虚拟客户端**（固定 `clientKind=puck`），不经过 WebSocket、不需要 API key、不占用 Web 连接数。
 2. `Origin` 由模块按调用来源填写：`{kind:"puck", assistantId, trigger: user_message|tool|routine|event}`；Relay 据此做来源标注与门禁，不信任 Brain 传入的任何身份字段。
-3. 方法白名单（最小权限）不变：`device.list`、`thread.list`、`thread.read`、`thread.history`（有界）、`thread.cache.read/watch/unwatch/promote/touch`、`thread.create`、`turn.start`、`turn.interrupt`、`interaction.respond`（门禁见 §7.4），以及仅对 brain 设备开放的 `puck.brain.*`（§4.3）。其他方法（`auth.pair.*`、`thread.archive.*`、`thread.name.update`、`thread.pin.update`、`queue.*`、`file.context.*`、`workspace.*`、编辑与设置写入）在接口层直接拒绝。
+3. 方法白名单（最小权限）：`device.list`、`thread.list`、`thread.read`、`thread.history`（有界）、`thread.cache.read/watch/unwatch/promote/touch`、`thread.bootstrap`、`turn.start`、`turn.interrupt`、`interaction.respond`（门禁见 §7.4），以及仅对 brain 设备开放的 `puck.brain.*`（§4.3）。`thread.create` 仅保留旧内部兼容，不再用于 `start_task`。其他方法（`auth.pair.*`、`thread.archive.*`、`thread.name.update`、`thread.pin.update`、`queue.*`、`file.context.*`、`workspace.*`、编辑与设置写入）在接口层直接拒绝。
 4. 独立配额：写 120／分钟、watch 256、在途 32；用尽 `OVERLOADED`，不影响 Web／Agent。
 5. 各助理的设备／目录作用域在模块内执行；接口层只做模块级白名单与 brain thread 拦截（第二道防线）。
 

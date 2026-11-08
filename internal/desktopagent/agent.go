@@ -19,6 +19,7 @@ import (
 	"github.com/wu8685/Ariel/internal/codex/desktopipc"
 	"github.com/wu8685/Ariel/internal/filecontext"
 	"github.com/wu8685/Ariel/internal/modelsettings"
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 	"github.com/wu8685/Ariel/internal/wsheartbeat"
 	"github.com/wu8685/Ariel/protocol"
 )
@@ -342,6 +343,9 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		capabilities["threadPin"] = service.ThreadPinEnabled()
 	}
 	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": agentEpoch, "adapterVersion": "desktop-ipc-0.160.0", "capabilities": capabilities}
+	if a.brain != nil {
+		hello["puckToolsetVersion"] = toolcontract.Version
+	}
 	if cfg.TasksEnabled {
 		capabilities["taskManagement"] = a.tasks.managementReady()
 		capabilities["taskExecution"] = a.tasks.executionReady(ctx)

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 const MaxResultBytes = 64 << 10
@@ -32,12 +34,13 @@ type Call struct {
 }
 
 type ToolResult struct {
-	Success         bool           `json:"success"`
-	Code            string         `json:"code,omitempty"`
-	Message         string         `json:"message,omitempty"`
-	Data            map[string]any `json:"data,omitempty"`
-	AuthorizationID string         `json:"authorizationId,omitempty"`
-	Truncated       bool           `json:"truncated,omitempty"`
+	Success         bool                      `json:"success"`
+	Code            string                    `json:"code,omitempty"`
+	Message         string                    `json:"message,omitempty"`
+	Details         []toolcontract.FieldError `json:"details,omitempty"`
+	Data            map[string]any            `json:"data,omitempty"`
+	AuthorizationID string                    `json:"authorizationId,omitempty"`
+	Truncated       bool                      `json:"truncated,omitempty"`
 }
 
 type Action struct {
@@ -103,7 +106,7 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 	case "start_task":
 		result = h.startTask(ctx, call, authorized)
 	case "send_turn":
-		result = h.sendTurn(ctx, call)
+		result = h.sendTurn(ctx, call, authorized)
 	case "interrupt":
 		result = h.interrupt(ctx, call)
 	case "respond_interaction":
@@ -143,15 +146,19 @@ func (h *Handler) forward(ctx context.Context, call Call, method string) ToolRes
 }
 
 func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) ToolResult {
-	var input struct {
-		DeviceID, CWD, Goal, Prompt, ClientTaskID string
-		RiskTags                                  []string
-	}
-	if json.Unmarshal(call.Arguments, &input) != nil || input.DeviceID == "" || input.CWD == "" || input.ClientTaskID == "" || input.Prompt == "" {
-		return toolError("INVALID_ARGUMENT", "invalid start_task arguments")
+	input, details := toolcontract.DecodeStartTask(call.Arguments)
+	if len(details) != 0 {
+		return invalidArguments("invalid start_task arguments", details)
 	}
 	if existing, err := h.backend.Task(ctx, call.AssistantID, input.ClientTaskID); err == nil {
 		return ToolResult{Success: true, Data: taskData(existing)}
+	}
+	online, supported := h.deviceCapability(input.DeviceID, "threadBootstrap")
+	if !online {
+		return toolError("DEVICE_OFFLINE", "target device is offline")
+	}
+	if !supported {
+		return toolError("PROTOCOL_UNSUPPORTED", "target device does not support atomic thread bootstrap")
 	}
 	if !authorized {
 		authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, Arguments: call.Arguments})
@@ -169,19 +176,15 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	if authorized {
 		requestOrigin.Trigger = "user_decision"
 	}
-	created := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "thread.create", mustJSON(map[string]any{"cwd": input.CWD}))
+	created := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "thread.bootstrap", mustJSON(map[string]any{"cwd": input.CWD, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
 	if created.Outcome != "accepted" {
 		return fromResult(created)
 	}
 	threadID, _ := created.Data["threadId"].(string)
-	if threadID == "" {
-		threadID = "pending-" + input.ClientTaskID
+	turnID, _ := created.Data["turnId"].(string)
+	if threadID == "" || turnID == "" {
+		return toolError("OUTCOME_UNKNOWN", "thread bootstrap response lacks authoritative identities")
 	}
-	turn := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "turn.start", mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
-	if turn.Outcome != "accepted" {
-		return fromResult(turn)
-	}
-	turnID, _ := turn.Data["turnId"].(string)
 	task := Task{ID: input.ClientTaskID, AssistantID: call.AssistantID, DeviceID: input.DeviceID, CWD: input.CWD, NativeThreadID: threadID, Goal: input.Goal, Status: "running", LastTurnID: turnID}
 	if err := h.backend.SaveTask(ctx, task); err != nil {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
@@ -189,17 +192,64 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	return ToolResult{Success: true, Data: taskData(task)}
 }
 
-func (h *Handler) sendTurn(ctx context.Context, call Call) ToolResult {
-	var input struct{ TaskID, Text, ClientMessageID string }
-	if json.Unmarshal(call.Arguments, &input) != nil || input.TaskID == "" || input.Text == "" || input.ClientMessageID == "" {
-		return toolError("INVALID_ARGUMENT", "invalid send_turn arguments")
+func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) ToolResult {
+	input, details := toolcontract.DecodeSendTurn(call.Arguments)
+	if len(details) != 0 {
+		return invalidArguments("invalid send_turn arguments", details)
 	}
-	task, err := h.backend.Task(ctx, call.AssistantID, input.TaskID)
-	if err != nil {
-		return toolError("PUCK_ASSISTANT_NOT_FOUND", "task not found")
+	deviceID, threadID := input.DeviceID, input.ThreadID
+	if input.TaskID != "" {
+		task, err := h.backend.Task(ctx, call.AssistantID, input.TaskID)
+		if err != nil {
+			return toolError("PUCK_ASSISTANT_NOT_FOUND", "task not found")
+		}
+		deviceID, threadID = task.DeviceID, task.NativeThreadID
 	}
-	params := mustJSON(map[string]any{"threadId": task.NativeThreadID, "clientMessageId": input.ClientMessageID, "text": input.Text})
-	return fromResult(h.orchestrator.Forward(ctx, origin(call.AssistantID), task.DeviceID, "turn.start", params))
+	online, supported := h.deviceCapability(deviceID, "send")
+	if !online {
+		return toolError("DEVICE_OFFLINE", "target device is offline")
+	}
+	if !supported {
+		return toolError("PROTOCOL_UNSUPPORTED", "target device does not support sending turns")
+	}
+	if !authorized {
+		authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, Arguments: call.Arguments})
+		if err != nil {
+			if errors.Is(err, ErrAuthorizationRequired) {
+				return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
+			}
+			return toolError("PUCK_UNAVAILABLE", err.Error())
+		}
+		if authorizationID != "" {
+			return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
+		}
+	}
+	requestOrigin := origin(call.AssistantID)
+	if authorized {
+		requestOrigin.Trigger = "user_decision"
+	}
+	params := mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientMessageID, "text": input.Text})
+	return fromResult(h.orchestrator.Forward(ctx, requestOrigin, deviceID, "turn.start", params))
+}
+
+func (h *Handler) deviceCapability(deviceID, capability string) (bool, bool) {
+	for _, device := range h.orchestrator.Devices() {
+		if device["deviceId"] != deviceID {
+			continue
+		}
+		if device["agentOnline"] != true {
+			return false, false
+		}
+		switch capabilities := device["capabilities"].(type) {
+		case map[string]bool:
+			return true, capabilities[capability]
+		case map[string]any:
+			supported, _ := capabilities[capability].(bool)
+			return true, supported
+		}
+		return true, false
+	}
+	return false, false
 }
 
 func (h *Handler) interrupt(ctx context.Context, call Call) ToolResult {
@@ -256,6 +306,10 @@ func fromResult(result Result) ToolResult {
 }
 
 func toolError(code, message string) ToolResult { return ToolResult{Code: code, Message: message} }
+
+func invalidArguments(message string, details []toolcontract.FieldError) ToolResult {
+	return ToolResult{Code: "INVALID_ARGUMENT", Message: message, Details: details}
+}
 
 func mustJSON(value any) json.RawMessage {
 	encoded, _ := json.Marshal(value)

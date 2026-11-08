@@ -69,3 +69,92 @@ func TestCanonicalDecodersReturnTypedRequests(t *testing.T) {
 	}
 }
 
+func TestStartTaskValidationMatrix(t *testing.T) {
+	valid := map[string]any{
+		"deviceId": "exec-a", "cwd": "/fixture", "goal": "test", "prompt": "run",
+		"riskTags": []any{}, "clientTaskId": "00000000-0000-4000-8000-000000000001",
+	}
+	for _, field := range []string{"deviceId", "cwd", "goal", "prompt", "riskTags", "clientTaskId"} {
+		t.Run("missing "+field, func(t *testing.T) {
+			input := cloneMap(valid)
+			delete(input, field)
+			_, details := DecodeStartTask(marshal(input))
+			if len(details) == 0 || details[0].Field != field {
+				t.Fatalf("details=%+v", details)
+			}
+		})
+	}
+	tests := []struct {
+		name, field string
+		mutate      func(map[string]any)
+	}{
+		{"relative cwd", "cwd", func(v map[string]any) { v["cwd"] = "relative" }},
+		{"wrong prompt type", "prompt", func(v map[string]any) { v["prompt"] = 7 }},
+		{"long prompt", "prompt", func(v map[string]any) { v["prompt"] = string(make([]byte, 65537)) }},
+		{"wrong risk type", "riskTags", func(v map[string]any) { v["riskTags"] = "deploy" }},
+		{"duplicate risk", "riskTags[1]", func(v map[string]any) { v["riskTags"] = []any{"deploy", "deploy"} }},
+		{"bad uuid", "clientTaskId", func(v map[string]any) { v["clientTaskId"] = "task-a" }},
+		{"attachment unsupported", "attachments", func(v map[string]any) { v["attachments"] = []any{} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := cloneMap(valid)
+			test.mutate(input)
+			_, details := DecodeStartTask(marshal(input))
+			if len(details) == 0 || details[0].Field != test.field {
+				t.Fatalf("details=%+v", details)
+			}
+		})
+	}
+}
+
+func TestSendTurnValidationMatrix(t *testing.T) {
+	valid := map[string]any{
+		"taskId": "task-a", "text": "continue", "riskTags": []any{},
+		"clientMessageId": "00000000-0000-4000-8000-000000000002",
+	}
+	for _, field := range []string{"text", "riskTags", "clientMessageId"} {
+		t.Run("missing "+field, func(t *testing.T) {
+			input := cloneMap(valid)
+			delete(input, field)
+			_, details := DecodeSendTurn(marshal(input))
+			if len(details) == 0 || details[0].Field != field {
+				t.Fatalf("details=%+v", details)
+			}
+		})
+	}
+	tests := []struct {
+		name, field string
+		mutate      func(map[string]any)
+	}{
+		{"empty text", "text", func(v map[string]any) { v["text"] = "" }},
+		{"long text", "text", func(v map[string]any) { v["text"] = string(make([]byte, 65537)) }},
+		{"device without thread", "threadId", func(v map[string]any) { delete(v, "taskId"); v["deviceId"] = "exec-a" }},
+		{"thread without device", "deviceId", func(v map[string]any) { delete(v, "taskId"); v["threadId"] = "thread-a" }},
+		{"unknown risk", "riskTags[0]", func(v map[string]any) { v["riskTags"] = []any{"unknown"} }},
+		{"unknown field", "queue", func(v map[string]any) { v["queue"] = true }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := cloneMap(valid)
+			test.mutate(input)
+			_, details := DecodeSendTurn(marshal(input))
+			if len(details) == 0 || details[0].Field != test.field {
+				t.Fatalf("details=%+v", details)
+			}
+		})
+	}
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	copy := make(map[string]any, len(input))
+	for key, value := range input {
+		copy[key] = value
+	}
+	return copy
+}
+
+func marshal(value any) json.RawMessage {
+	body, _ := json.Marshal(value)
+	return body
+}

@@ -75,6 +75,7 @@
         "token": { "type": "string", "minLength": 1 },
         "deviceId": { "$ref": "#/$defs/id" }, "deviceName": { "$ref": "#/$defs/id" },
         "agentEpoch": { "$ref": "#/$defs/id" }, "adapterVersion": { "$ref": "#/$defs/id" },
+        "puckToolsetVersion": { "type": "integer", "minimum": 1 },
         "taskStoreId": { "$ref": "#/$defs/id" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }
@@ -687,6 +688,7 @@
         "deviceId": { "$ref": "#/$defs/id" },
         "agentEpoch": { "$ref": "#/$defs/id" },
         "taskStoreId": { "$ref": "#/$defs/id" },
+        "puckToolsetVersion": { "type": "integer", "minimum": 1 },
         "agentOnline": { "type": "boolean" }, "codexReady": { "type": "boolean" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }
