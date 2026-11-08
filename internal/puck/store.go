@@ -208,8 +208,8 @@ func (s *Store) SetAssistantBrain(ctx context.Context, assistantID, threadID, st
 }
 
 func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,persona=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
-		a.Name, a.Avatar, a.Description, a.Persona, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), a.Status, nowText(time.Time{}), a.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,persona=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,policy=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
+		a.Name, a.Avatar, a.Description, a.Persona, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), a.Status, nowText(time.Time{}), a.ID)
 	if err != nil {
 		return err
 	}

@@ -136,7 +136,10 @@ type ExecutionPolicy struct {
 	SandboxPolicy     map[string]any
 }
 
-func PuckExecutionPolicy(cwd string) ExecutionPolicy {
+func PuckExecutionPolicy(mode, cwd string) ExecutionPolicy {
+	if mode == "full" {
+		return ExecutionPolicy{ApprovalPolicy: "never", SandboxPolicy: map[string]any{"type": "dangerFullAccess"}}
+	}
 	return ExecutionPolicy{ApprovalPolicy: "on-request", ApprovalsReviewer: "user", SandboxPolicy: map[string]any{"type": "workspaceWrite", "writableRoots": []string{cwd}, "networkAccess": false}}
 }
 
@@ -232,7 +235,9 @@ func startProductionTurnImages(ctx context.Context, c caller, owner, threadID, c
 	request := map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input}
 	if policy != nil {
 		request["approvalPolicy"] = policy.ApprovalPolicy
-		request["approvalsReviewer"] = policy.ApprovalsReviewer
+		if policy.ApprovalsReviewer != "" {
+			request["approvalsReviewer"] = policy.ApprovalsReviewer
+		}
 		request["sandboxPolicy"] = policy.SandboxPolicy
 	}
 	r, err := c.Call(ctx, Request{Method: "thread-follower-start-turn", Version: 2, TargetClientID: owner, Mutating: true, Params: map[string]any{

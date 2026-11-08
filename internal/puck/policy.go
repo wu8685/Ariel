@@ -14,6 +14,7 @@ var riskyPromptFragments = []string{"git push", "--force", "rm -rf", "kubectl ap
 
 type PolicyInput struct {
 	Tool, DeviceID, CWD, ThreadID, TurnOrigin, Prompt string
+	PermissionMode                                    string
 	RiskTags                                          []string
 	AllowedScope                                      map[string][]string
 	OwnedThread                                       bool
@@ -31,6 +32,9 @@ type PolicyDecision struct {
 func EvaluatePolicy(input PolicyInput) PolicyDecision {
 	if input.AssistantWorkspaceRoot != "" && pathWithin(input.AssistantWorkspaceRoot, input.CWD) {
 		return PolicyDecision{DeniedCode: "PUCK_SELF_TARGET"}
+	}
+	if input.PermissionMode == "full" {
+		return PolicyDecision{}
 	}
 	decision := PolicyDecision{}
 	roots, deviceAllowed := input.AllowedScope[input.DeviceID]

@@ -2,8 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 const token = `s_${"b".repeat(64)}`;
 const initialAssistants = [
-	{ assistantId: "puck-one", name: "小帕", description: "负责日常开发协助", brainDeviceId: "brain-a", status: "ready", unreadCount: 0, lastMessagePreview: "测试已经开始", avatar: JSON.stringify({ shape: "cloud", color: "#ff2d8d" }) },
-	{ assistantId: "puck-two", name: "罗宾", description: "整理研究资料", brainDeviceId: "brain-a", status: "ready", unreadCount: 2, lastMessagePreview: "需要你确认研究范围", avatar: JSON.stringify({ shape: "drop", color: "#16c96a" }) },
+	{ assistantId: "puck-one", name: "小帕", description: "负责日常开发协助", brainDeviceId: "brain-a", status: "ready", permissionMode: "full", unreadCount: 0, lastMessagePreview: "测试已经开始", avatar: JSON.stringify({ shape: "cloud", color: "#ff2d8d" }) },
+	{ assistantId: "puck-two", name: "罗宾", description: "整理研究资料", brainDeviceId: "brain-a", status: "ready", permissionMode: "full", unreadCount: 2, lastMessagePreview: "需要你确认研究范围", avatar: JSON.stringify({ shape: "drop", color: "#16c96a" }) },
 ];
 let assistants = initialAssistants;
 let avatarUpdates: Record<string, unknown>[] = [];
@@ -38,7 +38,7 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
     if (message.method === "puck.history") data = { messages: historyByAssistant?.[String(message.params.assistantId)] ?? messages };
 		if (message.method === "puck.update") {
 			avatarUpdates.push(message.params);
-			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, ...(message.params.avatar ? { avatar: JSON.stringify(message.params.avatar) } : {}), ...(typeof message.params.description === "string" ? { description: message.params.description } : {}) } : item);
+			assistants = assistants.map(item => item.assistantId === message.params.assistantId ? { ...item, ...(message.params.avatar ? { avatar: JSON.stringify(message.params.avatar) } : {}), ...(typeof message.params.description === "string" ? { description: message.params.description } : {}), ...(typeof message.params.permissionMode === "string" ? { permissionMode: message.params.permissionMode } : {}) } : item);
 			data = { assistant: assistants.find(item => item.assistantId === message.params.assistantId) };
 		}
 		if (message.method === "puck.read") {
@@ -626,5 +626,16 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await page.getByRole("button", { name: "Codex 会话" }).click();
 		await expect(puckIcon).toHaveAttribute("type", "image/svg+xml");
 		await expect(puckIcon).toHaveAttribute("href", "/brand/ariel-logo-wind-messenger-micro.svg");
+	});
+
+	test("shows full access by default and persists switching back to ask", async ({ page }) => {
+		await openPuck(page);
+		const permission = page.getByLabel("运行权限");
+		await expect(permission).toHaveValue("full");
+		await expect(page.getByText("可执行任意命令并访问主机文件，不再询问")).toBeVisible();
+		await permission.selectOption("ask");
+		await expect(permission).toHaveValue("ask");
+		await expect(page.getByText("高风险操作会请求确认")).toBeVisible();
+		await expect.poll(() => avatarUpdates.at(-1)).toMatchObject({ assistantId: "puck-one", permissionMode: "ask" });
 	});
 });

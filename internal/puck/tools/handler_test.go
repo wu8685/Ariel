@@ -42,6 +42,14 @@ func TestAuthorizedTaskCarriesConsumedUserDecisionOrigin(t *testing.T) {
 	}
 }
 
+func TestRequestAuthorizationCanBeAutoApprovedByPersistentMode(t *testing.T) {
+	handler := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "request_authorization", Arguments: json.RawMessage(`{"summary":"ship","action":"deploy"}`)})
+	if !result.Success || result.AuthorizationID != "" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestReadToolRetriesOneRejectedResyncButMutationDoesNot(t *testing.T) {
 	readAttempts := 0
 	readOrchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
@@ -78,6 +86,7 @@ func (f *fakeBackend) Authorize(_ context.Context, _ string, action Action) (str
 	}
 	return "", nil
 }
+func (f *fakeBackend) PermissionMode(context.Context, string) string { return "full" }
 func (f *fakeBackend) SaveTask(_ context.Context, task Task) error {
 	f.tasks[task.ID] = task
 	return nil

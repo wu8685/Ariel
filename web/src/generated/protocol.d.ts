@@ -302,7 +302,8 @@ export interface HelloOK {
 export interface PuckOrigin {
   kind: "puck";
   assistantId: Id;
-  trigger: "user_message" | "tool" | "routine" | "event";
+  trigger: "user_message" | "tool" | "routine" | "event" | "user_decision";
+  permissionMode?: "full" | "ask";
 }
 export interface Error {
   code:

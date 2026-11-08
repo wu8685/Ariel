@@ -311,7 +311,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	go func() {
 		defer cacheTouchWorker.Done()
 		for request := range cacheTouches {
-			a.handle(requestCtx, request.id, request.method, request.params, false)
+			a.handle(requestCtx, request.id, request.method, request.params, false, "")
 		}
 	}()
 	defer func() {
@@ -432,7 +432,8 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 			Method    string          `json:"method"`
 			Params    json.RawMessage `json:"params"`
 			Origin    struct {
-				Kind string `json:"kind"`
+				Kind           string `json:"kind"`
+				PermissionMode string `json:"permissionMode"`
 			} `json:"origin"`
 		}
 		if json.Unmarshal(body, &req) != nil || (req.Type != "request" && !strings.HasPrefix(req.Type, "task.")) {
@@ -465,7 +466,11 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 				if strings.HasPrefix(req.Type, "task.") {
 					a.tasks.handle(requestCtx, requestBody)
 				} else {
-					a.handle(requestCtx, req.RequestID, req.Method, req.Params, req.Origin.Kind == "puck")
+					mode := req.Origin.PermissionMode
+					if req.Origin.Kind == "puck" && mode == "" {
+						mode = "ask"
+					}
+					a.handle(requestCtx, req.RequestID, req.Method, req.Params, req.Origin.Kind == "puck", mode)
 				}
 			}(body)
 		default:
@@ -550,7 +555,7 @@ func (a *agent) sendWithin(ctx context.Context, value any, timeout time.Duration
 	return a.conn.Write(writeCtx, websocket.MessageText, body)
 }
 
-func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage, puckOrigin bool) {
+func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessage, puckOrigin bool, puckMode string) {
 	if strings.HasPrefix(method, "puck.brain.") {
 		a.handleBrain(ctx, id, method, raw, puckOrigin)
 		return
@@ -646,7 +651,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		var thread map[string]any
 		var turnID string
 		if puckOrigin {
-			thread, turnID, err = a.service.BootstrapThreadWithExecutionPolicy(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings)
+			thread, turnID, err = a.service.BootstrapThreadWithExecutionPolicy(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings, puckMode)
 		} else {
 			thread, turnID, err = a.service.BootstrapThreadWithSettings(ctx, p.CWD, p.ClientMessageID, p.Text, p.Images, p.Settings)
 		}
@@ -826,7 +831,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		text, err = a.prepareMessage(ctx, p.Text, p.FileContexts)
 		if err == nil {
 			if puckOrigin {
-				turnID, err = a.service.StartWithExecutionPolicy(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
+				turnID, err = a.service.StartWithExecutionPolicy(ctx, p.ThreadID, p.ClientMessageID, text, p.Images, puckMode)
 			} else {
 				turnID, err = a.service.StartWithImages(ctx, p.ThreadID, p.ClientMessageID, text, p.Images)
 			}

@@ -36,14 +36,14 @@ func (b AppServerBootstrapper) Bootstrap(ctx context.Context, cwd, messageID, te
 }
 
 func (b AppServerBootstrapper) BootstrapWithSettings(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (BootstrapResult, error) {
-	return b.bootstrap(ctx, cwd, messageID, text, images, settings, false)
+	return b.bootstrap(ctx, cwd, messageID, text, images, settings, "")
 }
 
-func (b AppServerBootstrapper) BootstrapWithExecutionPolicy(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values) (BootstrapResult, error) {
-	return b.bootstrap(ctx, cwd, messageID, text, images, settings, true)
+func (b AppServerBootstrapper) BootstrapWithExecutionPolicy(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values, mode string) (BootstrapResult, error) {
+	return b.bootstrap(ctx, cwd, messageID, text, images, settings, mode)
 }
 
-func (b AppServerBootstrapper) bootstrap(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values, puckPolicy bool) (BootstrapResult, error) {
+func (b AppServerBootstrapper) bootstrap(ctx context.Context, cwd, messageID, text string, images []string, settings *modelsettings.Values, puckMode string) (BootstrapResult, error) {
 	if b.Binary == "" {
 		return BootstrapResult{}, appserver.ErrMethodUnavailable
 	}
@@ -64,10 +64,12 @@ func (b AppServerBootstrapper) bootstrap(ctx context.Context, cwd, messageID, te
 		Tier   *string          `json:"serviceTier"`
 	}
 	startParams := map[string]any{"cwd": cwd, "ephemeral": false, "serviceName": "ariel"}
-	if puckPolicy {
-		policy := appserver.PuckExecutionPolicyParams(cwd)
+	if puckMode != "" {
+		policy := appserver.PuckExecutionPolicyParams(puckMode, cwd)
 		startParams["approvalPolicy"] = policy["approvalPolicy"]
-		startParams["approvalsReviewer"] = policy["approvalsReviewer"]
+		if reviewer, ok := policy["approvalsReviewer"].(string); ok && reviewer != "" {
+			startParams["approvalsReviewer"] = reviewer
+		}
 		startParams["sandbox"] = policy["sandbox"]
 	}
 	if settings != nil {
@@ -97,10 +99,12 @@ func (b AppServerBootstrapper) bootstrap(ctx context.Context, cwd, messageID, te
 		} `json:"turn"`
 	}
 	turnParams := map[string]any{"threadId": started.Thread.ID, "clientUserMessageId": messageID, "input": input}
-	if puckPolicy {
-		policy := appserver.PuckExecutionPolicyParams(cwd)
+	if puckMode != "" {
+		policy := appserver.PuckExecutionPolicyParams(puckMode, cwd)
 		turnParams["approvalPolicy"] = policy["approvalPolicy"]
-		turnParams["approvalsReviewer"] = policy["approvalsReviewer"]
+		if reviewer, ok := policy["approvalsReviewer"].(string); ok && reviewer != "" {
+			turnParams["approvalsReviewer"] = reviewer
+		}
 		turnParams["sandboxPolicy"] = policy["sandboxPolicy"]
 	}
 	if settings != nil {

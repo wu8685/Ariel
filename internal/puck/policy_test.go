@@ -51,6 +51,19 @@ func TestPolicyEngineClassifiesP0CriticalActions(t *testing.T) {
 	}
 }
 
+func TestFullPermissionModeSkipsOptionalAuthorizationButNotSelfTarget(t *testing.T) {
+	root := t.TempDir()
+	input := PolicyInput{PermissionMode: "full", Tool: "start_task", DeviceID: "exec-a", CWD: filepath.Join(root, "work"), Prompt: "git push origin main", RiskTags: []string{"deploy"}, AllowedScope: map[string][]string{}, ExecutionPolicyEnforceable: false}
+	decision := EvaluatePolicy(input)
+	if decision.RequiresAuthorization || len(decision.Rules) != 0 || decision.DeniedCode != "" {
+		t.Fatalf("full decision=%+v", decision)
+	}
+	input.CWD, input.AssistantWorkspaceRoot = filepath.Join(root, "puck", "assistant"), filepath.Join(root, "puck")
+	if decision := EvaluatePolicy(input); decision.DeniedCode != "PUCK_SELF_TARGET" {
+		t.Fatalf("self-target decision=%+v", decision)
+	}
+}
+
 func TestNativeInteractionsAlwaysRequireUserDecision(t *testing.T) {
 	for _, kind := range []string{"command_approval", "file_approval", "permission_request", "user_input", "unsupported"} {
 		if !NativeInteractionRequiresUser(kind) {

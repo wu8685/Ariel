@@ -9,7 +9,7 @@ type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: {
 type Request = (method: string, target: string, params: Record<string, unknown>) => Promise<PuckResponse>;
 type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
-type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; unreadCount?: number; lastMessagePreview?: string };
+type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string };
 type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 const lastAssistantStorageKey = "ariel.puck.lastAssistantId.v1";
@@ -182,7 +182,7 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
   if (message.kind === "authorization") return <section className={`puck-card puck-authorization-card${terminal ? " terminal" : ""}`} role="group" aria-label="授权卡片">
     <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">◇</span><strong>{terminal ? "授权已处理" : "需要授权"}</strong></div>
     <p>{message.text}</p>
-    <dl><dt>动作</dt><dd>{String(data.action || "未说明")}</dd><dt>主机</dt><dd>{String(data.deviceId || "未说明")}</dd><dt>目录</dt><dd className="puck-mono">{String(data.cwd || "未说明")}</dd><dt>有效期</dt><dd title={data.expiresAt ? new Date(String(data.expiresAt)).toLocaleString("zh-CN") : undefined}>{expiryLabel(data.expiresAt)}</dd></dl>
+    <dl>{data.action != null && <><dt>动作</dt><dd>{String(data.action)}</dd></>}{data.deviceId != null && <><dt>主机</dt><dd>{String(data.deviceId)}</dd></>}{data.cwd != null && <><dt>目录</dt><dd className="puck-mono">{String(data.cwd)}</dd></>}{data.expiresAt != null && <><dt>有效期</dt><dd title={new Date(String(data.expiresAt)).toLocaleString("zh-CN")}>{expiryLabel(data.expiresAt)}</dd></>}</dl>
     {(data.risk != null || data.riskTags != null) && <p className="puck-risk"><span aria-hidden="true">△</span>风险：{String(data.risk || arrayData<string>(data.riskTags).join("、") || "无额外风险")}</p>}
     {!terminal ? <div className="puck-card-actions"><button className="puck-btn" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div> : <p className="puck-card-result">{decisionLabel(data)}</p>}
   </section>;
@@ -349,7 +349,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   async function createAssistant() {
     const deviceID = brainDeviceID || readyBrains[0]?.deviceId;
     if (!name.trim() || !deviceID) { setNotice("请填写名称并选择可用的大脑主机。"); return; }
-    const response = await request("puck.create", "relay", { name: name.trim(), brainDeviceId: deviceID, allowedScope: {} });
+    const response = await request("puck.create", "relay", { name: name.trim(), brainDeviceId: deviceID, allowedScope: {}, permissionMode: "full" });
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     listSequence.current += 1;
     const assistant = response.data?.assistant as Assistant;
@@ -444,6 +444,13 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		const confirmed = response.data?.assistant as Assistant | undefined;
 		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, description }) : item)); setEditingDescription(false);
 	}
+	async function updatePermissionMode(permissionMode: "full" | "ask") {
+		if (!selected || (selected.permissionMode || "full") === permissionMode) return;
+		const response = await request("puck.update", "relay", { assistantId: selected.assistantId, permissionMode });
+		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
+		const confirmed = response.data?.assistant as Assistant | undefined;
+		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, permissionMode }) : item));
+	}
 	async function reactTo(message: Message, emoji: string) {
 		if (!selected) return; const assistantID = selected.assistantId; const response = await request("puck.message.react", "relay", { assistantId:assistantID, messageId:message.id, emoji });
 		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
@@ -523,7 +530,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color}} size="small" animated={false}/></button>; })}</div></div>
           <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/></button>; })}</div></div>
         </div>
-        <section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd></dl></section>
+        <section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
       </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}
     </aside>
 

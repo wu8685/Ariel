@@ -133,6 +133,7 @@
 | 0130 | [Puck 个人助理编排层与跨主机 Codex 任务管理](0130-puck-personal-assistant.md) | Approved（P0 范围，2026-11-03；Q1–Q4／Q10／Q13–Q15／Q20–Q22／命名 Puck／Q24／Q27／Q28 已决，写探针见 §4.2.2；brain thread 在 Desktop 可见已接受；Q23 follower 路径在 P0 第 0 步验证；P1 起逐阶段确认） | Relay 进程内第二入口（默认关闭，仅 Passkey + HTTPS）承载多个助理（产品名 Puck），大脑在所选主机 Codex；自主派发、关键动作才授权，原生审批始终归用户；Web Push 通知 |
 | 0131 | [Relay 握手向后兼容与 Puck reaction 测试修复建议](0131-relay-hello-puck-compat-and-reaction-test.md) | Draft（修复建议） | 未协商的 v1 `hello.ok` 保持旧严格契约；Web 从 HTTP 读取 Puck 状态；reaction 测试按目标消息断言 |
 | 0134 | [Puck `start_task` / `send_turn` 契约修复](0134-puck-start-task-send-turn-contract.md) | Implemented（2026-11-08；Go／race／vet／build、Web 412 项与 build 已验；未部署） | canonical typed schema、字段级错误、原子 `thread.bootstrap`、双 locator、toolset version 与 capability gate |
+| 0135 | [Puck 自建 Bot 默认 Full Access](0135-puck-default-full-access.md) | Implemented（2026-11-08；Go／race／vet／build、Web unit／browser／build 已验；未部署） | Bot 持久权限模式；默认 full；Codex `never + danger-full-access`；保留 ask 与硬安全边界 |
 
 ## 设计基线
 

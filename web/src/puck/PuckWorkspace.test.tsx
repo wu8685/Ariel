@@ -323,6 +323,7 @@ describe("PuckWorkspace", () => {
     const view = render(<PuckWorkspace request={request} state="ready" devices={[]} onOpenThread={onOpenThread} />);
     expect(await screen.findByRole("group", { name: "问题卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "授权卡片" })).toBeTruthy();
+		expect(screen.getByRole("group", { name: "授权卡片" }).textContent).not.toContain("未说明");
     expect(screen.getByRole("group", { name: "任务卡片" })).toBeTruthy();
 	expect(view.container.querySelectorAll(".puck-transcript .puck-avatar")).toHaveLength(0);
 	expect(view.container.querySelectorAll(".puck-message.assistant.continued")).toHaveLength(2);
@@ -463,14 +464,14 @@ describe("PuckWorkspace", () => {
 
 	it("shows server unread counts, clears them on open, and persists editable instructions", async () => {
 		let assistants = [
-			{ assistantId: "a-1", name: "小帕", description: "开发助理", brainDeviceId: "brain-a", status: "ready", unreadCount: 0, lastMessagePreview: "已完成测试" },
-			{ assistantId: "a-2", name: "罗宾", description: "", brainDeviceId: "brain-a", status: "ready", unreadCount: 3, lastMessagePreview: "需要你确认方案" },
+			{ assistantId: "a-1", name: "小帕", description: "开发助理", brainDeviceId: "brain-a", status: "ready", permissionMode: "full", unreadCount: 0, lastMessagePreview: "已完成测试" },
+			{ assistantId: "a-2", name: "罗宾", description: "", brainDeviceId: "brain-a", status: "ready", permissionMode: "full", unreadCount: 3, lastMessagePreview: "需要你确认方案" },
 		];
 		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
 			if (method === "puck.list") return accepted({ assistants });
 			if (method === "puck.history") return accepted({ messages: [] });
 			if (method === "puck.read") { assistants = assistants.map(item => item.assistantId === params.assistantId ? { ...item, unreadCount: 0 } : item); return accepted({ unreadCount: 0 }); }
-			if (method === "puck.update") { assistants = assistants.map(item => item.assistantId === params.assistantId ? { ...item, description: String(params.description) } : item); return accepted({ assistant: assistants.find(item => item.assistantId === params.assistantId) }); }
+			if (method === "puck.update") { assistants = assistants.map(item => item.assistantId === params.assistantId ? { ...item, ...params } : item); return accepted({ assistant: assistants.find(item => item.assistantId === params.assistantId) }); }
 			return accepted({});
 		});
 		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
@@ -485,6 +486,10 @@ describe("PuckWorkspace", () => {
 		fireEvent.click(screen.getByRole("button", { name: "保存说明" }));
 		await screen.findByText("先给结论，再列风险");
 		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-2", description: "先给结论，再列风险" });
+		expect((screen.getByLabelText("运行权限") as HTMLSelectElement).value).toBe("full");
+		fireEvent.change(screen.getByLabelText("运行权限"), { target: { value: "ask" } });
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-2", permissionMode: "ask" }));
+		expect((screen.getByLabelText("运行权限") as HTMLSelectElement).value).toBe("ask");
 	});
 
 	it("renders live real elapsed time, final work summary and actor reaction pills", async () => {

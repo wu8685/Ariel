@@ -24,6 +24,7 @@ type fakeModuleBridge struct {
 	ensureThreads   []string
 	events          chan relay.BrainEvent
 	params          []json.RawMessage
+	origins         []relay.Origin
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
@@ -33,11 +34,12 @@ func (f *fakeModuleBridge) Devices() []map[string]any {
 	}
 }
 func (f *fakeModuleBridge) BrainThreads(v map[relay.BrainThread]string) { f.brains = v }
-func (f *fakeModuleBridge) Forward(_ context.Context, _ relay.Origin, _ string, method string, params json.RawMessage) relay.PuckResponse {
+func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ string, method string, params json.RawMessage) relay.PuckResponse {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, method)
 	f.params = append(f.params, append(json.RawMessage(nil), params...))
+	f.origins = append(f.origins, origin)
 	if method == "puck.brain.ensure" {
 		if f.ensureFailures > 0 {
 			f.ensureFailures--
@@ -494,7 +496,7 @@ func TestModuleConsumesAuthorizationAndStopsStartedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer module.Close()
-	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","permissionMode":"ask"}`))
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
 	arguments := `{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"run tests","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000141"}`
 	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-task","tool":"start_task","arguments":` + arguments + `}`)}
@@ -551,6 +553,64 @@ func TestModuleConsumesAuthorizationAndStopsStartedTask(t *testing.T) {
 	if stopped.Error != nil || stopped.Data["summary"] != "已停止当前回复，并请求停止 1 项任务" {
 		t.Fatalf("stop=%+v", stopped)
 	}
+}
+
+func TestModuleDefaultsFullAndPersistsAskMode(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	assistant := created.Data["assistant"].(map[string]any)
+	if assistant["permissionMode"] != "full" {
+		t.Fatalf("assistant=%+v", assistant)
+	}
+	id := assistant["assistantId"].(string)
+	updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "permissionMode": "ask"}))
+	if updated.Error != nil || updated.Data["assistant"].(map[string]any)["permissionMode"] != "ask" {
+		t.Fatalf("updated=%+v", updated)
+	}
+	stored, err := module.store.Assistant(context.Background(), id)
+	if err != nil || permissionMode(stored) != "ask" {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+}
+
+func TestFullModeHighRiskTaskDoesNotCreateAuthorizationCard(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	arguments := `{"deviceId":"exec-a","cwd":"/work","goal":"deploy","prompt":"git push origin main","riskTags":["deploy"],"clientTaskId":"00000000-0000-4000-8000-000000000242"}`
+	bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-full","tool":"start_task","arguments":` + arguments + `}`)}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		tasks, _ := module.store.Tasks(context.Background(), id)
+		if len(tasks) == 1 {
+			history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+			for _, message := range history {
+				if message.Kind == "authorization" {
+					t.Fatalf("unexpected card=%s", message.CardJSON)
+				}
+			}
+			bridge.mu.Lock()
+			defer bridge.mu.Unlock()
+			for i, call := range bridge.calls {
+				if call == "thread.bootstrap" && bridge.origins[i].PermissionMode != "full" {
+					t.Fatalf("origin=%+v", bridge.origins[i])
+				}
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("full task was not dispatched")
 }
 
 func TestModuleRotatesBrainBeforeRetiringOldThread(t *testing.T) {

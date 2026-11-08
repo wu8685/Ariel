@@ -90,7 +90,7 @@ func TestProductionStartRejectsBusyBeforeNativeCallAndPreservesMessageID(t *test
 func TestPuckProductionStartCarriesExplicitPolicyOnFollowerTurn(t *testing.T) {
 	owner := &recordingOwner{reply: Reply{Result: json.RawMessage(`{"result":{"turn":{"id":"new-turn"}}}`)}}
 	idle := json.RawMessage(`{"cwd":"/fixture","threadRuntimeStatus":{"type":"idle"},"requests":[],"turns":[]}`)
-	if _, err := StartProductionTurnWithPolicy(context.Background(), owner, "owner", "thread", "/fixture", idle, "client-id", "hello", PuckExecutionPolicy("/fixture")); err != nil {
+	if _, err := StartProductionTurnWithPolicy(context.Background(), owner, "owner", "thread", "/fixture", idle, "client-id", "hello", PuckExecutionPolicy("ask", "/fixture")); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(owner.calls[0].Params)
@@ -98,6 +98,19 @@ func TestPuckProductionStartCarriesExplicitPolicyOnFollowerTurn(t *testing.T) {
 		if !containsJSON(body, key, value) {
 			t.Fatalf("missing %s=%s: %s", key, value, body)
 		}
+	}
+	owner.calls = nil
+	if _, err := StartProductionTurnWithPolicy(context.Background(), owner, "owner", "thread", "/fixture", idle, "client-id-2", "hello", PuckExecutionPolicy("full", "/fixture")); err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(owner.calls[0].Params)
+	for key, value := range map[string]string{"approvalPolicy": "never", "type": "dangerFullAccess"} {
+		if !containsJSON(body, key, value) {
+			t.Fatalf("missing %s=%s: %s", key, value, body)
+		}
+	}
+	if containsJSON(body, "approvalsReviewer", "user") {
+		t.Fatalf("full policy still selects user reviewer: %s", body)
 	}
 }
 

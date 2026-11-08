@@ -14,9 +14,10 @@ const (
 )
 
 type Origin struct {
-	Kind        string `json:"kind"`
-	AssistantID string `json:"assistantId"`
-	Trigger     string `json:"trigger"`
+	Kind           string `json:"kind"`
+	AssistantID    string `json:"assistantId"`
+	Trigger        string `json:"trigger"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 type PuckError struct {
@@ -358,7 +359,7 @@ func (s *Server) forwardPuck(ctx context.Context, origin Origin, deviceID, metho
 	}
 	if executionPolicyUnenforceable(method, origin, agent.capabilities) {
 		s.mu.Unlock()
-		return puckRejected("EXECUTION_POLICY_UNENFORCEABLE", "target Agent cannot prove on-request execution policy")
+		return puckRejected("EXECUTION_POLICY_UNENFORCEABLE", "target Agent cannot enforce the requested execution policy")
 	}
 	relayID := newRequestID()
 	result := make(chan map[string]any, 1)

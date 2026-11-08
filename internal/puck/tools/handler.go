@@ -17,7 +17,7 @@ var (
 )
 
 type Origin struct {
-	Kind, AssistantID, Trigger string
+	Kind, AssistantID, Trigger, PermissionMode string
 }
 
 type Result struct {
@@ -64,6 +64,7 @@ type Orchestrator interface {
 
 type Backend interface {
 	Authorize(context.Context, string, Action) (string, error)
+	PermissionMode(context.Context, string) string
 	SaveTask(context.Context, Task) error
 	Task(context.Context, string, string) (Task, error)
 	Emit(context.Context, Event) error
@@ -176,6 +177,7 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	if authorized {
 		requestOrigin.Trigger = "user_decision"
 	}
+	requestOrigin.PermissionMode = h.backend.PermissionMode(ctx, call.AssistantID)
 	created := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "thread.bootstrap", mustJSON(map[string]any{"cwd": input.CWD, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
 	if created.Outcome != "accepted" {
 		return fromResult(created)
@@ -228,6 +230,7 @@ func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) Tool
 	if authorized {
 		requestOrigin.Trigger = "user_decision"
 	}
+	requestOrigin.PermissionMode = h.backend.PermissionMode(ctx, call.AssistantID)
 	params := mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientMessageID, "text": input.Text})
 	return fromResult(h.orchestrator.Forward(ctx, requestOrigin, deviceID, "turn.start", params))
 }
@@ -282,6 +285,9 @@ func (h *Handler) requestAuthorization(ctx context.Context, call Call) ToolResul
 	id, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, Arguments: call.Arguments})
 	if err != nil && !errors.Is(err, ErrAuthorizationRequired) {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if id == "" {
+		return ToolResult{Success: true, Data: map[string]any{"autoApproved": true}}
 	}
 	return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: id}
 }

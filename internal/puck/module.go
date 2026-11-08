@@ -251,7 +251,7 @@ type toolOrchestrator struct{ bridge Orchestrator }
 
 func (o toolOrchestrator) Devices() []map[string]any { return o.bridge.Devices() }
 func (o toolOrchestrator) Forward(ctx context.Context, origin pucktools.Origin, device, method string, params json.RawMessage) pucktools.Result {
-	result := o.bridge.Forward(ctx, relay.Origin{Kind: origin.Kind, AssistantID: origin.AssistantID, Trigger: origin.Trigger}, device, method, params)
+	result := o.bridge.Forward(ctx, relay.Origin{Kind: origin.Kind, AssistantID: origin.AssistantID, Trigger: origin.Trigger, PermissionMode: origin.PermissionMode}, device, method, params)
 	out := pucktools.Result{Outcome: result.Outcome, Data: result.Data}
 	if result.Error != nil {
 		out.Code, out.Message = result.Error.Code, result.Error.Message
@@ -292,7 +292,7 @@ func (b toolBackend) Authorize(ctx context.Context, assistantID string, action p
 			enforceable = caps["executionPolicy"]
 		}
 	}
-	decision := EvaluatePolicy(PolicyInput{Tool: action.Tool, DeviceID: arguments.DeviceID, CWD: arguments.CWD, ThreadID: arguments.ThreadID, Prompt: arguments.Prompt, RiskTags: arguments.RiskTags, AllowedScope: allowed, OwnedThread: ownedThread, ExecutionPolicyEnforceable: enforceable, AssistantWorkspaceRoot: "/agent-managed/puck/" + assistantID})
+	decision := EvaluatePolicy(PolicyInput{PermissionMode: permissionMode(a), Tool: action.Tool, DeviceID: arguments.DeviceID, CWD: arguments.CWD, ThreadID: arguments.ThreadID, Prompt: arguments.Prompt, RiskTags: arguments.RiskTags, AllowedScope: allowed, OwnedThread: ownedThread, ExecutionPolicyEnforceable: enforceable, AssistantWorkspaceRoot: "/agent-managed/puck/" + assistantID})
 	if decision.DeniedCode != "" {
 		return "", errors.New(decision.DeniedCode)
 	}
@@ -306,6 +306,14 @@ func (b toolBackend) Authorize(ctx context.Context, assistantID string, action p
 	card, _ := json.Marshal(map[string]any{"authorizationId": auth.ID, "rules": decision.Rules, "actionHash": auth.ActionHash, "action": action.Tool, "deviceId": arguments.DeviceID, "cwd": arguments.CWD, "riskTags": arguments.RiskTags, "expiresAt": auth.ExpiresAt, "cardState": "pending"})
 	_ = b.module.store.AppendMessage(ctx, Message{ID: "authorization-card:" + auth.ID, AssistantID: assistantID, Role: "assistant", Kind: "authorization", Text: "这个操作需要你确认后才能继续。", CardJSON: string(card)})
 	return auth.ID, pucktools.ErrAuthorizationRequired
+}
+
+func (b toolBackend) PermissionMode(ctx context.Context, assistantID string) string {
+	a, err := b.module.store.Assistant(ctx, assistantID)
+	if err != nil {
+		return "ask"
+	}
+	return permissionMode(a)
 }
 func (b toolBackend) SaveTask(ctx context.Context, task pucktools.Task) error {
 	if err := b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, CreatedBy: "puck", LastTurnID: task.LastTurnID}); err != nil {
@@ -415,11 +423,12 @@ func (m *Module) list(ctx context.Context) relay.PuckResponse {
 
 func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
-		Name          string         `json:"name"`
-		Description   string         `json:"description"`
-		BrainDeviceID string         `json:"brainDeviceId"`
-		AllowedScope  map[string]any `json:"allowedScope"`
-		Avatar        map[string]any `json:"avatar"`
+		Name           string         `json:"name"`
+		Description    string         `json:"description"`
+		BrainDeviceID  string         `json:"brainDeviceId"`
+		AllowedScope   map[string]any `json:"allowedScope"`
+		Avatar         map[string]any `json:"avatar"`
+		PermissionMode string         `json:"permissionMode"`
 	}
 	if json.Unmarshal(raw, &input) != nil || input.Name == "" || input.BrainDeviceID == "" {
 		return moduleError("INVALID_ARGUMENT", "invalid assistant")
@@ -448,7 +457,14 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 			return moduleError("INVALID_ARGUMENT", err.Error())
 		}
 	}
+	if input.PermissionMode == "" {
+		input.PermissionMode = "full"
+	}
+	if input.PermissionMode != "full" && input.PermissionMode != "ask" {
+		return moduleError("INVALID_ARGUMENT", "invalid permission mode")
+	}
 	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, Persona: input.Description, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: currentToolsetVersion, AllowedScope: string(scope), Status: "provisioning"}
+	a.Policy = policyWithPermissionMode(a.Policy, input.PermissionMode)
 	if err := m.store.CreateAssistant(ctx, a); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
@@ -484,12 +500,13 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 
 func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
 	var input struct {
-		AssistantID   string         `json:"assistantId"`
-		Name          *string        `json:"name"`
-		Description   *string        `json:"description"`
-		BrainDeviceID *string        `json:"brainDeviceId"`
-		AllowedScope  map[string]any `json:"allowedScope"`
-		Avatar        map[string]any `json:"avatar"`
+		AssistantID    string         `json:"assistantId"`
+		Name           *string        `json:"name"`
+		Description    *string        `json:"description"`
+		BrainDeviceID  *string        `json:"brainDeviceId"`
+		AllowedScope   map[string]any `json:"allowedScope"`
+		Avatar         map[string]any `json:"avatar"`
+		PermissionMode *string        `json:"permissionMode"`
 	}
 	if json.Unmarshal(raw, &input) != nil || input.AssistantID == "" {
 		return moduleError("INVALID_ARGUMENT", "invalid assistant update")
@@ -519,6 +536,12 @@ func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if input.AllowedScope != nil {
 		scope, _ := json.Marshal(input.AllowedScope)
 		a.AllowedScope = string(scope)
+	}
+	if input.PermissionMode != nil {
+		if *input.PermissionMode != "full" && *input.PermissionMode != "ask" {
+			return moduleError("INVALID_ARGUMENT", "invalid permission mode")
+		}
+		a.Policy = policyWithPermissionMode(a.Policy, *input.PermissionMode)
 	}
 	if input.Avatar != nil {
 		avatar, err := validateAvatar(input.Avatar)
@@ -954,8 +977,27 @@ func (m *Module) syncBrainThreads(ctx context.Context) {
 }
 
 func assistantData(a Assistant) map[string]any {
-	return map[string]any{"assistantId": a.ID, "name": a.Name, "avatar": a.Avatar, "description": a.Description, "brainDeviceId": a.BrainDeviceID, "brainThreadId": a.BrainThreadID, "status": a.Status, "toolsetVersion": a.ToolsetVersion, "unreadCount": a.UnreadCount, "lastMessagePreview": a.LastMessagePreview}
+	return map[string]any{"assistantId": a.ID, "name": a.Name, "avatar": a.Avatar, "description": a.Description, "brainDeviceId": a.BrainDeviceID, "brainThreadId": a.BrainThreadID, "status": a.Status, "toolsetVersion": a.ToolsetVersion, "permissionMode": permissionMode(a), "unreadCount": a.UnreadCount, "lastMessagePreview": a.LastMessagePreview}
 }
+
+func permissionMode(a Assistant) string {
+	var policy struct {
+		PermissionMode string `json:"permissionMode"`
+	}
+	if json.Unmarshal([]byte(defaultJSON(a.Policy, "{}")), &policy) == nil && policy.PermissionMode == "ask" {
+		return "ask"
+	}
+	return "full"
+}
+
+func policyWithPermissionMode(raw, mode string) string {
+	policy := map[string]any{}
+	_ = json.Unmarshal([]byte(defaultJSON(raw, "{}")), &policy)
+	policy["permissionMode"] = mode
+	encoded, _ := json.Marshal(policy)
+	return string(encoded)
+}
+
 func brainInstructions(id, name, description string) string {
 	return fmt.Sprintf(`你是 [Puck] %s（%s）。%s
 默认使用中文，表达简短自然。收到请求后先用一句短回复确认；此后只在里程碑、需要用户介入或最终结果时汇报，不发送流水账。
