@@ -75,7 +75,6 @@
         "token": { "type": "string", "minLength": 1 },
         "deviceId": { "$ref": "#/$defs/id" }, "deviceName": { "$ref": "#/$defs/id" },
         "agentEpoch": { "$ref": "#/$defs/id" }, "adapterVersion": { "$ref": "#/$defs/id" },
-        "puckToolsetVersion": { "type": "integer", "minimum": 1 },
         "taskStoreId": { "$ref": "#/$defs/id" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }

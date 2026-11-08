@@ -9,7 +9,7 @@ func TestV1EnvelopeSchemaAcceptsKnownMessages(t *testing.T) {
 	valid := []string{
 		`{"type":"hello","v":1,"role":"web","token":"secret"}`,
 		`{"type":"hello","v":1,"role":"agent","token":"secret","deviceId":"device-a","deviceName":"Mac","agentEpoch":"epoch-a","adapterVersion":"mock-1","capabilities":{"autoLoad":false,"codexReady":false}}`,
-		`{"type":"hello","v":1,"role":"agent","token":"secret","deviceId":"desktop-local","deviceName":"Desktop 本机","agentEpoch":"epoch-a","adapterVersion":"desktop-ipc-0.160.0","puckToolsetVersion":2,"capabilities":{"autoLoad":true,"codexReady":true,"history":true,"send":true,"interrupt":true,"interaction":true}}`,
+		`{"type":"hello","v":1,"role":"agent","token":"secret","deviceId":"desktop-local","deviceName":"Desktop 本机","agentEpoch":"epoch-a","adapterVersion":"desktop-ipc-0.160.0+puck-toolset-2","capabilities":{"autoLoad":true,"codexReady":true,"history":true,"send":true,"interrupt":true,"interaction":true}}`,
 		`{"type":"hello.ok","v":1,"connectionId":"conn-a","relayEpoch":"relay-a"}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.list","params":{"limit":20}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.create","params":{"cwd":"/fixture"}}`,
@@ -67,7 +67,6 @@ func TestV1EnvelopeSchemaRejectsWrongVersionShapeAndUnexpectedFields(t *testing.
 	invalid := []string{
 		`{"type":"hello","v":2,"role":"web","token":"secret"}`,
 		`{"type":"hello","v":1,"role":"agent","token":"secret"}`,
-		`{"type":"hello","v":1,"role":"agent","token":"secret","deviceId":"device-a","deviceName":"Mac","agentEpoch":"epoch-a","adapterVersion":"mock-1","puckToolsetVersion":0,"capabilities":{"autoLoad":false,"codexReady":false}}`,
 		`{"type":"hello","v":1,"role":"web","token":"secret","deviceId":"claimed"}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"turn.start","params":{"text":"hi"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"device-a","method":"thread.bootstrap","params":{"cwd":"relative","clientMessageId":"00000000-0000-4000-8000-000000000002","text":"hello"}}`,

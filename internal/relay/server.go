@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -393,16 +394,15 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hello struct {
-		Type               string          `json:"type"`
-		Role               string          `json:"role"`
-		Token              string          `json:"token"`
-		DeviceID           string          `json:"deviceId"`
-		DeviceName         string          `json:"deviceName"`
-		AgentEpoch         string          `json:"agentEpoch"`
-		AdapterVersion     string          `json:"adapterVersion"`
-		PuckToolsetVersion int             `json:"puckToolsetVersion"`
-		Capabilities       map[string]bool `json:"capabilities"`
-		TaskStoreID        string          `json:"taskStoreId"`
+		Type           string          `json:"type"`
+		Role           string          `json:"role"`
+		Token          string          `json:"token"`
+		DeviceID       string          `json:"deviceId"`
+		DeviceName     string          `json:"deviceName"`
+		AgentEpoch     string          `json:"agentEpoch"`
+		AdapterVersion string          `json:"adapterVersion"`
+		Capabilities   map[string]bool `json:"capabilities"`
+		TaskStoreID    string          `json:"taskStoreId"`
 	}
 	if json.Unmarshal(raw, &hello) != nil || hello.Type != "hello" || (hello.Role == "web" && origin == "") {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
@@ -413,7 +413,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
-	p := &peer{conn: conn, id: rand.Text(), role: hello.Role, deviceID: hello.DeviceID, deviceName: hello.DeviceName, agentEpoch: hello.AgentEpoch, adapterVersion: hello.AdapterVersion, puckToolsetVersion: hello.PuckToolsetVersion, capabilities: hello.Capabilities}
+	p := &peer{conn: conn, id: rand.Text(), role: hello.Role, deviceID: hello.DeviceID, deviceName: hello.DeviceName, agentEpoch: hello.AgentEpoch, adapterVersion: hello.AdapterVersion, puckToolsetVersion: parsePuckToolsetVersion(hello.AdapterVersion), capabilities: hello.Capabilities}
 	if p.role == "web" {
 		p.cachePending = map[string]map[string]any{}
 		p.cacheWake = make(chan struct{}, 1)
@@ -502,6 +502,19 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func parsePuckToolsetVersion(adapterVersion string) int {
+	const marker = "+puck-toolset-"
+	index := strings.LastIndex(adapterVersion, marker)
+	if index < 0 {
+		return 0
+	}
+	version, err := strconv.Atoi(adapterVersion[index+len(marker):])
+	if err != nil || version < 1 {
+		return 0
+	}
+	return version
 }
 
 func (s *Server) heartbeat(ctx context.Context, p *peer) {

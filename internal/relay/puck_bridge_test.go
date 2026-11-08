@@ -18,7 +18,7 @@ func TestPuckBridgeWhitelistsMethodsAndInjectsTrustedOrigin(t *testing.T) {
 	agent := dialTest(t, server.URL, "")
 	hello := agentHello()
 	hello["capabilities"].(map[string]bool)["puckBrain"] = true
-	hello["puckToolsetVersion"] = 2
+	hello["adapterVersion"] = "mock-1+puck-toolset-2"
 	sendJSON(t, agent, hello)
 	readJSON(t, agent)
 
@@ -137,12 +137,25 @@ func TestPuckBridgeRejectsBrainToolsetNewerThanAgent(t *testing.T) {
 	agent := dialTest(t, server.URL, "")
 	hello := agentHello()
 	hello["capabilities"].(map[string]bool)["puckBrain"] = true
-	hello["puckToolsetVersion"] = 1
+	hello["adapterVersion"] = "mock-1+puck-toolset-1"
 	sendJSON(t, agent, hello)
 	readJSON(t, agent)
 	response := r.PuckBridge().Forward(context.Background(), Origin{Kind: "puck", AssistantID: "assistant-a", Trigger: "tool"}, "mock-mac", "puck.brain.ensure", json.RawMessage(`{"assistantId":"assistant-a","name":"Puck","cwd":"/fixture","developerInstructions":"guard","toolsetVersion":2}`))
 	if response.Error == nil || response.Error.Code != "PROTOCOL_UNSUPPORTED" {
 		t.Fatalf("response=%+v", response)
+	}
+}
+
+func TestPuckToolsetVersionUsesBackwardCompatibleAdapterVersion(t *testing.T) {
+	for adapter, expected := range map[string]int{
+		"desktop-ipc-0.160.0":                      0,
+		"desktop-ipc-0.160.0+puck-toolset-2":       2,
+		"desktop-ipc-0.160.0+puck-toolset-invalid": 0,
+		"desktop-ipc-0.160.0+puck-toolset-2-extra": 0,
+	} {
+		if actual := parsePuckToolsetVersion(adapter); actual != expected {
+			t.Fatalf("adapter=%q actual=%d expected=%d", adapter, actual, expected)
+		}
 	}
 }
 

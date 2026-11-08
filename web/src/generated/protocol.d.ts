@@ -261,7 +261,6 @@ export interface AgentHello {
   deviceName: Id;
   agentEpoch: Id;
   adapterVersion: Id;
-  puckToolsetVersion?: number;
   taskStoreId?: Id;
   capabilities: Capabilities;
 }

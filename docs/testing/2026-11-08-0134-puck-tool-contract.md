@@ -36,7 +36,7 @@ canonical source 位于 `internal/puck/toolcontract/contract.go`：
 | --- | --- | --- |
 | Puck registry / Desktop brain host | 任意 object；无字段信息 | 直接消费 canonical `DynamicTools(version)`；两个 mutation tool 为严格 schema |
 | Relay 内 Puck handler / adapter | 匿名结构；无 details；`start_task` 两步错误映射；`send_turn` 只支持 task | typed decode；字段级 details；原子 bootstrap；send 双 locator + policy |
-| Relay ↔ Desktop Agent | `thread.bootstrap` 不在 Puck 白名单；无 toolset version | whitelist/write quota/policy gate 均覆盖 bootstrap；hello 携带 toolset version；future/newer contract fail-closed |
+| Relay ↔ Desktop Agent | `thread.bootstrap` 不在 Puck 白名单；无 toolset version | whitelist/write quota/policy gate 均覆盖 bootstrap；既有 `adapterVersion` 携带 toolset version，新 Relay 将其投影到 device status；future/newer contract fail-closed |
 | Desktop Agent 消费端 | `thread.create` unavailable；`thread.bootstrap` 与 `turn.start` 有真实消费路径 | start 走 `BootstrapThreadWithExecutionPolicy`；send 走 `StartWithExecutionPolicy`；未验证 `executionPolicy` capability 时仍要求用户授权 |
 
 严格字段：
@@ -80,6 +80,8 @@ Red commit：`8671fb9 test: define Puck mutation tool contract`
 - toolset v2 只在新建/轮换 brain thread 上声明严格 schema；旧 v1 thread 不伪装成 v2。
 - 已存在的旧 assistant 在下一次用户输入或问题回答前先轮换 brain thread，成功后才继续；旧
   thread 保留只读并 retire。
+- 新 Agent 使用旧 Relay 已接受的 `adapterVersion` 字符串承载 toolset version，不向旧严格
+  hello schema增加未知字段，因此可安全先升级 Agent。
 - 新 Relay 请求 v2、旧 Agent 未声明对应 version 时返回 `PROTOCOL_UNSUPPORTED`。
 - 新 Agent 可接受 v1 resume；只读工具与旧 transport envelope 不变。
 - 按项目安全边界不实现离线 mutation queue：离线返回 `DEVICE_OFFLINE`，unknown 不重放。

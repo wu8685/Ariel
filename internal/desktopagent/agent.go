@@ -342,10 +342,11 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 		capabilities["threadRename"] = service.ThreadRenameEnabled()
 		capabilities["threadPin"] = service.ThreadPinEnabled()
 	}
-	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": agentEpoch, "adapterVersion": "desktop-ipc-0.160.0", "capabilities": capabilities}
+	adapterVersion := "desktop-ipc-0.160.0"
 	if a.brain != nil {
-		hello["puckToolsetVersion"] = toolcontract.Version
+		adapterVersion = fmt.Sprintf("%s+puck-toolset-%d", adapterVersion, toolcontract.Version)
 	}
+	hello := map[string]any{"type": "hello", "v": 1, "role": "agent", "token": cfg.Token, "deviceId": cfg.DeviceID, "deviceName": cfg.DeviceName, "agentEpoch": agentEpoch, "adapterVersion": adapterVersion, "capabilities": capabilities}
 	if cfg.TasksEnabled {
 		capabilities["taskManagement"] = a.tasks.managementReady()
 		capabilities["taskExecution"] = a.tasks.executionReady(ctx)
