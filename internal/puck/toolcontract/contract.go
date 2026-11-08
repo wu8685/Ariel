@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 3
+const Version = 4
 const canonicalMutationToolVersion = 2
 
 const (
@@ -98,7 +98,7 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 	}
 	switch name {
 	case "start_task":
-		return Definition{Name: name, Description: "在指定设备和绝对 workspace 中创建执行任务，并原子发送首条输入。", InputSchema: startTaskSchema()}, true
+		return Definition{Name: name, Description: "在指定设备和绝对 workspace 中创建执行任务，并原子发送首条输入。无论 Bot 是 Full Access 还是每次询问模式，只要需要目标 workspace 实际执行就调用；授权由 Relay 处理，调用本工具不代表绕过授权。", InputSchema: startTaskSchema()}, true
 	case "send_turn":
 		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。", InputSchema: sendTurnSchema()}, true
 	case "ask_user":

@@ -3,6 +3,7 @@ package toolcontract
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -197,6 +198,13 @@ func TestSendTurnValidationMatrix(t *testing.T) {
 				t.Fatalf("details=%+v", details)
 			}
 		})
+	}
+}
+
+func TestStartTaskDescriptionDelegatesAuthorizationToRelay(t *testing.T) {
+	definition, ok := DefinitionFor(Version, "start_task")
+	if !ok || !strings.Contains(definition.Description, "授权由 Relay") || !strings.Contains(definition.Description, "无论") {
+		t.Fatalf("description=%q", definition.Description)
 	}
 }
 

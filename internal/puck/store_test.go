@@ -205,6 +205,28 @@ func TestStoreMigratesV2TaskIdempotencyColumns(t *testing.T) {
 	}
 }
 
+func TestDeletingAssistantAlsoDeletesPersistentAuthorizationRules(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateAssistant(ctx, Assistant{ID: "assistant-a", Name: "Puck", BrainDeviceID: "brain", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertAuthorizationRule(ctx, AuthorizationRule{AssistantID: "assistant-a", ActionType: "start_task", DeviceID: "exec-a", CWD: "/work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SoftDeleteAssistant(ctx, "assistant-a"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM authorization_rules WHERE assistant_id=?`, "assistant-a").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rules=%d err=%v", count, err)
+	}
+}
+
 func TestStorePersistsAvatarAndUpdatesCardInPlace(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
 	if err != nil {

@@ -10,6 +10,7 @@ type Request = (method: string, target: string, params: Record<string, unknown>)
 type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
 type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string };
+type AuthorizationRule = { id: string; assistantId: string; actionType: string; deviceId: string; cwd: string; createdAt: string };
 type Message = { id: string; assistantId?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 const lastAssistantStorageKey = "ariel.puck.lastAssistantId.v1";
@@ -190,8 +191,9 @@ function expiryLabel(value: unknown): string {
 }
 function decisionLabel(data: Record<string, unknown>): string {
   const rejected = String(data.cardState) === "rejected" || String(data.decision) === "reject";
+	const always = String(data.decision) === "approve_always";
   const decidedAt = data.decidedAt ? new Date(String(data.decidedAt)).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }) : "";
-  return `${rejected ? "已拒绝" : "已允许一次"}${decidedAt ? ` · ${decidedAt}` : ""}`;
+  return `${rejected ? "已拒绝" : always ? "已允许（以后都允许）" : "已允许一次"}${decidedAt ? ` · ${decidedAt}` : ""}`;
 }
 class PuckConversationErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -254,7 +256,7 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
     <dl>{data.action != null && <><dt>动作</dt><dd>{String(data.action)}</dd></>}{data.deviceId != null && <><dt>主机</dt><dd>{String(data.deviceId)}</dd></>}{data.cwd != null && <><dt>目录</dt><dd className="puck-mono">{String(data.cwd)}</dd></>}{data.expiresAt != null && <><dt>有效期</dt><dd title={new Date(String(data.expiresAt)).toLocaleString("zh-CN")}>{expiryLabel(data.expiresAt)}</dd></>}</dl>
     {(data.risk != null || data.riskTags != null) && <p className="puck-risk"><span aria-hidden="true">△</span>风险：{String(data.risk || arrayData<string>(data.riskTags).join("、") || "无额外风险")}</p>}
     {data.reason != null && <p className="puck-risk"><span aria-hidden="true">△</span>原因：{String(data.reason)}</p>}
-    {!terminal ? <div className="puck-card-actions"><button className="puck-btn" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button></div> : <p className="puck-card-result">{decisionLabel(data)}</p>}
+    {!terminal ? <div className="puck-card-actions puck-authorization-actions"><button className="puck-btn" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"reject")}>拒绝</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_once")}>仅这一次允许</button><button className="puck-btn primary" type="button" disabled={submitting} onClick={()=>onAction("authorization",data,"approve_always")}>以后都允许</button></div> : <p className="puck-card-result">{decisionLabel(data)}</p>}
   </section>;
   if (message.kind === "share_result") {
     const items = arrayData<Record<string,unknown>>(data.items).filter(item => item && typeof item === "object");
@@ -287,6 +289,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [name, setName] = useState("");
   const [brainDeviceID, setBrainDeviceID] = useState("");
 	const [submittingCard, setSubmittingCard] = useState("__none__");
+	const [authorizationRules, setAuthorizationRules] = useState<AuthorizationRule[]>([]);
 	const [mobilePanel, setMobilePanel] = useState<"" | "assistants" | "info">("");
 	const avatarUpdateSequence = useRef(0);
   const listSequence = useRef(0);
@@ -384,12 +387,16 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   }
   useEffect(() => { if (state !== "ready") return; void loadList(); const timer = window.setInterval(() => void loadList(), 5000); return () => window.clearInterval(timer); }, [state]);
   useEffect(() => {
-    if (!selectedID) { messageAssistantRef.current = ""; setMessages([]); return; }
+	if (!selectedID) { messageAssistantRef.current = ""; setMessages([]); setAuthorizationRules([]); return; }
+	let active = true;
 	if (messageAssistantRef.current !== selectedID) { messageAssistantRef.current = selectedID; setMessages([]); }
 	setEditingDescription(false); setDescriptionDraft(assistants.find(item => item.assistantId === selectedID)?.description || "");
 	setAssistants(current => current.map(item => item.assistantId === selectedID ? { ...item, unreadCount: 0 } : item));
 	void request("puck.read", "relay", { assistantId: selectedID });
-    let active = true;
+	setAuthorizationRules([]);
+	void request("puck.authorization.rule.list", "relay", { assistantId: selectedID }).then(response => {
+		if (active && response.outcome === "accepted") setAuthorizationRules(arrayData<AuthorizationRule>(response.data?.rules));
+	});
     void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
       if (active && response.outcome === "accepted") {
         const durable = historyMessages(response.data?.messages, selectedID);
@@ -496,11 +503,16 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		const response = kind === "authorization"
 			? await request("puck.authorization.decide","relay",{assistantId:assistantID,authorizationId:String(data.authorizationId||""),decision:String(value)})
 			: await request("puck.question.answer","relay",{assistantId:assistantID,questionId:String(data.questionId||""),answers:value});
-		if (response.outcome === "accepted") updateScopedMessages(assistantID, current => current.map(message => {
+		if (response.outcome === "accepted") {
+			updateScopedMessages(assistantID, current => current.map(message => {
 			const card = kind === "question" ? normalizeQuestionData(message) : cardData(message);
 			if (String(card.authorizationId || card.questionId || "") !== identity) return message;
-			return {...message, cardJSON: JSON.stringify({...card, cardState: kind === "question" ? "answered" : value === "reject" ? "rejected" : "consumed", ...(kind === "question" ? {answers:value} : {})})};
-		})); else setNotice(responseError(response));
+			return {...message, cardJSON: JSON.stringify({...card, cardState: kind === "question" ? "answered" : value === "reject" ? "rejected" : "consumed", ...(kind === "question" ? {answers:value} : {decision:value})})};
+			}));
+			if (kind === "authorization" && value === "approve_always") void request("puck.authorization.rule.list", "relay", { assistantId: assistantID }).then(listed => {
+				if (selectedRef.current === assistantID && listed.outcome === "accepted") setAuthorizationRules(arrayData<AuthorizationRule>(listed.data?.rules));
+			});
+		} else setNotice(responseError(response));
 		setSubmittingCard("__none__");
 	}
 	async function updateAvatar(shape: AvatarShape, color: string) {
@@ -534,6 +546,13 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
 		const confirmed = response.data?.assistant as Assistant | undefined;
 		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, permissionMode }) : item));
+	}
+	async function revokeAuthorizationRule(ruleID: string) {
+		if (!selected) return;
+		const assistantID = selected.assistantId;
+		const response = await request("puck.authorization.rule.revoke", "relay", { assistantId: assistantID, ruleId: ruleID });
+		if (response.outcome === "accepted") setAuthorizationRules(current => current.filter(rule => rule.id !== ruleID));
+		else setNotice(responseError(response));
 	}
 	async function deleteAssistant() {
 		if (!deleteTarget || deleting) return;
@@ -642,6 +661,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
           <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/></button>; })}</div></div>
         </div>
 		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
+		<section className="puck-authorization-rules"><h4>以后都允许</h4>{authorizationRules.length === 0 ? <p>尚未保存规则</p> : <ul>{authorizationRules.map(rule=><li key={rule.id}><div><strong>{rule.actionType}</strong><span>{rule.deviceId}</span><code>{rule.cwd}</code><time dateTime={rule.createdAt}>{new Date(rule.createdAt).toLocaleString("zh-CN")}</time></div><button className="puck-btn" type="button" aria-label={`撤销规则 ${rule.actionType} ${rule.cwd}`} onClick={()=>void revokeAuthorizationRule(rule.id)}>撤销</button></li>)}</ul>}</section>
 		<section className="puck-danger-zone"><h4>危险操作</h4><p>删除后，这个 Bot 及其历史将不再显示。</p><button className="puck-btn danger" type="button" onClick={()=>setDeleteTarget(selected)}>删除 Bot</button></section>
       </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}
     </aside>

@@ -8,6 +8,7 @@ const initialAssistants = [
 let assistants = initialAssistants;
 let avatarUpdates: Record<string, unknown>[] = [];
 let sentMessages: Record<string, unknown>[] = [];
+let authorizationDecisions: Record<string, unknown>[] = [];
 const initialMessages = [
 	{ id: "user-request", role: "user", kind: "text", text: "帮我检查 Ariel 的测试状态。", createdAt: "2026-11-03T11:59:59Z" },
 	{ id: "hello", role: "assistant", kind: "text", text: "晚上好。测试已经开始，我会在有结果时告诉你。", workSummary: JSON.stringify({ elapsedMs: 12400, steps: 3 }), createdAt: "2026-11-03T12:00:00Z" },
@@ -21,6 +22,7 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   assistants = assistantFixture;
 	avatarUpdates = [];
   sentMessages = [];
+	authorizationDecisions = [];
   messages = history;
   await page.route("**/api/auth/status", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ mode: "passkey", authenticated: true, enrollmentRequired: false, puck: { state: "ready" } }) }));
   await page.route("http://127.0.0.1:4173/", async route => {
@@ -62,6 +64,11 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
       messages = messages.map(item => item.id === "question" ? { ...item, cardJSON: JSON.stringify({ questionId: "question-a", options: ["Go", "Web"], cardState: "answered", answer: "Go" }) } : item);
       data = {};
     }
+		if (message.method === "puck.authorization.decide") {
+			authorizationDecisions.push(message.params);
+			messages = messages.map(item => item.id === "authorization" ? { ...item, cardJSON: JSON.stringify({ ...JSON.parse(item.cardJSON || "{}"), cardState: "consumed", decision: message.params.decision }) } : item);
+			data = { state: "consumed" };
+		}
     if (message.method === "puck.stop") data = { summary: "已请求停止 1 项", message: { id: "stop", role: "assistant", kind: "stop_summary", text: "已请求停止 1 项" } };
     socket.send(JSON.stringify({ type: "response", v: 1, requestId: message.requestId, outcome: "accepted", data }));
   }));
@@ -88,6 +95,23 @@ test.describe("Puck structured question cards", () => {
 			await expect(row).toHaveScreenshot(`puck-question-${id}-390-dark.png`, { animations:"disabled", caret:"hide" });
 		}
 		expect(await page.locator(".puck-workspace").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+	});
+});
+
+test.describe("Puck persistent authorization card", () => {
+	test.use({ viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true, colorScheme: "dark" });
+	test("keeps three decisions inside a narrow card and renders approve-always terminal state", async ({ page }) => {
+		const history = [
+			...initialMessages.slice(0, 2),
+			{ id: "authorization", role: "assistant", kind: "authorization", text: "运行隔离测试需要确认。", cardJSON: JSON.stringify({ authorizationId: "authorization-a", action: "start_task", deviceId: "brain-a", cwd: "/work/ariel", expiresAt: "2099-11-03T12:30:00Z", cardState: "pending" }), createdAt: "2026-11-03T12:00:02Z" },
+		] as typeof initialMessages;
+		await openPuck(page, history);
+		const card = page.getByRole("group", { name: "授权卡片" });
+		for (const name of ["拒绝", "仅这一次允许", "以后都允许"]) await expect(card.getByRole("button", { name })).toBeVisible();
+		expect(await card.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+		await card.getByRole("button", { name: "以后都允许" }).click();
+		await expect(card.getByText("已允许（以后都允许）")).toBeVisible();
+		expect(authorizationDecisions).toContainEqual({ assistantId: "puck-one", authorizationId: "authorization-a", decision: "approve_always" });
 	});
 });
 

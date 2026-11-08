@@ -358,6 +358,7 @@ describe("PuckWorkspace", () => {
     const view = render(<PuckWorkspace request={request} state="ready" devices={[]} onOpenThread={onOpenThread} />);
     expect(await screen.findByRole("group", { name: "问题卡片" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "授权卡片" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "以后都允许" })).toBeTruthy();
 		expect(screen.getByRole("group", { name: "授权卡片" }).textContent).not.toContain("未说明");
     expect(screen.getByRole("group", { name: "任务卡片" })).toBeTruthy();
 	expect(view.container.querySelectorAll(".puck-transcript .puck-avatar")).toHaveLength(0);
@@ -367,6 +368,27 @@ describe("PuckWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开会话" }));
     expect(onOpenThread).toHaveBeenCalledWith("exec-a", "thread-a");
   });
+
+	it("persists approve-always decisions, renders their terminal label, and revokes saved rules", async () => {
+		let messages = [{ id: "z", role: "assistant", kind: "authorization", text: "运行测试", cardJSON: JSON.stringify({ authorizationId: "auth-a", cardState: "pending", deviceId: "exec-a", cwd: "/work" }) }];
+		let rules = [{ id: "rule-a", assistantId: "a-1", actionType: "start_task", deviceId: "exec-a", cwd: "/work", createdAt: "2026-11-08T10:00:00Z" }];
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", permissionMode: "ask" }] });
+			if (method === "puck.history") return accepted({ messages });
+			if (method === "puck.authorization.rule.list") return accepted({ rules });
+			if (method === "puck.authorization.decide") { messages = messages.map(message => ({ ...message, cardJSON: JSON.stringify({ ...JSON.parse(message.cardJSON), cardState: "consumed", decision: params.decision }) })); return accepted({ state: "consumed" }); }
+			if (method === "puck.authorization.rule.revoke") { rules = rules.filter(rule => rule.id !== params.ruleId); return accepted({}); }
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByText("start_task");
+		fireEvent.click(screen.getByRole("button", { name: "以后都允许" }));
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.authorization.decide", "relay", { assistantId: "a-1", authorizationId: "auth-a", decision: "approve_always" }));
+		expect(await screen.findByText("已允许（以后都允许）")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "撤销规则 start_task /work" }));
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.authorization.rule.revoke", "relay", { assistantId: "a-1", ruleId: "rule-a" }));
+		expect(await screen.findByText("尚未保存规则")).toBeTruthy();
+	});
 
   it("explains unavailable deployment prerequisites", async () => {
     render(<PuckWorkspace request={vi.fn()} state="unavailable" reason="PUCK_REQUIRES_PASSKEY_HTTPS" devices={[]} />);

@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 3
+const storeSchemaVersion = 4
 
 type Store struct{ db *sql.DB }
 
@@ -48,6 +48,15 @@ type Task struct {
 type Authorization struct {
 	ID, AssistantID, SourceMessageID, ActionJSON, ActionHash, RulesHit, Status string
 	ExpiresAt, DecidedAt                                                       time.Time
+}
+
+type AuthorizationRule struct {
+	ID          string    `json:"id"`
+	AssistantID string    `json:"assistantId"`
+	ActionType  string    `json:"actionType"`
+	DeviceID    string    `json:"deviceId"`
+	CWD         string    `json:"cwd"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 type AuditEntry struct {
@@ -122,6 +131,10 @@ func (s *Store) migrate(ctx context.Context) error {
 			source_message_id TEXT NOT NULL DEFAULT '', rules_hit TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT, created_at TEXT NOT NULL)`,
 			`CREATE INDEX authorizations_assistant ON authorizations(assistant_id, status)`,
 			`CREATE UNIQUE INDEX authorizations_pending_source_message ON authorizations(assistant_id,source_message_id) WHERE source_message_id<>'' AND status='pending'`,
+			`CREATE TABLE authorization_rules (
+            id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), action_type TEXT NOT NULL, device_id TEXT NOT NULL,
+            cwd_root TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(assistant_id,action_type,device_id,cwd_root))`,
+			`CREATE INDEX authorization_rules_assistant ON authorization_rules(assistant_id, created_at)`,
 			`CREATE TABLE audit_log (
             id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), actor TEXT NOT NULL, action TEXT NOT NULL,
             target TEXT NOT NULL DEFAULT '', result TEXT NOT NULL, at TEXT NOT NULL)`,
@@ -142,12 +155,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE UNIQUE INDEX authorizations_pending_source_message ON authorizations(assistant_id,source_message_id) WHERE source_message_id<>'' AND status='pending'`,
 		)
 	}
+	if version > 0 && version < 4 {
+		statements = append(statements,
+			`CREATE TABLE authorization_rules (
+            id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), action_type TEXT NOT NULL, device_id TEXT NOT NULL,
+            cwd_root TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(assistant_id,action_type,device_id,cwd_root))`,
+			`CREATE INDEX authorization_rules_assistant ON authorization_rules(assistant_id, created_at)`,
+		)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 3`); err != nil {
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 4`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -276,6 +297,9 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 		return sql.ErrNoRows
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE authorizations SET status='rejected',decided_at=? WHERE assistant_id=? AND status='pending'`, now, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM authorization_rules WHERE assistant_id=?`, assistantID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -439,6 +463,73 @@ func (s *Store) Authorization(ctx context.Context, assistantID, authorizationID 
 		a.DecidedAt, _ = time.Parse(time.RFC3339Nano, decided.String)
 	}
 	return a, err
+}
+
+func (s *Store) UpsertAuthorizationRule(ctx context.Context, rule AuthorizationRule) (AuthorizationRule, error) {
+	if rule.ID == "" {
+		rule.ID = randomID("rule")
+	}
+	if rule.CreatedAt.IsZero() {
+		rule.CreatedAt = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO authorization_rules(id,assistant_id,action_type,device_id,cwd_root,created_at) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(assistant_id,action_type,device_id,cwd_root) DO NOTHING`, rule.ID, rule.AssistantID, rule.ActionType, rule.DeviceID, rule.CWD, nowText(rule.CreatedAt))
+	if err != nil {
+		return AuthorizationRule{}, err
+	}
+	var created string
+	err = s.db.QueryRowContext(ctx, `SELECT id,assistant_id,action_type,device_id,cwd_root,created_at FROM authorization_rules WHERE assistant_id=? AND action_type=? AND device_id=? AND cwd_root=?`, rule.AssistantID, rule.ActionType, rule.DeviceID, rule.CWD).Scan(&rule.ID, &rule.AssistantID, &rule.ActionType, &rule.DeviceID, &rule.CWD, &created)
+	rule.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	return rule, err
+}
+
+func (s *Store) AuthorizationRules(ctx context.Context, assistantID string) ([]AuthorizationRule, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,action_type,device_id,cwd_root,created_at FROM authorization_rules WHERE assistant_id=? ORDER BY created_at,id`, assistantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var rules []AuthorizationRule
+	for rows.Next() {
+		var rule AuthorizationRule
+		var created string
+		if err := rows.Scan(&rule.ID, &rule.AssistantID, &rule.ActionType, &rule.DeviceID, &rule.CWD, &created); err != nil {
+			return nil, err
+		}
+		rule.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		rules = append(rules, rule)
+	}
+	return rules, rows.Err()
+}
+
+func (s *Store) MatchAuthorizationRule(ctx context.Context, assistantID, actionType, deviceID, cwd string) (*AuthorizationRule, error) {
+	rules, err := s.AuthorizationRules(ctx, assistantID)
+	if err != nil {
+		return nil, err
+	}
+	cwd = filepath.Clean(cwd)
+	for _, rule := range rules {
+		if rule.ActionType != actionType || rule.DeviceID != deviceID {
+			continue
+		}
+		rel, err := filepath.Rel(rule.CWD, cwd)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			matched := rule
+			return &matched, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Store) RevokeAuthorizationRule(ctx context.Context, assistantID, ruleID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM authorization_rules WHERE assistant_id=? AND id=?`, assistantID, ruleID)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) LatestUserMessageID(ctx context.Context, assistantID string) (string, error) {

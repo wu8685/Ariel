@@ -90,6 +90,8 @@ export type Request = {
     | "puck.task.list"
     | "puck.authorization.list"
     | "puck.authorization.decide"
+    | "puck.authorization.rule.list"
+    | "puck.authorization.rule.revoke"
     | "puck.decision.record"
     | "puck.brain.ensure"
     | "puck.brain.turn.start"

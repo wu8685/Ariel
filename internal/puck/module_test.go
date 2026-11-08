@@ -122,6 +122,56 @@ func TestTextMessageOmitsNullImagesFromBrainTurn(t *testing.T) {
 	}
 }
 
+func TestExplicitExecutionTargetDispatchesDeterministicallyBeforeBrainPlanning(t *testing.T) {
+	for _, mode := range []string{"full", "ask"} {
+		t.Run(mode, func(t *testing.T) {
+			bridge := &fakeModuleBridge{}
+			module, err := NewModule(t.TempDir(), bridge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer module.Close()
+			created := module.Handle(context.Background(), "puck.create", mustJSON(map[string]any{"name": "Helper", "brainDeviceId": "brain-a", "permissionMode": mode}))
+			id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+			module.clearPending(id)
+			bridge.mu.Lock()
+			bridge.calls, bridge.params, bridge.origins = nil, nil, nil
+			bridge.mu.Unlock()
+			result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "请在 exec-a 的 /work/project 运行测试"}))
+			if result.Error != nil {
+				t.Fatalf("result=%+v", result)
+			}
+			tasks, _ := module.store.Tasks(context.Background(), id)
+			var authorizations int
+			if err := module.store.db.QueryRow(`SELECT COUNT(*) FROM authorizations WHERE assistant_id=?`, id).Scan(&authorizations); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "full" && (len(tasks) != 1 || authorizations != 0) {
+				t.Fatalf("full tasks=%d authorizations=%d", len(tasks), authorizations)
+			}
+			if mode == "ask" && (len(tasks) != 0 || authorizations != 1) {
+				t.Fatalf("ask tasks=%d authorizations=%d", len(tasks), authorizations)
+			}
+			bridge.mu.Lock()
+			defer bridge.mu.Unlock()
+			if slices.Contains(bridge.calls, "puck.brain.turn.start") {
+				t.Fatalf("verified execution target was left to nondeterministic Brain planning: %v", bridge.calls)
+			}
+		})
+	}
+}
+
+func TestExplicitExecutionTargetRequiresExactDeviceToken(t *testing.T) {
+	devices := []map[string]any{
+		{"deviceId": "exec", "capabilities": map[string]bool{"threadBootstrap": true}},
+		{"deviceId": "exec-a", "capabilities": map[string]bool{"threadBootstrap": true}},
+	}
+	deviceID, cwd := explicitExecutionTarget("请在 exec-a 的 /work/project 运行测试", devices)
+	if deviceID != "exec-a" || cwd != "/work/project" {
+		t.Fatalf("device=%q cwd=%q", deviceID, cwd)
+	}
+}
+
 func TestMessageResumesBrainAndRetriesOneDefinitelyRejectedTurn(t *testing.T) {
 	bridge := &fakeModuleBridge{turnFailureCode: "RESYNC_REQUIRED"}
 	module, err := NewModule(t.TempDir(), bridge)
@@ -643,6 +693,85 @@ func TestModuleConsumesAuthorizationAndStopsStartedTask(t *testing.T) {
 	}
 }
 
+func TestModuleApproveAlwaysAutoExecutesDescendantAndRevokeRestoresCard(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 4)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","permissionMode":"ask"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	sendMessage := func(messageID, text string) {
+		result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": messageID, "text": text}))
+		if result.Error != nil {
+			t.Fatalf("message=%+v", result)
+		}
+	}
+	toolCall := func(callID, taskID, cwd string) {
+		bridge.events <- relay.BrainEvent{DeviceID: "brain-a", ThreadID: "brain-thread-a", AssistantID: id, Name: "puck.brain.toolCall", Payload: mustJSON(map[string]any{"callId": callID, "tool": "start_task", "arguments": map[string]any{"deviceId": "exec-a", "cwd": cwd, "goal": "test", "prompt": "run tests", "riskTags": []string{}, "clientTaskId": taskID}})}
+	}
+	waitForCounts := func(tasks, authorizations int) []Message {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+			gotTasks, gotAuthorizations := 0, 0
+			for _, message := range history {
+				if message.Kind == "task" {
+					gotTasks++
+				}
+				if message.Kind == "authorization" {
+					gotAuthorizations++
+				}
+			}
+			if gotTasks == tasks && gotAuthorizations == authorizations {
+				return history
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("did not reach tasks=%d authorizations=%d", tasks, authorizations)
+		return nil
+	}
+	sendMessage("message-one", "first")
+	toolCall("call-one", "00000000-0000-4000-8000-000000000151", "/work/project")
+	history := waitForCounts(0, 1)
+	var authorizationID string
+	for _, message := range history {
+		if message.Kind == "authorization" {
+			var card map[string]any
+			_ = json.Unmarshal([]byte(message.CardJSON), &card)
+			authorizationID, _ = card["authorizationId"].(string)
+		}
+	}
+	decided := module.Handle(context.Background(), "puck.authorization.decide", mustJSON(map[string]any{"assistantId": id, "authorizationId": authorizationID, "decision": "approve_always"}))
+	if decided.Error != nil {
+		t.Fatalf("decide=%+v", decided)
+	}
+	waitForCounts(1, 1)
+	listed := module.Handle(context.Background(), "puck.authorization.rule.list", mustJSON(map[string]any{"assistantId": id}))
+	rules, _ := listed.Data["rules"].([]AuthorizationRule)
+	if listed.Error != nil || len(rules) != 1 {
+		t.Fatalf("list=%+v", listed)
+	}
+	sendMessage("message-two", "second")
+	toolCall("call-two", "00000000-0000-4000-8000-000000000152", "/work/project/sub")
+	history = waitForCounts(2, 1)
+	foundAutoRecord := false
+	for _, message := range history {
+		foundAutoRecord = foundAutoRecord || strings.Contains(message.Text, "以后都允许")
+	}
+	if !foundAutoRecord {
+		t.Fatal("automatic execution record missing")
+	}
+	revoked := module.Handle(context.Background(), "puck.authorization.rule.revoke", mustJSON(map[string]any{"assistantId": id, "ruleId": rules[0].ID}))
+	if revoked.Error != nil {
+		t.Fatalf("revoke=%+v", revoked)
+	}
+	sendMessage("message-three", "third")
+	toolCall("call-three", "00000000-0000-4000-8000-000000000153", "/work/project/sub")
+	waitForCounts(2, 2)
+}
+
 func TestModuleDefaultsFullAndPersistsAskMode(t *testing.T) {
 	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1)}
 	module, err := NewModule(t.TempDir(), bridge)
@@ -1006,10 +1135,13 @@ func TestDeletedAssistantIgnoresQueuedBrainToolCall(t *testing.T) {
 
 func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
 	got := brainInstructions("assistant-a", "小帕", "开发助理")
-	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "禁止调用 exec", "直接调用 Puck tool"} {
+	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "不得尝试本地 shell 或 exec", "code_mode_host", "直接调用 Puck tool"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "禁止调用 exec 或通过 code mode 间接调用工具") {
+		t.Fatalf("instructions forbid the code_mode_host transport used by dynamic Puck tools:\n%s", got)
 	}
 }
 

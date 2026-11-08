@@ -8,19 +8,25 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
 var (
-	ErrActionChanged         = errors.New("authorization action changed")
-	ErrAuthorizationExpired  = errors.New("authorization expired")
-	ErrAuthorizationConsumed = errors.New("authorization already consumed")
-	ErrAuthorizationRejected = errors.New("authorization rejected")
+	ErrActionChanged             = errors.New("authorization action changed")
+	ErrAuthorizationExpired      = errors.New("authorization expired")
+	ErrAuthorizationConsumed     = errors.New("authorization already consumed")
+	ErrAuthorizationRejected     = errors.New("authorization rejected")
+	ErrAuthorizationScopeInvalid = errors.New("authorization scope invalid")
 )
 
 type FrozenAction struct {
 	Tool            string          `json:"tool"`
 	SourceMessageID string          `json:"sourceMessageId,omitempty"`
+	ActionType      string          `json:"actionType,omitempty"`
+	DeviceID        string          `json:"deviceId,omitempty"`
+	CWD             string          `json:"cwd,omitempty"`
 	Arguments       json.RawMessage `json:"arguments"`
 }
 
@@ -39,9 +45,9 @@ func HashAction(action FrozenAction) string {
 		arguments = string(action.Arguments)
 	}
 	canonical, _ := json.Marshal(struct {
-		Tool      string `json:"tool"`
-		Arguments any    `json:"arguments"`
-	}{action.Tool, arguments})
+		Tool, ActionType, DeviceID, CWD string
+		Arguments                       any
+	}{action.Tool, action.ActionType, action.DeviceID, action.CWD, arguments})
 	digest := sha256.Sum256(canonical)
 	return hex.EncodeToString(digest[:])
 }
@@ -85,8 +91,8 @@ func (s *AuthorizationService) Decide(ctx context.Context, assistantID, authoriz
 		return err
 	}
 	defer tx.Rollback()
-	var storedHash, status, expires string
-	if err := tx.QueryRowContext(ctx, `SELECT action_hash,status,expires_at FROM authorizations WHERE assistant_id=? AND id=?`, assistantID, authorizationID).Scan(&storedHash, &status, &expires); err != nil {
+	var storedHash, status, expires, actionJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT action_hash,status,expires_at,action_json FROM authorizations WHERE assistant_id=? AND id=?`, assistantID, authorizationID).Scan(&storedHash, &status, &expires, &actionJSON); err != nil {
 		return err
 	}
 	if storedHash != actionHash {
@@ -104,6 +110,16 @@ func (s *AuthorizationService) Decide(ctx context.Context, assistantID, authoriz
 	status = "approved"
 	if decision == "reject" {
 		status = "rejected"
+	} else if decision == "approve_always" {
+		var action FrozenAction
+		if json.Unmarshal([]byte(actionJSON), &action) != nil || !validAuthorizationScope(action) {
+			return ErrAuthorizationScopeInvalid
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO authorization_rules(id,assistant_id,action_type,device_id,cwd_root,created_at) VALUES(?,?,?,?,?,?)
+			ON CONFLICT(assistant_id,action_type,device_id,cwd_root) DO NOTHING`, randomID("rule"), assistantID, action.ActionType, action.DeviceID, filepath.Clean(action.CWD), nowText(s.now()))
+		if err != nil {
+			return err
+		}
 	} else if decision != "approve_once" {
 		return errors.New("invalid authorization decision")
 	}
@@ -115,6 +131,11 @@ func (s *AuthorizationService) Decide(ctx context.Context, assistantID, authoriz
 		return ErrAuthorizationConsumed
 	}
 	return tx.Commit()
+}
+
+func validAuthorizationScope(action FrozenAction) bool {
+	cwd := filepath.Clean(strings.TrimSpace(action.CWD))
+	return strings.TrimSpace(action.ActionType) != "" && len(action.ActionType) <= 256 && strings.TrimSpace(action.DeviceID) != "" && len(action.DeviceID) <= 128 && filepath.IsAbs(cwd) && cwd != string(filepath.Separator)
 }
 
 func (s *AuthorizationService) Consume(ctx context.Context, assistantID, authorizationID string) (FrozenAction, error) {

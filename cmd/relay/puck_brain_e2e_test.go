@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,8 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	}
 	root := t.TempDir()
 	fixture := filepath.Join(root, "execution-fixture")
-	if err := os.MkdirAll(fixture, 0700); err != nil {
+	fixtureChild := filepath.Join(fixture, "child")
+	if err := os.MkdirAll(fixtureChild, 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(fixture, "marker.txt"), []byte("fixture-marker\n"), 0600); err != nil {
@@ -108,7 +110,7 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	}
 
 	created := e2eRequest(t, web, nextRequestID(), "puck.create", "relay", map[string]any{
-		"name": "Fixture " + mode, "brainDeviceId": "fixture-device", "permissionMode": mode,
+		"name": "Fixture Assistant", "brainDeviceId": "fixture-device", "permissionMode": mode,
 	}, 3*time.Minute)
 	assistant := responseData(created)["assistant"].(map[string]any)
 	assistantID := assistant["assistantId"].(string)
@@ -170,6 +172,9 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		expected := mode == "full" && tasks == 1 && authorizations == 0 || mode == "ask" && tasks == 0 && authorizations == 1
 		if expected && firstExpectedAt.IsZero() {
 			firstExpectedAt = time.Now()
+			if mode == "ask" {
+				break
+			}
 			deadline = firstExpectedAt.Add(3*time.Minute + 30*time.Second)
 		}
 		if !firstExpectedAt.IsZero() && !expected {
@@ -183,6 +188,42 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 			t.Fatalf("mode=%s did not reach expected state: tasks=%d authorizations=%d assistantKinds=%v", mode, lastTasks, lastAuthorizations, lastAssistantKinds)
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if mode == "ask" {
+		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		authorizationID := e2ePendingAuthorizationID(history)
+		if authorizationID == "" {
+			t.Fatal("ask mode reached authorization count without a pending authorization id")
+		}
+		decided := e2eRequest(t, web, nextRequestID(), "puck.authorization.decide", "relay", map[string]any{"assistantId": assistantID, "authorizationId": authorizationID, "decision": "approve_always"}, 3*time.Minute)
+		if decided["outcome"] != "accepted" {
+			t.Fatalf("approve_always rejected: %v", decided["error"])
+		}
+		e2eWaitForPuckCounts(t, web, nextRequestID, assistantID, 1, 1, false, 3*time.Minute)
+		e2eWaitForBrainIdle(t, web, nextRequestID, assistantID, 3*time.Minute)
+		rulesResponse := e2eRequest(t, web, nextRequestID(), "puck.authorization.rule.list", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		ruleID := e2eFirstRuleID(rulesResponse)
+		if ruleID == "" {
+			t.Fatal("approve_always did not persist a rule")
+		}
+		secondID := "00000000-0000-4000-8000-000000000913"
+		secondPrompt := "请在 fixture-device 的目录 " + fixtureChild + " 实际检查 marker.txt 的上级目录内容并报告；必须交给目标设备执行，不修改文件。"
+		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{"assistantId": assistantID, "clientMessageId": secondID, "text": secondPrompt}, 3*time.Minute); response["outcome"] != "accepted" {
+			t.Fatalf("second ask message rejected: %v", response["error"])
+		}
+		e2eWaitForPuckCounts(t, web, nextRequestID, assistantID, 2, 1, true, 6*time.Minute)
+		e2eWaitForBrainIdle(t, web, nextRequestID, assistantID, 3*time.Minute)
+		revoked := e2eRequest(t, web, nextRequestID(), "puck.authorization.rule.revoke", "relay", map[string]any{"assistantId": assistantID, "ruleId": ruleID}, 15*time.Second)
+		if revoked["outcome"] != "accepted" {
+			t.Fatalf("rule revoke rejected: %v", revoked["error"])
+		}
+		thirdID := "00000000-0000-4000-8000-000000000914"
+		thirdPrompt := "请再次在 fixture-device 的目录 " + fixtureChild + " 实际检查 marker.txt 的上级目录内容并报告；必须交给目标设备执行，不修改文件。"
+		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{"assistantId": assistantID, "clientMessageId": thirdID, "text": thirdPrompt}, 3*time.Minute); response["outcome"] != "accepted" {
+			t.Fatalf("third ask message rejected: %v", response["error"])
+		}
+		e2eWaitForPuckCounts(t, web, nextRequestID, assistantID, 2, 2, true, 6*time.Minute)
+		t.Log("mode=ask persistent authorization flow: first=0 task/1 authorization, approved=1/1, automatic=2/1, revoked=2/2")
 	}
 	_ = e2eRequest(t, web, nextRequestID(), "puck.stop", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
 	cancel()
@@ -252,6 +293,78 @@ func e2eMessageKinds(response map[string]any) (tasks, authorizations int) {
 		}
 	}
 	return tasks, authorizations
+}
+
+func e2ePendingAuthorizationID(response map[string]any) string {
+	messages, _ := responseData(response)["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["kind"] != "authorization" {
+			continue
+		}
+		var card map[string]any
+		_ = json.Unmarshal([]byte(fmt.Sprint(message["cardJSON"])), &card)
+		if card["cardState"] == "pending" {
+			return fmt.Sprint(card["authorizationId"])
+		}
+	}
+	return ""
+}
+
+func e2eFirstRuleID(response map[string]any) string {
+	rules, _ := responseData(response)["rules"].([]any)
+	if len(rules) == 0 {
+		return ""
+	}
+	rule, _ := rules[0].(map[string]any)
+	return fmt.Sprint(rule["id"])
+}
+
+func e2eWaitForPuckCounts(t *testing.T, web *websocket.Conn, nextRequestID func() string, assistantID string, wantTasks, wantAuthorizations int, requireAutoRecord bool, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		tasks, authorizations := e2eMessageKinds(history)
+		autoRecord := !requireAutoRecord || e2eHasAutomaticAuthorizationRecord(history)
+		if tasks == wantTasks && authorizations == wantAuthorizations && autoRecord {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("counts did not reach tasks=%d authorizations=%d autoRecord=%v; got tasks=%d authorizations=%d autoRecord=%v", wantTasks, wantAuthorizations, requireAutoRecord, tasks, authorizations, autoRecord)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func e2eHasAutomaticAuthorizationRecord(response map[string]any) bool {
+	messages, _ := responseData(response)["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if strings.Contains(fmt.Sprint(message["text"]), "以后都允许") {
+			return true
+		}
+	}
+	return false
+}
+
+func e2eWaitForBrainIdle(t *testing.T, web *websocket.Conn, nextRequestID func() string, assistantID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+		busy := false
+		for _, kind := range e2eAssistantKinds(history) {
+			busy = busy || kind == "processing" || kind == "greeting_processing"
+		}
+		if !busy {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Brain did not become idle")
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func e2eAssistantKinds(response map[string]any) []string {
