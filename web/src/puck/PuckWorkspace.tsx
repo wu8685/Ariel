@@ -392,8 +392,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   }, [selectedID, messages]);
 
   useEffect(() => {
-	if (!messages.some(message => workData(message).state === "running")) return;
-	setClock(Date.now()); const timer = window.setInterval(() => setClock(Date.now()), 1000);
+	const running = messages.some(message => workData(message).state === "running");
+	const pendingAuthorization = messages.some(message => message.kind === "authorization" && String(cardData(message).cardState || "pending") === "pending");
+	if (!running && !pendingAuthorization) return;
+	setClock(Date.now()); const timer = window.setInterval(() => setClock(Date.now()), running ? 1000 : 5000);
 	return () => window.clearInterval(timer);
   }, [messages]);
 

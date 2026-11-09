@@ -586,6 +586,22 @@ describe("PuckWorkspace", () => {
 		expect(screen.queryByRole("button", { name: "仅这一次允许" })).toBeNull();
 	});
 
+	it("keeps a pending authorization expiry fresh while no work is running", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-09T00:00:00Z"));
+		const expiresAt = new Date(Date.now() + 2_000).toISOString();
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [{ id: "auth", role: "assistant", kind: "authorization", text: "运行测试", cardJSON: JSON.stringify({ authorizationId: "auth", cardState: "pending", expiresAt }) }] })
+			: method === "puck.watch" ? accepted({ watchId: "watch-a" }) : accepted({}));
+		render(<PuckWorkspace request={request} subscribeEvents={() => () => undefined} state="ready" devices={[]} />);
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(screen.getByText("1 分钟后过期")).toBeTruthy();
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(screen.getByText("授权已过期")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "仅这一次允许" })).toBeNull();
+	});
+
   it("uses puck.watch events for durable conversation updates and unwatches on cleanup", async () => {
     let listener: ((event: Record<string, unknown>) => void) | undefined;
     const subscribeEvents = vi.fn((next: (event: Record<string, unknown>) => void) => { listener = next; return vi.fn(); });
