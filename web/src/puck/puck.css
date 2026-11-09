@@ -204,6 +204,13 @@
   font-weight: var(--puck-weight-semibold);
   line-height: var(--puck-leading-ui);
 }
+.puck-workspace .puck-assistant-capacity {
+  margin-left: auto;
+  padding-right: var(--puck-space-2);
+  color: var(--color-muted);
+  font-size: var(--puck-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
 .puck-workspace .puck-add {
   width: var(--puck-control-sm);
   min-width: var(--puck-control-sm);

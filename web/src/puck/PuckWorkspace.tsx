@@ -298,6 +298,7 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
 
 export function PuckWorkspace({ request, subscribeEvents, state, reason, devices, onBack, onOpenThread }: { request: Request; subscribeEvents?: SubscribeEvents; state: "ready" | "unavailable" | "disabled"; reason?: string; devices: Device[]; onBack?: () => void; onOpenThread?: (deviceId: string, threadId: string) => void }) {
   const [assistants, setAssistants] = useState<Assistant[]>([]);
+  const [maxActiveAssistants, setMaxActiveAssistants] = useState<number>();
   const [selectedID, setSelectedID] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
@@ -401,6 +402,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (sequence !== listSequence.current) return;
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     const next = arrayData<Assistant>(response.data?.assistants);
+    const reportedLimit = Number(response.data?.maxActiveAssistants);
+    if (Number.isInteger(reportedLimit) && reportedLimit > 0) setMaxActiveAssistants(reportedLimit);
     const currentID = selectedRef.current;
     const preferredID = lastAssistantRef.current;
     const nextID = currentID && next.some(item => item.assistantId === currentID)
@@ -462,6 +465,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	}, [selectedID, subscribeEvents]);
 
   async function createAssistant() {
+    if (maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants) { setNotice(`最多可创建 ${maxActiveAssistants} 个 Bot。`); return; }
     const deviceID = brainDeviceID || readyBrains[0]?.deviceId;
     if (!name.trim() || !deviceID) { setNotice("请填写名称并选择可用的大脑主机。"); return; }
     const response = await request("puck.create", "relay", { name: name.trim(), brainDeviceId: deviceID, allowedScope: {}, permissionMode: "full" });
@@ -666,7 +670,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   return <main className="puck-workspace">
     {mobilePanel && <button className="puck-panel-backdrop" aria-label="关闭面板" onClick={()=>setMobilePanel("")}/>}
     <aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}>
-      <header><b>Puck</b><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理">＋</button></header>
+      <header><b>Puck</b><span className="puck-assistant-capacity" aria-label={maxActiveAssistants === undefined ? `助理数量 ${assistants.length}` : `助理数量 ${assistants.length}/${maxActiveAssistants}`}>{assistants.length}{maxActiveAssistants === undefined ? "" : ` / ${maxActiveAssistants}`}</span><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理" disabled={maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants}>＋</button></header>
       <div className="puck-assistant-list">{assistants.map(item => <button className={`puck-assistant-row${item.assistantId === selectedID ? " active" : ""}`} key={item.assistantId} onClick={() => { selectAssistant(item.assistantId); setMobilePanel(""); }}>
         <PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={Boolean(item.unreadCount) || item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/>
         <span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || item.lastMessagePreview || (item.status === "ready" ? "在线" : "准备中")}</small></span>
@@ -685,7 +689,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         {selected && <div className="puck-header-actions puck-glass-chip">{busy ? <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button> : <button className="puck-icon-btn" type="button" aria-label="更多助理操作" onClick={()=>setMobilePanel("info")}><span className="puck-more" aria-hidden="true">•••</span></button>}</div>}
       </header>
 	      <div className="puck-transcript" ref={transcriptRef} aria-live="polite" onScroll={trackTranscriptScroll}>{assistants.length === 0 ? <div className="puck-empty">
-        <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)}>新建助理</button>
+        <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)} disabled={maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants}>新建助理</button>
 	      </div> : <PuckConversationErrorBoundary key={selectedID}>{messages.map((message,index) => {
         const continued = index > 0 && messages[index - 1].role === message.role;
         const groupEnd = index === messages.length - 1 || messages[index + 1].role !== message.role;

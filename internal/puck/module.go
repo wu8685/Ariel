@@ -26,7 +26,10 @@ type Orchestrator interface {
 	BrainEvents() <-chan relay.BrainEvent
 }
 
-const currentToolsetVersion = toolcontract.Version
+const (
+	currentToolsetVersion = toolcontract.Version
+	MaxActiveAssistants   = 50
+)
 
 type Module struct {
 	store      *Store
@@ -572,7 +575,7 @@ func (m *Module) list(ctx context.Context) relay.PuckResponse {
 	for _, a := range assistants {
 		items = append(items, assistantData(a))
 	}
-	return accepted(map[string]any{"assistants": items})
+	return accepted(map[string]any{"assistants": items, "maxActiveAssistants": MaxActiveAssistants})
 }
 
 func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
@@ -597,10 +600,6 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if !ready {
 		return moduleError("BRAIN_HOST_OFFLINE", "selected brain host is not ready")
 	}
-	assistants, _ := m.store.Assistants(ctx)
-	if len(assistants) >= 10 {
-		return moduleError("OVERLOADED", "assistant limit reached")
-	}
 	id := randomID("assistant")
 	scope, _ := json.Marshal(input.AllowedScope)
 	avatar := ""
@@ -619,7 +618,9 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	}
 	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, Persona: input.Description, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: currentToolsetVersion, AllowedScope: string(scope), Status: "provisioning"}
 	a.Policy = policyWithPermissionMode(a.Policy, input.PermissionMode)
-	if err := m.store.CreateAssistant(ctx, a); err != nil {
+	if err := m.store.CreateAssistantLimited(ctx, a, MaxActiveAssistants); errors.Is(err, ErrAssistantLimitReached) {
+		return moduleError("OVERLOADED", fmt.Sprintf("active assistant limit reached (%d)", MaxActiveAssistants))
+	} else if err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	result := m.ensureBrain(ctx, a)

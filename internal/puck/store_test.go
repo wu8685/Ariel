@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,6 +140,41 @@ func TestStorePersistsReplyTargetsAndScopesSingleMessageReads(t *testing.T) {
 	}
 	if _, err := store.Message(ctx, "assistant-b", "reply-a"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-assistant read err=%v", err)
+	}
+}
+
+func TestStoreCreateAssistantLimitedAtomicallyRejectsConcurrentOverflow(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	const limit = 5
+	start := make(chan struct{})
+	errs := make(chan error, limit+3)
+	for i := 0; i < limit+3; i++ {
+		go func(i int) {
+			<-start
+			errs <- store.CreateAssistantLimited(ctx, Assistant{ID: fmt.Sprintf("assistant-%d", i), Name: "Bot", BrainDeviceID: "brain-a", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}, limit)
+		}(i)
+	}
+	close(start)
+	accepted, rejected := 0, 0
+	for i := 0; i < limit+3; i++ {
+		err := <-errs
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrAssistantLimitReached):
+			rejected++
+		default:
+			t.Fatalf("unexpected create error: %v", err)
+		}
+	}
+	assistants, err := store.Assistants(ctx)
+	if err != nil || accepted != limit || rejected != 3 || len(assistants) != limit {
+		t.Fatalf("accepted=%d rejected=%d assistants=%d err=%v", accepted, rejected, len(assistants), err)
 	}
 }
 

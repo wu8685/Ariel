@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -511,10 +511,10 @@ sequenceDiagram
    2. 发 `puck.brain.ensure`：Agent 在固定根目录（`~/.ariel/puck/<assistantId>/`）创建空的专用 `cwd`（根目录外拒绝，不写入文件），在常驻 app-server 上 `thread/start`（`developerInstructions`、`dynamicTools`、策略），返回 `brain_thread_id`；
    3. 发问候首轮（UI5.2），以 exact `clientUserMessageId` 读回确认；
    4. 状态 `provisioning → ready`；任一步失败停在 `provisioning` 并可重试；重试复用已记录的 `brain_thread_id`，不重复建 thread。
-2. **列表／读取**（`puck.list`）：名称、状态、大脑主机在线、未读与待授权数量。
+2. **列表／读取**（`puck.list`）：名称、状态、大脑主机在线、未读与待授权数量，并返回 `maxActiveAssistants`，供 Web 显示服务端权威容量。
 3. **更新**（`puck.update`）：名称、人设、作用域、策略、通知设置即时生效；人设变化在下一 turn 以“设置已更新”系统前缀告知 Brain；人设大幅变更或工具集升级时轮换 brain thread（`developerInstructions`／`dynamicTools` 只能在创建时设定，§4.2.5）；**更换大脑主机**会在新主机新建 brain thread，旧 brain thread 由原主机 Agent `retire`（保留 rollout，不再驱动），记忆／任务／routine 不变。
 4. **删除**（`puck.delete`）：二次确认；立即停用 routine、`puck.brain.retire`、停止 watch、拒绝该助理的待处理授权；已派发执行 thread **不停止、不归档**（用户可在 Ariel 中继续操作）。数据软删除 30 天后清除（期限待定，Q16）；brain thread 是否归档由用户在删除时选择，默认保留。
-5. 助理数量上限默认 10（防止误建过多 brain thread）。
+5. 活跃助理数量上限默认 50（防止误建过多 brain thread）。创建时必须在同一 SQLite 事务内统计 `deleted_at IS NULL` 的助理并插入新记录，避免并发请求越过上限；达到上限返回 `OVERLOADED`。Web 显示当前数量与服务端上限，并在达到上限时禁用新建入口。软删除后的助理不占活跃容量。
 
 ### 8.3 隔离
 
@@ -709,7 +709,7 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 6. 真实浏览器：Chromium 中授予通知权限、订阅、接收真实 Web Push（本地测试推送服务或真实 FCM 专用测试订阅）、`notificationclick` 深链到卡片；Service Worker 不拦截其他请求（断言现有页面加载与升级流程不变）；iOS 非独立模式显示添加到主屏幕引导。物理 iPhone（16.4+ 主屏幕 PWA）待用户复验。
 7. 隔离 Codex fixture 上完成一次“派发 → 原生审批 → Push → 用户在卡片决定 → 完成 → 摘要 → Push”。
 8. 体验与界面（Playwright）：mock 事件序列下对话中只出现里程碑消息（开始／阻塞／结果各一条），其余变化只更新卡片（E3）；完成／失败／需要用户时对话消息与 Push 同时产生（E4）；Codex 审批卡片在对话内且与现有卡片行为一致，Push 深链定位到同一卡片（E5）；附件卡片打开现有查看器（E11）；通知权限卡片只出现一次、拒绝后不再出现；侧栏未读／待处理角标与已读水位多标签页同步。
-9. 资源：开启 Puck 的长稳基准（例如 10 个助理、50 个跟踪任务、持续事件）下记录模块内存、goroutine、队列深度与 Relay `/ws` 延迟，确认模块不超出 128 MiB 预算、进程在 896 MiB `GOMEMLIMIT`／1152 Mi 限制下稳定、Relay hot cache 行为不变（Q20）。
+9. 资源：开启 Puck 的长稳基准（例如 50 个助理、50 个跟踪任务、持续事件）下记录模块内存、goroutine、队列深度与 Relay `/ws` 延迟，确认模块不超出 128 MiB 预算、进程在 896 MiB `GOMEMLIMIT`／1152 Mi 限制下稳定、Relay hot cache 行为不变（Q20）。
 
 ### P2：记忆 + Routines
 
@@ -724,7 +724,7 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 
 ### P3：多助理体验完善
 
-范围：助理数量上限、头像、按助理未读／待授权角标、作用域重叠提示（Q19）、删除保留期清理（Q16）、导入／导出（Q11）。验收随对应开放问题定稿后补充。
+范围：助理数量上限（默认 50，已提前实现）、头像、按助理未读／待授权角标、作用域重叠提示（Q19）、删除保留期清理（Q16）、导入／导出（Q11）。验收随对应开放问题定稿后补充。
 
 ### P4：CLI-only 主机 Adapter
 

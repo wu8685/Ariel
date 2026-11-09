@@ -18,6 +18,8 @@ const storeSchemaVersion = 5
 
 type Store struct{ db *sql.DB }
 
+var ErrAssistantLimitReached = errors.New("active assistant limit reached")
+
 type Assistant struct {
 	ID, Name, Avatar, Description, Persona                          string
 	BrainDeviceID, BrainCWD, BrainModel, BrainReasoning             string
@@ -193,11 +195,43 @@ func nullTimeText(value time.Time) any {
 }
 
 func (s *Store) CreateAssistant(ctx context.Context, a Assistant) error {
+	return insertAssistant(ctx, s.db, a)
+}
+
+type assistantInserter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertAssistant(ctx context.Context, target assistantInserter, a Assistant) error {
 	now := nowText(time.Time{})
-	_, err := s.db.ExecContext(ctx, `INSERT INTO assistants
+	_, err := target.ExecContext(ctx, `INSERT INTO assistants
 		(id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Name, a.Avatar, a.Description, a.Persona, a.BrainDeviceID, a.BrainCWD, a.BrainModel, a.BrainReasoning, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), defaultJSON(a.Limits, "{}"), a.Status, a.UnreadCount, a.LastMessagePreview, now, now)
 	return err
+}
+
+// CreateAssistantLimited counts active assistants and inserts the new row in
+// one transaction so concurrent callers cannot oversubscribe the limit.
+func (s *Store) CreateAssistantLimited(ctx context.Context, a Assistant, limit int) error {
+	if limit <= 0 {
+		return ErrAssistantLimitReached
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistants WHERE deleted_at IS NULL`).Scan(&active); err != nil {
+		return err
+	}
+	if active >= limit {
+		return ErrAssistantLimitReached
+	}
+	if err := insertAssistant(ctx, tx, a); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func defaultJSON(value, fallback string) string {

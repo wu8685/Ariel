@@ -9,6 +9,17 @@ const rejected = (code: string) => ({ type: "response", v: 1, requestId: crypto.
 afterEach(() => { cleanup(); localStorage.clear(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("PuckWorkspace", () => {
+	it("reports the server assistant capacity and disables creation at the limit", async () => {
+		const assistants = Array.from({ length: 50 }, (_, index) => ({ assistantId: `a-${index}`, name: `Bot ${index}`, brainDeviceId: "brain-a", status: "ready" }));
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants, maxActiveAssistants: 50 })
+			: method === "puck.history" ? accepted({ messages: [] }) : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("Bot 0");
+		expect(screen.getByLabelText("助理数量 50/50")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "新建助理" }).hasAttribute("disabled")).toBe(true);
+	});
+
 	it("restores the last used assistant and falls back when the saved assistant no longer exists", async () => {
 		localStorage.setItem("ariel.puck.lastAssistantId.v1", "a-2");
 		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {

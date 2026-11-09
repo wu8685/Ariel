@@ -501,6 +501,38 @@ func TestModuleFailedBrainProvisionDoesNotLeaveCapacityConsumingAssistant(t *tes
 	}
 }
 
+func TestModuleReportsAndEnforcesFiftyActiveAssistantLimit(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	for i := 0; i < 49; i++ {
+		err := module.store.CreateAssistant(ctx, Assistant{ID: fmt.Sprintf("existing-%02d", i), Name: "Existing", BrainDeviceID: "brain-a", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := module.Handle(ctx, "puck.list", nil)
+	if got := listed.Data["maxActiveAssistants"]; got != 50 {
+		t.Fatalf("reported maxActiveAssistants=%v", got)
+	}
+	fiftieth := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Fiftieth","brainDeviceId":"brain-a"}`))
+	if fiftieth.Error != nil {
+		t.Fatalf("50th create=%+v", fiftieth)
+	}
+	overflow := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Overflow","brainDeviceId":"brain-a"}`))
+	if overflow.Error == nil || overflow.Error.Code != "OVERLOADED" {
+		t.Fatalf("51st create=%+v", overflow)
+	}
+	assistants, err := module.store.Assistants(ctx)
+	if err != nil || len(assistants) != 50 {
+		t.Fatalf("assistants=%d err=%v", len(assistants), err)
+	}
+}
+
 func TestModulePersistsRealTurnDurationStepsUnreadAndReactions(t *testing.T) {
 	bridge := &fakeModuleBridge{}
 	module, err := NewModule(t.TempDir(), bridge)
