@@ -54,6 +54,11 @@ describe("interaction cards", () => {
     expect(onChange).toHaveBeenCalledWith("choice", "继续");
 
     fireEvent.click(screen.getByRole("radio", { name: "其他" }));
-    expect(screen.getByRole("textbox", { name: "自定义回答" })).toBeTruthy();
+    const custom = screen.getByRole("textbox", { name: "自定义回答" });
+    fireEvent.compositionStart(custom);
+    fireEvent.keyDown(custom, { key: "Enter" });
+    fireEvent.compositionEnd(custom);
+    fireEvent.keyDown(custom, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { answersForSubmission } from "./interaction";
 import type { Interaction } from "./generated/protocol";
+import { useImeEnterGuard } from "./ime-enter";
 
 type InteractionCardProps = {
   card: Interaction;
@@ -32,6 +33,7 @@ function decisionLabel(card: Interaction, decision: string, submitting: boolean)
 }
 
 export function InteractionCard({ card, values, onChange, onRespond, disabled, submitting = false }: InteractionCardProps) {
+  const customAnswerIme = useImeEnterGuard();
   const [customQuestions, setCustomQuestions] = useState<Set<string>>(() => new Set());
 
   return <section className="interaction-card">
@@ -70,7 +72,7 @@ export function InteractionCard({ card, values, onChange, onRespond, disabled, s
             <span className="question-option-copy"><strong>其他</strong><small>输入自定义回答</small></span>
           </label>
         </div> : null}
-        {(options.length === 0 || custom) && <textarea aria-label={options.length ? "自定义回答" : question.question} value={current} onChange={event => onChange(question.id, event.target.value)} placeholder="输入回答" rows={3} />}
+        {(options.length === 0 || custom) && <textarea aria-label={options.length ? "自定义回答" : question.question} value={current} onChange={event => onChange(question.id, event.target.value)} onCompositionStart={customAnswerIme.compositionStart} onCompositionEnd={customAnswerIme.compositionEnd} onBlur={customAnswerIme.blur} placeholder="输入回答" rows={3} />}
       </fieldset>;
     })}
     <div className="interaction-actions">{card.availableDecisions.map(decision => <button key={decision} className={decision === "accept_once" || decision === "answer" ? "primary" : "secondary"} disabled={disabled || (decision === "answer" && !answersForSubmission(card, values))} onClick={() => onRespond(decision)}>{decisionLabel(card, decision, submitting)}</button>)}</div>

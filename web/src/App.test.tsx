@@ -647,7 +647,14 @@ describe("Ariel app interactions", () => {
     expect((input as HTMLInputElement).selectionStart).toBe(1);
     expect((input as HTMLInputElement).selectionEnd).toBe(1);
     fireEvent.change(input, { target: { value: "  新名称  " } });
-    fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229, which: 229 });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(requests("thread.name.update")).toHaveLength(0);
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 60)); });
+    fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(requests("thread.name.update")).toHaveLength(1));
     expect(requests("thread.name.update")[0].params).toEqual({ threadId: "fixture", name: "新名称" });
     const renamed = { ...withMessage, title: "新名称", updatedAt: "2026-10-04T00:00:01Z" };
@@ -2052,7 +2059,13 @@ describe("Ariel app interactions", () => {
       fireEvent.change(input, { target: { value: "desktop draft" } });
       expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
       expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
+      expect(fireEvent.keyDown(input, { key: "Enter", keyCode: 229, which: 229 })).toBe(true);
+      fireEvent.compositionStart(input);
+      expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(true);
+      fireEvent.compositionEnd(input);
+      expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(true);
       expect(requests("turn.start")).toHaveLength(0);
+      await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 60)); });
       expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
       await waitFor(() => expect(requests("turn.start")).toHaveLength(1));
     } finally {

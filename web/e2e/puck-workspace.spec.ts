@@ -89,8 +89,16 @@ test.describe("Puck reply to message desktop", () => {
 		await expect(reply).toHaveCSS("opacity", "1");
 		await reply.click();
 		await expect(page.getByLabel("正在回复助理消息")).toContainText("晚上好");
-		await page.getByRole("textbox", { name: "给 Puck 发消息" }).fill("继续检查失败项");
-		await page.getByRole("button", { name: "发送" }).click();
+		const composer = page.getByRole("textbox", { name: "给 Puck 发消息" });
+		await composer.fill("继续检查失败项");
+		await composer.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229, which: 229, bubbles: true, cancelable: true });
+		await composer.dispatchEvent("compositionstart", { data: "继续" });
+		await composer.press("Enter");
+		await composer.dispatchEvent("compositionend", { data: "继续" });
+		await composer.press("Enter");
+		expect(sentMessages).toHaveLength(0);
+		await page.waitForTimeout(60);
+		await composer.press("Enter");
 		await expect.poll(() => sentMessages.at(-1)?.replyTo).toBe("hello");
 		const quote = page.getByRole("button", { name: "跳到被引用的消息" });
 		await quote.click();

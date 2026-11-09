@@ -347,6 +347,18 @@ test.describe("wide-screen file and chat workspace",()=>{
     await page.setViewportSize({width:1280,height:844});await expect(composer).toHaveValue(draft);expect(reads).toEqual(["a.md"]);expect(methods.filter(m=>m==="thread.cache.watch")).toHaveLength(1);
   });
 
+  test("desktop composer ignores IME Enter variants and sends the next ordinary Enter",async({page})=>{
+    await page.setViewportSize({width:1280,height:844});const {methods}=await setup(page);
+    const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("中文输入法草稿");
+    await composer.dispatchEvent("keydown",{key:"Enter",code:"Enter",keyCode:229,which:229,bubbles:true,cancelable:true});
+    await composer.dispatchEvent("compositionstart",{data:"zhong"});await composer.press("Enter");
+    expect(methods.filter(method=>method==="turn.start")).toHaveLength(0);
+    await composer.dispatchEvent("compositionend",{data:"中文"});await composer.press("Enter");
+    expect(methods.filter(method=>method==="turn.start")).toHaveLength(0);
+    await page.waitForTimeout(60);await composer.press("Enter");
+    await expect.poll(()=>methods.filter(method=>method==="turn.start").length).toBe(1);
+  });
+
   test("short desktop keeps the quote footer, composer and independent scroll regions reachable",async({page})=>{
     await page.setViewportSize({width:1280,height:420});const {methods}=await setup(page);
     const composer=page.getByRole("textbox",{name:"发送消息"});await composer.fill("短屏保留草稿");await page.getByRole("button",{name:"查看原文：a.md"}).click();
