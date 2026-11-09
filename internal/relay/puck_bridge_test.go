@@ -81,6 +81,74 @@ func TestPuckBridgeRoutesBrainEventsByConnectionIdentity(t *testing.T) {
 	}
 }
 
+func TestPuckBridgeWaitsBrieflyForCriticalBrainEventCapacity(t *testing.T) {
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := r.PuckBridge()
+	bridge.BrainThreads(map[BrainThread]string{{DeviceID: "mock-mac", ThreadID: "brain-a"}: "assistant-a"})
+	for index := 0; index < cap(bridge.events); index++ {
+		bridge.events <- BrainEvent{Name: "fixture"}
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- bridge.routeBrainEvent("mock-mac", []byte(`{"event":"puck.brain.toolCall","threadId":"brain-a","callId":"call-a"}`))
+	}()
+	time.Sleep(20 * time.Millisecond)
+	<-bridge.events
+	if !<-done {
+		t.Fatal("critical event was not recognized")
+	}
+	for len(bridge.events) > 1 {
+		<-bridge.events
+	}
+	if event := <-bridge.events; event.Name != "puck.brain.toolCall" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestPuckBridgeReportsCriticalBrainEventOverflow(t *testing.T) {
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := r.PuckBridge()
+	bridge.eventWait = time.Millisecond
+	bridge.BrainThreads(map[BrainThread]string{{DeviceID: "mock-mac", ThreadID: "brain-a"}: "assistant-a"})
+	for index := 0; index < cap(bridge.events); index++ {
+		bridge.events <- BrainEvent{Name: "fixture"}
+	}
+	if !bridge.routeBrainEvent("mock-mac", []byte(`{"event":"puck.brain.toolCall","threadId":"brain-a","callId":"call-a"}`)) {
+		t.Fatal("event was not recognized")
+	}
+	if bridge.eventDrops.Load() != 1 {
+		t.Fatalf("drops = %d", bridge.eventDrops.Load())
+	}
+	select {
+	case failure := <-bridge.BrainFailures():
+		if failure.AssistantID != "assistant-a" || failure.Name != "puck.brain.toolCall" {
+			t.Fatalf("failure = %+v", failure)
+		}
+	default:
+		t.Fatal("missing delivery failure")
+	}
+}
+
+func TestPuckBridgeCoalescesDeviceStatusToLatest(t *testing.T) {
+	r, err := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := r.PuckBridge()
+	bridge.routeDeviceStatus(map[string]any{"deviceId": "old"})
+	bridge.routeDeviceStatus(map[string]any{"deviceId": "new"})
+	status := <-bridge.DeviceStatus()
+	if status["deviceId"] != "new" || len(bridge.device) != 0 {
+		t.Fatalf("status = %+v queued=%d", status, len(bridge.device))
+	}
+}
+
 func TestPuckBridgeFailsClosedWhenExecutionPolicyIsUnverified(t *testing.T) {
 	r, _ := New(Config{Token: "test-token", WebPIN: "012345", AllowedOrigins: []string{testOrigin}, PuckState: "ready"})
 	server := httptest.NewServer(r.Handler())

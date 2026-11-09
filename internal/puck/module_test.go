@@ -25,6 +25,7 @@ type fakeModuleBridge struct {
 	emptyTurn         bool
 	ensureThreads     []string
 	events            chan relay.BrainEvent
+	failures          chan relay.BrainDeliveryFailure
 	params            []json.RawMessage
 	origins           []relay.Origin
 }
@@ -762,6 +763,37 @@ func (f *fakeModuleBridge) BrainEvents() <-chan relay.BrainEvent {
 		f.events = make(chan relay.BrainEvent, 4)
 	}
 	return f.events
+}
+
+func (f *fakeModuleBridge) BrainFailures() <-chan relay.BrainDeliveryFailure {
+	if f.failures == nil {
+		f.failures = make(chan relay.BrainDeliveryFailure, 4)
+	}
+	return f.failures
+}
+
+func TestModuleMakesBrainDeliveryFailureVisible(t *testing.T) {
+	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1), failures: make(chan relay.BrainDeliveryFailure, 1)}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	if created.Error != nil {
+		t.Fatal(created.Error)
+	}
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.pending[id] = pendingBrainTurn{turnID: "turn-a", responseID: "response-a", startedAt: time.Now()}
+	module.handleBrainDeliveryFailure(context.Background(), relay.BrainDeliveryFailure{AssistantID: id, Name: "puck.brain.toolCall"})
+	messages, err := module.store.Messages(context.Background(), id, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := messages[len(messages)-1]
+	if last.ID != "response-a" || last.Kind != "error" || !strings.Contains(last.Text, "繁忙") {
+		t.Fatalf("message = %+v", last)
+	}
 }
 
 func TestModuleRetriesProvisioningWithoutCreatingAnotherAssistant(t *testing.T) {

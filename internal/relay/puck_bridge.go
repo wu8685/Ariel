@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	puckMaxInFlight = 32
 	puckEventBuffer = 128
+	puckEventWait   = 250 * time.Millisecond
 )
 
 type Origin struct {
@@ -44,11 +48,19 @@ type BrainEvent struct {
 	Payload     json.RawMessage
 }
 
+type BrainDeliveryFailure struct {
+	AssistantID string
+	Name        string
+}
+
 type PuckBridge struct {
-	server *Server
-	sem    chan struct{}
-	events chan BrainEvent
-	device chan map[string]any
+	server     *Server
+	sem        chan struct{}
+	events     chan BrainEvent
+	failures   chan BrainDeliveryFailure
+	device     chan map[string]any
+	eventWait  time.Duration
+	eventDrops atomic.Uint64
 
 	mu           sync.RWMutex
 	brainThreads map[BrainThread]string
@@ -117,12 +129,14 @@ func (b *PuckBridge) Watch(ctx context.Context, origin Origin, deviceID, threadI
 }
 
 func newPuckBridge(server *Server) *PuckBridge {
-	return &PuckBridge{server: server, sem: make(chan struct{}, puckMaxInFlight), events: make(chan BrainEvent, puckEventBuffer), device: make(chan map[string]any, 64), brainThreads: map[BrainThread]string{}, now: time.Now}
+	return &PuckBridge{server: server, sem: make(chan struct{}, puckMaxInFlight), events: make(chan BrainEvent, puckEventBuffer), failures: make(chan BrainDeliveryFailure, 32), device: make(chan map[string]any, 1), eventWait: puckEventWait, brainThreads: map[BrainThread]string{}, now: time.Now}
 }
 
 func (s *Server) PuckBridge() *PuckBridge { return s.puckBridge }
 
 func (b *PuckBridge) BrainEvents() <-chan BrainEvent { return b.events }
+
+func (b *PuckBridge) BrainFailures() <-chan BrainDeliveryFailure { return b.failures }
 
 func (b *PuckBridge) DeviceStatus() <-chan map[string]any { return b.device }
 
@@ -310,11 +324,37 @@ func (b *PuckBridge) routeBrainEvent(deviceID string, body []byte) bool {
 		return true
 	}
 	event := BrainEvent{DeviceID: deviceID, ThreadID: envelope.ThreadID, AssistantID: assistantID, Name: envelope.Event, Payload: append(json.RawMessage(nil), body...)}
+	if envelope.Event == "puck.brain.status" {
+		select {
+		case b.events <- event:
+		default:
+			b.logEventDrop(assistantID, envelope.Event)
+		}
+		return true
+	}
+	timer := time.NewTimer(b.eventWait)
+	defer timer.Stop()
 	select {
 	case b.events <- event:
-	default:
+	case <-timer.C:
+		b.logEventDrop(assistantID, envelope.Event)
+		select {
+		case b.failures <- BrainDeliveryFailure{AssistantID: assistantID, Name: envelope.Event}:
+		default:
+			log.Printf("puck brain delivery failure queue full: assistant=%s event=%s", assistantSummaryID(assistantID), envelope.Event)
+		}
 	}
 	return true
+}
+
+func (b *PuckBridge) logEventDrop(assistantID, event string) {
+	drops := b.eventDrops.Add(1)
+	log.Printf("puck brain event dropped: assistant=%s event=%s drops=%d", assistantSummaryID(assistantID), event, drops)
+}
+
+func assistantSummaryID(assistantID string) string {
+	digest := sha256.Sum256([]byte(assistantID))
+	return fmt.Sprintf("%x", digest[:6])
 }
 
 func (b *PuckBridge) routeDeviceStatus(status map[string]any) {
@@ -325,6 +365,14 @@ func (b *PuckBridge) routeDeviceStatus(status map[string]any) {
 	select {
 	case b.device <- copy:
 	default:
+		select {
+		case <-b.device:
+		default:
+		}
+		select {
+		case b.device <- copy:
+		default:
+		}
 	}
 }
 

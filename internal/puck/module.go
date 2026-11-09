@@ -24,6 +24,7 @@ type Orchestrator interface {
 	Forward(context.Context, relay.Origin, string, string, json.RawMessage) relay.PuckResponse
 	BrainThreads(map[relay.BrainThread]string)
 	BrainEvents() <-chan relay.BrainEvent
+	BrainFailures() <-chan relay.BrainDeliveryFailure
 }
 
 const (
@@ -153,8 +154,24 @@ func (m *Module) runBrainEvents(ctx context.Context) {
 				return
 			}
 			m.handleBrainEvent(ctx, event)
+		case failure, ok := <-m.bridge.BrainFailures():
+			if !ok {
+				return
+			}
+			m.handleBrainDeliveryFailure(ctx, failure)
 		}
 	}
+}
+
+func (m *Module) handleBrainDeliveryFailure(ctx context.Context, failure relay.BrainDeliveryFailure) {
+	pending := m.clearPending(failure.AssistantID)
+	message := Message{ID: newUUID(), AssistantID: failure.AssistantID, Role: "assistant", Kind: "error", Text: "助理事件队列繁忙，本次操作已停止，请重试。"}
+	if pending.responseID != "" {
+		message.ID = pending.responseID
+		_ = m.store.UpsertMessage(ctx, message)
+		return
+	}
+	_ = m.store.AppendMessage(ctx, message)
 }
 
 func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
