@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
@@ -190,12 +191,12 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	}
 	if call.SourceMessageID != "" {
 		if existing, err := h.backend.TaskBySourceMessage(ctx, call.AssistantID, call.SourceMessageID); err == nil {
-			return ToolResult{Success: true, Data: taskData(existing)}
+			return h.reuseStartTask(ctx, call, existing, input, authorized)
 		}
 		input.ClientTaskID = stableTaskID(call.AssistantID, call.SourceMessageID)
 	}
 	if existing, err := h.backend.Task(ctx, call.AssistantID, input.ClientTaskID); err == nil {
-		return ToolResult{Success: true, Data: taskData(existing)}
+		return h.reuseStartTask(ctx, call, existing, input, authorized)
 	}
 	online, supported := h.deviceCapability(input.DeviceID, "threadBootstrap")
 	if !online {
@@ -205,24 +206,11 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 		return toolError("PROTOCOL_UNSUPPORTED", "target device does not support atomic thread bootstrap")
 	}
 	if !authorized {
-		effectiveArguments, _ := json.Marshal(input)
-		authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, SourceMessageID: call.SourceMessageID, Arguments: effectiveArguments})
-		if err != nil {
-			if errors.Is(err, ErrAuthorizationRequired) {
-				return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
-			}
-			return toolError("PUCK_UNAVAILABLE", err.Error())
-		}
-		if authorizationID != "" {
-			return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}
+		if result, ok := h.authorizationResult(ctx, call, input); ok {
+			return result
 		}
 	}
-	requestOrigin := origin(call.AssistantID)
-	if authorized {
-		requestOrigin.Trigger = "user_decision"
-	}
-	requestOrigin.PermissionMode = h.backend.PermissionMode(ctx, call.AssistantID)
-	created := h.orchestrator.Forward(ctx, requestOrigin, input.DeviceID, "thread.bootstrap", mustJSON(map[string]any{"cwd": input.CWD, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
+	created := h.bootstrapStart(ctx, call, input, authorized)
 	if created.Outcome != "accepted" {
 		return fromResult(created)
 	}
@@ -236,6 +224,63 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return ToolResult{Success: true, Data: taskData(task)}
+}
+
+func (h *Handler) reuseStartTask(ctx context.Context, call Call, existing Task, input toolcontract.StartTaskRequest, authorized bool) ToolResult {
+	if existing.DeviceID == input.DeviceID && filepath.Clean(existing.CWD) == filepath.Clean(input.CWD) {
+		return ToolResult{Success: true, Data: taskData(existing)}
+	}
+	// A different cwd is not the same execution target. Reusing the old task as
+	// success skips the host directory check and reports an empty code.
+	online, supported := h.deviceCapability(input.DeviceID, "threadBootstrap")
+	if !online {
+		return toolError("DEVICE_OFFLINE", "target device is offline")
+	}
+	if !supported {
+		return toolError("PROTOCOL_UNSUPPORTED", "target device does not support atomic thread bootstrap")
+	}
+	if !authorized {
+		if result, ok := h.authorizationResult(ctx, call, input); ok {
+			return result
+		}
+	}
+	created := h.bootstrapStart(ctx, call, input, authorized)
+	if created.Outcome != "accepted" {
+		return fromResult(created)
+	}
+	threadID, _ := created.Data["threadId"].(string)
+	if threadID != "" && threadID != existing.NativeThreadID {
+		h.orchestrator.Forward(ctx, h.requestOrigin(ctx, call, authorized), input.DeviceID, "thread.archive.update", mustJSON(map[string]any{"threadId": threadID, "archived": true}))
+	}
+	return ToolResult{Success: true, Data: taskData(existing)}
+}
+
+func (h *Handler) authorizationResult(ctx context.Context, call Call, input toolcontract.StartTaskRequest) (ToolResult, bool) {
+	effectiveArguments, _ := json.Marshal(input)
+	authorizationID, err := h.backend.Authorize(ctx, call.AssistantID, Action{Tool: call.Tool, SourceMessageID: call.SourceMessageID, Arguments: effectiveArguments})
+	if err != nil {
+		if errors.Is(err, ErrAuthorizationRequired) {
+			return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}, true
+		}
+		return toolError("PUCK_UNAVAILABLE", err.Error()), true
+	}
+	if authorizationID != "" {
+		return ToolResult{Code: "AUTHORIZATION_REQUIRED", AuthorizationID: authorizationID}, true
+	}
+	return ToolResult{}, false
+}
+
+func (h *Handler) requestOrigin(ctx context.Context, call Call, authorized bool) Origin {
+	requestOrigin := origin(call.AssistantID)
+	if authorized {
+		requestOrigin.Trigger = "user_decision"
+	}
+	requestOrigin.PermissionMode = h.backend.PermissionMode(ctx, call.AssistantID)
+	return requestOrigin
+}
+
+func (h *Handler) bootstrapStart(ctx context.Context, call Call, input toolcontract.StartTaskRequest, authorized bool) Result {
+	return h.orchestrator.Forward(ctx, h.requestOrigin(ctx, call, authorized), input.DeviceID, "thread.bootstrap", mustJSON(map[string]any{"cwd": input.CWD, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
 }
 
 func withTrustedStartTaskID(raw json.RawMessage, taskID string) json.RawMessage {

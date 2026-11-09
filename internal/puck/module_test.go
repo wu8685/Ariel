@@ -23,6 +23,8 @@ type fakeModuleBridge struct {
 	turnFailureCode   string
 	toolResultFailure bool
 	emptyTurn         bool
+	bootstrapCode     string
+	bootstrapMessage  string
 	ensureThreads     []string
 	events            chan relay.BrainEvent
 	failures          chan relay.BrainDeliveryFailure
@@ -69,6 +71,9 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
 	if method == "thread.bootstrap" {
+		if f.bootstrapCode != "" {
+			return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: f.bootstrapCode, Message: f.bootstrapMessage}}
+		}
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"threadId": "exec-thread-a", "turnId": "exec-turn-a"}}
 	}
 	if method == "turn.start" {
@@ -1542,5 +1547,54 @@ func TestModuleConversationWatchSkipsIdleSnapshotQueries(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("watch did not observe mutation")
+	}
+}
+
+func TestFreshMissingCwdToolResultJSONIsFileNotFound(t *testing.T) {
+	const tip = "目标 workspace 目录不存在；请先使用 list_threads 或 read_thread 返回的 cwd，或向用户确认目录后重试；不要猜测路径。"
+	bridge := &fakeModuleBridge{bootstrapCode: "FILE_NOT_FOUND", bootstrapMessage: tip}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","permissionMode":"full"}`))
+	assistant := created.Data["assistant"].(map[string]any)
+	id := assistant["assistantId"].(string)
+	threadID := assistant["brainThreadId"].(string)
+	module.handleBrainEvent(context.Background(), relay.BrainEvent{
+		AssistantID: id, DeviceID: "brain-a", ThreadID: threadID, Name: "puck.brain.toolCall",
+		Payload: json.RawMessage(`{"callId":"call-missing","tool":"start_task","arguments":{"deviceId":"exec-a","cwd":"/turn70-definitely-missing","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000070"}}`),
+	})
+	var text string
+	var outerSuccess bool
+	for i := len(bridge.params) - 1; i >= 0; i-- {
+		if bridge.calls[i] != "puck.brain.toolResult" {
+			continue
+		}
+		var params struct {
+			Success      bool `json:"success"`
+			ContentItems []struct {
+				Text string `json:"text"`
+			} `json:"contentItems"`
+		}
+		if json.Unmarshal(bridge.params[i], &params) != nil || len(params.ContentItems) == 0 {
+			t.Fatalf("tool result params: %s", bridge.params[i])
+		}
+		text = params.ContentItems[0].Text
+		outerSuccess = params.Success
+		break
+	}
+	var parsed struct {
+		Success bool   `json:"success"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(text), &parsed) != nil || outerSuccess || parsed.Success || parsed.Code != "FILE_NOT_FOUND" || !strings.Contains(parsed.Message, "list_threads") || strings.Contains(parsed.Message, "turn70-definitely-missing") {
+		t.Fatalf("fresh missing cwd wire success=%v text=%s", outerSuccess, text)
+	}
+	tasks, err := module.store.Tasks(context.Background(), id)
+	if err != nil || len(tasks) != 0 {
+		t.Fatalf("tasks=%v err=%v", tasks, err)
 	}
 }
