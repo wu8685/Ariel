@@ -29,6 +29,12 @@
 7. Codex `turn/completed` 若含失败状态或 error，不得记录为成功完成；Agent 只记录稳定错误码，并向
    Bot 流发送固定 `BRAIN_UNAVAILABLE` 终态，由 Relay 转为可读失败消息。原始 provider message
    不进入日志、协议或 DB。
+8. `puck.create` 使用所选大脑主机 hello 中已声明且不超过当前版本的 toolset 调用
+   `puck.brain.ensure`。主机仍声明上一版 toolset 时必须完成创建和后续消息，不能在请求到达
+   Agent 之前返回 `PROTOCOL_UNSUPPORTED`。已有助理只在该主机声明的版本达到当前版本时才轮换
+   brain thread；主机版本更低时保持现有 thread。调用方直接请求高于主机已声明版本的
+   `puck.brain.ensure` 时，Relay 仍拒绝。主机 hello 没有可解析 toolset 时，行为与原先一样，
+   由 Relay 在转发前拒绝。
 
 ## 3. 验收
 

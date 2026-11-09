@@ -649,7 +649,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if input.PermissionMode != "full" && input.PermissionMode != "ask" {
 		return moduleError("INVALID_ARGUMENT", "invalid permission mode")
 	}
-	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, Persona: input.Description, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: currentToolsetVersion, AllowedScope: string(scope), Status: "provisioning"}
+	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, Persona: input.Description, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: m.toolsetForHost(input.BrainDeviceID), AllowedScope: string(scope), Status: "provisioning"}
 	a.Policy = policyWithPermissionMode(a.Policy, input.PermissionMode)
 	if err := m.store.CreateAssistantLimited(ctx, a, MaxActiveAssistants); errors.Is(err, ErrAssistantLimitReached) {
 		return moduleError("OVERLOADED", fmt.Sprintf("active assistant limit reached (%d)", MaxActiveAssistants))
@@ -710,7 +710,11 @@ func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResp
 		return moduleError("BRAIN_UNAVAILABLE", "assistant toolset is newer than this Relay")
 	}
 	oldDevice, oldThread := a.BrainDeviceID, a.BrainThreadID
-	toolsetUpgrade := a.ToolsetVersion < currentToolsetVersion
+	hostID := a.BrainDeviceID
+	if input.BrainDeviceID != nil && *input.BrainDeviceID != "" {
+		hostID = *input.BrainDeviceID
+	}
+	toolsetUpgrade := a.ToolsetVersion < currentToolsetVersion && m.toolsetForHost(hostID) >= currentToolsetVersion
 	rotate := a.Status == "provisioning" || input.BrainDeviceID != nil || toolsetUpgrade
 	if toolsetUpgrade {
 		a.ToolsetVersion = currentToolsetVersion
@@ -782,6 +786,34 @@ func (m *Module) brainReady(deviceID string) bool {
 	return false
 }
 
+func advertisedToolset(devices []map[string]any, deviceID string) int {
+	for _, device := range devices {
+		if device["deviceId"] != deviceID {
+			continue
+		}
+		switch value := device["puckToolsetVersion"].(type) {
+		case int:
+			return value
+		case int64:
+			return int(value)
+		case float64:
+			if value >= 1 && value == float64(int(value)) {
+				return int(value)
+			}
+		}
+		return 0
+	}
+	return 0
+}
+
+func (m *Module) toolsetForHost(deviceID string) int {
+	advertised := advertisedToolset(m.bridge.Devices(), deviceID)
+	if advertised < 1 || advertised > currentToolsetVersion {
+		return currentToolsetVersion
+	}
+	return advertised
+}
+
 func (m *Module) ensureBrain(ctx context.Context, a Assistant) relay.PuckResponse {
 	request := map[string]any{"assistantId": a.ID, "name": "[Puck] " + a.Name, "cwd": "/agent-managed/puck/" + a.ID, "developerInstructions": brainInstructions(a.ID, a.Name, a.Description), "toolsetVersion": a.ToolsetVersion}
 	return m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.ensure", mustJSON(request))
@@ -793,6 +825,9 @@ func (m *Module) ensureCurrentToolset(ctx context.Context, a Assistant) (Assista
 	}
 	if a.ToolsetVersion > currentToolsetVersion {
 		return a, &relay.PuckError{Code: "BRAIN_UNAVAILABLE", Message: "assistant toolset is newer than this Relay"}
+	}
+	if m.toolsetForHost(a.BrainDeviceID) < currentToolsetVersion {
+		return a, nil
 	}
 	oldDevice, oldThread := a.BrainDeviceID, a.BrainThreadID
 	a.ToolsetVersion = currentToolsetVersion
