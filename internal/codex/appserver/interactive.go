@@ -309,7 +309,7 @@ func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*I
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
-	cmd.Stderr = io.Discard
+	cmd.Stderr = appServerDiagnosticWriter()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
