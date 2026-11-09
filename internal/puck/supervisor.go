@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,12 +16,15 @@ var (
 )
 
 type Supervisor struct {
-	mu        sync.Mutex
-	threshold int
-	window    time.Duration
-	panics    []time.Time
-	open      bool
-	now       func() time.Time
+	mu              sync.Mutex
+	threshold       int
+	window          time.Duration
+	panics          []time.Time
+	open            bool
+	now             func() time.Time
+	restartDelay    time.Duration
+	restartMaxDelay time.Duration
+	callTimeouts    atomic.Uint64
 }
 
 func NewSupervisor(threshold int, window time.Duration) *Supervisor {
@@ -29,7 +34,7 @@ func NewSupervisor(threshold int, window time.Duration) *Supervisor {
 	if window <= 0 {
 		window = time.Minute
 	}
-	return &Supervisor{threshold: threshold, window: window, now: time.Now}
+	return &Supervisor{threshold: threshold, window: window, now: time.Now, restartDelay: 100 * time.Millisecond, restartMaxDelay: 5 * time.Second}
 }
 
 func (s *Supervisor) Open() bool {
@@ -42,6 +47,8 @@ func (s *Supervisor) Call(ctx context.Context, handler func(context.Context) err
 	if s.Open() {
 		return ErrCircuitOpen
 	}
+	handlerCtx, cancelHandler := context.WithCancel(ctx)
+	defer cancelHandler()
 	result := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -50,24 +57,52 @@ func (s *Supervisor) Call(ctx context.Context, handler func(context.Context) err
 				result <- fmt.Errorf("%w: panic recovered", ErrUnavailable)
 			}
 		}()
-		result <- handler(ctx)
+		result <- handler(handlerCtx)
 	}()
 	select {
 	case err := <-result:
 		return err
 	case <-ctx.Done():
+		cancelHandler()
+		count := s.callTimeouts.Add(1)
+		log.Printf("puck supervisor call context ended while handler was running: count=%d", count)
 		return ctx.Err()
 	}
 }
 
 func (s *Supervisor) Go(handler func()) {
 	go func() {
-		defer func() {
-			if recover() != nil {
-				s.recordPanic()
+		delay := s.restartDelay
+		for {
+			panicked := false
+			func() {
+				defer func() {
+					if recover() != nil {
+						panicked = true
+						s.recordPanic()
+					}
+				}()
+				handler()
+			}()
+			if !panicked || s.Open() {
+				return
 			}
-		}()
-		handler()
+			if delay <= 0 {
+				delay = 100 * time.Millisecond
+			}
+			maxDelay := s.restartMaxDelay
+			if maxDelay <= 0 {
+				maxDelay = 5 * time.Second
+			}
+			log.Printf("puck supervisor background panic recovered: restarting_after=%s", delay)
+			time.Sleep(delay)
+			if delay < maxDelay {
+				delay *= 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+			}
+		}
 	}()
 }
 
