@@ -179,16 +179,32 @@ func TestStartTaskIsIdempotentAndUnknownIsNeverReplayed(t *testing.T) {
 }
 
 func TestStartTaskIsIdempotentAcrossBrainIDsForOneUserMessage(t *testing.T) {
-	orchestrator := &fakeOrchestrator{}
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method != "thread.bootstrap" {
+			return Result{Outcome: "accepted", Data: map[string]any{}}
+		}
+		var body struct {
+			CWD string `json:"cwd"`
+		}
+		_ = json.Unmarshal(params, &body)
+		threadID := "thread-a"
+		if body.CWD == "/work/changed" {
+			threadID = "thread-b"
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"threadId": threadID, "turnId": "turn-a"}}
+	}}
 	backend := &fakeBackend{tasks: map[string]Task{}}
 	handler := New(orchestrator, backend)
 	first := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000101"}`)})
 	second := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work/changed","goal":"test again","prompt":"do it again","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000102"}`)})
-	if !first.Success || !second.Success || len(orchestrator.calls) != 1 {
-		t.Fatalf("first=%+v second=%+v calls=%v", first, second, orchestrator.calls)
+	if !first.Success || !second.Success || len(backend.tasks) != 1 {
+		t.Fatalf("first=%+v second=%+v tasks=%d calls=%v", first, second, len(backend.tasks), orchestrator.calls)
 	}
 	if first.Data["taskId"] != second.Data["taskId"] {
 		t.Fatalf("task ids differ: first=%v second=%v", first.Data["taskId"], second.Data["taskId"])
+	}
+	if orchestrator.calls[0] != "thread.bootstrap" || orchestrator.calls[len(orchestrator.calls)-1] != "thread.archive.update" {
+		t.Fatalf("changed cwd was not revalidated and retired: %v", orchestrator.calls)
 	}
 }
 
@@ -246,6 +262,44 @@ func TestStartTaskPreservesActionableWorkspaceFailure(t *testing.T) {
 	})
 	if result.Success || result.Code != "FILE_NOT_FOUND" || !strings.Contains(result.Message, "list_threads") || strings.Contains(result.Message, "/missing") {
 		t.Fatalf("actionable safe error lost: %+v", result)
+	}
+}
+
+func TestMissingCwdAfterExistingTaskIsNotEmptySuccess(t *testing.T) {
+	const tip = "目标 workspace 目录不存在；请先使用 list_threads 或 read_thread 返回的 cwd，或向用户确认目录后重试；不要猜测路径。"
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method != "thread.bootstrap" {
+			return Result{Outcome: "accepted", Data: map[string]any{}}
+		}
+		var body struct {
+			CWD string `json:"cwd"`
+		}
+		if json.Unmarshal(params, &body) != nil || strings.Contains(body.CWD, "missing") {
+			return Result{Outcome: "rejected", Code: "FILE_NOT_FOUND", Message: tip}
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a", "turnId": "turn-a"}}
+	}}
+	backend := &fakeBackend{tasks: map[string]Task{}}
+	handler := New(orchestrator, backend)
+	first := handler.Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn70", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[]}`),
+	})
+	second := handler.Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn70", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/turn70-definitely-missing","goal":"test","prompt":"do it","riskTags":[]}`),
+	})
+	encoded, _ := json.Marshal(second)
+	var parsed struct {
+		Success bool   `json:"success"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(encoded, &parsed) != nil || parsed.Success || parsed.Code != "FILE_NOT_FOUND" || !strings.Contains(parsed.Message, "list_threads") || strings.Contains(parsed.Message, "missing") {
+		t.Fatalf("missing cwd masked as empty success: first=%+v wire=%s", first, encoded)
+	}
+	if len(backend.tasks) != 1 {
+		t.Fatalf("missing cwd created or dropped tasks: %d", len(backend.tasks))
 	}
 }
 

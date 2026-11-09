@@ -23,6 +23,10 @@
    其他 contract 约束继续 fail closed。
 4. 目标 `cwd` 不存在时，Desktop Agent 返回 `FILE_NOT_FOUND`，并提供不含原始路径的安全说明：
    Brain 应使用 `list_threads` / `read_thread` 返回的 cwd，或向用户确认后重试，不得猜测路径。
+   同一用户消息已经有 task 时，只有 deviceId 与 cwd 都与已记录目标一致才直接返回该 task。
+   cwd 不同必须重新让执行主机校验目录；目录不存在时仍返回 `FILE_NOT_FOUND` 与上述说明，
+   ToolResult 不得是 `success=true` 且 code 为空，也不得为此再插入第二条 task。目录存在时
+   只保留原 task，并归档这次探测创建的执行 thread。
 5. 非绝对路径、NUL、超长路径和“存在但不是目录”继续返回 `INVALID_ARGUMENT`。
 6. 不改变 DB schema，不建立离线队列，不自动重放 mutation，不回显用户正文、完整 thread id 或
    本机绝对路径。
@@ -41,7 +45,8 @@
 1. Red：复现 Codex 0.160 的非 UUID `clientTaskId` 与不存在 cwd 的裸错误。
 2. Green：可信 Brain 调用在缺失／畸形 legacy id 时使用稳定服务端 task id；同一用户消息重试只
    创建一个 task。
-3. 不存在 cwd 返回 `FILE_NOT_FOUND` 与可行动说明；Bot 可据此纠正或询问用户。
+3. 不存在 cwd 返回 `FILE_NOT_FOUND` 与可行动说明；Bot 可据此纠正或询问用户。同一用户消息
+   已有其他 cwd 的 task 时，缺失目录仍返回该结果，而不是空 code 的成功包。
 4. Codex 0.160.0 隔离真实 Brain 冒烟覆盖 `start_task` 成功，随后 `send_turn` 与
    `get_task_status` 成功；Full Access 保持 1 task / 0 authorization，并覆盖 `ask_user`。
 5. 完整门禁、Agent 先于 Relay 的生产发布与临时 `turn63` Bot / native thread 清理按 Turn 63
