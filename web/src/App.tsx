@@ -7,6 +7,7 @@ import { InteractionCard } from "./interaction-card";
 import { newRequestID } from "./ids";
 import { ExecutionSettingsControl } from "./execution-settings";
 import { nativeNoticeKind } from "./native-notice";
+import { systemPresentation } from "./item-presentation";
 import { ExecutionSettingsStore, type ExecutionGuard } from "./model-settings";
 import { WebSession } from "./session";
 import { appendOlderPage, emptyHistoryState, prependOlderItems, type HistoryState } from "./history";
@@ -3093,6 +3094,9 @@ function ConversationTurn({ onEdit, turn, fileChanges, onOpenFile, onOpenReferen
       if (part.kind === "message") {
         const item = part.item;
 		const notice = nativeNoticeKind(item);
+		const presentation = systemPresentation(item);
+		if (presentation?.kind === "steered") return <div className="steered-notice" role="status" key={item.itemId} data-item-id={item.itemId}>{presentation.title}</div>;
+		if (presentation?.kind === "automatic-approval" || presentation?.kind === "unsupported") return <details className={`system-disclosure ${presentation.kind === "automatic-approval" ? "auto-approval" : "unsupported-item"}`} key={item.itemId} data-item-id={item.itemId}><summary>{presentation.title}</summary><ul>{presentation.details.map((detail,index)=><li key={`${item.itemId}:${index}`}>{detail}</li>)}</ul></details>;
 		const projected = item.role === "user" ? projectCanonicalFileContexts(item.text) : { text:item.text, quotes:[] };
         const markdownImages = item.images?.filter(image => image.kind === "markdown") || [];
         const nativeImages = item.images?.filter(image => image.kind === "native") || [];

@@ -1898,6 +1898,31 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("**tool literal**")).toBeTruthy();
   });
 
+  it("renders Codex 0.160 private items without raw placeholders or question envelopes", async () => {
+    const thread = { ...fixtureThread, turns: [{ turnId: "turn-61", status: "completed", items: [
+      { itemId: "approval", role: "system", text: "已自动审批 3 项\n命令 · 已批准\n文件 · 已批准\n网络 · 已批准" },
+      { itemId: "steered", role: "system", text: "已插入引导" },
+      { itemId: "answer", role: "user", text: "> 问题：Which fixture?\n\n你的回答：Blue" },
+      { itemId: "unknown", role: "system", text: "暂不支持显示的内容\n类型：futureToolscript" },
+    ] }], pendingInteractions: [] } as unknown as Thread;
+    await openFixture(thread);
+
+    const approval = document.querySelector<HTMLDetailsElement>("details.auto-approval");
+    const unknown = document.querySelector<HTMLDetailsElement>("details.unsupported-item");
+    expect(approval?.querySelector("summary")?.textContent).toBe("已自动审批 3 项");
+    expect(approval?.open).toBe(false);
+    expect(approval?.textContent).toContain("命令 · 已批准");
+    expect(unknown?.querySelector("summary")?.textContent).toBe("暂不支持显示的内容");
+    expect(unknown?.open).toBe(false);
+    expect(unknown?.textContent).toContain("类型：futureToolscript");
+    expect(document.querySelector(".steered-notice")?.textContent).toBe("已插入引导");
+    expect(document.querySelector(".message.user blockquote")?.textContent).toContain("问题：Which fixture?");
+    expect(screen.getByText("你的回答：Blue")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("[futureTool 项目]");
+    expect(document.body.textContent).not.toContain("send_user_message_question_reply");
+    expect(document.body.textContent).not.toContain("questionItemId");
+  });
+
   it("discards a late lazy tool response after switching conversations", async () => {
     const thread = { ...fixtureThread, turns: [{ turnId: "turn-tool", status: "completed", items: [
       { itemId: "tool", role: "system", text: "tool", activity: { kind: "mcpToolCall", label: "fixture/lookup", status: "completed", detailState: "available", detailRevision: "a".repeat(64), truncated: false } },
@@ -1919,7 +1944,7 @@ describe("Ariel app interactions", () => {
       { itemId: "c", role: "system", text: "命令执行", activity: { kind: "commandExecution", label: "/usr/bin/true", status: "completed", detailState: "available", detailRevision: "b".repeat(64), truncated: false } },
       { itemId: "a", role: "assistant", text: "answer" },
       { itemId: "f", role: "system", text: "文件变更", activity: { kind: "fileChange", label: "文件变更", status: "completed", detailState: "available", detailRevision: "c".repeat(64), truncated: false } },
-      { itemId: "unknown", role: "system", text: "[futureTool 项目]" },
+      { itemId: "unknown", role: "system", text: "暂不支持显示的内容\n类型：futureTool" },
     ] }], pendingInteractions: [{ interactionId: "approval", kind: "command_approval", prompt: "Approve fixture only", availableDecisions: ["deny"] }] } as unknown as Thread;
     await openFixture(thread);
     const opener = screen.getByRole("button", { name: /打开工具调用.*3 项/ });
@@ -1930,7 +1955,7 @@ describe("Ariel app interactions", () => {
     expect(screen.getByLabelText("最近工具摘要").textContent).toBe("fixture/lookup（已完成） · /usr/bin/true（已完成） · 文件变更（已完成）");
     expect(document.querySelectorAll(".activity-item")).toHaveLength(0);
     expect(screen.getByText("answer")).toBeTruthy();
-    expect(screen.getByText("[futureTool 项目]")).toBeTruthy();
+    expect(document.querySelector("details.unsupported-item summary")?.textContent).toBe("暂不支持显示的内容");
     expect(screen.getByText("Approve fixture only")).toBeTruthy();
     fireEvent.click(opener);
     const closer = screen.getByRole("button", { name: /收起工具调用.*3 项/ });
@@ -1940,7 +1965,7 @@ describe("Ariel app interactions", () => {
     expect(screen.getByText("/usr/bin/true")).toBeTruthy();
     expect(document.querySelector(".activity-details img")).toBeNull();
     expect(document.querySelectorAll(".activity-item")).toHaveLength(3);
-    const transcriptOrder = [...document.querySelectorAll(".turn .message, .turn .activity-item")].map(node => node.getAttribute("data-item-id"));
+    const transcriptOrder = [...document.querySelectorAll(".turn .message, .turn .activity-item, .turn .system-disclosure")].map(node => node.getAttribute("data-item-id"));
     expect(transcriptOrder).toEqual(["u", "m", "c", "a", "f", "unknown"]);
     fireEvent.click(screen.getByRole("button", { name: /收起工具调用/ }));
     expect(document.querySelectorAll(".activity-item")).toHaveLength(0);

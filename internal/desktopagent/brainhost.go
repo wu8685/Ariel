@@ -194,7 +194,7 @@ func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text st
 	h.mu.Lock()
 	h.turnStarted[started.Turn.ID] = startedAt
 	h.mu.Unlock()
-	logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true, "effort", effort)
+	logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true, "effort", effort, "model", model, "promptBytes", len(text))
 	return started.Turn.ID, nil
 }
 

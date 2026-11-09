@@ -475,7 +475,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .markdown-body li > p { margin: .1em 0; }
 .markdown-body li input[type="checkbox"] { accent-color: var(--color-accent); margin-right: .45em; }
 .markdown-body blockquote { margin: .7em 0; padding: .15em 0 .15em .85em; border-left: 2px solid var(--color-border-strong); color: var(--color-muted); }
-.message.user .markdown-body blockquote { border-left-color: #ffffff99; color: var(--color-on-primary); }
+.message.user .markdown-body blockquote { border-left-color: #ffffff99; color: var(--color-on-primary); font-size: .86em; opacity: .82; }
 .markdown-body hr { border: 0; border-top: 1px solid var(--color-border-strong); margin: .8em 0; }
 .markdown-body a { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 .workspace-document-reference { appearance:none; border:0; background:transparent; color:var(--color-accent); display:inline-flex; align-items:baseline; gap:.28em; padding:0; margin:0; font:inherit; line-height:inherit; text-decoration:underline; text-underline-offset:2px; overflow-wrap:anywhere; cursor:pointer; }
@@ -536,6 +536,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message.native-notice.failure .message-body { border-left-color: var(--color-danger-border); }
 .message.native-notice.unknown { color: var(--color-warning); }
 .message.native-notice.unknown .message-body { border-left-color: var(--color-warning-border); }
+.steered-notice, .system-disclosure { margin: 6px 0; color: var(--color-subtle); font-size: 11px; line-height: 1.55; }
+.steered-notice { padding: 2px 0; }
+.system-disclosure { width: fit-content; max-width: min(100%, 680px); }
+.system-disclosure summary { cursor: pointer; list-style-position: outside; overflow-wrap: anywhere; }
+.system-disclosure ul { margin: 5px 0 0 18px; padding: 0; color: var(--color-muted); }
+.system-disclosure li { margin: 2px 0; overflow-wrap: anywhere; }
 .interaction-card {
   border: 1px solid var(--color-border-strong);
   border-left: 3px solid var(--color-border-strong);

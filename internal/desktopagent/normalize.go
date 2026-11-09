@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
@@ -330,6 +331,139 @@ func omitInlineImageData(value string) string {
 	return out.String()
 }
 
+const (
+	questionReplyOpen  = "<send_user_message_question_reply>"
+	questionReplyClose = "</send_user_message_question_reply>"
+)
+
+type questionReply struct {
+	QuestionItemID json.RawMessage `json:"questionItemId"`
+	Question       string          `json:"question"`
+	Answer         string          `json:"answer"`
+}
+
+func normalizeQuestionReplyText(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	hasEnvelope := strings.Contains(trimmed, questionReplyOpen) || strings.Contains(trimmed, questionReplyClose)
+	if !hasEnvelope {
+		return value, false
+	}
+	fallback := "已提交补充回答，但当前格式暂不支持显示。"
+	if !strings.HasPrefix(trimmed, questionReplyOpen) || !strings.HasSuffix(trimmed, questionReplyClose) {
+		return fallback, true
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, questionReplyOpen), questionReplyClose))
+	var replies []questionReply
+	if strings.HasPrefix(body, "[") {
+		if json.Unmarshal([]byte(body), &replies) != nil {
+			return fallback, true
+		}
+	} else {
+		var reply questionReply
+		if json.Unmarshal([]byte(body), &reply) != nil {
+			return fallback, true
+		}
+		replies = []questionReply{reply}
+	}
+	if len(replies) == 0 || len(replies) > 16 {
+		return fallback, true
+	}
+	parts := make([]string, 0, len(replies))
+	for _, reply := range replies {
+		question := strings.TrimSpace(reply.Question)
+		answer := strings.TrimSpace(reply.Answer)
+		id := bytes.TrimSpace(reply.QuestionItemID)
+		if len(id) == 0 || bytes.Equal(id, []byte("null")) || question == "" || answer == "" || len(question) > 2048 || len(answer) > 8192 {
+			return fallback, true
+		}
+		question = strings.Join(strings.Fields(question), " ")
+		parts = append(parts, "> 问题："+escapeQuestionReplyMarkdown(question)+"\n\n你的回答："+escapeQuestionReplyMarkdown(answer))
+	}
+	result := strings.Join(parts, "\n\n")
+	if len(result) > 32<<10 {
+		return fallback, true
+	}
+	return result, true
+}
+
+func escapeQuestionReplyMarkdown(value string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "[", "\\[", "]", "\\]", "<", "\\<", ">", "\\>")
+	return replacer.Replace(value)
+}
+
+func safeNativeType(value string) string {
+	var out strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '.' {
+			out.WriteRune(r)
+		}
+		if out.Len() >= 128 {
+			break
+		}
+	}
+	if out.Len() == 0 {
+		return "unknown"
+	}
+	return out.String()
+}
+
+func automaticApprovalCategory(actionType string) string {
+	switch actionType {
+	case "command", "execve", "writeStdin":
+		return "命令"
+	case "applyPatch":
+		return "文件"
+	case "networkAccess":
+		return "网络"
+	case "mcpToolCall":
+		return "工具"
+	case "requestPermissions":
+		return "权限"
+	default:
+		return "请求"
+	}
+}
+
+func automaticApprovalStatus(status string) string {
+	switch status {
+	case "approved":
+		return "已批准"
+	case "denied":
+		return "未通过"
+	case "inProgress":
+		return "检查中"
+	case "timedOut":
+		return "已超时"
+	case "aborted":
+		return "已停止"
+	default:
+		return "状态未知"
+	}
+}
+
+type automaticApprovalSummary struct {
+	id, category, status string
+}
+
+func projectAutomaticApprovals(reviews []automaticApprovalSummary) map[string]any {
+	allApproved := true
+	details := make([]string, 0, len(reviews))
+	for _, review := range reviews {
+		allApproved = allApproved && review.status == "approved"
+		details = append(details, review.category+" · "+automaticApprovalStatus(review.status))
+	}
+	title := "自动审批检查"
+	if allApproved {
+		title = "已自动审批"
+	}
+	if len(reviews) == 1 {
+		title += " · " + reviews[0].category
+	} else {
+		title += fmt.Sprintf(" %d 项", len(reviews))
+	}
+	return map[string]any{"itemId": reviews[0].id, "role": "system", "text": title + "\n" + strings.Join(details, "\n")}
+}
+
 func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]any, error) {
 	if id == "" {
 		return nil, ErrNativeShape
@@ -344,6 +478,14 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 	// latest candidate until native progress or another error supersedes it.
 	retryIndex := -1
 	retryItems := make(map[int]bool)
+	approvalReviews := make([]automaticApprovalSummary, 0, 4)
+	flushApprovalReviews := func() {
+		if len(approvalReviews) == 0 {
+			return
+		}
+		items = append(items, projectAutomaticApprovals(approvalReviews))
+		approvalReviews = approvalReviews[:0]
+	}
 	for _, raw := range rawItems {
 		var item struct {
 			ID                  string          `json:"id"`
@@ -376,7 +518,10 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			DurationMs json.RawMessage `json:"durationMs"`
 			ExitCode   json.RawMessage `json:"exitCode"`
 			Completed  *bool           `json:"completed"`
-			Changes    []struct {
+			Action     struct {
+				Type string `json:"type"`
+			} `json:"action"`
+			Changes []struct {
 				Path string          `json:"path"`
 				Diff json.RawMessage `json:"diff"`
 				Kind struct {
@@ -387,6 +532,11 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		if json.Unmarshal(raw, &item) != nil || item.ID == "" || item.Type == "" {
 			return nil, ErrNativeShape
 		}
+		if item.Type == "automaticApprovalReview" {
+			approvalReviews = append(approvalReviews, automaticApprovalSummary{id: item.ID, category: automaticApprovalCategory(item.Action.Type), status: item.Status})
+			continue
+		}
+		flushApprovalReviews()
 		role, text := "system", ""
 		var activity map[string]any
 		isRetry := false
@@ -412,7 +562,8 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			parts := make([]string, 0, len(item.Content))
 			for _, c := range item.Content {
 				if c.Type == "text" {
-					parts = append(parts, c.Text)
+					value, _ := normalizeQuestionReplyText(c.Text)
+					parts = append(parts, value)
 				} else if (c.Type == "image" && !strings.HasPrefix(c.URL, "data:image/")) || (c.Type == "localImage" && c.Path == "") {
 					parts = append(parts, "[图片暂不可用]")
 				} else if c.Type != "image" && c.Type != "localImage" {
@@ -531,8 +682,48 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			default:
 				text = "等待补充回答"
 			}
+		case "steered":
+			text = "已插入引导"
+		case "contextCompaction":
+			text = "已压缩上下文"
+		case "enteredReviewMode":
+			text = "已进入 Review 模式"
+		case "exitedReviewMode":
+			text = "已退出 Review 模式"
+		case "hookPrompt":
+			text = "已应用会话指引"
+		case "autoReviewInterruptionWarning":
+			text = "自动审批检查已停止"
+		case "strictReviewNotice":
+			text = "已启用严格审查"
+		case "remoteTaskCreated":
+			text = "已创建远程任务"
+		case "personalityChanged":
+			text = "已更新对话风格"
+		case "forkedFromConversation":
+			text = "此会话来自派生会话"
+		case "modelChanged", "modelRerouted":
+			text = "模型已变更"
+		case "mcpServerElicitation", "permissionRequest":
+			text = "发生过一次交互请求"
+		case "worktreeInit":
+			text = "已初始化 Worktree"
+		case "todo-list":
+			text = "已更新待办"
+		case "planImplementation":
+			text = "正在执行计划"
+		case "functionCallOutput":
+			text = "工具返回结果"
+			activity = toolActivity("tool", text, item.Status)
+		case "dynamicToolCall":
+			label := nativeString(item.Tool)
+			if label == "" {
+				label = "动态工具"
+			}
+			text = "工具调用: " + label
+			activity = toolActivity("tool", label, item.Status)
 		default:
-			text = "[" + item.Type + " 项目]"
+			text = "暂不支持显示的内容\n类型：" + safeNativeType(item.Type)
 		}
 		if activity != nil {
 			text, _ = boundedActivityText(512, text)
@@ -562,6 +753,7 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			retryItems[retryIndex] = true
 		}
 	}
+	flushApprovalReviews()
 	// Strip only Adapter-owned retry projections. Other errors, unknown native
 	// types, and user/assistant text must remain intact, including in history.
 	visible := items[:0]

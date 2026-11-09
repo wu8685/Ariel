@@ -461,6 +461,9 @@ func TestModuleStartsRealGreetingAndPersistsFallbackWhenTurnUnavailable(t *testi
 	if greetingEffort != "low" {
 		t.Fatalf("greeting effort=%q, want low", greetingEffort)
 	}
+	if len(greetingPrompt) > 4096 {
+		t.Fatalf("greeting prompt unexpectedly grew: bytes=%d", len(greetingPrompt))
+	}
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
 	greetingMessages := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
 	if len(greetingMessages) != 1 || greetingMessages[0].Kind != "greeting_processing" || !strings.Contains(greetingMessages[0].WorkSummary, `"state":"running"`) {

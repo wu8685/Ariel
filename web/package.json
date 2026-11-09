@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "preview": "vite preview",
     "build": "npm run generate:protocol && tsc -b && vite build",
     "test": "vitest run",
     "test:ui": "playwright test",

@@ -86,12 +86,12 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 		t.Fatalf("config=%+v", config)
 	}
 	image := "data:image/png;base64,AAAA"
-	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", []string{image}, "", ""); err != nil {
+	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", []string{image}, "fixture-model", "low"); err != nil {
 		t.Fatal(err)
 	}
 	turn := process.calls[1].params
 	policy, _ := turn["sandboxPolicy"].(map[string]any)
-	if turn["clientUserMessageId"] != "client-message-a" || turn["approvalPolicy"] != "never" || policy["type"] != "readOnly" {
+	if turn["clientUserMessageId"] != "client-message-a" || turn["approvalPolicy"] != "never" || policy["type"] != "readOnly" || turn["model"] != "fixture-model" || turn["effort"] != "low" {
 		t.Fatalf("turn=%+v", turn)
 	}
 	input := turn["input"].([]any)
@@ -248,6 +248,13 @@ func TestBrainHostLogsSanitizedPhaseLatency(t *testing.T) {
 	for _, record := range capture.records {
 		if strings.Contains(record.Message, assistantID) || strings.Contains(record.Message, "secret prompt") {
 			t.Fatalf("brain phase log leaked sensitive input: %v", record)
+		}
+		if record.Message == "thread-pipeline" {
+			fields := map[string]slog.Value{}
+			record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
+			if fields["phase"].String() == "brain-turn-start" && (fields["effort"].String() != "low" || fields["promptBytes"].Int64() != int64(len("secret prompt"))) {
+				t.Fatalf("brain turn parameter evidence missing: %v", fields)
+			}
 		}
 	}
 }

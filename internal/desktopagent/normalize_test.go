@@ -30,7 +30,7 @@ func TestNormalizeNativeErrorNotices(t *testing.T) {
 		{"missing flag", "completed", []json.RawMessage{json.RawMessage(`{"id":"unknown","type":"error","message":"Unclassified native error"}`)}, []string{"Codex 状态未确认：Unclassified native error"}},
 		{"invalid flag", "inProgress", []json.RawMessage{json.RawMessage(`{"id":"unknown","type":"error","message":"unknown","willRetry":"true"}`)}, []string{"Codex 状态未确认：unknown"}},
 		{"no message", "failed", []json.RawMessage{json.RawMessage(`{"id":"empty","type":"error","willRetry":false}`)}, []string{"Codex 错误：原生未提供错误说明"}},
-		{"unknown type", "completed", []json.RawMessage{json.RawMessage(`{"id":"other","type":"futureTool"}`)}, []string{"[futureTool 项目]"}},
+		{"unknown type", "completed", []json.RawMessage{json.RawMessage(`{"id":"other","type":"futureTool"}`)}, []string{"暂不支持显示的内容\n类型：futureTool"}},
 		{"do not strip a literal plan", "completed", []json.RawMessage{json.RawMessage(`{"id":"plan","type":"plan","text":"Codex 正在重试：literal plan"}`)}, []string{"Codex 正在重试：literal plan"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestNormalizeToolActivitiesKeepOnlyLazySummariesAndUnknownTypesVisible(t *t
 	if _, present := got[9].(map[string]any)["activity"]; present {
 		t.Fatal("unknown type was silently treated as a tool")
 	}
-	if got[9].(map[string]any)["text"] != "[futureTool 项目]" {
+	if got[9].(map[string]any)["text"] != "暂不支持显示的内容\n类型：futureTool" {
 		t.Fatal("unknown type lost compatibility notice")
 	}
 }
