@@ -192,6 +192,63 @@ func TestStartTaskIsIdempotentAcrossBrainIDsForOneUserMessage(t *testing.T) {
 	}
 }
 
+func TestStartTaskUsesTrustedSourceIdentityInsteadOfBrainGeneratedID(t *testing.T) {
+	for _, raw := range []string{
+		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[]}`,
+		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"turn63-not-a-uuid"}`,
+	} {
+		orchestrator := &fakeOrchestrator{}
+		backend := &fakeBackend{tasks: map[string]Task{}}
+		result := New(orchestrator, backend).Execute(context.Background(), Call{
+			AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task", Arguments: json.RawMessage(raw),
+		})
+		if !result.Success || len(orchestrator.calls) != 1 {
+			t.Fatalf("raw=%s result=%+v calls=%v", raw, result, orchestrator.calls)
+		}
+		taskID, _ := result.Data["taskId"].(string)
+		if taskID == "" || taskID == "turn63-not-a-uuid" {
+			t.Fatalf("task identity was not assigned by Relay: %q", taskID)
+		}
+	}
+}
+
+func TestStartTaskWithoutTrustedSourceStillRequiresUUID(t *testing.T) {
+	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+		AssistantID: "assistant-a", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[]}`),
+	})
+	if result.Success || result.Code != "INVALID_ARGUMENT" || len(result.Details) == 0 || result.Details[0].Field != "clientTaskId" {
+		t.Fatalf("untrusted missing identity was accepted: %+v", result)
+	}
+}
+
+func TestStartTaskTrustedIdentityDoesNotRelaxUnknownOrInvalidFields(t *testing.T) {
+	for _, raw := range []string{
+		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":7}`,
+		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"unknown":true}`,
+	} {
+		result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+			AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task", Arguments: json.RawMessage(raw),
+		})
+		if result.Success || result.Code != "INVALID_ARGUMENT" {
+			t.Fatalf("unsafe field was accepted: raw=%s result=%+v", raw, result)
+		}
+	}
+}
+
+func TestStartTaskPreservesActionableWorkspaceFailure(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
+		return Result{Outcome: "rejected", Code: "FILE_NOT_FOUND", Message: "目标 workspace 目录不存在；请先使用 list_threads 或 read_thread 返回的 cwd，或向用户确认目录后重试；不要猜测路径。"}
+	}}
+	result := New(orchestrator, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/missing","goal":"test","prompt":"do it","riskTags":[]}`),
+	})
+	if result.Success || result.Code != "FILE_NOT_FOUND" || !strings.Contains(result.Message, "list_threads") || strings.Contains(result.Message, "/missing") {
+		t.Fatalf("actionable safe error lost: %+v", result)
+	}
+}
+
 func TestToolsRequireTrustedAssistantAndBoundResults(t *testing.T) {
 	orchestrator := &fakeOrchestrator{fn: func(string, json.RawMessage) Result {
 		return Result{Outcome: "accepted", Data: map[string]any{"text": strings.Repeat("x", 70<<10)}}

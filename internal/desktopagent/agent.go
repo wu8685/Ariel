@@ -1471,9 +1471,16 @@ func (a *agent) reply(ctx context.Context, id, method string, data map[string]an
 			}
 		}
 		msg["outcome"] = outcome
-		msg["error"] = map[string]string{"code": code, "message": code}
+		msg["error"] = map[string]string{"code": code, "message": requestErrorMessage(method, code)}
 	}
 	_ = a.send(ctx, msg)
+}
+
+func requestErrorMessage(method, code string) string {
+	if method == "thread.bootstrap" && code == "FILE_NOT_FOUND" {
+		return "目标 workspace 目录不存在；请先使用 list_threads 或 read_thread 返回的 cwd，或向用户确认目录后重试；不要猜测路径。"
+	}
+	return code
 }
 
 func requestErrorCode(method string, err error) string {

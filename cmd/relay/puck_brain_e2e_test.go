@@ -136,12 +136,21 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	if !ok || assistantID == "" {
 		t.Fatal("puck.create returned an assistant without an id")
 	}
+	brainThreadID, _ := assistant["brainThreadId"].(string)
+	if brainThreadID == "" {
+		t.Fatal("puck.create returned an assistant without a Brain thread id")
+	}
 	greetingStarted := time.Now()
 	greetingDeadline := time.Now().Add(4 * time.Minute)
 	for {
 		history := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
 		if e2eGreetingCompleted(history) {
 			break
+		}
+		if e2eGreetingFailed(history) {
+			_ = e2eRequest(t, web, nextRequestID(), "puck.delete", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
+			_ = e2eRequest(t, web, nextRequestID(), "thread.archive.update", "fixture-device", map[string]any{"threadId": brainThreadID, "archived": true}, 30*time.Second)
+			t.Fatal("isolated Bot greeting failed before task dispatch")
 		}
 		if time.Now().After(greetingDeadline) {
 			t.Fatal("isolated Bot greeting did not complete")
@@ -272,7 +281,7 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		e2eRequireReplyPersisted(t, web, nextRequestID, assistantID, assistantReplyID, assistantMessageID)
 
 		taskReplyID := "00000000-0000-4000-8000-000000000916"
-		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{"assistantId": assistantID, "clientMessageId": taskReplyID, "text": "请对引用任务继续检查 marker.txt，并使用已有 taskId 的 send_turn 跟进；不要新建任务。", "replyTo": taskMessageID}, 3*time.Minute); response["outcome"] != "accepted" {
+		if response := e2eRequest(t, web, nextRequestID(), "puck.message.send", "relay", map[string]any{"assistantId": assistantID, "clientMessageId": taskReplyID, "text": "请先用已有 taskId 调用 get_task_status 核对状态，再调用 send_turn 继续检查 marker.txt；不要新建任务。", "replyTo": taskMessageID}, 3*time.Minute); response["outcome"] != "accepted" {
 			t.Fatalf("task reply rejected: %v", response["error"])
 		}
 		e2eWaitForBrainIdle(t, web, nextRequestID, assistantID, 4*time.Minute)
@@ -289,7 +298,7 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 			}
 			time.Sleep(2 * time.Second)
 		}
-		t.Log("reply smoke: assistant reply persisted; task-card reply stayed on one task")
+		t.Log("reply smoke: assistant reply persisted; task-card reply requested get_task_status then send_turn and stayed on one task")
 		t.Logf("preflight scenario=quoted-replies elapsed=%s", time.Since(replyStarted).Round(time.Millisecond))
 
 		questionStarted := time.Now()
@@ -315,6 +324,11 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 		t.Logf("preflight scenario=ask_user elapsed=%s", time.Since(questionStarted).Round(time.Millisecond))
 	}
 	deleteStarted := time.Now()
+	cleanupHistory := e2eRequest(t, web, nextRequestID(), "puck.history", "relay", map[string]any{"assistantId": assistantID}, 15*time.Second)
+	executionThreadID := e2eTaskThreadID(cleanupHistory)
+	if executionThreadID == "" && mode == "full" {
+		t.Fatal("temporary execution thread id missing before cleanup")
+	}
 	_ = e2eRequest(t, web, nextRequestID(), "puck.stop", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
 	deleted := e2eRequest(t, web, nextRequestID(), "puck.delete", "relay", map[string]any{"assistantId": assistantID}, 30*time.Second)
 	if deleted["outcome"] != "accepted" {
@@ -323,6 +337,15 @@ func runPuckBrainFirstMessageMode(t *testing.T, mode string) {
 	listed := e2eRequest(t, web, nextRequestID(), "puck.list", "relay", map[string]any{}, 15*time.Second)
 	if e2eAssistantListed(listed, assistantID) {
 		t.Fatal("temporary Bot remained listed after deletion")
+	}
+	for _, threadID := range []string{executionThreadID, brainThreadID} {
+		if threadID == "" {
+			continue
+		}
+		archived := e2eRequest(t, web, nextRequestID(), "thread.archive.update", "fixture-device", map[string]any{"threadId": threadID, "archived": true}, 30*time.Second)
+		if archived["outcome"] != "accepted" {
+			t.Fatalf("temporary Codex thread archive rejected: %v", archived["error"])
+		}
 	}
 	t.Logf("preflight scenario=delete-bot elapsed=%s", time.Since(deleteStarted).Round(time.Millisecond))
 	cancel()
@@ -489,6 +512,17 @@ func e2eGreetingCompleted(response map[string]any) bool {
 	return false
 }
 
+func e2eGreetingFailed(response map[string]any) bool {
+	messages, _ := responseData(response)["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] == "assistant" && message["kind"] == "error" {
+			return true
+		}
+	}
+	return false
+}
+
 func e2eHasCanonicalQuestion(response map[string]any) bool {
 	messages, _ := responseData(response)["messages"].([]any)
 	for _, raw := range messages {
@@ -534,6 +568,23 @@ func e2eLatestMessageID(response map[string]any, role, kind string) string {
 		message, _ := messages[index].(map[string]any)
 		if message["role"] == role && message["kind"] == kind {
 			return fmt.Sprint(message["id"])
+		}
+	}
+	return ""
+}
+
+func e2eTaskThreadID(response map[string]any) string {
+	messages, _ := responseData(response)["messages"].([]any)
+	for index := len(messages) - 1; index >= 0; index-- {
+		message, _ := messages[index].(map[string]any)
+		if message["kind"] != "task" {
+			continue
+		}
+		var card struct {
+			ThreadID string `json:"threadId"`
+		}
+		if json.Unmarshal([]byte(fmt.Sprint(message["cardJSON"])), &card) == nil && card.ThreadID != "" {
+			return card.ThreadID
 		}
 	}
 	return ""

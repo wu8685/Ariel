@@ -64,3 +64,14 @@ func TestPuckBrainUnavailableErrorIsNotDisguisedAsResyncRequired(t *testing.T) {
 		t.Fatalf("brain unavailable classified as %s, want BRAIN_UNAVAILABLE", got)
 	}
 }
+
+func TestBootstrapMissingWorkspaceHasActionableSafeMessage(t *testing.T) {
+	err := errors.New("FILE_NOT_FOUND")
+	if got := requestErrorCode("thread.bootstrap", err); got != "FILE_NOT_FOUND" {
+		t.Fatalf("code=%q", got)
+	}
+	message := requestErrorMessage("thread.bootstrap", "FILE_NOT_FOUND")
+	if !strings.Contains(message, "list_threads") || !strings.Contains(message, "read_thread") || strings.Contains(message, "/Users/") {
+		t.Fatalf("message is not actionable and safe: %q", message)
+	}
+}

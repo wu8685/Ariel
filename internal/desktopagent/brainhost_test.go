@@ -259,6 +259,52 @@ func TestBrainHostLogsSanitizedPhaseLatency(t *testing.T) {
 	}
 }
 
+func TestBrainHostTurnsFailedCompletionIntoSafeTerminalMessage(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	process := newFakeBrainProcess()
+	events := make(chan BrainHostEvent, 2)
+	host := NewBrainHost(BrainHostConfig{
+		Enabled: true, Binary: "codex", Root: t.TempDir(),
+		Start: func(context.Context, string, string) (brainProcess, error) { return process, nil },
+		Emit:  func(event BrainHostEvent) { events <- event },
+	})
+	defer host.Close()
+	threadID, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message", "fixture", nil, "", "low"); err != nil {
+		t.Fatal(err)
+	}
+	process.incoming <- brainFrame{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"brain-thread","turn":{"id":"brain-turn","status":"failed","error":{"message":"private provider details","codexErrorInfo":"other"}}}`)}
+	event := <-events
+	if event.Kind != "puck.brain.event" || event.Payload["method"] != "item/agentMessage/completed" {
+		t.Fatalf("safe terminal event missing: %+v", event)
+	}
+	encoded, _ := json.Marshal(event.Payload)
+	if !strings.Contains(string(encoded), "BRAIN_UNAVAILABLE") || strings.Contains(string(encoded), "private provider details") {
+		t.Fatalf("unsafe terminal event: %s", encoded)
+	}
+	if capture.leaks("private provider details") {
+		t.Fatal("failed completion log leaked provider details")
+	}
+	found := false
+	capture.mu.Lock()
+	for _, record := range capture.records {
+		fields := map[string]slog.Value{}
+		record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
+		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" {
+			found = true
+		}
+	}
+	capture.mu.Unlock()
+	if !found {
+		t.Fatalf("failed completion was not logged safely: %v", capture.phases())
+	}
+}
+
 func TestBrainHostLogsSafeStructuredToolRejectionDiagnostic(t *testing.T) {
 	capture := &capturedPhases{}
 	restore := SetPhaseLogger(slog.New(capture))

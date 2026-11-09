@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +23,20 @@ type anyThreadHistory struct{}
 type searchableHistory struct{ fakeHistory }
 
 type pinnedHistory struct{ fakeHistory }
+
+func TestCanonicalProjectDirectoryDistinguishesMissingWorkspace(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := canonicalProjectDirectory(missing); err == nil || err.Error() != "FILE_NOT_FOUND" {
+		t.Fatalf("missing workspace error=%v", err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalProjectDirectory(file); err == nil || err.Error() != "INVALID_ARGUMENT" {
+		t.Fatalf("non-directory workspace error=%v", err)
+	}
+}
 
 func (pinnedHistory) List(_ context.Context, cursor string, limit int) (appserver.Page, error) {
 	if cursor != "" || limit != 50 {

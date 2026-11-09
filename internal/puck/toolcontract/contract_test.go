@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,6 +40,24 @@ func TestMutationSchemasAreStrictAndMachineReadable(t *testing.T) {
 		if (len(required) == 0 && !hasOneOf) || len(definition.InputSchema["examples"].([]any)) == 0 {
 			t.Fatalf("%s lacks required/examples", name)
 		}
+	}
+}
+
+func TestStartTaskSchemaAssignsIdentityServerSide(t *testing.T) {
+	definition, ok := DefinitionFor(Version, "start_task")
+	if !ok {
+		t.Fatal("start_task definition missing")
+	}
+	required, _ := definition.InputSchema["required"].([]string)
+	if slices.Contains(required, "clientTaskId") {
+		t.Fatalf("Brain must not be required to generate clientTaskId: %v", required)
+	}
+	properties, _ := definition.InputSchema["properties"].(map[string]any)
+	if _, ok := properties["clientTaskId"]; !ok {
+		t.Fatal("legacy clientTaskId compatibility property missing")
+	}
+	if Version < 5 {
+		t.Fatalf("toolset version=%d must rotate existing Brain threads", Version)
 	}
 }
 

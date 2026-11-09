@@ -180,7 +180,11 @@ func (h *Handler) forward(ctx context.Context, call Call, method string) ToolRes
 }
 
 func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) ToolResult {
-	input, details := toolcontract.DecodeStartTask(call.Arguments)
+	arguments := call.Arguments
+	if call.SourceMessageID != "" {
+		arguments = withTrustedStartTaskID(arguments, stableTaskID(call.AssistantID, call.SourceMessageID))
+	}
+	input, details := toolcontract.DecodeStartTask(arguments)
 	if len(details) != 0 {
 		return invalidArguments("invalid start_task arguments", details)
 	}
@@ -232,6 +236,26 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return ToolResult{Success: true, Data: taskData(task)}
+}
+
+func withTrustedStartTaskID(raw json.RawMessage, taskID string) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return raw
+	}
+	if legacy, ok := fields["clientTaskId"]; ok {
+		var value string
+		if json.Unmarshal(legacy, &value) != nil || len(value) > 128 {
+			return raw
+		}
+	}
+	encodedID, _ := json.Marshal(taskID)
+	fields["clientTaskId"] = encodedID
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 func stableTaskID(assistantID, sourceMessageID string) string {

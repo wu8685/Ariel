@@ -434,9 +434,15 @@ func canonicalProjectDirectory(cwd string) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", errors.New("FILE_NOT_FOUND")
+		}
 		return "", errors.New("INVALID_ARGUMENT")
 	}
 	info, err := os.Stat(resolved)
+	if os.IsNotExist(err) {
+		return "", errors.New("FILE_NOT_FOUND")
+	}
 	if err != nil || !info.IsDir() {
 		return "", errors.New("INVALID_ARGUMENT")
 	}

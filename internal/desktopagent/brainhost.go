@@ -1,6 +1,7 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -410,12 +411,29 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 		return
 	}
 	if frame.Method == "turn/completed" && identity.TurnID != "" {
+		failed := brainTurnCompletionFailed(frame.Params)
 		h.mu.Lock()
 		started, ok := h.turnStarted[identity.TurnID]
 		delete(h.turnStarted, identity.TurnID)
 		h.mu.Unlock()
 		if ok {
-			logPhase("brain-turn-complete", identity.ThreadID, "durationMs", time.Since(started).Milliseconds(), "ok", true)
+			attrs := []any{"durationMs", time.Since(started).Milliseconds(), "ok", !failed}
+			if failed {
+				attrs = append(attrs, "error", "BRAIN_UNAVAILABLE")
+			}
+			logPhase("brain-turn-complete", identity.ThreadID, attrs...)
+		}
+		if failed {
+			if h.cfg.Emit != nil {
+				h.cfg.Emit(BrainHostEvent{
+					Kind: "puck.brain.event", AssistantID: assistant, ThreadID: identity.ThreadID, TurnID: identity.TurnID,
+					Payload: map[string]any{
+						"method": "item/agentMessage/completed",
+						"params": map[string]any{"threadId": identity.ThreadID, "turnId": identity.TurnID, "item": map[string]any{"id": "brain-failure-" + identity.TurnID, "type": "agentMessage", "text": "BRAIN_UNAVAILABLE"}},
+					},
+				})
+			}
+			return
 		}
 	}
 	if strings.Contains(frame.Method, "commandExecution") || strings.Contains(frame.Method, "fileChange") || strings.Contains(frame.Method, "collabAgent") {
@@ -430,6 +448,20 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 	if h.cfg.Emit != nil {
 		h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.event", AssistantID: assistant, ThreadID: identity.ThreadID, TurnID: identity.TurnID, Payload: map[string]any{"method": frame.Method, "params": json.RawMessage(frame.Params)}})
 	}
+}
+
+func brainTurnCompletionFailed(raw json.RawMessage) bool {
+	var completion struct {
+		Turn struct {
+			Status string          `json:"status"`
+			Error  json.RawMessage `json:"error"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &completion) != nil {
+		return false
+	}
+	errorValue := bytes.TrimSpace(completion.Turn.Error)
+	return completion.Turn.Status == "failed" || len(errorValue) > 0 && string(errorValue) != "null"
 }
 
 func (h *BrainHost) timeoutCall(callID string) {
