@@ -1,12 +1,24 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { App } from "./App";
+import { App, errorText } from "./App";
 import type { Thread } from "./generated/protocol";
 import { normalizeProjectPath, projectName } from "./projects";
 import { DurableHistoryCache, MemoryDurableHistoryBackend } from "./durable-history-cache";
 import { emptyHistoryState } from "./history";
 import * as passkeyAPI from "./auth";
+
+it("maps FEATURE_DISABLED copy by request method with a generic fallback", () => {
+  const response = { outcome: "rejected", error: { code: "FEATURE_DISABLED", message: "FEATURE_DISABLED" } } as never;
+  expect(errorText(response, "file.context.read")).toBe("文件引用功能尚未启用。");
+  expect(errorText(response, "workspace.files.list")).toBe("文件浏览功能尚未启用。");
+  expect(errorText(response, "file.context.asset.read")).toBe("文档图片读取功能尚未启用。");
+  expect(errorText(response, "thread.settings.update")).toBe("模型与执行设置功能尚未启用。");
+  expect(errorText(response, "turn.edit")).toBe("消息编辑功能尚未启用。");
+  expect(errorText(response, "queue.add")).toBe("消息队列功能尚未启用。");
+  expect(errorText(response, "interaction.respond")).toBe("远程交互功能尚未启用。");
+  expect(errorText(response, "unknown.method")).toBe("这项功能尚未启用。");
+});
 
 class BrowserSocket {
   static sockets: BrowserSocket[] = [];

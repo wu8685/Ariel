@@ -123,7 +123,7 @@ function contentMarker(thread: Thread): ContentMarker {
 function hasNewVisibleContent(previous: ContentMarker | null, current: ContentMarker): boolean {
   return !!previous && (Object.keys(current) as (keyof ContentMarker)[]).some(key => previous[key] !== current[key]);
 }
-const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "实时连接暂时失效，请重新连接；历史内容已保留。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。", FEATURE_DISABLED: "文件引用功能尚未启用。", CHILLING_UNAVAILABLE: "本机 Chilling 暂不可用。", CONTRACT_UNSUPPORTED: "Chilling 文件协议版本不兼容。", FILE_NOT_FOUND: "文件已不存在。", PATH_NOT_ALLOWED: "该路径不允许读取。", REFERENCE_NOT_FOUND: "这项工具记录已不存在。", DETAIL_PENDING: "工具详情仍在生成，请稍后重试。", DETAIL_CHANGED: "工具详情已经更新，请重新打开。", DETAIL_TOO_LARGE: "这项工具详情无法安全分页，请在 Codex Desktop 查看。", UNSUPPORTED_FILE_TYPE: "当前只支持 UTF-8 文本文件。", FILE_TOO_LARGE: "文件超过 1 MiB，无法在这里打开。", FILE_CHANGED: "文件已经变化，请重新打开并选择片段。" };
+const resultText: Record<string, string> = { DEVICE_OFFLINE: "设备离线，请确认电脑上的 Agent 已连接。", TURN_BUSY: "这个会话正在运行；草稿已保留，不会自动重发。", STALE_TURN: "运行中的 turn 已变化，请刷新状态后再停止。", STALE_INTERACTION: "这项交互已经变化或过期，请查看最新会话状态。", OUTCOME_UNKNOWN: "执行结果不确定。请先查看会话状态，不要直接重发。", RESYNC_REQUIRED: "实时连接暂时失效，请重新连接；历史内容已保留。", NATIVE_STATE_UNCERTAIN: "Codex 原生会话状态暂时无法确认，已停止此会话的远程操作。请稍后手动重新选择；若持续出现，请在电脑端查看。", HISTORY_TOO_LARGE: "此页内容超过安全传输上限；已保留当前可见内容。", INTERACTION_UNSUPPORTED: "这张卡片已失效或当前决定不可用。", INVALID_ARGUMENT: "请求内容无效。", OVERLOADED: "请求过多，请稍后再试。", PROTOCOL_UNSUPPORTED: "当前 Codex 版本不支持这项操作。", TIMEOUT: "操作超时，请重试。", CHILLING_UNAVAILABLE: "本机 Chilling 暂不可用。", CONTRACT_UNSUPPORTED: "Chilling 文件协议版本不兼容。", FILE_NOT_FOUND: "文件已不存在。", PATH_NOT_ALLOWED: "该路径不允许读取。", REFERENCE_NOT_FOUND: "这项工具记录已不存在。", DETAIL_PENDING: "工具详情仍在生成，请稍后重试。", DETAIL_CHANGED: "工具详情已经更新，请重新打开。", DETAIL_TOO_LARGE: "这项工具详情无法安全分页，请在 Codex Desktop 查看。", UNSUPPORTED_FILE_TYPE: "当前只支持 UTF-8 文本文件。", FILE_TOO_LARGE: "文件超过 1 MiB，无法在这里打开。", FILE_CHANGED: "文件已经变化，请重新打开并选择片段。" };
 type ActivityPage = { text: string; nextCursor: string; revision: string; complete: boolean };
 
 const terminalCacheReasons = new Set(["AGENT_CAPACITY", "CACHE_CAPACITY", "CACHE_OVERSIZED", "CACHE_SEQUENCE", "HISTORY_TOO_LARGE", "INVALID_ARGUMENT", "NATIVE_STATE_UNCERTAIN", "OVERLOADED", "PROTOCOL_UNSUPPORTED", "RESYNC_REQUIRED", "TIMEOUT"]);
@@ -131,7 +131,19 @@ function isTerminalCacheReason(reason: unknown): reason is string {
   return typeof reason === "string" && terminalCacheReasons.has(reason);
 }
 
-function errorText(response: Response): string {
+function featureDisabledText(method: string): string {
+  if (method === "file.context.asset.read") return "文档图片读取功能尚未启用。";
+  if (method.startsWith("file.context.")) return "文件引用功能尚未启用。";
+  if (method.startsWith("workspace.")) return "文件浏览功能尚未启用。";
+  if (method.startsWith("thread.settings.") || method === "model.catalog.read") return "模型与执行设置功能尚未启用。";
+  if (method.startsWith("turn.edit")) return "消息编辑功能尚未启用。";
+  if (method.startsWith("queue.")) return "消息队列功能尚未启用。";
+  if (method === "interaction.respond") return "远程交互功能尚未启用。";
+  return "这项功能尚未启用。";
+}
+
+export function errorText(response: Response, method = ""): string {
+  if (response.error?.code === "FEATURE_DISABLED") return featureDisabledText(method);
   return response.error ? resultText[response.error.code] || response.error.message : "操作未完成。";
 }
 
@@ -470,7 +482,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 			response=await client.request("file.context.asset.read",deviceId,params);
 		}
 		if(signal.aborted)throw new DOMException("读取已取消","AbortError");
-		if(response.outcome!=="accepted"||!response.data)throw new Error(response.error?.code==="FILE_TOO_LARGE"?"图片超过大小或尺寸限制":errorText(response));
+		if(response.outcome!=="accepted"||!response.data)throw new Error(response.error?.code==="FILE_TOO_LARGE"?"图片超过大小或尺寸限制":errorText(response,"file.context.asset.read"));
 		return response.data;
 	},[client,deviceId]);
 	const fileAssetContext=useMemo(()=>({agentEpoch:device?.agentEpoch||"",relayVersion:relayAssetVersion,request:requestDocumentAsset}),[device?.agentEpoch,relayAssetVersion,requestDocumentAsset]);
@@ -1147,7 +1159,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const generation = ++deviceListGeneration.current;
     const response = await client.request("device.list", "relay", {});
     if (generation !== deviceListGeneration.current) return [];
-    if (response.outcome !== "accepted") { setNotice(errorText(response)); return []; }
+    if (response.outcome !== "accepted") { setNotice(errorText(response,"device.list")); return []; }
     const found = (response.data?.devices as Device[] | undefined) || [];
     const restoredDevice = fileWorkspaceSession.acceptDevices(found,webFileContextEnabled());
     setRelayAssetVersion(response.data?.documentAssetsVersion===1?1:0);
@@ -1234,7 +1246,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (response.outcome !== "accepted") {
       if (background) return;
       const code = response.error?.code;
-      setListError(query && code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : code === "TIMEOUT" || code === "OUTCOME_UNKNOWN" ? "加载会话超时，请重试。" : errorText(response));
+      setListError(query && code === "PROTOCOL_UNSUPPORTED" ? "当前 Codex 版本不支持会话内容搜索" : code === "TIMEOUT" || code === "OUTCOME_UNKNOWN" ? "加载会话超时，请重试。" : errorText(response,"thread.list"));
       return;
     }
     const page = (response.data?.threads as Thread[] | undefined) || [];
@@ -1327,7 +1339,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (epoch !== pendingSelect.current || selection.current.threadId !== id || selection.current.deviceId !== targetDevice) return false;
         const fetched = stored.data?.thread as Thread | undefined;
         if (stored.outcome !== "accepted" || fetched?.threadId !== id) {
-          setNotice(stored.outcome === "accepted" ? "历史页身份无法确认。" : errorText(stored));
+          setNotice(stored.outcome === "accepted" ? "历史页身份无法确认。" : errorText(stored,"thread.read"));
           return false;
         }
         thread = fetched;
@@ -1602,13 +1614,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
         const reason = response.error?.code || "NATIVE_STATE_UNCERTAIN";
         if (!progressiveInstalled && fastThread && !(await showReadOnlyHistory(id, targetDevice, epoch, fastThread, reason))) {
-          setNotice(errorText(response));
+          setNotice(errorText(response,"thread.subscribe"));
           return;
         }
         setReadOnlyReason(reason);
         setReadOnlyHistory(true);
         setSyncingView(false);
-        setNotice(`${errorText(response)} 历史保持只读；重新选择会话可重试连接。`);
+        setNotice(`${errorText(response,"thread.subscribe")} 历史保持只读；重新选择会话可重试连接。`);
         return;
       }
       if (response.error?.code === "NATIVE_STATE_UNCERTAIN") blockedSelection.current = `${targetDevice}\u0000${id}`;
@@ -1617,7 +1629,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         setReadOnlyHistory(true);
         if (!fast || fast.settled) setSyncingView(false);
       }
-      setNotice(errorText(response)); return;
+      setNotice(errorText(response,"thread.subscribe")); return;
     }
     const subID = response.data?.subscriptionId;
     if (typeof subID !== "string" || !subID) { setNotice("订阅回执缺少 ID，无法确认会话状态。"); return; }
@@ -1662,7 +1674,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
           setReadOnlyHistory(true);
           setReadOnlyReason(response.error?.code || "RESYNC_REQUIRED");
           setSyncingView(false);
-          setNotice(errorText(response));
+          setNotice(errorText(response,"thread.cache.promote"));
         }
         return;
       }
@@ -2297,7 +2309,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
         if (epoch !== pendingSelect.current || historyEpoch!==historyGeneration.current || selection.current.threadId !== targetThread) return;
         if (response.outcome !== "accepted") {
           if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) continue;
-          setNotice(errorText(response)); return;
+          setNotice(errorText(response,"thread.history")); return;
         }
         const turns = response.data?.turns as Turn[] | undefined;
         const nextCursor = response.data?.nextCursor;
@@ -2343,7 +2355,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       if (epoch !== pendingSelect.current || selection.current.threadId !== targetThread) return;
       if (response.outcome !== "accepted") {
         if (response.error?.code === "INVALID_ARGUMENT" && discardRestoredHistory(deviceId, targetThread)) void loadOlder();
-        else setNotice(errorText(response));
+        else setNotice(errorText(response,"thread.history.items"));
         return;
       }
       const items = response.data?.items as Item[] | undefined;
@@ -2379,7 +2391,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setWorking(false);
     if(selection.current.deviceId!==targetDevice||selection.current.threadId!==targetThread||agentEpochFor(targetDevice)!==agentEpoch)return;
     const target=parseEditTarget(response.data?.target);
-    if(response.outcome!=="accepted"||response.data?.agentEpoch!==agentEpoch||!target||target.turnId!==turn.turnId){setNotice(response.outcome==="accepted"?"编辑目标已变化，请查看最新状态。":errorText(response));return;}
+    if(response.outcome!=="accepted"||response.data?.agentEpoch!==agentEpoch||!target||target.turnId!==turn.turnId){setNotice(response.outcome==="accepted"?"编辑目标已变化，请查看最新状态。":errorText(response,"turn.edit.read"));return;}
     // Do not overwrite text typed while the read was in flight.
     if(composerSnapshot.current.draft.trim()||composerSnapshot.current.screenshots.length||composerSnapshot.current.fileQuotes.length){setNotice("已有未发送草稿，未覆盖其内容。");return;}
     setMessageEdit({...target,agentEpoch});setDraft(target.text);setNotice("");composerInputRef.current?.focus();
@@ -2394,7 +2406,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const same=selection.current.deviceId===targetDevice&&selection.current.threadId===targetThread;
     const current=same?composerSnapshot.current:composerDrafts.current.get({deviceId:targetDevice,threadId:targetThread});
     if(current){const unchanged=current.revision===source.revision;const next=accepted?{...current,messageEdit:undefined,draft:unchanged?"":current.draft,revision:current.revision+1}:{...current,messageEdit:{...target,uncertain:response.outcome==="unknown"||response.outcome==="accepted"},revision:current.revision+1};composerDrafts.current.set({deviceId:targetDevice,threadId:targetThread},next);if(same)showComposerSnapshot(next);}
-    if(same)setNotice(accepted?"消息已替换；已发生的文件修改不会撤销。":response.outcome==="unknown"||response.outcome==="accepted"?"编辑结果不确定。草稿已保留，请核对最新会话；不会自动重发。":errorText(response));
+    if(same)setNotice(accepted?"消息已替换；已发生的文件修改不会撤销。":response.outcome==="unknown"||response.outcome==="accepted"?"编辑结果不确定。草稿已保留，请核对最新会话；不会自动重发。":errorText(response,"turn.edit"));
   }
 
   async function send() {
@@ -2421,7 +2433,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 			&& Array.isArray(candidate.turns) && Array.isArray(candidate.pendingInteractions) && typeof receiptTurnID === "string" && receiptTurnID
 			&& response.data?.clientMessageId === clientMessageId;
 		if (!accepted) {
-			setNotice(response.outcome === "accepted" ? "创建结果无法确认。草稿已保留，请先刷新会话列表核对，不要直接重发。" : errorText(response));
+          setNotice(response.outcome === "accepted" ? "创建结果无法确认。草稿已保留，请先刷新会话列表核对，不要直接重发。" : errorText(response,"thread.bootstrap"));
 			return;
 		}
 		const created = candidate as Thread;
@@ -2476,7 +2488,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       else if (pending) pending.status = "unknown";
       setPendingSubmissionRevision(revision => revision + 1);
     }
-    if (sameSubmissionTarget(submission)) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response));
+    if (sameSubmissionTarget(submission)) setNotice(response.outcome === "accepted" ? "队列回执格式无法确认，草稿已保留。" : errorText(response,"turn.start"));
   }
 
   function editQueuedMessage(item: QueuedMessage) {
@@ -2513,7 +2525,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (response.outcome !== "accepted") {
       setNotice(method === "queue.steer" && response.error?.code === "PROTOCOL_UNSUPPORTED"
         ? "当前 Codex Desktop 不支持立即引导；排队项仍保留。"
-        : errorText(response));
+        : errorText(response,method));
       return;
     }
     if (!applyQueueResponse(response, targetDevice, targetThread)) { setNotice("队列回执格式无法确认，请等待状态同步后再操作。"); return; }
@@ -2633,7 +2645,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const response = await client.request("thread.activity.read", targetDevice, { threadId: targetThread, turnId, itemId: item.itemId, ...(cursor ? { cursor } : {}), limitBytes: 65536, ...(expectedRevision ? { expectedRevision } : {}) });
     if (selection.current.deviceId !== targetDevice || selection.current.threadId !== targetThread) throw new Error("会话已切换");
     const data = response.data;
-    if (response.outcome !== "accepted" || typeof data?.text !== "string" || typeof data?.revision !== "string" || typeof data?.nextCursor !== "string" || typeof data?.complete !== "boolean") throw new Error(errorText(response));
+    if (response.outcome !== "accepted" || typeof data?.text !== "string" || typeof data?.revision !== "string" || typeof data?.nextCursor !== "string" || typeof data?.complete !== "boolean") throw new Error(errorText(response,"thread.activity.read"));
     return data as ActivityPage;
   }
 
@@ -2642,7 +2654,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setStopping(true);
     const response = await client.request("turn.interrupt", deviceId, { threadId: view.threadId, expectedTurnId: activeTurn.turnId });
     setStopping(false);
-    if (response.outcome !== "accepted") setNotice(errorText(response));
+    if (response.outcome !== "accepted") setNotice(errorText(response,"turn.interrupt"));
   }
 
   async function respond(interaction: Interaction, decision: string) {
@@ -2653,7 +2665,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     setWorking(true);
     const response = await client.request("interaction.respond", deviceId, { threadId: view.threadId, interactionId: interaction.interactionId, decision, ...(decision === "answer" ? { answers: mapped } : {}) });
     setWorking(false);
-    if (response.outcome !== "accepted") setNotice(errorText(response));
+    if (response.outcome !== "accepted") setNotice(errorText(response,"interaction.respond"));
   }
 
   function openThreadMenu(thread: Thread, left: number, top: number) {
@@ -2699,7 +2711,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     if (targetDevice !== selection.current.deviceId || targetAgentEpoch !== agentEpochFor(targetDevice)) return;
     const operationId = response.data?.operationId;
     if (response.outcome !== "accepted" || typeof operationId !== "string" || !operationId) {
-      setNotice(response.outcome === "accepted" ? "归档回执无法确认，会话列表已重新加载。" : errorText(response));
+      setNotice(response.outcome === "accepted" ? "归档回执无法确认，会话列表已重新加载。" : errorText(response,"thread.archive.update"));
       void loadThreads(targetDevice, "", searchInputRef.current.trim());
       return;
     }
@@ -2773,7 +2785,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       void loadThreads(targetDevice, "", searchInputRef.current.trim(), true);
       return;
     }
-    setRenameThreadError(response.outcome === "accepted" ? "修改回执无法确认，请重试。" : errorText(response));
+    setRenameThreadError(response.outcome === "accepted" ? "修改回执无法确认，请重试。" : errorText(response,"thread.name.update"));
   }
 
   async function pinThread(thread: Thread) {
@@ -2797,7 +2809,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       void loadThreads(targetDevice, "", searchInputRef.current.trim(), true);
       return;
     }
-    setNotice(response.outcome === "accepted" ? "置顶回执无法确认，会话列表已重新加载。" : response.outcome === "unknown" ? "置顶结果不确定，请检查会话列表。" : errorText(response));
+    setNotice(response.outcome === "accepted" ? "置顶回执无法确认，会话列表已重新加载。" : response.outcome === "unknown" ? "置顶结果不确定，请检查会话列表。" : errorText(response,"thread.pin.update"));
     if (response.outcome === "unknown" || response.outcome === "accepted") void loadThreads(targetDevice, "", searchInputRef.current.trim(), true);
   }
 
@@ -2808,7 +2820,7 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     const response = await client.request("thread.archive.undo", deviceId, { threadId: toast.threadId, operationId: toast.operationId });
     setThreadArchiveWorking("");
     if (response.outcome !== "accepted") {
-      setNotice(errorText(response));
+      setNotice(errorText(response,"thread.archive.undo"));
       return;
     }
     setArchiveUndoToast(null);
