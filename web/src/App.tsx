@@ -30,6 +30,8 @@ import { useWorkspaceLayout } from "./workspace-layout";
 import { editableMessage, parseEditTarget, historyRewritten, type MessageEdit } from "./message-edit";
 import {StreamFence} from "./stream-fence";
 import { loadAuthStatus, loginWithPasskey, logoutPasskey, normalizePuckStatus, registerPasskey } from "./auth";
+import { approveRemoteLogin, cancelRemoteLogin, pollRemoteLogin, readRemoteLogin, rejectRemoteLogin, remoteLoginURL, startRemoteLogin, takeRemoteLoginID } from "./remote-login";
+import { RemoteApprovalDialog, RemoteLoginDialog } from "./remote-login-panel";
 import { FileContentCache, FileQuoteChips, HistoricalFileQuotes, TurnFileChanges, projectCanonicalFileContexts, webFileContextEnabled, type FileChange, type FileQuote, type FileViewMode } from "./file-context";
 import { FileWorkspace, FileWorkspaceModel, useFileWorkspace } from "./file-workspace";
 import { FileWorkspaceSession } from "./file-workspace-session";
@@ -79,10 +81,27 @@ type RenameThreadDialog = { threadId: string; name: string };
 type LocalThreadDraft = { deviceId: string; agentEpoch: string; cwd: string; draftId: string };
 type WebAuthMode = "pin" | "passkey";
 type PasskeyAuthState = { loaded: boolean; enrollmentRequired: boolean; error: string };
+type RemoteLoginState = {
+  generation: number;
+  id: string;
+  pollToken: string;
+  code: string;
+  expiresAt: number;
+  qr: string;
+  url: string;
+  status: "loading" | "waiting" | "approved" | "rejected" | "cancelled" | "expired" | "error";
+  message: string;
+};
 type ReadOnlyReason = "" | "OVERLOADED" | "HISTORY_TOO_LARGE" | "NATIVE_STATE_UNCERTAIN" | "TIMEOUT" | "PROTOCOL_UNSUPPORTED" | string;
 
 function webAuthModeFromDocument(): WebAuthMode {
   return document.querySelector<HTMLMetaElement>('meta[name="ariel-auth-mode"]')?.content === "passkey" ? "passkey" : "pin";
+}
+
+function initialRemoteApprovalID(explicit?: string): string {
+  if (webAuthModeFromDocument() !== "passkey") return "";
+  if (explicit !== undefined) return explicit;
+  return takeRemoteLoginID(window.location, window.history);
 }
 
 function readingKey(deviceId: string, threadId: string): string { return `${deviceId}\u0000${threadId}`; }
@@ -286,7 +305,7 @@ function PairingDialog({ invite, seconds, onClose, onRegenerate }: { invite: Pai
   </div>;
 }
 
-export function App({ initialPairingCredential, durableHistoryCache }: { initialPairingCredential?: string; durableHistoryCache?: DurableHistoryCache } = {}) {
+export function App({ initialPairingCredential, initialRemoteLoginID, durableHistoryCache }: { initialPairingCredential?: string; initialRemoteLoginID?: string; durableHistoryCache?: DurableHistoryCache } = {}) {
   const authIme = useImeEnterGuard();
   const renameIme = useImeEnterGuard();
   const composerIme = useImeEnterGuard();
@@ -299,6 +318,13 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 	const [workspaceMode, setWorkspaceMode] = useState<"codex" | "puck">("codex");
 	const [puckAvailability, setPuckAvailability] = useState<{ state: "ready" | "unavailable" | "disabled"; reason?: string }>({ state: "disabled" });
   const [setupToken, setSetupToken] = useState("");
+  const remoteGeneration = useRef(0);
+  const remotePollLock = useRef<Promise<void> | null>(null);
+  const remoteSettled = useRef(false);
+  const [remoteLogin, setRemoteLogin] = useState<RemoteLoginState | null>(null);
+  const [remoteLoginSeconds, setRemoteLoginSeconds] = useState(0);
+  const [remoteApprovalID, setRemoteApprovalID] = useState(() => initialRemoteApprovalID(initialRemoteLoginID));
+  const [remoteApproval, setRemoteApproval] = useState<{ status: string; code: string; message: string } | null>(null);
   const [phonePairing, setPhonePairing] = useState<PhonePairing | null>(() => {
     const credential = initialPairingCredential ?? takePairingCredential(window.location, window.history);
     if (webAuthModeFromDocument() !== "pin") return null;
@@ -1069,6 +1095,56 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       setPasskeyAuth(current => ({ ...current, error: message }));
     } finally {
       if (generation === authGeneration.current) setPasskeyBusy(false);
+    }
+  }
+
+  async function openRemoteLogin() {
+    if (passkeyBusy || passkeyAuth.enrollmentRequired || remoteApprovalID) return;
+    const generation = ++remoteGeneration.current;
+    remoteSettled.current = false;
+    const previous = remoteLogin;
+    if (previous?.pollToken && (previous.status === "waiting" || previous.status === "loading")) void cancelRemoteLogin(previous.id, previous.pollToken).catch(() => undefined);
+    setRemoteLogin({ generation, id: "", pollToken: "", code: "", expiresAt: 0, qr: "", url: "", status: "loading", message: "" });
+    try {
+      const challenge = await startRemoteLogin();
+      if (generation !== remoteGeneration.current) {
+        void cancelRemoteLogin(challenge.id, challenge.pollToken).catch(() => undefined);
+        return;
+      }
+      const url = remoteLoginURL(window.location.origin, challenge.id);
+      const qr = await pairingQRCode(url);
+      if (generation !== remoteGeneration.current) {
+        void cancelRemoteLogin(challenge.id, challenge.pollToken).catch(() => undefined);
+        return;
+      }
+      const expiresAt = Date.parse(challenge.expiresAt);
+      if (!Number.isFinite(expiresAt)) throw new Error("无法创建远程登录，请重试。");
+      setRemoteLogin({ generation, id: challenge.id, pollToken: challenge.pollToken, code: challenge.code, expiresAt, qr, url, status: "waiting", message: "" });
+    } catch (error) {
+      if (generation !== remoteGeneration.current) return;
+      setRemoteLogin({ generation, id: "", pollToken: "", code: "", expiresAt: 0, qr: "", url: "", status: "error", message: error instanceof Error ? error.message : "无法创建远程登录，请重试。" });
+    }
+  }
+
+  function closeRemoteLogin() {
+    const current = remoteLogin;
+    remoteGeneration.current++;
+    remoteSettled.current = true;
+    if (current?.pollToken && (current.status === "waiting" || current.status === "loading")) void cancelRemoteLogin(current.id, current.pollToken).catch(() => undefined);
+    setRemoteLogin(null);
+  }
+
+  async function decideRemoteApproval(decision: "approved" | "rejected") {
+    if (!remoteApprovalID || passkeyBusy) return;
+    setPasskeyBusy(true);
+    try {
+      if (decision === "approved") await approveRemoteLogin(remoteApprovalID);
+      else await rejectRemoteLogin(remoteApprovalID);
+      setRemoteApproval(current => ({ status: decision, code: current?.code || "", message: "" }));
+    } catch (error) {
+      setRemoteApproval(current => ({ status: current?.status || "error", code: current?.code || "", message: error instanceof Error ? error.message : "无法处理远程登录。" }));
+    } finally {
+      setPasskeyBusy(false);
     }
   }
 
@@ -1959,6 +2035,80 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
     return () => window.clearInterval(timer);
   }, [pairingInvite?.status, pairingInvite?.credential, pairingInvite?.expiresAt]);
 
+  useEffect(() => {
+    if (webAuthMode !== "passkey" || !remoteApprovalID) return;
+    let active = true;
+    void readRemoteLogin(remoteApprovalID).then(result => {
+      if (!active) return;
+      setRemoteApproval({ status: result.status, code: result.code || "", message: "" });
+    }).catch(error => {
+      if (!active) return;
+      setRemoteApproval({ status: "error", code: "", message: error instanceof Error ? error.message : "无法读取远程登录请求。" });
+    });
+    return () => { active = false; };
+  }, [webAuthMode, remoteApprovalID]);
+
+  useEffect(() => {
+    if (remoteLogin?.status !== "waiting") { setRemoteLoginSeconds(0); return; }
+    const generation = remoteLogin.generation;
+    const expiresAt = remoteLogin.expiresAt;
+    const id = remoteLogin.id;
+    const pollToken = remoteLogin.pollToken;
+    const tick = () => {
+      const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+      setRemoteLoginSeconds(seconds);
+      if (seconds === 0 && remoteGeneration.current === generation) {
+        remoteGeneration.current++;
+        remoteSettled.current = true;
+        if (pollToken) void cancelRemoteLogin(id, pollToken).catch(() => undefined);
+        setRemoteLogin(view => view?.generation === generation ? { ...view, status: "expired", pollToken: "", qr: "" } : view);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [remoteLogin?.status, remoteLogin?.generation, remoteLogin?.expiresAt, remoteLogin?.id, remoteLogin?.pollToken]);
+
+  useEffect(() => {
+    if (remoteLogin?.status !== "waiting") return;
+    const generation = remoteLogin.generation;
+    const id = remoteLogin.id;
+    const pollToken = remoteLogin.pollToken;
+    const authGen = authGeneration.current;
+    let stopped = false;
+    const finish = (next: RemoteLoginState["status"], message = "") => {
+      if (remoteSettled.current || generation !== remoteGeneration.current || authGen !== authGeneration.current) return;
+      remoteSettled.current = true;
+      setRemoteLogin(view => view?.generation === generation ? { ...view, status: next, message } : view);
+      if (next === "approved") {
+        setPasskeyAuth({ loaded: true, enrollmentRequired: false, error: "" });
+        client.connect("cookie");
+      }
+    };
+    const tick = () => {
+      if (stopped || remoteSettled.current || remotePollLock.current) return;
+      const run = (async () => {
+        try {
+          const result = await pollRemoteLogin(id, pollToken);
+          if (result.status === "pending") return;
+          finish(result.status);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (message.includes("已失效") || message.includes("已过期") || message.includes("已经处理")) finish("error", message);
+        }
+      })();
+      remotePollLock.current = run;
+      void run.finally(() => { if (remotePollLock.current === run) remotePollLock.current = null; });
+    };
+    tick();
+    const timer = window.setInterval(() => { if (!stopped) tick(); }, 2000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [remoteLogin?.status, remoteLogin?.generation, remoteLogin?.id, remoteLogin?.pollToken, client]);
+
+  useEffect(() => {
+    if (status === "ready" && remoteLogin?.status === "approved") setRemoteLogin(null);
+  }, [status, remoteLogin?.status]);
+
   useLayoutEffect(() => {
     if (activeComposerIdentity.current) composerDrafts.current.set(activeComposerIdentity.current, captureComposerSnapshot());
     activeComposerIdentity.current = null;
@@ -2848,12 +2998,15 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
 
   const accessHero = <div><div className="connect-hero"><ArielLogo size="clamp(128px, 12vw, 160px)" variant="color" decorative priority className="connect-logo" /><div className="connect-hero-copy"><span className="eyebrow">PRIVATE ACCESS</span><h1>Agent 联络中继器</h1></div></div><p>{webAuthMode === "passkey" ? "使用此设备上的 Passkey 安全登录。会话凭据仅保存在受保护的浏览器 Cookie 中。" : "输入 6 位连接码。连接后，同一标签页刷新会自动恢复；连接码不会存入浏览器。"}</p></div>;
   const accessPanel = webAuthMode === "passkey" ? <section className="connect-panel" aria-label="Passkey 登录">{accessHero}
-    {!passkeyAuth.loaded ? <div className="auth-loading" role="status">正在检查登录状态…</div> : <form onSubmit={event => { event.preventDefault(); if (!authIme.blocksFormSubmit()) void authenticateWithPasskey(); }}>
+    {!passkeyAuth.loaded ? <div className="auth-loading" role="status">正在检查登录状态…</div> : <div className="connect-auth"><form onSubmit={event => { event.preventDefault(); if (!authIme.blocksFormSubmit()) void authenticateWithPasskey(); }}>
       {passkeyAuth.enrollmentRequired && <><label htmlFor="setup-token">首次设置密钥</label><input id="setup-token" type="password" value={setupToken} onChange={event => setSetupToken(event.target.value)} onCompositionStart={authIme.compositionStart} onCompositionEnd={authIme.compositionEnd} onBlur={authIme.blur} onKeyDown={event=>{authIme.classify(event);}} minLength={32} autoComplete="off" placeholder="输入部署时配置的 setup token" required /></>}
       <button className="primary passkey-action" type="submit" onPointerDown={authIme.allowExplicitFormSubmit} disabled={passkeyBusy || status === "connecting" || (passkeyAuth.enrollmentRequired && setupToken.length < 32)}>{passkeyBusy || status === "connecting" ? "正在处理…" : passkeyAuth.enrollmentRequired ? "创建 Passkey" : "使用 Passkey 登录"}</button>
       {passkeyAuth.error && <p role="alert" className="connect-error">{passkeyAuth.error}</p>}
       <small>{passkeyAuth.enrollmentRequired ? "首次登记成功后，请从云端部署 Secret 中移除 setup token。" : "Passkey 会校验当前 HTTPS 域名，不使用共享密码。"}</small>
-    </form>}
+    </form>
+    {!passkeyAuth.enrollmentRequired && !remoteApprovalID && <button className="secondary remote-login-entry" type="button" onClick={() => void openRemoteLogin()} disabled={passkeyBusy || status === "connecting"}>扫码远程登录</button>}
+    {remoteApprovalID && <p className="remote-login-hint" role="status">{remoteApproval?.message || `此链接用于批准另一台浏览器登录。请先使用 Passkey。核对码 ${remoteApproval?.code || "…"}。登录成功后还需要再点击批准。`}</p>}
+    </div>}
   </section> : phonePairing ? <PhonePairingPanel pairing={phonePairing} origin={window.location.origin} onConfirm={confirmPhonePairing} onCancel={cancelPhonePairing} /> : <section className="connect-panel" aria-label="连接 Relay">{accessHero}<form onSubmit={event => { event.preventDefault(); if (!authIme.blocksFormSubmit() && isWebPIN(token)) { savedSessionAttempt.current = false; setSessionExpired(false); client.connect(token); } }}><label htmlFor="token">6 位连接码</label><div className="connect-row"><input id="token" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={token} onChange={event => setToken(event.target.value)} onCompositionStart={authIme.compositionStart} onCompositionEnd={authIme.compositionEnd} onBlur={authIme.blur} onKeyDown={event=>{authIme.classify(event);}} autoComplete="off" placeholder="输入 6 位数字" required /><button className="primary" type="submit" onPointerDown={authIme.allowExplicitFormSubmit} disabled={!isWebPIN(token)}>连接 <span aria-hidden="true">↗</span></button></div>{status === "invalid" && <p role="alert" className="connect-error">{sessionExpired ? "保存的会话已失效，请重新输入连接码。" : "连接码错误或 Relay 已锁定；累计 10 次错误后需重启 Relay。"}</p>}<small>仅建议在可信局域网使用。HTTP/WS 连接未加密。</small></form></section>;
   const incompatiblePanel = <section className="connect-panel" aria-label="版本不兼容"><div><span className="eyebrow">UPDATE REQUIRED</span><h1>页面版本不兼容</h1><p>当前页面无法识别 Relay 的通信协议。你的登录状态没有失效，请刷新页面加载最新版本。</p></div><div className="compatibility-actions"><button className="primary" type="button" aria-label="刷新页面" onClick={() => window.location.reload()}>刷新页面</button><small>刷新后仍然出现时，请检查 Web 与 Relay 是否来自同一版本。</small></div></section>;
 
@@ -2880,10 +3033,12 @@ export function App({ initialPairingCredential, durableHistoryCache }: { initial
       root?.querySelector<HTMLElement>('.file-workspace [role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
     }
   },[exclusiveFiles]);
-	if (workspaceMode === "puck" && (status === "ready" || hasConversationContext)) {
+	if (workspaceMode === "puck" && (status === "ready" || hasConversationContext) && !remoteApprovalID && !remoteLogin) {
 		return <PuckWorkspace request={(method,target,params)=>client.request(method as Parameters<typeof client.request>[0],target,params)} subscribeEvents={listener=>client.subscribeEvents(event=>listener(event as unknown as Record<string,unknown>))} state={puckAvailability.state} reason={puckAvailability.reason} devices={devices.map(device=>({deviceId:device.deviceId,name:device.deviceName,capabilities:device.capabilities}))} onBack={()=>setWorkspaceMode("codex")} onOpenThread={(targetDevice,targetThread)=>{setWorkspaceMode("codex");setDeviceId(targetDevice);void selectThread(targetThread,targetDevice)}}/>;
 	}
   return <div className={`app-shell ${status === "ready" || hasConversationContext ? "connected" : ""}`} style={visualViewportHeight === null ? undefined : { height: visualViewportHeight }}>
+    {remoteLogin && <RemoteLoginDialog status={remoteLogin.status} qr={remoteLogin.qr} code={remoteLogin.code} url={remoteLogin.url} seconds={remoteLoginSeconds} message={remoteLogin.message} onClose={closeRemoteLogin} onRegenerate={() => void openRemoteLogin()} />}
+    {remoteApprovalID && status === "ready" && <RemoteApprovalDialog status={remoteApproval?.status || "pending"} code={remoteApproval?.code || ""} message={remoteApproval?.message || ""} busy={passkeyBusy} onApprove={() => void decideRemoteApproval("approved")} onReject={() => void decideRemoteApproval("rejected")} onClose={() => setRemoteApprovalID("")} />}
     <header className="masthead">
       <div className="brand"><ArielLogo size={29} variant="micro" tone="white" decorative className="brand-logo" /><span>Ariel</span><small>Codex 随身工作台</small></div>
       <div className="mast-actions">{puckAvailability.state !== "disabled" && (status === "ready" || hasConversationContext) && <button type="button" className="secondary" onClick={()=>setWorkspaceMode("puck")}>Puck</button>}<span className={`connection ${status}`}><span className="status-dot" />{connectionLabel}</span></div>

@@ -157,5 +157,39 @@ test("enrolls a primary and backup Passkey, then signs in again", async ({ brows
   const afterRefresh = (await context.cookies(publicOrigin)).find(cookie => cookie.name === "__Host-ariel_session");
   expect(afterRefresh?.value).not.toBe(beforeRefresh?.value);
   expect(afterRefresh).toMatchObject({ secure: true, httpOnly: true, sameSite: "Strict" });
+
+  const remote = await browser.newContext({ ignoreHTTPSErrors: true, locale: "zh-CN", viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: "dark", reducedMotion: "reduce" });
+  const remotePage = await remote.newPage();
+  await remotePage.goto(publicOrigin);
+  await remotePage.getByRole("button", { name: "扫码远程登录" }).click();
+  const link = remotePage.getByLabel("远程登录链接");
+  await expect(link).toBeVisible();
+  const approvalURL = await link.inputValue();
+  expect(approvalURL).toContain("/?remoteLogin=");
+  expect(approvalURL).not.toMatch(/pollToken|__Host-ariel_session/);
+  const remoteCode = (await remotePage.locator(".remote-login-code").innerText()).replace(/\s/g, "");
+  await expect(remotePage.getByText("等待扫码")).toBeVisible();
+
+  await page.getByRole("button", { name: "退出" }).click();
+  await page.goto(approvalURL);
+  await expect(page.getByRole("button", { name: "使用 Passkey 登录" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "批准远程登录" })).toHaveCount(0);
+  await expect(page.getByText(remoteCode)).toBeVisible();
+  await page.getByRole("button", { name: "使用 Passkey 登录" }).click();
+  await expect(page.locator(".masthead .connection.ready")).toContainText("Relay 已连接");
+  await expect(remotePage.locator(".masthead .connection.ready")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "批准远程登录" })).toBeVisible();
+  await page.getByRole("button", { name: "批准远程登录" }).click();
+  await expect(page.getByText("已批准")).toBeVisible();
+  await expect(remotePage.locator(".masthead .connection.ready")).toContainText("Relay 已连接", { timeout: 10_000 });
+
+  const replay = await browser.newContext({ ignoreHTTPSErrors: true, locale: "zh-CN" });
+  const replayPage = await replay.newPage();
+  await replayPage.goto(approvalURL);
+  await expect(replayPage.getByText("这个远程登录请求已失效。")).toBeVisible();
+  await expect(replayPage.locator(".masthead .connection.ready")).toHaveCount(0);
+  await expect(replayPage.getByRole("button", { name: "使用 Passkey 登录" })).toBeVisible();
+  await replay.close();
+  await remote.close();
   await context.close();
 });

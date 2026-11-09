@@ -244,6 +244,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pairing-qr { display: inline-grid; place-items: center; padding: 12px; border-radius: 10px; background: white; }
 .pairing-qr img { display: block; width: min(280px, 65vw); height: auto; }
 .pairing-countdown { display: block; color: var(--color-accent); margin-top: 9px; font-size: 13px; }
+.connect-panel .connect-auth { max-width: 460px; flex: 1; }
+.connect-panel .remote-login-entry { width: 100%; margin-top: 10px; }
+.connect-panel .remote-login-hint { margin: 16px 0 0; }
+.remote-login-code { display: block; margin-top: 8px; letter-spacing: .28em; font-size: 28px; font-weight: 700; color: var(--color-text); }
+.remote-login-link { display: block; width: 100%; margin: 12px auto 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-panel); color: var(--color-text); font-size: 12px; }
 .pairing-state { min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--color-muted); }
 .pairing-state strong { color: var(--color-text); font-size: 20px; }
 .pairing-state.success strong { color: var(--color-success); }
@@ -650,7 +655,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .mast-actions .connection { display: none; }
   .pair-entry { min-height: 44px; }
   .connect-panel { top: 60px; flex-direction: column; gap: 16px; align-items: stretch; overflow: auto; justify-content: flex-start; padding: 10vh 20px 30px; }
-  .connect-panel > div, .connect-panel form { max-width: none; flex: none; }
+  .connect-panel > div, .connect-panel form, .connect-panel .connect-auth { max-width: none; flex: none; }
   .connect-panel h1 { font-size: 24px; }
   .pairing-confirm { padding-top: 7vh; }
   .pairing-dialog { padding: 26px 18px 22px; }
