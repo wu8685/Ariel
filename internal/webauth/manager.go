@@ -45,6 +45,8 @@ type Manager struct {
 	now          func() time.Time
 	usedMu       sync.Mutex
 	used         map[[32]byte]time.Time
+	remoteMu     sync.Mutex
+	remote       map[string]*remoteChallenge
 	puckStatus   map[string]string
 }
 
@@ -90,7 +92,7 @@ func New(cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{publicOrigin: cfg.PublicOrigin, setupToken: cfg.SetupToken, store: store, codec: codec, webauthn: wa, now: time.Now, used: map[[32]byte]time.Time{}, puckStatus: cloneStringMap(cfg.PuckStatus)}, nil
+	return &Manager{publicOrigin: cfg.PublicOrigin, setupToken: cfg.SetupToken, store: store, codec: codec, webauthn: wa, now: time.Now, used: map[[32]byte]time.Time{}, remote: map[string]*remoteChallenge{}, puckStatus: cloneStringMap(cfg.PuckStatus)}, nil
 }
 
 func (m *Manager) Handler() http.Handler {
@@ -101,6 +103,12 @@ func (m *Manager) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/passkey/login/options", m.loginOptions)
 	mux.HandleFunc("POST /api/auth/passkey/login/verify", m.loginVerify)
 	mux.HandleFunc("POST /api/auth/logout", m.logout)
+	mux.HandleFunc("POST /api/auth/remote-login/start", m.remoteLoginStart)
+	mux.HandleFunc("POST /api/auth/remote-login/status", m.remoteLoginStatus)
+	mux.HandleFunc("POST /api/auth/remote-login/approve", m.remoteLoginApprove)
+	mux.HandleFunc("POST /api/auth/remote-login/reject", m.remoteLoginReject)
+	mux.HandleFunc("POST /api/auth/remote-login/poll", m.remoteLoginPoll)
+	mux.HandleFunc("POST /api/auth/remote-login/cancel", m.remoteLoginCancel)
 	return mux
 }
 

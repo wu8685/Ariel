@@ -91,7 +91,20 @@ ariel.example.com {
 
 已登录后，可在左侧会话栏点击钥匙图标“添加 Passkey”，为另一台设备或安全密钥登记备用凭据。凭据文件支持保存多个 Passkey。
 
-## 5. 连接 Desktop Agent
+## 5. 让没有 Passkey 的浏览器登录
+
+云端或远程浏览器不能使用用户设备上的 Passkey。登录门提供「扫码远程登录」：
+
+1. 在那台浏览器打开 Ariel，点击「扫码远程登录」。
+2. 用已经登记 Passkey 的手机或电脑扫描二维码，或打开旁边的链接。
+3. 如果这台批准设备还没登录，先完成 Passkey；登录本身不会批准远程浏览器。
+4. 核对两边的核对码，再点击「批准远程登录」。远程浏览器随后进入已登录状态。
+
+二维码里只有一次性挑战编号。会话仍写在 `__Host-` Cookie 中。挑战三分钟后失效，只能兑换一次。这不是 PIN，也不恢复局域网扫码配对。
+
+本地试验使用与 [0059 端到端](../testing/2026-10-08-0059-native-passkey-auth.md) 相同的 Passkey Relay 与 HTTPS 入口：一台带 virtual authenticator 的浏览器先登记，另一台不带认证器的浏览器发起扫码，再回到已登录浏览器批准。
+
+## 6. 连接 Desktop Agent
 
 Desktop Agent 与 Relay 跨公网通信，使用与 Relay 相同的高熵 `ARIEL_TOKEN`：
 

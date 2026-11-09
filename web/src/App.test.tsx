@@ -502,6 +502,88 @@ describe("Ariel app interactions", () => {
 		BrowserSocket.sockets[0].onopen?.(new Event("open"));
 		expect(JSON.parse(BrowserSocket.sockets[0].sent[0]).token).toBe("cookie");
 	});
+	it("hides remote login until a Passkey exists", async () => {
+		const meta = document.createElement("meta");
+		meta.name = "ariel-auth-mode";
+		meta.content = "passkey";
+		document.head.append(meta);
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ mode: "passkey", authenticated: false, enrollmentRequired: true }), { status: 200 })));
+		render(<App />);
+		expect(await screen.findByRole("button", { name: "创建 Passkey" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "扫码远程登录" })).toBeNull();
+	});
+	it("shows a remote login QR without the poll token and connects after approval", async () => {
+		const meta = document.createElement("meta");
+		meta.name = "ariel-auth-mode";
+		meta.content = "passkey";
+		document.head.append(meta);
+		const id = "A".repeat(22);
+		const pollToken = "p".repeat(43);
+		let approved = false;
+		const calls: Array<{ url: string; body: unknown }> = [];
+		vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+			const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+			calls.push({ url: String(url), body });
+			if (url === "/api/auth/status") return new Response(JSON.stringify({ mode: "passkey", authenticated: false, enrollmentRequired: false }), { status: 200 });
+			if (url === "/api/auth/remote-login/start") return new Response(JSON.stringify({ id, pollToken, expiresAt: new Date(Date.now() + 60_000).toISOString(), code: "K7NQ2M" }), { status: 200 });
+			if (url === "/api/auth/remote-login/poll") return new Response(JSON.stringify({ status: approved ? "approved" : "pending" }), { status: 200 });
+			if (url === "/api/auth/remote-login/cancel") return new Response(JSON.stringify({ status: "cancelled" }), { status: 200 });
+			return new Response(JSON.stringify({ ok: true }), { status: 200 });
+		}));
+		render(<App />);
+		fireEvent.click(await screen.findByRole("button", { name: "扫码远程登录" }));
+		const image = await screen.findByRole("img", { name: "扫码远程登录二维码" });
+		const link = screen.getByLabelText("远程登录链接") as HTMLInputElement;
+		expect(link.value).toBe(`${window.location.origin}/?remoteLogin=${id}`);
+		expect(link.value).not.toContain(pollToken);
+		expect(image.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+		expect(image.getAttribute("src")).not.toContain(pollToken);
+		expect(document.body.textContent).not.toContain(pollToken);
+		expect(screen.getByText("等待扫码", { exact: false })).toBeTruthy();
+		approved = true;
+		await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(1), { timeout: 4000 });
+		BrowserSocket.sockets[0].onopen?.(new Event("open"));
+		expect(JSON.parse(BrowserSocket.sockets[0].sent[0]).token).toBe("cookie");
+		expect(calls.some(call => call.url === "/api/auth/remote-login/approve")).toBe(false);
+	});
+	it("requires an explicit approval after Passkey login", async () => {
+		const meta = document.createElement("meta");
+		meta.name = "ariel-auth-mode";
+		meta.content = "passkey";
+		document.head.append(meta);
+		const id = "B".repeat(22);
+		window.history.replaceState({}, "", `/?remoteLogin=${id}`);
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+			calls.push(String(url));
+			if (url === "/api/auth/status") return new Response(JSON.stringify({ mode: "passkey", authenticated: false, enrollmentRequired: false }), { status: 200 });
+			if (url === "/api/auth/remote-login/status") return new Response(JSON.stringify({ status: "pending", code: "H3K9PQ", expiresAt: new Date(Date.now() + 60_000).toISOString() }), { status: 200 });
+			if (String(url).endsWith("/options")) return new Response(JSON.stringify({ publicKey: { challenge: "AQI", rpId: "ariel.example.com", allowCredentials: [], userVerification: "required" } }), { status: 200 });
+			if (url === "/api/auth/remote-login/approve") return new Response(JSON.stringify({ status: "approved" }), { status: 200 });
+			return new Response(JSON.stringify({ ok: true }), { status: 200 });
+		}));
+		Object.defineProperty(navigator, "credentials", {
+			configurable: true,
+			value: { get: vi.fn(async () => ({
+				id: "credential", type: "public-key", rawId: new Uint8Array([1]).buffer,
+				authenticatorAttachment: "platform", getClientExtensionResults: () => ({}),
+				response: { clientDataJSON: new Uint8Array([2]).buffer, authenticatorData: new Uint8Array([3]).buffer, signature: new Uint8Array([4]).buffer, userHandle: null },
+			} as unknown as PublicKeyCredential)) },
+		});
+		render(<App />);
+		expect(await screen.findByRole("button", { name: "使用 Passkey 登录" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "批准远程登录" })).toBeNull();
+		expect(await screen.findByText("H3K9PQ", { exact: false })).toBeTruthy();
+		expect(window.location.search).toBe("");
+		fireEvent.click(screen.getByRole("button", { name: "使用 Passkey 登录" }));
+		await waitFor(() => expect(BrowserSocket.sockets).toHaveLength(1));
+		expect(calls.some(url => url.endsWith("/approve"))).toBe(false);
+		const socket = BrowserSocket.sockets[0];
+		socket.onopen?.(new Event("open"));
+		act(() => socket.message({ type: "hello.ok", v: 1, connectionId: "c", relayEpoch: "e" }));
+		fireEvent.click(await screen.findByRole("button", { name: "批准远程登录" }));
+		await waitFor(() => expect(calls.filter(url => url.endsWith("/approve"))).toHaveLength(1));
+	});
 	it("does not misreport a Passkey protocol mismatch as an expired login", async () => {
 		const meta = document.createElement("meta");
 		meta.name = "ariel-auth-mode";

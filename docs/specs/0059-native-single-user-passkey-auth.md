@@ -131,3 +131,7 @@ Passkey 模式禁止配置 `ARIEL_WEB_PIN`，避免产生可被误认为有效�
 Relay 现在以 `ARIEL_WEB_AUTH` 在 PIN 与 Passkey 间显式选择。Passkey 模式由 `internal/webauth` 提供 WebAuthn ceremony、AES-256-GCM `__Host-` Cookie、单次 ceremony replay 防护和原子 JSON credential store；Relay WebSocket 只接受经 Cookie verifier 确认的浏览器请求，并继续独立验证 Agent token。Web 根据 Relay 注入的认证模式同步选择登录界面，支持首次登记、日常登录、logout 和自动恢复，不暴露 PIN 或二维码降级入口。
 
 部署与恢复流程见[公网 Passkey 部署](../operations/public-passkey-deployment.md)，完整证据见[0059 验收记录](../testing/2026-10-08-0059-native-passkey-auth.md)。
+
+## 修订（2026-11-09）
+
+[0145](0145-passkey-remote-qr-login.md) 增加 Passkey 远程扫码登录。上文「不展示二维码配对入口」和「Passkey 模式禁用 `auth.pair.create` / `auth.pair.cancel`」继续有效，指的是 PIN 模式的 `p_` 配对。0145 不恢复 PIN、`s_` 或 `p_`，批准方仍必须先持有 Passkey 会话。
