@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"sync"
 	"time"
 )
+
+const cacheRestoreConcurrency = 4
 
 func (s *Server) restoreAgentCacheFollowers(ctx context.Context, agent *peer) {
 	type candidate struct {
@@ -38,14 +41,37 @@ func (s *Server) restoreAgentCacheFollowers(ctx context.Context, agent *peer) {
 		}
 		return candidates[i].lastUsed.After(candidates[j].lastUsed)
 	})
+	keys := make([]cacheKey, 0, len(candidates))
 	for _, candidate := range candidates {
-		requestID := s.promotionRequestID(candidate.key)
-		if err := sendCacheTouch(ctx, agent, candidate.key, true, requestID); err != nil {
-			s.mu.Lock()
-			s.finishCachePromotionLocked(candidate.key)
-			s.mu.Unlock()
-			return
+		keys = append(keys, candidate.key)
+	}
+	restoreCacheFollowerBatch(ctx, keys, func(ctx context.Context, key cacheKey) error {
+		return sendCacheTouch(ctx, agent, key, true, s.promotionRequestID(key))
+	}, func(key cacheKey) {
+		s.mu.Lock()
+		s.finishCachePromotionLocked(key)
+		s.mu.Unlock()
+	})
+}
+
+func restoreCacheFollowerBatch(ctx context.Context, keys []cacheKey, send func(context.Context, cacheKey) error, failed func(cacheKey)) {
+	for start := 0; start < len(keys); start += cacheRestoreConcurrency {
+		end := start + cacheRestoreConcurrency
+		if end > len(keys) {
+			end = len(keys)
 		}
+		var batch sync.WaitGroup
+		for _, key := range keys[start:end] {
+			key := key
+			batch.Add(1)
+			go func() {
+				defer batch.Done()
+				if err := send(ctx, key); err != nil {
+					failed(key)
+				}
+			}()
+		}
+		batch.Wait()
 	}
 }
 

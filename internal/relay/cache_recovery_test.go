@@ -3,9 +3,44 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestCacheFollowerRestoreUsesBoundedBatchesAndContinuesAfterFailure(t *testing.T) {
+	keys := make([]cacheKey, 9)
+	for index := range keys {
+		keys[index] = cacheKey{deviceID: "mock-mac", threadID: fmt.Sprintf("thread-%d", index)}
+	}
+	var current atomic.Int32
+	var peak atomic.Int32
+	var mu sync.Mutex
+	attempted := map[string]bool{}
+	restoreCacheFollowerBatch(context.Background(), keys, func(_ context.Context, key cacheKey) error {
+		now := current.Add(1)
+		for old := peak.Load(); now > old && !peak.CompareAndSwap(old, now); old = peak.Load() {
+		}
+		mu.Lock()
+		attempted[key.threadID] = true
+		mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		current.Add(-1)
+		if key.threadID == "thread-1" {
+			return errors.New("fixture")
+		}
+		return nil
+	}, func(cacheKey) {})
+	if peak.Load() < 2 || peak.Load() > cacheRestoreConcurrency {
+		t.Fatalf("peak = %d", peak.Load())
+	}
+	if len(attempted) != len(keys) {
+		t.Fatalf("attempted = %d want %d", len(attempted), len(keys))
+	}
+}
 
 func TestRelayLeaseCannotClearExplicitCacheFailure(t *testing.T) {
 	for _, reason := range []string{"RESYNC_REQUIRED", "CACHE_OVERSIZED", "NATIVE_STATE_UNCERTAIN", "TIMEOUT"} {
