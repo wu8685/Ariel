@@ -203,8 +203,17 @@ func TestStartTaskIsIdempotentAcrossBrainIDsForOneUserMessage(t *testing.T) {
 	if first.Data["taskId"] != second.Data["taskId"] {
 		t.Fatalf("task ids differ: first=%v second=%v", first.Data["taskId"], second.Data["taskId"])
 	}
-	if orchestrator.calls[0] != "thread.bootstrap" || orchestrator.calls[len(orchestrator.calls)-1] != "thread.archive.update" {
-		t.Fatalf("changed cwd was not revalidated and retired: %v", orchestrator.calls)
+	var stored Task
+	for _, task := range backend.tasks {
+		stored = task
+	}
+	if second.Data["threadId"] != "thread-b" || stored.CWD != "/work/changed" || stored.NativeThreadID != "thread-b" {
+		t.Fatalf("new cwd was not adopted: second=%+v task=%+v calls=%v", second, stored, orchestrator.calls)
+	}
+	for _, call := range orchestrator.calls {
+		if call == "thread.archive.update" {
+			t.Fatalf("successful re-bootstrap archived the new thread: %v", orchestrator.calls)
+		}
 	}
 }
 

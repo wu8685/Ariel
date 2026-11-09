@@ -249,10 +249,23 @@ func (h *Handler) reuseStartTask(ctx context.Context, call Call, existing Task, 
 		return fromResult(created)
 	}
 	threadID, _ := created.Data["threadId"].(string)
-	if threadID != "" && threadID != existing.NativeThreadID {
-		h.orchestrator.Forward(ctx, h.requestOrigin(ctx, call, authorized), input.DeviceID, "thread.archive.update", mustJSON(map[string]any{"threadId": threadID, "archived": true}))
+	turnID, _ := created.Data["turnId"].(string)
+	if threadID == "" || turnID == "" {
+		return toolError("OUTCOME_UNKNOWN", "thread bootstrap response lacks authoritative identities")
 	}
-	return ToolResult{Success: true, Data: taskData(existing)}
+	// The new cwd is the one that actually started. Returning the previous
+	// thread and archiving this one reports the wrong task.
+	task := existing
+	task.DeviceID = input.DeviceID
+	task.CWD = input.CWD
+	task.NativeThreadID = threadID
+	task.Goal = input.Goal
+	task.Status = "running"
+	task.LastTurnID = turnID
+	if err := h.backend.SaveTask(ctx, task); err != nil {
+		return toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	return ToolResult{Success: true, Data: taskData(task)}
 }
 
 func (h *Handler) authorizationResult(ctx context.Context, call Call, input toolcontract.StartTaskRequest) (ToolResult, bool) {
