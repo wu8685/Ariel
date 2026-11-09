@@ -231,28 +231,53 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func runTransportLoop(ctx context.Context, cfg Config, service *Service) error {
-	delay := 200 * time.Millisecond
+	backoff := newTransportBackoff()
 	for ctx.Err() == nil {
-		err := RunWithService(ctx, cfg, service)
+		ready := false
+		attempt := cfg
+		onReady := cfg.OnReady
+		attempt.OnReady = func() error {
+			if onReady != nil {
+				if err := onReady(); err != nil {
+					return err
+				}
+			}
+			ready = true
+			return nil
+		}
+		err := RunWithService(ctx, attempt, service)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if ready {
+			backoff.ready()
+		}
 		log.Printf("Relay transport disconnected: %v; reconnecting without restarting Codex service", err)
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(backoff.delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
 		}
-		if delay < 5*time.Second {
-			delay *= 2
-			if delay > 5*time.Second {
-				delay = 5 * time.Second
-			}
-		}
+		backoff.failed()
 	}
 	return ctx.Err()
+}
+
+type transportBackoff struct{ delay time.Duration }
+
+func newTransportBackoff() *transportBackoff { return &transportBackoff{delay: 200 * time.Millisecond} }
+
+func (b *transportBackoff) ready() { b.delay = 200 * time.Millisecond }
+
+func (b *transportBackoff) failed() {
+	if b.delay < 5*time.Second {
+		b.delay *= 2
+		if b.delay > 5*time.Second {
+			b.delay = 5 * time.Second
+		}
+	}
 }
 
 func RunWithService(ctx context.Context, cfg Config, service *Service) error {

@@ -34,6 +34,31 @@ func TestProductionThreadListTimeoutBudgets(t *testing.T) {
 	}
 }
 
+func TestTransportBackoffResetsAfterEveryReadyConnection(t *testing.T) {
+	b := newTransportBackoff()
+	for range 10 {
+		b.failed()
+	}
+	if b.delay != 5*time.Second {
+		t.Fatalf("capped delay = %s", b.delay)
+	}
+	for range 100 {
+		b.ready()
+		if b.delay != 200*time.Millisecond {
+			t.Fatalf("ready delay = %s", b.delay)
+		}
+		b.failed()
+		if b.delay != 400*time.Millisecond {
+			t.Fatalf("post-failure delay = %s", b.delay)
+		}
+	}
+	b.ready()
+	time.Sleep(time.Millisecond)
+	if b.delay != 200*time.Millisecond {
+		t.Fatalf("stable connection reset = %s", b.delay)
+	}
+}
+
 func TestProductionSubscriptionLoadBudget(t *testing.T) {
 	if threadSubscribeLoadTimeout != 45*time.Second {
 		t.Fatalf("thread subscribe load timeout = %s, want 45s", threadSubscribeLoadTimeout)
