@@ -607,6 +607,40 @@ describe("PuckWorkspace", () => {
     expect(request).toHaveBeenCalledWith("puck.unwatch", "relay", { watchId: "watch-a" });
   });
 
+  it("reduces full polling while puck.watch is healthy and restores fallback intervals on failure", async () => {
+    vi.useFakeTimers();
+    let watchHealthy = true;
+    const subscribeEvents = vi.fn(() => vi.fn());
+    const request = vi.fn(async (method: string) => {
+      if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] });
+      if (method === "puck.history") return accepted({ messages: [] });
+      if (method === "puck.watch") return watchHealthy ? accepted({ watchId: "watch-a" }) : rejected("PUCK_UNAVAILABLE");
+      return accepted({});
+    });
+    const view = render(<PuckWorkspace request={request} subscribeEvents={subscribeEvents} state="ready" devices={[]} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(request.mock.calls.filter(call => call[0] === "puck.watch")).toHaveLength(1);
+    const initialLists = request.mock.calls.filter(call => call[0] === "puck.list").length;
+    const initialHistory = request.mock.calls.filter(call => call[0] === "puck.history").length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(59_000); });
+    expect(request.mock.calls.filter(call => call[0] === "puck.list")).toHaveLength(initialLists);
+    expect(request.mock.calls.filter(call => call[0] === "puck.history")).toHaveLength(initialHistory);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(request.mock.calls.filter(call => call[0] === "puck.list").length).toBeGreaterThan(initialLists);
+    expect(request.mock.calls.filter(call => call[0] === "puck.history").length).toBeGreaterThan(initialHistory);
+
+    view.unmount();
+    watchHealthy = false;
+    request.mockClear();
+    render(<PuckWorkspace request={request} subscribeEvents={subscribeEvents} state="ready" devices={[]} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const failedLists = request.mock.calls.filter(call => call[0] === "puck.list").length;
+    const failedHistory = request.mock.calls.filter(call => call[0] === "puck.history").length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(request.mock.calls.filter(call => call[0] === "puck.list").length).toBeGreaterThanOrEqual(failedLists + 2);
+    expect(request.mock.calls.filter(call => call[0] === "puck.history").length).toBeGreaterThan(failedHistory);
+  });
+
 	it("renders direct accessible avatar choices and persists click and keyboard selection", async () => {
 		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "circle", color: "#8957f5" }) };
 		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {

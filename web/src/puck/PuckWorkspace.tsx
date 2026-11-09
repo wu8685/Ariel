@@ -311,6 +311,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [brainDeviceID, setBrainDeviceID] = useState("");
 	const [submittingCard, setSubmittingCard] = useState("__none__");
 	const [authorizationRules, setAuthorizationRules] = useState<AuthorizationRule[]>([]);
+	const [watchHealthy, setWatchHealthy] = useState(false);
 	const [mobilePanel, setMobilePanel] = useState<"" | "assistants" | "info">("");
 	const avatarUpdateSequence = useRef(0);
   const listSequence = useRef(0);
@@ -412,7 +413,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     setAssistants(next.map(item => item.assistantId === nextID ? { ...item, unreadCount: 0 } : item));
     if (nextID !== currentID) selectAssistant(nextID);
   }
-  useEffect(() => { if (state !== "ready") return; void loadList(); const timer = window.setInterval(() => void loadList(), 5000); return () => window.clearInterval(timer); }, [state]);
+  useEffect(() => { if (state !== "ready") return; void loadList(); const timer = window.setInterval(() => void loadList(), watchHealthy ? 60000 : 5000); return () => window.clearInterval(timer); }, [state, watchHealthy]);
   useEffect(() => {
 	if (!selectedID) { messageAssistantRef.current = ""; setMessages([]); setAuthorizationRules([]); return; }
 	let active = true;
@@ -433,9 +434,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     return () => { active = false; };
   }, [selectedID]);
 	useEffect(() => {
-		if (!selectedID) return;
+		if (!selectedID) { setWatchHealthy(false); return; }
 		let active = true;
 		let watchID = "";
+		setWatchHealthy(false);
 		const unsubscribe = subscribeEvents?.(event => {
 			if (!active || event.event !== "puck.event" || event.assistantId !== selectedID || event.kind !== "history") return;
 			const payload = event.payload as Record<string, unknown> | undefined;
@@ -446,23 +448,27 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (subscribeEvents) {
 			void request("puck.watch", "relay", { assistantId: selectedID }).then(response => {
 				const id = response.outcome === "accepted" ? String(response.data?.watchId || "") : "";
-				if (!id) return;
+				if (!id) { if (active) setWatchHealthy(false); return; }
 				if (!active) void request("puck.unwatch", "relay", { watchId: id });
-				else watchID = id;
-			});
+				else { watchID = id; setWatchHealthy(true); }
+			}).catch(() => { if (active) setWatchHealthy(false); });
 		}
+		return () => {
+			active = false;
+			unsubscribe?.();
+			if (watchID) void request("puck.unwatch", "relay", { watchId: watchID });
+		};
+	}, [selectedID, subscribeEvents]);
+	useEffect(() => {
+		if (!selectedID) return;
+		let active = true;
 		const timer = window.setInterval(() => { void request("puck.history", "relay", { assistantId: selectedID }).then(response => {
 			if (!active || response.outcome !== "accepted") return;
 			const durable = historyMessages(response.data?.messages, selectedID);
 			updateScopedMessages(selectedID, current => mergeHistory(current, durable));
-		}); }, subscribeEvents ? 10000 : 2000);
-		return () => {
-			active = false;
-			unsubscribe?.();
-			window.clearInterval(timer);
-			if (watchID) void request("puck.unwatch", "relay", { watchId: watchID });
-		};
-	}, [selectedID, subscribeEvents]);
+		}); }, watchHealthy ? 60000 : subscribeEvents ? 10000 : 2000);
+		return () => { active = false; window.clearInterval(timer); };
+	}, [selectedID, subscribeEvents, watchHealthy]);
 
   async function createAssistant() {
     if (maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants) { setNotice(`最多可创建 ${maxActiveAssistants} 个 Bot。`); return; }
