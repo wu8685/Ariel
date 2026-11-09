@@ -1508,3 +1508,36 @@ func TestModuleConversationWatchEmitsDurableChanges(t *testing.T) {
 	}
 	cancelContext()
 }
+
+func TestModuleConversationWatchSkipsIdleSnapshotQueries(t *testing.T) {
+	module, err := NewModule(t.TempDir(), &fakeModuleBridge{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	events, stop, watchErr := module.Watch(context.Background(), id)
+	if watchErr != nil {
+		t.Fatal(watchErr)
+	}
+	defer stop()
+	<-events
+	reads := module.watchSnapshotReads.Load()
+	time.Sleep(350 * time.Millisecond)
+	if got := module.watchSnapshotReads.Load(); got != reads {
+		t.Fatalf("idle watcher queried snapshots: before=%d after=%d", reads, got)
+	}
+	started := time.Now()
+	if err := module.store.AppendMessage(context.Background(), Message{ID: "revision-message", AssistantID: id, Role: "assistant", Kind: "text", Text: "revision changed"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-events:
+		if elapsed := time.Since(started); elapsed >= 200*time.Millisecond {
+			t.Fatalf("mutation notify was not prompt: %s", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watch did not observe mutation")
+	}
+}

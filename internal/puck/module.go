@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
@@ -33,17 +34,18 @@ const (
 )
 
 type Module struct {
-	store      *Store
-	bridge     Orchestrator
-	supervisor *Supervisor
-	tools      *pucktools.Handler
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	pendingMu  sync.Mutex
-	pending    map[string]pendingBrainTurn
-	lifecycle  sync.RWMutex
-	ackDelay   time.Duration
-	now        func() time.Time
+	store              *Store
+	bridge             Orchestrator
+	supervisor         *Supervisor
+	tools              *pucktools.Handler
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	pendingMu          sync.Mutex
+	pending            map[string]pendingBrainTurn
+	lifecycle          sync.RWMutex
+	ackDelay           time.Duration
+	now                func() time.Time
+	watchSnapshotReads atomic.Uint64
 }
 
 type pendingBrainTurn struct {
@@ -106,35 +108,49 @@ func (m *Module) Watch(ctx context.Context, assistantID string) (<-chan relay.Pu
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		lastSnapshot := ""
-		emit := func() bool {
+		lastRevision := ^uint64(0)
+		emit := func(force bool) (<-chan struct{}, bool) {
+			revision, changed := m.store.watchState()
+			if !force && revision == lastRevision {
+				return changed, true
+			}
+			m.watchSnapshotReads.Add(1)
 			if _, err := m.store.Assistant(watchCtx, assistantID); err != nil {
-				return false
+				return changed, false
 			}
 			messages, err := m.store.Messages(watchCtx, assistantID, 200)
 			if err != nil {
-				return false
+				return changed, false
 			}
 			encoded, _ := json.Marshal(messages)
+			lastRevision = revision
 			if string(encoded) == lastSnapshot {
-				return true
+				return changed, true
 			}
 			lastSnapshot = string(encoded)
 			select {
 			case events <- accepted(map[string]any{"messages": messages}):
-				return true
+				return changed, true
 			case <-watchCtx.Done():
-				return false
+				return changed, false
 			}
 		}
-		if !emit() {
+		changed, ok := emit(true)
+		if !ok {
 			return
 		}
 		for {
 			select {
 			case <-watchCtx.Done():
 				return
+			case <-changed:
+				changed, ok = emit(false)
+				if !ok {
+					return
+				}
 			case <-ticker.C:
-				if !emit() {
+				changed, ok = emit(false)
+				if !ok {
 					return
 				}
 			}

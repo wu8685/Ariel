@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -16,7 +18,12 @@ import (
 
 const storeSchemaVersion = 5
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db       *sql.DB
+	notifyMu sync.Mutex
+	notify   chan struct{}
+	revision atomic.Uint64
+}
 
 var ErrAssistantLimitReached = errors.New("active assistant limit reached")
 
@@ -79,7 +86,7 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{db: db, notify: make(chan struct{})}
 	if err := store.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, err
@@ -92,6 +99,27 @@ func OpenStore(path string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func (s *Store) watchState() (uint64, <-chan struct{}) {
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	return s.revision.Load(), s.notify
+}
+
+func (s *Store) markChanged() {
+	s.notifyMu.Lock()
+	s.revision.Add(1)
+	close(s.notify)
+	s.notify = make(chan struct{})
+	s.notifyMu.Unlock()
+}
+
+func (s *Store) changed(err error) error {
+	if err == nil {
+		s.markChanged()
+	}
+	return err
+}
 
 func (s *Store) migrate(ctx context.Context) error {
 	var version int
@@ -195,7 +223,7 @@ func nullTimeText(value time.Time) any {
 }
 
 func (s *Store) CreateAssistant(ctx context.Context, a Assistant) error {
-	return insertAssistant(ctx, s.db, a)
+	return s.changed(insertAssistant(ctx, s.db, a))
 }
 
 type assistantInserter interface {
@@ -231,7 +259,7 @@ func (s *Store) CreateAssistantLimited(ctx context.Context, a Assistant, limit i
 	if err := insertAssistant(ctx, tx, a); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.changed(tx.Commit())
 }
 
 func defaultJSON(value, fallback string) string {
@@ -273,6 +301,7 @@ func (s *Store) SetAssistantBrain(ctx context.Context, assistantID, threadID, st
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
+	s.markChanged()
 	return nil
 }
 
@@ -286,6 +315,7 @@ func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
+	s.markChanged()
 	return nil
 }
 
@@ -301,6 +331,7 @@ func (s *Store) UpdateMessageCard(ctx context.Context, assistantID, messageID, c
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
+	s.markChanged()
 	return nil
 }
 
@@ -316,7 +347,7 @@ func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
 	if err == nil {
 		err = s.updateAssistantMessageState(ctx, m, previousKind == "" || !messageCountsUnread(previousKind))
 	}
-	return err
+	return s.changed(err)
 }
 
 func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) error {
@@ -340,7 +371,7 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 	if _, err := tx.ExecContext(ctx, `DELETE FROM authorization_rules WHERE assistant_id=?`, assistantID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.changed(tx.Commit())
 }
 
 func (s *Store) AppendMessage(ctx context.Context, m Message) error {
@@ -351,7 +382,7 @@ func (s *Store) AppendMessage(ctx context.Context, m Message) error {
 	if err == nil {
 		err = s.updateAssistantMessageState(ctx, m, true)
 	}
-	return err
+	return s.changed(err)
 }
 
 func messageCountsUnread(kind string) bool {
@@ -387,6 +418,7 @@ func (s *Store) MarkAssistantRead(ctx context.Context, assistantID string) error
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
+	s.markChanged()
 	return nil
 }
 
@@ -399,6 +431,7 @@ func (s *Store) DeleteMessage(ctx context.Context, assistantID, messageID string
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
+	s.markChanged()
 	return nil
 }
 
@@ -419,6 +452,9 @@ func (s *Store) UpdateMessageReaction(ctx context.Context, assistantID, messageI
 	}
 	encoded, _ := json.Marshal(reactions)
 	_, err := s.db.ExecContext(ctx, `UPDATE conversation_messages SET reaction=? WHERE assistant_id=? AND id=?`, string(encoded), assistantID, messageID)
+	if err == nil {
+		s.markChanged()
+	}
 	return string(encoded), err
 }
 
@@ -461,7 +497,7 @@ func (s *Store) UpsertTask(ctx context.Context, task Task) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET status=excluded.status,last_turn_id=excluded.last_turn_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
         WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
-	return err
+	return s.changed(err)
 }
 
 func (s *Store) Task(ctx context.Context, assistantID, taskID string) (Task, error) {
@@ -495,12 +531,12 @@ func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
 
 func (s *Store) SetTaskStatus(ctx context.Context, assistantID, taskID, status string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?,updated_at=? WHERE assistant_id=? AND task_id=?`, status, nowText(time.Time{}), assistantID, taskID)
-	return err
+	return s.changed(err)
 }
 
 func (s *Store) InsertAuthorization(ctx context.Context, a Authorization) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO authorizations(id,assistant_id,action_json,action_hash,source_message_id,rules_hit,status,expires_at,decided_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.AssistantID, a.ActionJSON, a.ActionHash, a.SourceMessageID, a.RulesHit, a.Status, nowText(a.ExpiresAt), nullTimeText(a.DecidedAt), nowText(time.Time{}))
-	return err
+	return s.changed(err)
 }
 
 func (s *Store) Authorization(ctx context.Context, assistantID, authorizationID string) (Authorization, error) {
@@ -530,6 +566,9 @@ func (s *Store) UpsertAuthorizationRule(ctx context.Context, rule AuthorizationR
 	var created string
 	err = s.db.QueryRowContext(ctx, `SELECT id,assistant_id,action_type,device_id,cwd_root,created_at FROM authorization_rules WHERE assistant_id=? AND action_type=? AND device_id=? AND cwd_root=?`, rule.AssistantID, rule.ActionType, rule.DeviceID, rule.CWD).Scan(&rule.ID, &rule.AssistantID, &rule.ActionType, &rule.DeviceID, &rule.CWD, &created)
 	rule.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	if err == nil {
+		s.markChanged()
+	}
 	return rule, err
 }
 
@@ -579,6 +618,7 @@ func (s *Store) RevokeAuthorizationRule(ctx context.Context, assistantID, ruleID
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return sql.ErrNoRows
 	}
+	s.markChanged()
 	return nil
 }
 
