@@ -495,7 +495,7 @@ func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Mes
 func (s *Store) UpsertTask(ctx context.Context, task Task) error {
 	now := nowText(time.Time{})
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET status=excluded.status,last_turn_id=excluded.last_turn_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=excluded.last_turn_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
         WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
 	return s.changed(err)
 }

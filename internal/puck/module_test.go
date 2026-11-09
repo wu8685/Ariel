@@ -561,6 +561,10 @@ func TestModulePersistsRealTurnDurationStepsUnreadAndReactions(t *testing.T) {
 	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-a","tool":"list_devices","arguments":{}}`)})
 	now = now.Add(2500 * time.Millisecond)
 	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.event", Payload: json.RawMessage(`{"kind":"item/completed","payload":{"method":"item/completed","params":{"turnId":"brain-turn-a","item":{"id":"item-a","type":"agentMessage","text":"完成。"}}}}`)})
+	if pending := module.pendingTurn(id); pending.turnID != "brain-turn-a" {
+		t.Fatalf("confirmation cleared the open turn: %+v", pending)
+	}
+	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.event", Payload: json.RawMessage(`{"kind":"turn/completed","payload":{"method":"turn/completed","params":{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}}}`)})
 	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
 	var final Message
 	for _, message := range history {
@@ -1547,6 +1551,87 @@ func TestModuleConversationWatchSkipsIdleSnapshotQueries(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("watch did not observe mutation")
+	}
+}
+
+func TestConfirmationKeepsTurnBusyUntilStartTaskResult(t *testing.T) {
+	const tip = "目标 workspace 目录不存在；请先使用 list_threads 或 read_thread 返回的 cwd，或向用户确认目录后重试；不要猜测路径。"
+	bridge := &fakeModuleBridge{bootstrapCode: "FILE_NOT_FOUND", bootstrapMessage: tip}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","permissionMode":"full"}`))
+	assistant := created.Data["assistant"].(map[string]any)
+	id := assistant["assistantId"].(string)
+	threadID := assistant["brainThreadId"].(string)
+	module.clearPending(id)
+	if sent := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000181", "text": "这个目录在吗"})); sent.Error != nil {
+		t.Fatalf("send=%+v", sent)
+	}
+	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: threadID, Name: "puck.brain.event", Payload: json.RawMessage(`{"kind":"item/agentMessage/completed","payload":{"method":"item/agentMessage/completed","params":{"turnId":"brain-turn-a","item":{"id":"item-a","type":"agentMessage","text":"我先看一下这个目录。"}}}}`)})
+	history := module.Handle(context.Background(), "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+	var busy bool
+	for _, message := range history {
+		if message.Text == "我先看一下这个目录。" && message.Kind == "processing" {
+			busy = true
+		}
+	}
+	if !busy || module.pendingTurn(id).turnID == "" {
+		t.Fatalf("confirmation looked idle: pending=%+v history=%+v", module.pendingTurn(id), history)
+	}
+	module.handleBrainEvent(context.Background(), relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: threadID, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-missing","tool":"start_task","arguments":{"deviceId":"exec-a","cwd":"/turn71-definitely-missing","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000070"}}`)})
+	var text string
+	for i := len(bridge.params) - 1; i >= 0; i-- {
+		if bridge.calls[i] != "puck.brain.toolResult" {
+			continue
+		}
+		var params struct {
+			ContentItems []struct {
+				Text string `json:"text"`
+			} `json:"contentItems"`
+		}
+		if json.Unmarshal(bridge.params[i], &params) != nil || len(params.ContentItems) == 0 || params.ContentItems[0].Text == "" {
+			t.Fatalf("tool result=%s", bridge.params[i])
+		}
+		text = params.ContentItems[0].Text
+		break
+	}
+	var parsed struct {
+		Success bool   `json:"success"`
+		Code    string `json:"code"`
+	}
+	if json.Unmarshal([]byte(text), &parsed) != nil || parsed.Success || parsed.Code != "FILE_NOT_FOUND" {
+		t.Fatalf("start_task result text=%s", text)
+	}
+}
+
+func TestExplicitMissingCwdFallsThroughToBrain(t *testing.T) {
+	bridge := &fakeModuleBridge{bootstrapCode: "FILE_NOT_FOUND", bootstrapMessage: "目标 workspace 目录不存在；请先使用 list_threads 或 read_thread 返回的 cwd，或向用户确认目录后重试；不要猜测路径。"}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a","permissionMode":"full"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	bridge.mu.Lock()
+	bridge.calls = nil
+	bridge.mu.Unlock()
+	result := module.Handle(context.Background(), "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000182", "text": "请在 exec-a 的 /opt/Ariel/turn71-smoke-fixture 运行测试"}))
+	if result.Error != nil || result.Data["state"] != "processing" {
+		t.Fatalf("valid-looking send rejected: %+v", result)
+	}
+	tasks, _ := module.store.Tasks(context.Background(), id)
+	if len(tasks) != 0 {
+		t.Fatalf("missing explicit cwd created tasks: %+v", tasks)
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if !slices.Contains(bridge.calls, "puck.brain.turn.start") {
+		t.Fatalf("brain was not asked to recover: %v", bridge.calls)
 	}
 }
 

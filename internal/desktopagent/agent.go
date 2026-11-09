@@ -686,6 +686,9 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 			threadID, _ = thread["threadId"].(string)
 		}
 		data = map[string]any{"thread": thread, "threadId": threadID, "turnId": turnID, "clientMessageId": p.ClientMessageID}
+		if err != nil {
+			logPhase("thread-bootstrap", "", "ok", false, "error", requestErrorCode(method, err))
+		}
 	case "thread.archive.update":
 		if !p.Archived {
 			err = errors.New("INVALID_ARGUMENT")

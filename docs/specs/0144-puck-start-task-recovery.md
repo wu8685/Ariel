@@ -26,14 +26,19 @@
    同一用户消息已经有 task 时，只有 deviceId 与 cwd 都与已记录目标一致才直接返回该 task。
    cwd 不同必须重新让执行主机校验目录；目录不存在时仍返回 `FILE_NOT_FOUND` 与上述说明，
    ToolResult 不得是 `success=true` 且 code 为空，也不得为此再插入第二条 task。目录存在时
-   只保留原 task，并归档这次探测创建的执行 thread。
-5. 非绝对路径、NUL、超长路径和“存在但不是目录”继续返回 `INVALID_ARGUMENT`。
-6. 不改变 DB schema，不建立离线队列，不自动重放 mutation，不回显用户正文、完整 thread id 或
+   把原 task 改指向新的 thread 与 cwd，不归档新 thread 后再返回旧 task。
+5. 助理在同一 turn 里先发出确认文字，不代表 turn 结束。确认文字保持 processing／greeting_processing，
+   直到 `turn/completed` 才标成完成。这样后续 `start_task` 仍能把带 `contentItems[0].text` 的
+   `puck.brain.toolResult` 写回 Brain history，下一条 `puck.message.send` 不会在工具调用完成前打断。
+6. 服务端显式 dispatch 的 cwd 在执行主机上不存在时，`puck.message.send` 不拒绝；改为继续交给 Brain。
+   执行主机上的目录检查不会写阶段日志里的路径，但会记录稳定错误码。
+7. 非绝对路径、NUL、超长路径和“存在但不是目录”继续返回 `INVALID_ARGUMENT`。
+8. 不改变 DB schema，不建立离线队列，不自动重放 mutation，不回显用户正文、完整 thread id 或
    本机绝对路径。
-7. Codex `turn/completed` 若含失败状态或 error，不得记录为成功完成；Agent 只记录稳定错误码，并向
+9. Codex `turn/completed` 若含失败状态或 error，不得记录为成功完成；Agent 只记录稳定错误码，并向
    Bot 流发送固定 `BRAIN_UNAVAILABLE` 终态，由 Relay 转为可读失败消息。原始 provider message
    不进入日志、协议或 DB。
-8. `puck.create` 使用所选大脑主机 hello 中已声明且不超过当前版本的 toolset 调用
+10. `puck.create` 使用所选大脑主机 hello 中已声明且不超过当前版本的 toolset 调用
    `puck.brain.ensure`。主机仍声明上一版 toolset 时必须完成创建和后续消息，不能在请求到达
    Agent 之前返回 `PROTOCOL_UNSUPPORTED`。已有助理只在该主机声明的版本达到当前版本时才轮换
    brain thread；主机版本更低时保持现有 thread。调用方直接请求高于主机已声明版本的

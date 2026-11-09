@@ -330,7 +330,7 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if method == "" {
 		method = envelope.Payload.Method
 	}
-	if method != "item/completed" && method != "item/agentMessage/completed" {
+	if method != "item/completed" && method != "item/agentMessage/completed" && method != "turn/completed" {
 		return
 	}
 	var params struct {
@@ -338,7 +338,25 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 		Item   struct{ ID, Type, Text string } `json:"item"`
 		Text   string                          `json:"text"`
 	}
-	if json.Unmarshal(envelope.Payload.Params, &params) != nil {
+	if envelope.Payload.Params != nil && json.Unmarshal(envelope.Payload.Params, &params) != nil {
+		return
+	}
+	if method == "turn/completed" {
+		var completed struct {
+			TurnID string `json:"turnId"`
+			Turn   struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		_ = json.Unmarshal(envelope.Payload.Params, &completed)
+		turnID := completed.TurnID
+		if turnID == "" {
+			turnID = completed.Turn.ID
+		}
+		if turnID == "" {
+			return
+		}
+		m.finishBrainTurn(ctx, event.AssistantID, turnID)
 		return
 	}
 	text := params.Item.Text
@@ -348,24 +366,60 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if text == "" || params.Item.Type != "" && params.Item.Type != "agentMessage" {
 		return
 	}
-	kind := "text"
 	if friendly, ok := friendlyBrainError(text); ok {
-		text, kind = friendly, "error"
+		m.finishBrainTurnMessage(ctx, event.AssistantID, params.TurnID, friendly, "error")
+		return
 	}
-	pending := m.clearPendingForTurn(event.AssistantID, params.TurnID)
-	message := Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, BrainTurnID: params.TurnID}
+	// A confirmation message is not the end of the turn. Codex still emits
+	// start_task after that text; clearing busy here lets the next message.send
+	// interrupt the turn and leave the tool call without contentItems.
+	pending := m.pendingTurn(event.AssistantID)
 	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == params.TurnID) {
-		message.ID = pending.responseID
+		kind := "processing"
+		if current, err := m.store.Message(ctx, event.AssistantID, pending.responseID); err == nil && current.Kind == "greeting_processing" {
+			kind = "greeting_processing"
+		}
+		summary, _ := json.Marshal(map[string]any{"startedAt": pending.startedAt.UTC(), "state": "running", "steps": pending.steps})
+		_ = m.store.UpsertMessage(ctx, Message{ID: pending.responseID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, WorkSummary: string(summary), BrainTurnID: params.TurnID})
+		return
+	}
+	_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "text", Text: text, BrainTurnID: params.TurnID})
+}
+
+func (m *Module) pendingTurn(assistantID string) pendingBrainTurn {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	return m.pending[assistantID]
+}
+
+func (m *Module) finishBrainTurn(ctx context.Context, assistantID, turnID string) {
+	pending := m.pendingTurn(assistantID)
+	text := ""
+	if pending.responseID != "" {
+		if current, err := m.store.Message(ctx, assistantID, pending.responseID); err == nil {
+			text = current.Text
+		}
+	}
+	if text == "" {
+		text = "完成。"
+	}
+	m.finishBrainTurnMessage(ctx, assistantID, turnID, text, "text")
+}
+
+func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
+	pending := m.clearPendingForTurn(assistantID, turnID)
+	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == turnID) {
 		elapsed := m.now().Sub(pending.startedAt)
 		if elapsed < 0 {
 			elapsed = 0
 		}
 		summary, _ := json.Marshal(map[string]any{"elapsedMs": elapsed.Milliseconds(), "steps": pending.steps})
-		message.WorkSummary = string(summary)
-		_ = m.store.UpsertMessage(ctx, message)
+		_ = m.store.UpsertMessage(ctx, Message{ID: pending.responseID, AssistantID: assistantID, Role: "assistant", Kind: kind, Text: text, WorkSummary: string(summary), BrainTurnID: turnID})
 		return
 	}
-	_ = m.store.AppendMessage(ctx, message)
+	if kind == "error" {
+		_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: assistantID, Role: "assistant", Kind: kind, Text: text, BrainTurnID: turnID})
+	}
 }
 
 func friendlyBrainError(text string) (string, bool) {
@@ -961,7 +1015,12 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	}
 	if len(input.Images) == 0 && input.ReplyTo == "" {
 		if deviceID, cwd := explicitExecutionTarget(input.Text, m.bridge.Devices()); deviceID != "" {
-			return m.dispatchExplicitExecution(ctx, a, input.ClientMessageID, input.Text, deviceID, cwd)
+			dispatched := m.dispatchExplicitExecution(ctx, a, input.ClientMessageID, input.Text, deviceID, cwd)
+			// The named directory is not on the execution host. Rejecting the
+			// send strands the conversation; the brain can list a real cwd.
+			if dispatched.Error == nil || dispatched.Error.Code != "FILE_NOT_FOUND" {
+				return dispatched
+			}
 		}
 	}
 	turnParams := map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": input.ClientMessageID, "text": brainEnvelopeWithReply(a, input.Text, replyTarget), "model": a.BrainModel, "effort": a.BrainReasoning}
@@ -1018,7 +1077,9 @@ func (m *Module) dispatchExplicitExecution(ctx context.Context, a Assistant, mes
 	if result.Code == "AUTHORIZATION_REQUIRED" && result.AuthorizationID != "" {
 		return accepted(map[string]any{"messageId": messageID, "state": "awaiting_authorization", "authorizationId": result.AuthorizationID})
 	}
-	_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: a.ID, Role: "assistant", Kind: "error", Text: result.Message})
+	if result.Code != "FILE_NOT_FOUND" {
+		_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: a.ID, Role: "assistant", Kind: "error", Text: result.Message})
+	}
 	return moduleError(result.Code, result.Message)
 }
 
