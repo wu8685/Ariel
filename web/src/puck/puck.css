@@ -61,14 +61,14 @@
   --puck-row-height: 64px;
   --puck-status-height: 20px;
   --puck-avatar-msg: 56px;
-  --puck-avatar-picker: 28px;
+  --puck-avatar-picker: 34px;
   --puck-avatar-row: 44px;
   --puck-avatar-gap: 17px;
   --puck-avatar-header: 32px;
   --puck-avatar-hero: 96px;
   --puck-empty-avatar: 64px;
   --puck-shape-control: 40px;
-  --puck-color-control: 28px;
+  --puck-color-control: 34px;
   --puck-color-dot: 22px;
   --puck-border: 1px;
   --puck-ring: 2px;
@@ -982,6 +982,13 @@
   margin: var(--puck-space-5) 0;
   text-align: center;
 }
+.puck-workspace .puck-avatar-edit {
+  padding: 0;
+  border: 0;
+  border-radius: 28px;
+  background: transparent;
+}
+.puck-workspace .puck-avatar-edit .puck-avatar { pointer-events: none; }
 .puck-workspace .puck-avatar-editor > strong {
   margin-top: var(--puck-space-2);
   font-size: var(--puck-text-ui);
@@ -1028,14 +1035,6 @@
   gap: var(--puck-space-2);
   margin-top: var(--puck-space-2);
 }
-.puck-workspace .puck-avatar-picker {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  gap: var(--puck-space-5);
-}
-.puck-workspace .puck-picker-section { min-width: 0; display: grid; gap: var(--puck-space-2); }
-.puck-workspace .puck-avatar-picker-label,
 .puck-workspace .puck-info-details h4 {
   margin: 0;
   color: var(--color-muted);
@@ -1043,12 +1042,25 @@
   font-weight: var(--puck-weight-medium);
   line-height: var(--puck-leading-caption);
 }
-.puck-workspace .puck-shape-options {
+.puck-workspace .puck-shape-options,
+.puck-workspace .puck-color-options {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, var(--puck-shape-control));
-  gap: var(--puck-space-2);
+  justify-items: center;
+  gap: 14px;
 }
+.puck-workspace .puck-shape-row,
+.puck-workspace .puck-color-row {
+  display: grid;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+  margin-inline: auto;
+}
+.puck-workspace .puck-shape-row[data-count="4"] { grid-template-columns: repeat(4, var(--puck-shape-control)); column-gap: 8px; }
+.puck-workspace .puck-shape-row[data-count="5"] { grid-template-columns: repeat(5, var(--puck-shape-control)); column-gap: 8px; }
+.puck-workspace .puck-color-row[data-count="6"] { grid-template-columns: repeat(6, var(--puck-color-control)); column-gap: 8px; }
+.puck-workspace .puck-color-row[data-count="5"] { grid-template-columns: repeat(5, var(--puck-color-control)); column-gap: 8px; }
 .puck-workspace .puck-shape-option {
   width: var(--puck-shape-control);
   min-width: var(--puck-shape-control);
@@ -1063,7 +1075,7 @@
 }
 .puck-workspace .puck-shape-option:hover { background: var(--puck-hover); }
 .puck-workspace .puck-shape-option.selected { background: transparent; box-shadow: none; }
-.puck-workspace .puck-avatar-select-ring { display: none; fill: none; stroke: #656569; stroke-width: 9; stroke-linejoin: round; }
+.puck-workspace .puck-avatar-select-ring { display: none; fill: none; stroke: #656569; stroke-width: 8; stroke-linejoin: round; }
 .puck-workspace .puck-shape-option.selected .puck-avatar-select-ring { display: inline; }
 .puck-workspace .puck-shape-option .puck-avatar {
   width: var(--puck-avatar-picker);
@@ -1072,14 +1084,9 @@
 }
 .puck-workspace .puck-shape-option .puck-avatar-head { transform: none !important; transition: none; }
 .puck-workspace .puck-shape-option .puck-avatar svg {
+  overflow: visible;
   animation: none;
   filter: drop-shadow(0 calc(var(--puck-space-1) / 2) var(--puck-space-1) #0002);
-}
-.puck-workspace .puck-color-options {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, var(--puck-color-control));
-  gap: calc(var(--puck-space-2) + var(--puck-space-1) / 2);
 }
 .puck-workspace .puck-color-option {
   width: var(--puck-color-control);
@@ -1101,8 +1108,10 @@
   border-radius: var(--puck-radius-full);
   background: var(--puck-choice-color);
 }
-.puck-workspace .puck-color-option.selected {
-  box-shadow: 0 0 0 var(--puck-ring) var(--color-surface), 0 0 0 calc(var(--puck-ring) * 2) #fff;
+.puck-workspace .puck-color-option.selected { box-shadow: none; }
+.puck-workspace .puck-color-option.selected > span {
+  outline: 2px solid #656569;
+  outline-offset: 3px;
 }
 .puck-workspace .puck-info-details { margin-top: var(--puck-space-5); }
 .puck-workspace .puck-info-details dl {
@@ -1408,4 +1417,160 @@
   .puck-workspace .puck-thinking-dots i,
   .puck-workspace .puck-state i { animation: none; }
   .puck-workspace .puck-avatar-sparkles { display:none; }
+}
+
+/* Grok Bot 头像页取样：底 #1e1e1e，卡片 #2c2c2d，选中环 #656569。 */
+.puck-workspace .puck-avatar-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: end center;
+  background: #000a;
+}
+.puck-workspace .puck-avatar-sheet {
+  width: min(402px, 100vw);
+  height: min(844px, 100dvh);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+  padding: 18px 16px 24px;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: #1e1e1e;
+  color: #f5f5f7;
+  color-scheme: dark;
+  box-shadow: none;
+  outline: none;
+}
+.puck-workspace .puck-avatar-sheet-header {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.puck-workspace .puck-avatar-sheet-header h2 {
+  margin: 0;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.puck-workspace .puck-avatar-sheet-back,
+.puck-workspace .puck-avatar-sheet-done,
+.puck-workspace .puck-avatar-sheet-tabs button,
+.puck-workspace .puck-avatar-reset,
+.puck-workspace .puck-avatar-upload,
+.puck-workspace .puck-avatar-clear-image {
+  border: 0;
+  background: transparent;
+}
+.puck-workspace .puck-avatar-sheet-back {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  background: #3b3b3b;
+  color: #fff;
+}
+.puck-workspace .puck-avatar-sheet-back svg { width: 20px; height: 20px; }
+.puck-workspace .puck-avatar-sheet-done {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: #fff;
+  color: #111;
+  font-size: 15px;
+  font-weight: 600;
+}
+.puck-workspace .puck-avatar-sheet-tabs {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+}
+.puck-workspace .puck-avatar-sheet-tabs button {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: #919196;
+  font-size: 16px;
+  font-weight: 500;
+}
+.puck-workspace .puck-avatar-sheet-tabs button[aria-selected="true"] {
+  background: #333335;
+  color: #fff;
+}
+.puck-workspace .puck-avatar-sheet-preview {
+  display: grid;
+  place-items: center;
+  min-height: 112px;
+}
+.puck-workspace .puck-avatar-sheet-preview .puck-avatar { pointer-events: none; }
+.puck-workspace .puck-avatar-sheet-card {
+  display: grid;
+  align-content: start;
+  flex: 0 0 auto;
+  gap: 18px;
+  min-width: 0;
+  padding: 22px 16px 8px;
+  border-radius: 22px;
+  background: #2c2c2d;
+}
+.puck-workspace .puck-avatar-reset {
+  justify-self: stretch;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 12px 2px 8px;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 0;
+  color: #316bcb;
+  font-size: 16px;
+  font-weight: 500;
+  text-align: left;
+}
+.puck-workspace .puck-avatar-sheet-note { justify-items: start; padding-bottom: 18px; }
+.puck-workspace .puck-avatar-sheet-note p {
+  margin: 0;
+  color: #a1a1aa;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.puck-workspace .puck-avatar-upload,
+.puck-workspace .puck-avatar-clear-image {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: #333335;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 500;
+}
+.puck-workspace .puck-avatar-clear-image { background: transparent; color: #316bcb; }
+.puck-workspace .puck-avatar-upload-error { color: #ff453a; }
+.puck-workspace .puck-avatar-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (min-width: 701px) {
+  .puck-workspace .puck-avatar-sheet-backdrop { place-items: center; }
+  .puck-workspace .puck-avatar-sheet {
+    height: min(760px, calc(100dvh - 48px));
+    border-radius: 28px;
+    box-shadow: 0 24px 80px #000a;
+  }
 }

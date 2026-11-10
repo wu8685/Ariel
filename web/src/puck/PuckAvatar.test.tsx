@@ -89,6 +89,13 @@ describe("PuckAvatar", () => {
 		expect(avatarStyle).toMatch(/\.puck-avatar-select-ring \{ display: none;/);
 		expect(avatarStyle).toMatch(/\.puck-shape-option\.selected \.puck-avatar-select-ring \{ display: inline; \}/);
 		expect(avatarStyle).toMatch(/stroke: #656569/);
+		expect(avatarStyle).toMatch(/\.puck-shape-row\[data-count="4"\] \{[^}]*repeat\(4,/s);
+		expect(avatarStyle).toMatch(/\.puck-shape-row\[data-count="5"\] \{[^}]*repeat\(5,/s);
+		expect(avatarStyle).toMatch(/\.puck-color-row\[data-count="6"\] \{[^}]*repeat\(6,/s);
+		expect(avatarStyle).toMatch(/\.puck-color-row\[data-count="5"\] \{[^}]*repeat\(5,/s);
+		expect(avatarStyle).not.toMatch(/auto-fill/);
+		expect(avatarStyle).toMatch(/\.puck-color-option\.selected > span \{[^}]*outline:\s*2px solid #656569/s);
+		expect(avatarStyle).not.toMatch(/\.puck-color-option\.selected \{[^}]*#fff/s);
 		expect(avatarStyle).not.toMatch(/puck-avatar-presence/);
 	});
 

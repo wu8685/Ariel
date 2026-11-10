@@ -1490,6 +1490,20 @@ func TestModuleUpdatesAvatar(t *testing.T) {
 	if rejected.Error == nil {
 		t.Fatal("invalid shape accepted")
 	}
+	cleared := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": "cloud", "color": "blue"}}))
+	if cleared.Error != nil {
+		t.Fatal(cleared.Error)
+	}
+	var withoutImage map[string]string
+	if json.Unmarshal([]byte(cleared.Data["assistant"].(map[string]any)["avatar"].(string)), &withoutImage) != nil || withoutImage["shape"] != "cloud" || withoutImage["color"] != "blue" || withoutImage["image"] != "" {
+		t.Fatalf("reset avatar=%v", cleared.Data["assistant"].(map[string]any)["avatar"])
+	}
+	photo := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	withPhoto := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": "cloud", "color": "blue", "image": photo}}))
+	var withImage map[string]string
+	if withPhoto.Error != nil || json.Unmarshal([]byte(withPhoto.Data["assistant"].(map[string]any)["avatar"].(string)), &withImage) != nil || withImage["image"] != photo {
+		t.Fatalf("photo avatar=%v err=%v", withPhoto.Data, withPhoto.Error)
+	}
 }
 
 func TestModuleConversationWatchEmitsDurableChanges(t *testing.T) {

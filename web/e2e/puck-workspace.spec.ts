@@ -79,6 +79,31 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   await expect(page.locator(".puck-transcript").getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
 
+async function openAvatarSheet(page: Page) {
+  await page.getByRole("button", { name: "编辑头像" }).click();
+  const sheet = page.locator(".puck-avatar-sheet");
+  await expect(sheet).toBeVisible();
+  const shapeRows = sheet.locator(".puck-shape-row");
+  await expect(shapeRows).toHaveCount(3);
+  expect(await shapeRows.evaluateAll(rows => rows.map(row => row.querySelectorAll('[role="radio"]').length))).toEqual([4, 4, 5]);
+  expect(await sheet.locator(".puck-color-row").evaluateAll(rows => rows.map(row => row.querySelectorAll('[role="radio"]').length))).toEqual([6, 5]);
+  const wrapped = await shapeRows.evaluateAll(rows => rows.some(row => {
+    const tops = [...row.querySelectorAll('[role="radio"]')].map(radio => radio.getBoundingClientRect().top);
+    return Math.max(...tops) - Math.min(...tops) > 4;
+  }));
+  expect(wrapped).toBe(false);
+  const colorWrapped = await sheet.locator(".puck-color-row").evaluateAll(rows => rows.some(row => {
+    const tops = [...row.querySelectorAll('[role="radio"]')].map(radio => radio.getBoundingClientRect().top);
+    return Math.max(...tops) - Math.min(...tops) > 4;
+  }));
+  expect(colorWrapped).toBe(false);
+  await expect(sheet.getByRole("tab", { name: "形状" })).toHaveAttribute("aria-selected", "true");
+  await expect(sheet.getByRole("tab", { name: "生成" })).toBeVisible();
+  await expect(sheet.getByRole("tab", { name: "上传" })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "重置为默认" })).toBeVisible();
+  expect(await sheet.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+}
+
 test.describe("Puck reply to message desktop", () => {
 	test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false, colorScheme: "dark" });
 	test("reveals reply on hover, sends replyTo and jumps back to the quoted message", async ({ page }) => {
@@ -243,7 +268,11 @@ for (const width of [320, 390, 1280]) {
       expect(listAvatarBox!.height).toBeLessThanOrEqual(46);
       const listRowBox = await page.locator(".puck-assistant-row").first().boundingBox();
       expect(listRowBox!.height).toBe(64);
-      await expect(page.locator(".puck-shape-option .puck-avatar").first()).toHaveCSS("width", "28px");
+      if (width >= 700) {
+        await page.getByRole("button", { name: "编辑头像" }).click();
+        await expect(page.locator(".puck-shape-option .puck-avatar").first()).toHaveCSS("width", "34px");
+        await page.getByRole("button", { name: "完成" }).click();
+      }
       await expect(page.locator(".puck-info .puck-avatar-large")).toHaveCSS("width", "96px");
       await expect(processingRow).toHaveScreenshot(`puck-processing-avatar-${width}.png`, { animations: "disabled", caret: "hide" });
       const assistantList = page.locator(".puck-assistants");
@@ -481,15 +510,23 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
         await page.mouse.click(width - 20, 400);
         await expect(page.locator(".puck-assistants")).not.toHaveClass(/mobile-open/);
 				await page.getByRole("button", { name: "查看助理信息" }).click();
-				await expect(page.getByRole("radiogroup", { name: "头像形状" })).toBeVisible();
-				expect(await page.locator(".puck-avatar-picker").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+				await expect(page.getByRole("button", { name: "编辑头像" })).toBeVisible();
 				if (width === 390 && colorScheme === "dark") await expect(page).toHaveScreenshot("puck-390-info-drawer-dark.png", { animations: "disabled", caret: "hide" });
+				await openAvatarSheet(page);
+				if (width === 390 && colorScheme === "dark") await expect(page.locator(".puck-avatar-sheet")).toHaveScreenshot("puck-avatar-sheet-390-dark.png", { animations: "disabled", caret: "hide" });
+				await page.getByRole("button", { name: "完成" }).click();
 				await page.mouse.click(10, 400);
 				await expect(page.locator(".puck-info")).not.toHaveClass(/mobile-open/);
       } else {
         await expect(page.locator(".puck-assistants")).toBeVisible();
         await expect(page.locator(".puck-info")).toBeVisible();
-				await expect(page.getByRole("radiogroup", { name: "头像形状" })).toBeVisible();
+				await expect(page.getByRole("button", { name: "编辑头像" })).toBeVisible();
+				await expect(page.getByRole("radiogroup", { name: "头像形状" })).toHaveCount(0);
+				if (width === 1280 && colorScheme === "dark") {
+					await openAvatarSheet(page);
+					await expect(page.locator(".puck-avatar-sheet")).toHaveScreenshot("puck-avatar-sheet-1280-dark.png", { animations: "disabled", caret: "hide" });
+					await page.getByRole("button", { name: "完成" }).click();
+				}
 				const headerBottoms = await Promise.all([".puck-assistants > header", ".puck-conversation > header", ".puck-info > header"].map(selector => page.locator(selector).evaluate(element => element.getBoundingClientRect().bottom)));
 				expect(Math.max(...headerBottoms) - Math.min(...headerBottoms)).toBeLessThanOrEqual(1);
       }
@@ -700,6 +737,7 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 
 	test("selects every avatar property directly and persists mouse and keyboard changes", async ({ page }) => {
 		await openPuck(page);
+		await page.getByRole("button", { name: "编辑头像" }).click();
 		const shapeGroup = page.getByRole("radiogroup", { name: "头像形状" });
 		const colorGroup = page.getByRole("radiogroup", { name: "头像颜色" });
 		await expect(shapeGroup.getByRole("radio")).toHaveCount(13);
@@ -707,7 +745,7 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		expect(await shapeGroup.getByRole("radio").evaluateAll(radios => radios.map(radio => radio.getAttribute("aria-label")))).toEqual(["团块", "云", "方形", "闪光", "四叶", "心", "花", "水滴", "胶囊", "楔形", "房子", "星", "六边形"]);
 		await page.getByRole("radio", { name: "星" }).click();
 		await expect(page.getByRole("radio", { name: "星" })).toHaveAttribute("aria-checked", "true");
-		await expect(page.locator(".puck-avatar-large")).toHaveAttribute("data-shape", "star");
+		await expect(page.locator(".puck-avatar-sheet .puck-avatar-large")).toHaveAttribute("data-shape", "star");
 		await page.getByRole("radio", { name: "星" }).press("ArrowRight");
 		await expect(page.getByRole("radio", { name: "六边形" })).toHaveAttribute("aria-checked", "true");
 		await page.getByRole("radio", { name: "六边形" }).press("ArrowRight");
