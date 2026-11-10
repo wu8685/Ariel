@@ -18,7 +18,10 @@ describe("PuckWorkspace", () => {
 		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
 		await screen.findAllByText("Bot 0");
 		expect(screen.getByLabelText("助理数量 50/50")).toBeTruthy();
-		expect(screen.getByRole("button", { name: "新建助理" }).hasAttribute("disabled")).toBe(true);
+		expect(screen.getByRole("button", { name: "新建" }).hasAttribute("disabled")).toBe(false);
+		fireEvent.click(screen.getByRole("button", { name: "新建" }));
+		expect(screen.getByRole("menuitem", { name: "新建助理" }).hasAttribute("disabled")).toBe(true);
+		expect(screen.getByRole("menuitem", { name: "建群" }).hasAttribute("disabled")).toBe(false);
 	});
 
 	it("restores the last used assistant and falls back when the saved assistant no longer exists", async () => {
@@ -351,7 +354,8 @@ describe("PuckWorkspace", () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(document.querySelector(".puck-transcript")?.textContent).toContain("只属于旧助理");
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-    fireEvent.click(screen.getByRole("button", { name: "新建助理" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "新建助理" }));
     fireEvent.change(screen.getByLabelText("助理名称"), { target: { value: "个人心得" } });
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -855,8 +859,13 @@ describe("PuckWorkspace", () => {
 			return accepted({});
 		});
 		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
-		fireEvent.click(await screen.findByRole("button", { name: "建组聊天" }));
-		fireEvent.change(screen.getByLabelText("组名"), { target: { value: "研究组" } });
+		await screen.findByRole("button", { name: /小帕/ });
+		expect(screen.queryByRole("button", { name: "建组" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "建组聊天" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "新建" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "建群" }));
+		expect(screen.getByRole("heading", { name: "建群" })).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("群名"), { target: { value: "研究组" } });
 		fireEvent.click(screen.getByRole("checkbox", { name: "小帕" }));
 		fireEvent.click(screen.getByRole("checkbox", { name: "罗宾" }));
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
@@ -911,7 +920,12 @@ describe("PuckWorkspace", () => {
 		await screen.findByRole("button", { name: "收起未分组" });
 		expect(document.querySelector(".puck-conversation-title strong")?.textContent).toBe("小帕");
 		expect(screen.getByLabelText("罗宾有 3 条未读消息").textContent).toBe("3");
-		fireEvent.click(screen.getByRole("button", { name: "新建分组" }));
+		expect(screen.queryByRole("button", { name: "新建分组" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "分组" })).toBeNull();
+		fireEvent.contextMenu(screen.getByRole("button", { name: /小帕/ }));
+		expect(screen.queryByRole("menuitem", { name: "建分组" })).toBeNull();
+		fireEvent.contextMenu(document.querySelector(".puck-assistant-list")!);
+		fireEvent.click(screen.getByRole("menuitem", { name: "建分组" }));
 		fireEvent.change(screen.getByLabelText("分组名称"), { target: { value: "工作" } });
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
 		expect(await screen.findByRole("button", { name: "收起工作" })).toBeTruthy();
@@ -1028,5 +1042,69 @@ describe("PuckWorkspace", () => {
 		expect(request).toHaveBeenCalledWith("puck.section.move", "relay", expect.objectContaining({ kind: "assistant", entryId: "a-2", sectionId: "section-1" }));
 		expect(screen.getByRole("button", { name: "收起工作机" }).closest("section")?.textContent).toContain("罗宾");
 		hit.mockRestore();
+	});
+
+	it("puts 建群 in the plus menu and disables it until two assistants exist", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [] }) : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByRole("button", { name: /小帕/ });
+		expect(screen.queryByRole("button", { name: "建组" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "建组聊天" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "分组" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "新建分组" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "新建" }));
+		expect(screen.getByRole("menuitem", { name: "新建助理" })).toBeTruthy();
+		expect(screen.getByRole("menuitem", { name: "建群" }).hasAttribute("disabled")).toBe(true);
+		expect(screen.queryByRole("menuitem", { name: "建分组" })).toBeNull();
+	});
+
+	it("filters bots from the sidebar search field and restores the list", async () => {
+		const assistants = [
+			{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", lastMessagePreview: "早" },
+			{ assistantId: "a-2", name: "罗宾", brainDeviceId: "brain-a", status: "ready", lastMessagePreview: "需要你确认方案" },
+		];
+		const group = { groupId: "group-1", name: "研究组", members: [{ assistantId: "a-1", name: "小帕" }, { assistantId: "a-2", name: "罗宾" }], lastMessagePreview: "一起看一下" };
+		const request = vi.fn(async (method: string) => {
+			if (method === "puck.list") return accepted({ assistants });
+			if (method === "puck.group.list") return accepted({ groups: [group] });
+			if (method === "puck.history" || method === "puck.group.history") return accepted({ messages: [] });
+			if (method === "puck.section.list") return accepted({
+				sections: [{ sectionId: "section-1", name: "工作", collapsed: true }],
+				placements: [{ kind: "assistant", entryId: "a-2", sectionId: "section-1", position: 0 }],
+				ungroupedCollapsed: false,
+			});
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByRole("button", { name: /小帕/ });
+		expect(screen.queryByRole("button", { name: /罗宾/ })).toBeNull();
+		expect(screen.getByRole("button", { name: "搜索 Bot" }).querySelector("svg")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "搜索 Bot" }));
+		const field = screen.getByRole("textbox", { name: "搜索 Bot" });
+		expect(document.activeElement).toBe(field);
+		fireEvent.change(field, { target: { value: "罗宾" } });
+		expect(screen.getByRole("button", { name: /罗宾/ })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /小帕/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /研究组/ })).toBeNull();
+		fireEvent.change(field, { target: { value: "研究" } });
+		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /罗宾/ })).toBeNull();
+		fireEvent.change(field, { target: { value: "没有" } });
+		expect(screen.getByText("没有匹配的 Bot")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+		expect(screen.queryByRole("textbox", { name: "搜索 Bot" })).toBeNull();
+		expect(screen.getByRole("button", { name: /小帕/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /罗宾/ })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "搜索 Bot" }));
+		fireEvent.change(screen.getByRole("textbox", { name: "搜索 Bot" }), { target: { value: "帕" } });
+		expect(screen.queryByRole("button", { name: /研究组/ })).toBeNull();
+		fireEvent.keyDown(window, { key: "Escape" });
+		expect(screen.queryByRole("textbox", { name: "搜索 Bot" })).toBeNull();
+		expect(screen.getByText("Puck")).toBeTruthy();
+		expect(screen.getByRole("button", { name: /小帕/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
 	});
 });
