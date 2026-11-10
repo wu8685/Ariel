@@ -1,4 +1,4 @@
-import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { readScreenshotFiles, type ScreenshotDraft } from "../screenshots";
@@ -150,7 +150,7 @@ function avatarDesign(assistant: Assistant): AvatarDesign {
   } catch { /* deterministic fallback */ }
   return deriveAvatar(assistant.assistantId);
 }
-function moveRadio(event: KeyboardEvent<HTMLButtonElement>, values: readonly string[], current: string, select: (value: string) => void) {
+function moveRadio(event: ReactKeyboardEvent<HTMLButtonElement>, values: readonly string[], current: string, select: (value: string) => void) {
 	let index = values.indexOf(current);
 	if (["ArrowRight", "ArrowDown"].includes(event.key)) index = (index + 1) % values.length;
 	else if (["ArrowLeft", "ArrowUp"].includes(event.key)) index = (index - 1 + values.length) % values.length;
