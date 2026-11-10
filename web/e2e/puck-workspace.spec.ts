@@ -584,7 +584,8 @@ test.describe("Puck frosted dialog", () => {
 	test("uses the shared glass surface without blurring the transcript", async ({ page }) => {
 		await openPuck(page);
 		await page.getByRole("button", { name: "打开助理列表" }).click();
-		await page.getByRole("button", { name: "新建助理" }).click();
+		await page.getByRole("button", { name: "新建", exact: true }).click();
+		await page.getByRole("menuitem", { name: "新建助理" }).click();
 		const dialog = page.locator(".puck-dialog");
 		await expect(dialog).toBeVisible();
 		await expect(dialog).toHaveCSS("backdrop-filter", /blur\(20px\)/);
