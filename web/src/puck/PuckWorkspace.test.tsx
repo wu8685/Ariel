@@ -120,7 +120,7 @@ describe("PuckWorkspace", () => {
     const composer = view.container.querySelector<HTMLElement>(".puck-composer")!;
     expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#ff2f92");
     fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
-    await waitFor(() => expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#1084fe"));
+    await waitFor(() => expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#3c82f6"));
     const css = readFileSync("src/puck/puck.css", "utf8");
     expect(css).toMatch(/\.puck-workspace \.puck-send\.primary\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*background:\s*var\(--puck-avatar-color\);[^}]*color:\s*var\(--puck-send-foreground\)/s);
     expect(css).toMatch(/\.puck-workspace \.puck-send\.primary:disabled\s*\{[^}]*background:\s*[^;]+;[^}]*color:\s*[^;]+;/s);
@@ -692,7 +692,7 @@ describe("PuckWorkspace", () => {
 		await screen.findAllByText("小帕");
 		const shapes = screen.getByRole("radiogroup", { name: "头像形状" });
 		const colors = screen.getByRole("radiogroup", { name: "头像颜色" });
-		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(25);
+		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(13);
 		expect(colors.querySelectorAll('[role="radio"]')).toHaveLength(11);
 		expect(screen.getByRole("radio", { name: "团块" }).getAttribute("aria-checked")).toBe("true");
 		expect(screen.getByRole("radio", { name: "紫" }).getAttribute("aria-checked")).toBe("true");
@@ -705,10 +705,12 @@ describe("PuckWorkspace", () => {
 		expect(document.querySelector(".puck-avatar-large")?.getAttribute("data-shape")).toBe("star");
 		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "star", color: "violet", image: "https://cdn.example.test/bot.png" } });
 		fireEvent.keyDown(screen.getByRole("radio", { name: "星" }), { key: "ArrowRight" });
+		await waitFor(() => expect(screen.getByRole("radio", { name: "六边形" }).getAttribute("aria-checked")).toBe("true"));
+		fireEvent.keyDown(screen.getByRole("radio", { name: "六边形" }), { key: "ArrowRight" });
 		await waitFor(() => expect(screen.getByRole("radio", { name: "团块" }).getAttribute("aria-checked")).toBe("true"));
 		fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
 		await waitFor(() => expect(screen.getByRole("radio", { name: "蓝" }).getAttribute("aria-checked")).toBe("true"));
-		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#1084fe");
+		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#3c82f6");
 		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "blob", color: "blue", image: "https://cdn.example.test/bot.png" } });
 	});
 
@@ -817,8 +819,89 @@ describe("PuckWorkspace", () => {
 		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.group.history", "relay", { groupId: "group-1" }));
 		fireEvent.change(screen.getByLabelText("给 Puck 发消息"), { target: { value: "一起看一下" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
-		expect(await screen.findByText("我先看范围。")).toBeTruthy();
+		expect(await screen.findAllByText("我先看范围。")).toHaveLength(2);
+		const groupRow = screen.getByRole("button", { name: /研究组/ });
+		expect(groupRow.querySelector(".puck-group-cluster")).toBeTruthy();
+		expect(groupRow.querySelectorAll(".puck-avatar")).toHaveLength(2);
+		expect(groupRow.querySelector(".puck-group-mark")).toBeNull();
+		expect(groupRow.textContent).toContain("我先看范围。");
 		expect(screen.getAllByText("罗宾").length).toBeGreaterThan(0);
 		expect(request).toHaveBeenCalledWith("puck.group.message.send", "relay", expect.objectContaining({ groupId: "group-1", text: "一起看一下" }));
+	});
+
+	it("creates, renames, moves and collapses sidebar sections, then restores them without deleting chats", async () => {
+		const assistants = [
+			{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", unreadCount: 0, lastMessagePreview: "早" },
+			{ assistantId: "a-2", name: "罗宾", brainDeviceId: "brain-a", status: "ready", unreadCount: 3, lastMessagePreview: "需要你确认方案" },
+		];
+		const group = { groupId: "group-1", name: "研究组", members: [{ assistantId: "a-1", name: "小帕" }, { assistantId: "a-2", name: "罗宾" }], lastMessagePreview: "一起看一下" };
+		let sections: Array<{ sectionId: string; name: string; collapsed: boolean }> = [];
+		let placements: Array<{ kind: string; entryId: string; sectionId: string; position: number }> = [];
+		let ungroupedCollapsed = false;
+		const snapshot = () => ({ sections: sections.map(item => ({ ...item })), placements: placements.map(item => ({ ...item })), ungroupedCollapsed });
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants });
+			if (method === "puck.group.list") return accepted({ groups: [group] });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.section.list") return accepted(snapshot());
+			if (method === "puck.section.create") { sections = [...sections, { sectionId: "section-1", name: String(params.name), collapsed: false }]; return accepted(snapshot()); }
+			if (method === "puck.section.rename") { sections = sections.map(item => item.sectionId === params.sectionId ? { ...item, name: String(params.name) } : item); return accepted(snapshot()); }
+			if (method === "puck.section.move") {
+				placements = [...placements.filter(item => !(item.kind === params.kind && item.entryId === params.entryId)), { kind: String(params.kind), entryId: String(params.entryId), sectionId: String(params.sectionId || ""), position: Number(params.position) || 0 }];
+				return accepted(snapshot());
+			}
+			if (method === "puck.section.collapse") {
+				if (params.sectionId) sections = sections.map(item => item.sectionId === params.sectionId ? { ...item, collapsed: params.collapsed === true } : item);
+				else ungroupedCollapsed = params.collapsed === true;
+				return accepted(snapshot());
+			}
+			if (method === "puck.section.delete") {
+				placements = placements.map(item => item.sectionId === params.sectionId ? { ...item, sectionId: "" } : item);
+				sections = sections.filter(item => item.sectionId !== params.sectionId);
+				return accepted(snapshot());
+			}
+			return accepted({});
+		});
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByRole("button", { name: "收起未分组" });
+		expect(document.querySelector(".puck-conversation-title strong")?.textContent).toBe("小帕");
+		expect(screen.getByLabelText("罗宾有 3 条未读消息").textContent).toBe("3");
+		fireEvent.click(screen.getByRole("button", { name: "新建分组" }));
+		fireEvent.change(screen.getByLabelText("分组名称"), { target: { value: "工作" } });
+		fireEvent.click(screen.getByRole("button", { name: "创建" }));
+		expect(await screen.findByRole("button", { name: "收起工作" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "重命名分组 工作" }));
+		fireEvent.change(screen.getByLabelText("新的分组名称"), { target: { value: "工作机" } });
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+		expect(await screen.findByRole("button", { name: "收起工作机" })).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("移动 罗宾 到分组"), { target: { value: "section-1" } });
+		fireEvent.change(screen.getByLabelText("移动群聊 研究组 到分组"), { target: { value: "section-1" } });
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.section.move", "relay", expect.objectContaining({ kind: "group", entryId: "group-1", sectionId: "section-1" })));
+		const section = screen.getByRole("button", { name: "收起工作机" }).closest("section");
+		expect(section?.textContent).toContain("罗宾");
+		expect(section?.textContent).toContain("研究组");
+		expect(section?.textContent).toContain("一起看一下");
+		expect(section?.querySelector(".puck-group-cluster")).toBeTruthy();
+		expect(section?.querySelector(".puck-group-mark")).toBeNull();
+		expect(screen.getByLabelText("罗宾有 3 条未读消息").textContent).toBe("3");
+		expect(document.querySelector(".puck-conversation-title strong")?.textContent).toBe("小帕");
+		fireEvent.click(screen.getByRole("button", { name: "收起工作机" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: /罗宾/ })).toBeNull());
+		expect(screen.getByRole("button", { name: "展开工作机" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /小帕/ })).toBeTruthy();
+		view.unmount();
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		expect(await screen.findByRole("button", { name: "展开工作机" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /罗宾/ })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "展开工作机" }));
+		expect(await screen.findByLabelText("罗宾有 3 条未读消息")).toBeTruthy();
+		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "删除分组 工作机" }));
+		expect(screen.getByText(/不会删除 Bot、群聊、会话或历史/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "确认删除分组 工作机" }));
+		expect(await screen.findByRole("button", { name: /罗宾/ })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "收起工作机" })).toBeNull();
+		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
+		expect(request.mock.calls.some(call => call[0] === "puck.delete")).toBe(false);
 	});
 });

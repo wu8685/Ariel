@@ -101,6 +101,12 @@ export type Request = {
     | "puck.brain.status"
     | "puck.brain.retire"
     | "puck.group.list"
+    | "puck.section.list"
+    | "puck.section.create"
+    | "puck.section.rename"
+    | "puck.section.delete"
+    | "puck.section.collapse"
+    | "puck.section.move"
     | "puck.group.create"
     | "puck.group.history"
     | "puck.group.message.send";

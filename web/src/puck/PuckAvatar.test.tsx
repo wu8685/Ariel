@@ -14,9 +14,14 @@ describe("PuckAvatar", () => {
     expect(deriveAvatar("assistant-a")).toEqual(deriveAvatar("assistant-a"));
     expect(deriveAvatar("assistant-a")).not.toEqual(deriveAvatar("assistant-b"));
     expect(avatarShapes.map(option => option.value)).toEqual([
-      "blob", "pebble", "bean", "egg", "squircle", "tablet", "capsule", "cylinder", "hex", "gem", "crystal", "wedge", "shield", "dome", "arch", "cloud", "teardrop", "leaf", "square", "sparkle", "clover", "flower", "heart", "house", "star",
+      "blob", "cloud", "square", "sparkle", "clover", "heart", "flower", "teardrop", "capsule", "wedge", "house", "star", "hex",
     ]);
-    expect(avatarColors.map(option => option.value)).toEqual(["black", "brown", "red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray"]);
+    expect(avatarColors.map(option => option.value)).toEqual(["white", "brown", "red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray"]);
+    expect(avatarColors[0].hex).toBe("#ffffff");
+    expect(avatarColors.find(option => option.value === "blue")?.hex).toBe("#3c82f6");
+    expect(canonicalShape("pebble")).toBe("pebble");
+    expect(nearestAvatarColor("black")).toBe("black");
+    expect(nearestAvatarColor("#ffffff")).toBe("white");
     expect(avatarShapes.map(option => option.value)).toContain(deriveAvatar("assistant-a").shape);
     expect(avatarColors.map(option => option.hex)).toContain(deriveAvatar("assistant-a").colorHex);
     expect(canonicalShape("pumpkin")).toBe("dome");
@@ -34,10 +39,11 @@ describe("PuckAvatar", () => {
 	it("does not draw a presence ring and renders every picker shape once", () => {
 		const { container } = render(<>{avatarShapes.map(option => <PuckAvatar key={option.value} assistantId={option.value} name={option.label} design={{ shape: option.value, color: "cyan", colorHex: "#00bca6" }} animated={false}/>)}</>);
 		const avatars = Array.from(container.querySelectorAll<HTMLElement>(".puck-avatar"));
-		expect(avatars).toHaveLength(25);
+		expect(avatars).toHaveLength(13);
 		expect(container.querySelector(".puck-avatar-presence")).toBeNull();
 		expect(avatarStyle).not.toMatch(/puck-avatar-presence/);
-		expect(avatarStyle).toMatch(/--puck-avatar-row:\s*40px/);
+		expect(avatarStyle).toMatch(/--puck-avatar-row:\s*44px/);
+		expect(avatarStyle).toMatch(/--puck-avatar-gap:\s*17px/);
 		expect(avatarStyle).toMatch(/--puck-row-height:\s*96px/);
 		expect(avatarStyle).toMatch(/--puck-sidebar-width:\s*280px/);
 		expect(avatarStyle).toMatch(/\.puck-assistant-row\s*\{[^}]*min-height:\s*var\(--puck-row-height\)/s);
@@ -54,17 +60,19 @@ describe("PuckAvatar", () => {
 		expect(container.querySelector(".puck-avatar-body")).toBeNull();
 	});
 
-	it("renders two parallel black capsule eyes directly on one moving face", () => {
+	it("renders two slanted dark capsule eyes directly on one moving face", () => {
 		const { container } = render(<PuckAvatar assistantId="assistant-eyes" name="眼睛测试" animated={false}/>);
 		const face = container.querySelector(".puck-avatar-face");
 		const eyes = Array.from(face?.querySelectorAll(".puck-avatar-eye-shape") || []);
 		expect(eyes).toHaveLength(2);
 		expect(eyes.every(eye => eye.tagName.toLowerCase() === "rect")).toBe(true);
-		expect(eyes.map(eye => [eye.getAttribute("x"), eye.getAttribute("y"), eye.getAttribute("width"), eye.getAttribute("height"), eye.getAttribute("rx")])).toEqual([
-			["39", "47", "8", "16", "3"],
-			["53", "47", "8", "16", "3"],
+		expect(face?.querySelector(".puck-avatar-eyes")?.getAttribute("transform")).toContain("rotate(-18");
+		expect(eyes.map(eye => [eye.getAttribute("width"), eye.getAttribute("height"), eye.getAttribute("rx")])).toEqual([
+			["7", "14", "3.5"],
+			["7", "14", "3.5"],
 		]);
-		expect(Number(eyes[1].getAttribute("x")) - Number(eyes[0].getAttribute("x"))).toBe(14);
+		expect(Number(eyes[0].getAttribute("y"))).toBeLessThan(47);
+		expect(Number(eyes[1].getAttribute("x")) - Number(eyes[0].getAttribute("x"))).toBe(10);
 		expect(face?.querySelector("ellipse")).toBeNull();
 		expect(container.querySelector(".puck-avatar-eye-white, .puck-avatar-pupil, clipPath")).toBeNull();
 		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();

@@ -670,6 +670,18 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.groupHistory(ctx, params)
 		case "puck.group.message.send":
 			response = m.groupMessage(ctx, params)
+		case "puck.section.list":
+			response = m.sectionList(ctx)
+		case "puck.section.create":
+			response = m.sectionCreate(ctx, params)
+		case "puck.section.rename":
+			response = m.sectionRename(ctx, params)
+		case "puck.section.delete":
+			response = m.sectionDelete(ctx, params)
+		case "puck.section.collapse":
+			response = m.sectionCollapse(ctx, params)
+		case "puck.section.move":
+			response = m.sectionMove(ctx, params)
 		default:
 			response = moduleError("UNSUPPORTED", "Puck method is not available in P0")
 		}
@@ -1501,9 +1513,11 @@ var legacyAvatarShapes = map[string]string{
 }
 
 var avatarColorHex = map[string]string{
-	"black": "#000000", "brown": "#936439", "red": "#ff263c", "orange": "#ff6700", "yellow": "#ff9800",
-	"green": "#00c972", "cyan": "#00bca6", "blue": "#1084fe", "violet": "#9159fe", "magenta": "#ff309b", "gray": "#777777",
+	"black": "#000000", "white": "#ffffff", "brown": "#8c6640", "red": "#ea4045", "orange": "#ed702d", "yellow": "#f19d38",
+	"green": "#5ac67a", "cyan": "#54b9a6", "blue": "#3c82f6", "violet": "#895bf5", "magenta": "#eb4698", "gray": "#777777",
 }
+
+var avatarPalette = []string{"black", "white", "brown", "red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray"}
 
 func canonicalAvatarShape(shape string) (string, bool) {
 	if slices.Contains(avatarShapes, shape) {
@@ -1532,7 +1546,8 @@ func canonicalAvatarColor(color string) (string, bool) {
 		return int(value)
 	}
 	r, g, b := parse(1), parse(3), parse(5)
-	for id, token := range avatarColorHex {
+	for _, id := range avatarPalette {
+		token := avatarColorHex[id]
 		tr, _ := strconv.ParseInt(token[1:3], 16, 0)
 		tg, _ := strconv.ParseInt(token[3:5], 16, 0)
 		tb, _ := strconv.ParseInt(token[5:7], 16, 0)
