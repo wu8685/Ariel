@@ -767,4 +767,57 @@ describe("PuckWorkspace", () => {
 		expect(request).toHaveBeenCalledWith("puck.message.react", "relay", { assistantId: "a-1", messageId: "user-a", emoji: "👍" });
 		expect(screen.getByRole("button", { name: "你回应 👍，1 个" })).toBeTruthy();
 	});
+
+	it("collapses consecutive handled authorization cards and explains an empty result", async () => {
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [
+				{ id: "a", role: "assistant", kind: "authorization", text: "第一次", cardJSON: JSON.stringify({ cardState: "approved", decision: "approve_once" }) },
+				{ id: "b", role: "assistant", kind: "authorization", text: "第二次", cardJSON: JSON.stringify({ cardState: "pending", expiresAt: "2020-01-01T00:00:00Z" }) },
+				{ id: "c", role: "assistant", kind: "share_result", text: "完成了", cardJSON: JSON.stringify({ summary: "完成了", items: [] }) },
+			] }) : accepted({}));
+		const view = render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		const archive = await screen.findByText(/已收起 2 条已处理或过期的授权/);
+		expect((archive.closest("details") as HTMLDetailsElement).open).toBe(false);
+		expect(screen.getByText(/没有更多详情/)).toBeTruthy();
+		expect(view.container.textContent).not.toContain("结果详情暂时无法显示");
+	});
+
+	it("creates a group from ready assistants and shows each member reply", async () => {
+		const assistants = [
+			{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" },
+			{ assistantId: "a-2", name: "罗宾", brainDeviceId: "brain-a", status: "ready" },
+		];
+		const group = { groupId: "group-1", name: "研究组", members: [{ assistantId: "a-1", name: "小帕" }, { assistantId: "a-2", name: "罗宾" }] };
+		let history: Array<Record<string, unknown>> = [];
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants });
+			if (method === "puck.group.list") return accepted({ groups: request.mock.calls.some(call => call[0] === "puck.group.create") ? [group] : [] });
+			if (method === "puck.group.create") return accepted({ group });
+			if (method === "puck.group.history") return accepted({ messages: history });
+			if (method === "puck.group.message.send") {
+				history = [
+					{ id: params.clientMessageId, role: "user", kind: "text", text: params.text },
+					{ id: `${params.clientMessageId}-a-1`, role: "assistant", kind: "processing", text: "正在处理…", authorAssistantId: "a-1", authorName: "小帕" },
+					{ id: `${params.clientMessageId}-a-2`, role: "assistant", kind: "text", text: "我先看范围。", authorAssistantId: "a-2", authorName: "罗宾" },
+				];
+				return accepted({ messages: history });
+			}
+			if (method === "puck.history") return accepted({ messages: [] });
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		fireEvent.click(await screen.findByRole("button", { name: "建组聊天" }));
+		fireEvent.change(screen.getByLabelText("组名"), { target: { value: "研究组" } });
+		fireEvent.click(screen.getByRole("checkbox", { name: "小帕" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "罗宾" }));
+		fireEvent.click(screen.getByRole("button", { name: "创建" }));
+		expect(await screen.findByPlaceholderText("给小组发消息…")).toBeTruthy();
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.group.history", "relay", { groupId: "group-1" }));
+		fireEvent.change(screen.getByLabelText("给 Puck 发消息"), { target: { value: "一起看一下" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		expect(await screen.findByText("我先看范围。")).toBeTruthy();
+		expect(screen.getAllByText("罗宾").length).toBeGreaterThan(0);
+		expect(request).toHaveBeenCalledWith("puck.group.message.send", "relay", expect.objectContaining({ groupId: "group-1", text: "一起看一下" }));
+	});
 });

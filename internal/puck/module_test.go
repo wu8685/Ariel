@@ -1683,3 +1683,74 @@ func TestFreshMissingCwdToolResultJSONIsFileNotFound(t *testing.T) {
 		t.Fatalf("tasks=%v err=%v", tasks, err)
 	}
 }
+
+func TestGroupConversationFansOutToMembersWithoutWritingDirectHistory(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	first := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"小帕","brainDeviceId":"brain-a"}`))
+	second := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"罗宾","brainDeviceId":"brain-a"}`))
+	firstID := first.Data["assistant"].(map[string]any)["assistantId"].(string)
+	secondID := second.Data["assistant"].(map[string]any)["assistantId"].(string)
+	threadID := first.Data["assistant"].(map[string]any)["brainThreadId"].(string)
+	created := module.Handle(ctx, "puck.group.create", mustJSON(map[string]any{"name": "研究组", "memberIds": []string{firstID, secondID}}))
+	if created.Error != nil {
+		t.Fatalf("create=%+v", created)
+	}
+	groupID := created.Data["group"].(Group).ID
+	bridge.mu.Lock()
+	bridge.calls, bridge.params = nil, nil
+	bridge.mu.Unlock()
+	sent := module.Handle(ctx, "puck.group.message.send", mustJSON(map[string]any{"groupId": groupID, "clientMessageId": "00000000-0000-4000-8000-000000000191", "text": "一起看一下结论"}))
+	if sent.Error != nil {
+		t.Fatalf("send=%+v", sent)
+	}
+	bridge.mu.Lock()
+	starts := 0
+	for index, method := range bridge.calls {
+		if method != "puck.brain.turn.start" {
+			continue
+		}
+		starts++
+		if !strings.Contains(string(bridge.params[index]), "不要调用工具") || !strings.Contains(string(bridge.params[index]), "研究组") {
+			t.Fatalf("group prompt=%s", bridge.params[index])
+		}
+	}
+	bridge.mu.Unlock()
+	if starts != 2 {
+		t.Fatalf("starts=%d", starts)
+	}
+	for _, id := range []string{firstID, secondID} {
+		history := module.Handle(ctx, "puck.history", mustJSON(map[string]any{"assistantId": id})).Data["messages"].([]Message)
+		for _, message := range history {
+			if strings.Contains(message.Text, "一起看一下结论") || strings.Contains(message.Text, "小组结论") {
+				t.Fatalf("direct history received group text: %+v", message)
+			}
+		}
+	}
+	module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: firstID, DeviceID: "brain-a", ThreadID: threadID, Name: "puck.brain.event", Payload: json.RawMessage(`{"kind":"item/agentMessage/completed","payload":{"method":"item/agentMessage/completed","params":{"turnId":"brain-turn-a","item":{"id":"item-a","type":"agentMessage","text":"小组结论先看范围。"}}}}`)})
+	module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: firstID, DeviceID: "brain-a", ThreadID: threadID, Name: "puck.brain.event", Payload: json.RawMessage(`{"kind":"turn/completed","payload":{"method":"turn/completed","params":{"turnId":"brain-turn-a"}}}`)})
+	history := module.Handle(ctx, "puck.group.history", mustJSON(map[string]any{"groupId": groupID})).Data["messages"].([]GroupMessage)
+	var sawUser, sawReply bool
+	for _, message := range history {
+		if message.Role == "user" && message.Text == "一起看一下结论" {
+			sawUser = true
+		}
+		if message.AuthorAssistantID == firstID && message.Text == "小组结论先看范围。" && message.Kind == "text" && message.AuthorName == "小帕" {
+			sawReply = true
+		}
+	}
+	if !sawUser || !sawReply {
+		t.Fatalf("group history=%+v", history)
+	}
+	direct := module.Handle(ctx, "puck.history", mustJSON(map[string]any{"assistantId": firstID})).Data["messages"].([]Message)
+	for _, message := range direct {
+		if message.Text == "小组结论先看范围。" {
+			t.Fatalf("reply leaked into direct history: %+v", direct)
+		}
+	}
+}

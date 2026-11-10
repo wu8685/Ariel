@@ -123,7 +123,7 @@ test("reuses downloaded history after a mobile user switches away and back", asy
   relaySocket!.send(JSON.stringify({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: first.threadId, subscriptionId: `sub-${first.threadId}`, streamId: `stream-${first.threadId}`, baseSeq: 1, seq: 2, thread: firstUpdated }));
   await expect(page.getByText("B 正在运行")).toBeVisible();
 
-  const restoreLatest = page.getByRole("button", { name: "恢复输入区并回到最新" });
+  const restoreLatest = page.getByRole("button", { name: "回到最新" });
   if (await restoreLatest.isVisible()) await restoreLatest.click();
   await page.getByRole("button", { name: /打开会话列表/ }).click();
   await page.getByText(first.title).click();

@@ -420,6 +420,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
   const [composing, setComposing] = useState(false);
   const conversationLayoutRef = useRef<HTMLDivElement>(null);
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
+  const [latestHint, setLatestHint] = useState(false);
   const [historyChromeCollapsed, setHistoryChromeCollapsed] = useState(false);
   const [permissionInfoOpen, setPermissionInfoOpen] = useState(false);
   const [permissionInfoPosition, setPermissionInfoPosition] = useState({ left: 12, bottom: 12, width: 310, maxHeight: 300 });
@@ -441,6 +442,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
   // failed or oversized owner sync can reuse it instead of re-requesting.
   const fastReadCache = useRef<{ deviceId: string; threadId: string; epoch: number; settled: boolean; thread: Thread | null; result: Promise<Thread | null> } | null>(null);
   const terminalCacheFailure = useRef<{ deviceId: string; threadId: string; watchId: string; reason: string } | null>(null);
+  const cacheRecoveryAttempts = useRef(0);
   const deviceListGeneration = useRef(0);
   const threadListGeneration = useRef(0);
   const threadCreateGeneration = useRef(0);
@@ -537,7 +539,11 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     ? "历史只读 · 实时连接资源繁忙；当前历史可读，但发送暂时禁用。"
     : readOnlyReason === "HISTORY_TOO_LARGE"
       ? "历史只读 · 当前会话状态超过 64 MiB 安全上限；历史可读，但无法建立实时连接。"
-      : "历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。";
+      : readOnlyReason === "TIMEOUT"
+        ? "历史只读 · Desktop 响应超时。历史仍可阅读，重新连接后即可发送。"
+        : readOnlyReason === "RESYNC_REQUIRED"
+          ? "历史只读 · 实时连接暂时失效。历史仍可阅读，重新连接后恢复发送。"
+          : "历史只读 · 当前 Desktop 状态未确认，发送、停止和审批已禁用。";
   const canRetryReadOnly = readOnlyReason !== "HISTORY_TOO_LARGE" && readOnlyReason !== "PROTOCOL_UNSUPPORTED";
   const permissionWarning = Boolean(currentPermissions?.warning || currentPermissions?.label.includes("未知"));
   const displayedTurns = [...history.older, ...(view?.thread.turns || [])].map(turn => {
@@ -954,6 +960,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     historyReturnIntent.current = stabilizeLayout;
     transcriptTouchY.current = null;
     setShowReturnToLatest(false);
+    setLatestHint(false);
     if (stabilizeLayout) latestChromeRestoreDeadline.current = performance.now() + latestChromeRestoreDuration;
     setHistoryChromeCollapsed(false);
     if (container) {
@@ -979,6 +986,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
       scrollToLatest(container);
       lastTranscriptScrollTop.current = container.scrollTop;
       setShowReturnToLatest(false);
+      setLatestHint(false);
       return;
     }
     if (latestChromeRestoreDeadline.current) {
@@ -988,6 +996,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
         lastTranscriptScrollTop.current = container.scrollTop;
         followLatestRef.current = true;
         setShowReturnToLatest(false);
+        setLatestHint(false);
         return;
       }
       cancelLatestChromeRestore();
@@ -1002,7 +1011,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
       followLatestRef.current = returnedToLatest;
       if (returnedToLatest) {
         restoreLatestChrome(container);
-      }
+      } else setShowReturnToLatest(true);
       return;
     }
     followLatestRef.current = followLatestRef.current
@@ -1011,7 +1020,8 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     setHistoryChromeCollapsed(collapsed => collapsed
       ? distanceFromLatest > historyHeaderExpandDistance
       : distanceFromLatest > latestFollowDistance);
-    if (followLatestRef.current) setShowReturnToLatest(false);
+    if (followLatestRef.current) { setShowReturnToLatest(false); setLatestHint(false); }
+    else setShowReturnToLatest(true);
   }
 
   function applyHistoryReturnGesture(towardLatest: boolean) {
@@ -1454,6 +1464,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     blockedSelection.current = "";
     const epoch = ++pendingSelect.current;
     terminalCacheFailure.current = null;
+    cacheRecoveryAttempts.current = 0;
     const old = selection.current.view;
     const oldDevice = selection.current.deviceId;
     const oldSubscription = expectedSubscription.current;
@@ -1464,10 +1475,11 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     const warm = warmSubscription(targetDevice, id);
     expectedSubscription.current = "";
     const provisionalThread = initialThread || threads.find(candidate => candidate.threadId === id);
-    if (!warm && provisionalThread) {
-      const provisional = { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "cache-pending", seq: 0, thread: { ...asReadOnlyThread(provisionalThread), recentComplete: true, historyComplete: true } };
-      selection.current = { deviceId: targetDevice, threadId: id, view: provisional };
-      setThreadId(id); setView(provisional); setSyncingView(true); setReadOnlyHistory(false); setNotice("");
+    const preview: ThreadView | null = !warm && provisionalThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "cache-pending", seq: 0, thread: { ...asReadOnlyThread(provisionalThread), recentComplete: true, historyComplete: true } } : null;
+    if (preview) {
+      selection.current = { deviceId: targetDevice, threadId: id, view: preview };
+      setThreadId(id); setView(preview); setSyncingView(true); setReadOnlyHistory(false);
+      setNotice(provisionalThread?.turns?.length ? "" : "正在从 Desktop Agent 准备最近会话。");
     }
     let restoredView = restoreCachedConversation(targetDevice, id);
     if (!restoredView) {
@@ -1477,9 +1489,10 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
       if (durable?.value?.thread && currentIdentity && historyCache.current.set(currentIdentity, durable.value)) restoredView = restoreCachedConversation(targetDevice, id);
     }
     const cachedView = warm || restoredView || (initialThread ? { deviceId: targetDevice, threadId: id, subscriptionId: "", streamId: "", seq: 0, thread: initialThread } : null);
-    selection.current = { deviceId: targetDevice, threadId: id, view: cachedView };
+    const visibleView = cachedView || preview;
+    selection.current = { deviceId: targetDevice, threadId: id, view: visibleView };
     expectedSubscription.current = warm?.subscriptionId || "";
-    setThreadId(id); setView(cachedView); setSyncingView(!warm || warm.streamId === "cache-pending"); setReadOnlyHistory(false); setNotice(""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
+    setThreadId(id); setView(visibleView); setSyncingView(!warm || warm.streamId === "cache-pending"); setReadOnlyHistory(false); setNotice(visibleView && !cachedView && !visibleView.thread.turns?.length ? "正在从 Desktop Agent 准备最近会话。" : ""); setQueueWorking(""); setQueueMenuId(""); cancelQueueDrag();
     if (!restoredView) resetHistory();
     if (warm) {
       if (warm.streamId === "cache-pending") {
@@ -1558,8 +1571,19 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
           }).catch(() => { entry.settled = true; return null; });
           fastReadCache.current = entry;
           void entry.result.then(thread => {
-            if (!thread || epoch !== pendingSelect.current) return;
+            if (epoch !== pendingSelect.current) return;
             if (selection.current.deviceId !== targetDevice || selection.current.threadId !== id || expectedSubscription.current !== watchID) return;
+            if (!thread) {
+              const failed = terminalCacheFailure.current;
+              const terminalReason = failed?.deviceId === targetDevice && failed.threadId === id && failed.watchId === watchID ? failed.reason : "";
+              if (terminalReason) {
+                setReadOnlyHistory(Boolean(selection.current.view?.thread));
+                setReadOnlyReason(terminalReason);
+                setSyncingView(false);
+                setNotice(resultText[terminalReason] || "会话后台同步失败，请重试。");
+              } else if (!selection.current.view?.thread.turns?.length) setNotice("电脑端还没有返回最近消息，同步仍在继续。");
+              return;
+            }
             const currentView = selection.current.view;
             // Once an owner snapshot has won, even its temporarily stale view
             // outranks this old read. Resetting seq here loses the lineage and
@@ -1735,6 +1759,17 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     }
   }
 
+  async function retryVisibleSync() {
+    const current = selection.current;
+    if (!current.deviceId || !current.threadId || syncingView) return;
+    if (readOnlyHistory && current.view) {
+      await retryReadOnlyConnection();
+      return;
+    }
+    cacheRecoveryAttempts.current = 0;
+    await selectThread(current.threadId, current.deviceId, false);
+  }
+
   async function retryReadOnlyConnection() {
     const current = selection.current;
     if (readOnlyRetrying.current || !readOnlyHistory || syncingView || !current.view || !current.deviceId || !current.threadId) return;
@@ -1889,11 +1924,28 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
           if (currentEvent) {
             const reason = event.staleReason || "RESYNC_REQUIRED";
             const terminal = typeof event.staleReason === "string" && isTerminalCacheReason(reason);
-            terminalCacheFailure.current = terminal ? { deviceId: event.deviceId, threadId: event.threadId, watchId: event.watchId, reason } : null;
-            setReadOnlyHistory(terminal && Boolean(current.view?.thread));
-            setReadOnlyReason(reason);
-            setSyncingView(!terminal);
-            if (terminal) setNotice(resultText[reason] || "会话后台同步失败，已保留当前历史。");
+            const transient = reason === "TIMEOUT";
+            if (terminal && transient && cacheRecoveryAttempts.current < 1) {
+              cacheRecoveryAttempts.current += 1;
+              terminalCacheFailure.current = null;
+              setReadOnlyHistory(false);
+              setReadOnlyReason("");
+              setSyncingView(true);
+              setNotice(reason === "TIMEOUT" ? "Desktop 响应较慢，正在重新同步。可以先看已有内容，确认后即可发送。" : "正在重新连接 Desktop。可以先看已有内容，确认后即可发送。");
+              const retryDevice = event.deviceId;
+              const retryThread = event.threadId;
+              const retryWatch = event.watchId;
+              window.setTimeout(() => {
+                if (selection.current.deviceId !== retryDevice || selection.current.threadId !== retryThread || expectedSubscription.current !== retryWatch) return;
+                void client.request("thread.cache.promote", retryDevice, { threadId: retryThread });
+              }, 0);
+            } else {
+              terminalCacheFailure.current = terminal ? { deviceId: event.deviceId, threadId: event.threadId, watchId: event.watchId, reason } : null;
+              setReadOnlyHistory(terminal && Boolean(current.view?.thread));
+              setReadOnlyReason(reason);
+              setSyncingView(!terminal);
+              if (terminal) setNotice(resultText[reason] || "会话后台同步失败，已保留当前历史。");
+            }
           }
           return;
         }
@@ -1905,6 +1957,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
         const freshnessRecovery = source?.streamId === "cache-pending" && source.seq === next.seq;
         if(!acceptStream(next,source,freshnessRecovery))return;
         terminalCacheFailure.current = null;
+        cacheRecoveryAttempts.current = 0;
         observeUnread(event.deviceId, [event.thread]);
         retainWarmSubscription(next);
         if (!currentEvent) cacheWarmThread(next);
@@ -2117,7 +2170,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
     threadListGeneration.current++;
     const oldDevice = selection.current.deviceId;
     if (offlineDevice.current && offlineDevice.current !== deviceId) finishAgentRecovery(offlineDevice.current);
-    if (oldDevice && oldDevice !== deviceId) { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); }
+    if (oldDevice && oldDevice !== deviceId) { resumeReadingAnchor.current = null; followLatestRef.current = true; setShowReturnToLatest(false); setLatestHint(false); }
     const oldSubscription = expectedSubscription.current;
     const oldWarm = oldDevice ? warmSubscription(oldDevice, selection.current.threadId) : null;
     if (oldDevice) clearWarmSubscriptions(oldDevice, true);
@@ -2444,7 +2497,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
       restoreLatestChrome(container);
     } else if (lastPaint.current.seq !== view.seq) {
       if (followLatestRef.current) scrollToLatest(container);
-      else if (hasNewVisibleContent(lastPaint.current.marker, marker)) setShowReturnToLatest(true);
+      else if (hasNewVisibleContent(lastPaint.current.marker, marker)) { setShowReturnToLatest(true); setLatestHint(true); }
     } else if (followLatestRef.current) scrollToLatest(container);
     lastPaint.current = { key, seq: view.seq, marker };
   }, [view?.seq, view?.threadId, history, itemOverrides, syncingView]);
@@ -3109,7 +3162,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
         {!inlineAuthRecovery && readOnlyHistory && view && <div className="readonly-banner" role="status"><span>{readOnlyMessage}</span>{canRetryReadOnly && <button type="button" onClick={() => void retryReadOnlyConnection()} disabled={syncingView}>重新连接</button>}</div>}
         {syncingView && view && !readOnlyHistory && !connectionResume.current && <div className="readonly-banner" role="status">正在同步最新状态 · 当前内容可继续阅读和编辑草稿，操作暂时禁用。</div>}
         <div className="transcript" ref={transcriptRef} tabIndex={-1} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTranscriptTouchStart} onTouchMove={onTranscriptTouchMove} onTouchEnd={onTranscriptTouchEnd} onTouchCancel={onTranscriptTouchEnd} aria-live="polite">
-          {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? "正在同步会话…" : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? "等待电脑端加载原始历史。" : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p></div>}
+          {!view && <div className="empty"><div className="empty-symbol"><ArielLogo size={50} variant="micro" tone="white" decorative className="session-loading-logo" /></div><h3>{localThreadDraft ? "新会话草稿" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "会话状态无法确认" : threadId ? (syncingView ? "正在同步会话…" : "会话暂时无法同步") : "从这里接续"}</h3><p>{localThreadDraft ? "发送第一条消息后创建 Codex 会话。" : blockedSelection.current === `${deviceId}\u0000${threadId}` ? "远程操作已暂停。请稍后手动重新选择会话。" : threadId ? (syncingView ? "等待电脑端加载原始历史。" : "同步没有完成。可以重新连接，已有草稿会保留。") : "选一个会话，历史、运行状态与需要你决定的问题会出现在这里。"}</p>{threadId && !localThreadDraft && !syncingView && blockedSelection.current !== `${deviceId}\u0000${threadId}` && <button type="button" onClick={() => void retryVisibleSync()}>重新连接</button>}</div>}
           {view?.thread.historyComplete === false && !history.exhausted && <div className="history-control"><button className="history-action" type="button" onClick={() => void loadOlder()} disabled={historyLoading}>{historyLoading ? "正在加载更早消息…" : "加载更早消息"}</button></div>}
           {displayedTurns.slice(0, history.older.length).map(turn => <ConversationTurn key={`${view?.threadId}:${turn.turnId}`} turn={turn} onEdit={currentExecution?.editSupported && !messageEdit && ownerReady && !working && !queueWorking && !readOnlyHistory && view?.thread.runtime==="idle" && !view.thread.pendingInteractions.length && !queuedMessages.length && view.thread.turns.at(-1)?.turnId===turn.turnId && editableMessage(turn)?()=>void beginMessageEdit(turn):undefined} fileChanges={fileChanges[`${view?.threadId}\u0000${turn.turnId}`]} onOpenFile={(change,mode)=>void openChangedFile(turn.turnId,change,mode)} onOpenReference={documentReferencesVisible?(itemId,reference)=>void openDocumentReference(turn.turnId,itemId,reference):undefined} loading={itemLoading === turn.turnId} onLoadOlderItems={turn => void loadOlderItems(turn)} onLoadImage={(itemId, index) => loadImage(turn.turnId, itemId, index)} onLoadActivity={(item,cursor,revision) => loadActivity(turn.turnId,item,cursor,revision)} active={ownerReady && view?.thread.runtime === "inProgress" && view.thread.pendingInteractions.length === 0 && activeTurn?.turnId === turn.turnId} />)}
           {history.gap && <div className="history-gap">中间消息已从当前浏览窗口释放 <button type="button" onClick={resetHistory}>回到最新</button></div>}
@@ -3122,7 +3175,7 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
           })}
           {view?.thread.pendingInteractions.map(card => <InteractionCard key={card.interactionId} card={card} values={answers[card.interactionId] || {}} onChange={(id, value) => setAnswers(all => ({ ...all, [card.interactionId]: { ...all[card.interactionId], [id]: value } }))} onRespond={decision => void respond(card, decision)} disabled={working || !ownerReady} submitting={working} />)}
         </div>
-        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><CircleButton className="icon-control" type="button" aria-label={showReturnToLatest ? "回到最新" : "恢复输入区并回到最新"} data-tooltip={showReturnToLatest ? "回到最新" : "恢复并回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /></CircleButton></div>}
+        {(showReturnToLatest || historyChromeCollapsed) && view && <div className={`return-latest-bar ${historyChromeCollapsed ? "history-overlay" : ""}`}><button className="return-latest-button" type="button" aria-label={latestHint ? "有新消息" : "回到最新"} onClick={returnToLatest}><ReturnToLatestIcon /><span>{latestHint ? "有新消息" : "回到最新"}</span></button></div>}
         <div className={`composer-wrap ${historyChromeCollapsed ? "history-collapsed" : ""}`} data-history-collapsed={historyChromeCollapsed}><div className="composer-stack">{notice && <div className="notice" role="alert"><span>!</span>{notice}<CircleButton className="icon-control" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setNotice("")}><CloseIcon /></CircleButton></div>}
           {recoveringDeviceId === deviceId && view && <div className="readonly-banner" role="status">Desktop Agent 正在重连 · 当前显示最后确认的会话内容，操作暂时禁用。</div>}
           {queuedMessages.length > 0 && <section className="queue-panel" aria-label="排队的后续输入">

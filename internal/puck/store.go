@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 5
+const storeSchemaVersion = 6
 
 type Store struct {
 	db       *sql.DB
@@ -197,12 +197,26 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version > 0 && version < 5 {
 		statements = append(statements, `ALTER TABLE conversation_messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''`)
 	}
+	if version < 6 {
+		statements = append(statements,
+			`CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT)`,
+			`CREATE TABLE IF NOT EXISTS group_members (
+            group_id TEXT NOT NULL REFERENCES groups(id), assistant_id TEXT NOT NULL REFERENCES assistants(id),
+            position INTEGER NOT NULL, PRIMARY KEY (group_id, assistant_id))`,
+			`CREATE INDEX IF NOT EXISTS group_members_assistant ON group_members(assistant_id)`,
+			`CREATE TABLE IF NOT EXISTS group_messages (
+            id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES groups(id), role TEXT NOT NULL,
+            author_assistant_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
+			`CREATE INDEX IF NOT EXISTS group_messages_group_at ON group_messages(group_id, created_at)`,
+		)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 5`); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, storeSchemaVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -631,4 +645,165 @@ func (s *Store) LatestUserMessageID(ctx context.Context, assistantID string) (st
 func (s *Store) Audit(ctx context.Context, entry AuditEntry) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_log(id,assistant_id,actor,action,target,result,at) VALUES(?,?,?,?,?,?,?)`, entry.ID, entry.AssistantID, entry.Actor, entry.Action, entry.Target, entry.Result, nowText(entry.At))
 	return err
+}
+
+type Group struct {
+	ID      string        `json:"groupId"`
+	Name    string        `json:"name"`
+	Members []GroupMember `json:"members"`
+}
+
+type GroupMember struct {
+	AssistantID string `json:"assistantId"`
+	Name        string `json:"name"`
+}
+
+type GroupMessage struct {
+	ID                string    `json:"id"`
+	GroupID           string    `json:"groupId"`
+	Role              string    `json:"role"`
+	AuthorAssistantID string    `json:"authorAssistantId,omitempty"`
+	AuthorName        string    `json:"authorName,omitempty"`
+	Kind              string    `json:"kind"`
+	Text              string    `json:"text"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+func (s *Store) CountGroups(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM groups WHERE deleted_at IS NULL`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) CreateGroup(ctx context.Context, group Group) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := nowText(time.Time{})
+	if _, err := tx.ExecContext(ctx, `INSERT INTO groups(id,name,created_at) VALUES(?,?,?)`, group.ID, group.Name, now); err != nil {
+		return err
+	}
+	for index, member := range group.Members {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO group_members(group_id,assistant_id,position) VALUES(?,?,?)`, group.ID, member.AssistantID, index); err != nil {
+			return err
+		}
+	}
+	return s.changed(tx.Commit())
+}
+
+func (s *Store) Groups(ctx context.Context) ([]Group, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name FROM groups WHERE deleted_at IS NULL ORDER BY created_at,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	groups := []Group{}
+	for rows.Next() {
+		var group Group
+		if err := rows.Scan(&group.ID, &group.Name); err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range groups {
+		members, err := s.groupMembers(ctx, groups[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		groups[index].Members = members
+	}
+	return groups, nil
+}
+
+func (s *Store) Group(ctx context.Context, groupID string) (Group, error) {
+	var group Group
+	err := s.db.QueryRowContext(ctx, `SELECT id,name FROM groups WHERE id=? AND deleted_at IS NULL`, groupID).Scan(&group.ID, &group.Name)
+	if err != nil {
+		return Group{}, err
+	}
+	group.Members, err = s.groupMembers(ctx, groupID)
+	return group, err
+}
+
+func (s *Store) groupMembers(ctx context.Context, groupID string) ([]GroupMember, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT m.assistant_id,a.name FROM group_members m JOIN assistants a ON a.id=m.assistant_id WHERE m.group_id=? AND a.deleted_at IS NULL ORDER BY m.position,m.assistant_id`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	members := []GroupMember{}
+	for rows.Next() {
+		var member GroupMember
+		if err := rows.Scan(&member.AssistantID, &member.Name); err != nil {
+			return nil, err
+		}
+		members = append(members, member)
+	}
+	return members, rows.Err()
+}
+
+func (s *Store) AppendGroupMessage(ctx context.Context, m GroupMessage) error {
+	if len(m.Text) > 64<<10 {
+		return errors.New("Puck group message exceeds storage limit")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO group_messages(id,group_id,role,author_assistant_id,kind,text,created_at) VALUES(?,?,?,?,?,?,?)`, m.ID, m.GroupID, m.Role, m.AuthorAssistantID, m.Kind, m.Text, nowText(m.CreatedAt))
+	return s.changed(err)
+}
+
+func (s *Store) UpsertGroupMessage(ctx context.Context, m GroupMessage) error {
+	if len(m.Text) > 64<<10 {
+		return errors.New("Puck group message exceeds storage limit")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO group_messages(id,group_id,role,author_assistant_id,kind,text,created_at) VALUES(?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,text=excluded.text
+		WHERE group_messages.group_id=excluded.group_id`, m.ID, m.GroupID, m.Role, m.AuthorAssistantID, m.Kind, m.Text, nowText(m.CreatedAt))
+	return s.changed(err)
+}
+
+func (s *Store) DeleteGroupMessage(ctx context.Context, groupID, messageID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM group_messages WHERE group_id=? AND id=?`, groupID, messageID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	s.markChanged()
+	return nil
+}
+
+func (s *Store) GroupMessage(ctx context.Context, groupID, messageID string) (GroupMessage, error) {
+	var message GroupMessage
+	var created string
+	err := s.db.QueryRowContext(ctx, `SELECT id,group_id,role,author_assistant_id,kind,text,created_at FROM group_messages WHERE group_id=? AND id=?`, groupID, messageID).Scan(&message.ID, &message.GroupID, &message.Role, &message.AuthorAssistantID, &message.Kind, &message.Text, &created)
+	if err != nil {
+		return GroupMessage{}, err
+	}
+	message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	return message, nil
+}
+
+func (s *Store) GroupMessages(ctx context.Context, groupID string) ([]GroupMessage, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,group_id,role,author_assistant_id,kind,text,created_at FROM group_messages WHERE group_id=? ORDER BY created_at,rowid LIMIT 200`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []GroupMessage{}
+	for rows.Next() {
+		var message GroupMessage
+		var created string
+		if err := rows.Scan(&message.ID, &message.GroupID, &message.Role, &message.AuthorAssistantID, &message.Kind, &message.Text, &created); err != nil {
+			return nil, err
+		}
+		message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
 }

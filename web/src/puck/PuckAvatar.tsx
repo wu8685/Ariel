@@ -50,6 +50,7 @@ export function stateLabel(state: PuckState): string {
 
 function applyPose(element: HTMLElement, pose: AvatarPose) {
   element.dataset.pose = pose.name;
+  element.style.setProperty("--puck-presence-scale", pose.name === "rest" ? "0.94" : "1.08");
   element.style.setProperty("--puck-motion-duration", `${pose.motionDuration}ms`);
   element.style.setProperty("--puck-head-x", `${pose.headX}%`);
   element.style.setProperty("--puck-head-y", `${pose.headY}%`);
@@ -189,13 +190,15 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     "--puck-left-eye-xscale": restPose.leftEyeScaleX, "--puck-right-eye-xscale": restPose.rightEyeScaleX,
     "--puck-left-eye-yscale": restPose.leftEyeScaleY, "--puck-right-eye-yscale": restPose.rightEyeScaleY,
     "--puck-eye-roundness": restPose.eyeRoundness,
+    "--puck-presence-scale": "1",
   } as CSSProperties;
 
-  return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} draggable={false}
+  return <div ref={root} className={`puck-avatar puck-avatar-${size}`} role="img" aria-label={`${name}，${stateLabel(state)}`} data-live={animated ? "true" : "false"} draggable={false}
     data-expression={expression} data-shape={avatar.shape} data-reacting="false" data-moving="false" data-blink-phase="open" data-pose="rest" data-motion-count="0"
     style={style} onPointerMove={follow} onPointerLeave={() => { if (root.current) applyPose(root.current, currentPose.current); }}
     onPointerDown={react} onDragStart={event => event.preventDefault()}>
     <span className="puck-avatar-motion"><svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+      <circle className="puck-avatar-presence" cx="50" cy="55" r="42" />
       <g className="puck-avatar-head">
       <g className="puck-avatar-ears"><path className="puck-avatar-ear" d="M38 43C35 31 36 19 40 10c4 12 6 23 5 33Z"/><path className="puck-avatar-ear" d="M62 43c3-12 2-24-2-33-4 12-6 23-5 33Z"/></g>
       <g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
