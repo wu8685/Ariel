@@ -99,7 +99,11 @@ export type Request = {
     | "puck.brain.turn.interrupt"
     | "puck.brain.toolResult"
     | "puck.brain.status"
-    | "puck.brain.retire";
+    | "puck.brain.retire"
+    | "puck.group.list"
+    | "puck.group.create"
+    | "puck.group.history"
+    | "puck.group.message.send";
   params: {
     [k: string]: unknown;
   };

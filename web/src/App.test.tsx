@@ -371,6 +371,8 @@ describe("Ariel app interactions", () => {
 		await expandProject(fixtureThread.cwd);
 		fireEvent.click((await screen.findByText(fixtureThread.title)).closest("button")!);
 		await waitFor(() => expect(requests("thread.cache.watch")).toHaveLength(1));
+		expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+		expect((screen.getByLabelText("发送消息") as HTMLTextAreaElement).disabled).toBe(false);
 		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-missing", freshness: "missing", agentOnline: true, agentEpoch: "epoch" } }));
 		await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
 		expect(requests("thread.cache.promote")).toHaveLength(1);
@@ -468,11 +470,17 @@ describe("Ariel app interactions", () => {
 		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.cache.watch")[0].requestId, outcome: "accepted", data: { watchId: "watch-timeout", freshness: "missing", agentOnline: true, agentEpoch: "epoch" } }));
 		await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
 		act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: "fixture", watchId: "watch-timeout", freshness: "missing", agentOnline: true, agentEpoch: "epoch", staleReason: "TIMEOUT" }));
+		await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 0)); });
+		await waitFor(() => expect(requests("thread.cache.promote").length).toBeGreaterThanOrEqual(2));
 		const stored: Thread = { ...fixtureThread, turns: [{ turnId: "stored", status: "completed", items: [{ itemId: "stored-item", role: "assistant", text: "超时前已加载的历史" }] }] };
 		await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stored } }));
 		expect(await screen.findByText("超时前已加载的历史")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "正在同步会话，暂不可发送" })).toBeTruthy();
+		expect(screen.queryByText(/历史只读/)).toBeNull();
+		act(() => socket.message({ type: "event", v: 1, event: "thread.cache.update", deviceId: "mac", threadId: "fixture", watchId: "watch-timeout", freshness: "missing", agentOnline: true, agentEpoch: "epoch", staleReason: "TIMEOUT" }));
 		await waitFor(() => expect(screen.queryByRole("button", { name: "正在同步会话，暂不可发送" })).toBeNull());
-		expect(screen.getByText(/历史只读 ·/)).toBeTruthy();
+		expect(screen.getByText(/历史只读.*响应超时/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "重新连接" })).toBeTruthy();
 		expect(screen.getByText("超时前已加载的历史")).toBeTruthy();
 	});
 	it("uses Passkey mode without exposing a PIN fallback", async () => {
@@ -1202,8 +1210,9 @@ describe("Ariel app interactions", () => {
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "HISTORY_TOO_LARGE", message: "HISTORY_TOO_LARGE" } }));
     await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "rejected", error: { code: "PROTOCOL_UNSUPPORTED", message: "PROTOCOL_UNSUPPORTED" } }));
-    expect(screen.getByRole("heading", { name: "会话状态无法确认" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "正在同步会话，暂不可发送" })).toBeNull();
     expect(screen.getByRole("alert").textContent).toContain("历史分页");
   });
 
@@ -1273,7 +1282,7 @@ describe("Ariel app interactions", () => {
     expect(await screen.findByText("失败前已读到的历史")).toBeTruthy();
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
     expect(screen.getByText("失败前已读到的历史")).toBeTruthy();
-    expect(await screen.findByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(await screen.findByText(/历史只读.*响应超时/)).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("重试");
     fireEvent.change(screen.getByRole("textbox", { name: "发送消息" }), { target: { value: "do not send" } });
     expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
@@ -1297,13 +1306,14 @@ describe("Ariel app interactions", () => {
     await waitFor(() => expect(requests("thread.read")).toHaveLength(1));
 
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.subscribe")[0].requestId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
-    expect(screen.getByText("正在同步会话…")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "正在同步会话…" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy();
 
     const stored: Thread = { ...fixtureThread, runtime: "idle", turns: [{ turnId: "old", status: "completed", items: [{ itemId: "old-item", role: "assistant", text: "迟到但仍应展示的历史" }] }] };
     await act(async () => socket.message({ type: "response", v: 1, requestId: requests("thread.read")[0].requestId, outcome: "accepted", data: { thread: stored } }));
     expect(await screen.findByText("迟到但仍应展示的历史")).toBeTruthy();
     expect(screen.queryByText("正在同步会话…")).toBeNull();
-    expect(await screen.findByText(/历史只读.*Desktop 状态未确认/)).toBeTruthy();
+    expect(await screen.findByText(/历史只读.*响应超时/)).toBeTruthy();
     expect(screen.getByRole("alert").textContent).not.toContain("不要直接重发");
     expect(requests("thread.read")).toHaveLength(1);
     expect(requests("turn.start")).toHaveLength(0);
@@ -1626,8 +1636,8 @@ describe("Ariel app interactions", () => {
     expect(transcript.scrollTop).toBe(300);
     expect(conversationHead.classList.contains("history-collapsed")).toBe(false);
     expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(earlierScrollCalls);
-    const returnToLatest = screen.getByRole("button", { name: "回到最新" });
-    expect(returnToLatest.textContent).toBe("");
+    const returnToLatest = screen.getByRole("button", { name: "有新消息" });
+    expect(returnToLatest.textContent).toContain("有新消息");
     expect(returnToLatest.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     fireEvent.click(returnToLatest);
     expect(transcript.scrollTop).toBe(800);
@@ -1635,6 +1645,7 @@ describe("Ariel app interactions", () => {
     expect(conversationHead.dataset.historyCollapsed).toBe("false");
     expect(composerWrap.classList.contains("history-collapsed")).toBe(false);
     expect(composerWrap.dataset.historyCollapsed).toBe("false");
+    expect(screen.queryByRole("button", { name: "有新消息" })).toBeNull();
     expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
   });
 
@@ -1771,10 +1782,11 @@ describe("Ariel app interactions", () => {
     fireEvent.scroll(transcript);
     const stopped: Thread = { ...recent, runtime: "idle", turns: [{ ...recent.turns[0], status: "completed" }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 1, seq: 2, thread: stopped }));
-    expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
+    expect(screen.getByRole("button", { name: "回到最新" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "有新消息" })).toBeNull();
     const more: Thread = { ...stopped, turns: [...stopped.turns, { turnId: "next", status: "completed", items: [{ itemId: "new", role: "assistant", text: "new content" }] }] };
     act(() => socket.message({ type: "event", v: 1, event: "thread.update", deviceId: "mac", threadId: "fixture", subscriptionId: "sub", streamId: "stream", baseSeq: 2, seq: 3, thread: more }));
-    expect(screen.getByRole("button", { name: "回到最新" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "有新消息" })).toBeTruthy();
     expect(transcript.scrollTop).toBe(300);
   });
 

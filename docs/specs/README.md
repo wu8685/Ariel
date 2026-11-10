@@ -139,6 +139,7 @@
 | 0141 | [Puck 生产工具参数兼容与二进制一致性](0141-puck-production-tool-compatibility.md) | Implemented（2026-11-09；0.160.0 五项隔离预发通过） | 三个结构化工具的脱敏诊断、安全 alias 归一化、单次重试／友好降级，以及生产／预发 Codex binary 一致性门禁 |
 | 0138 | [Puck 持久授权规则与 ask 派发可靠性](0138-puck-persistent-authorization-rules.md) | Approved（2026-11-08；Turn 50） | `approve_always` 的 Bot+动作+主机+目录树规则、逐条撤销、可见自动执行记录、真实 Brain ask/full 门禁 |
 | 0145 | [Passkey 远程扫码登录](0145-passkey-remote-qr-login.md) | Implemented（2026-11-09；Go race／Web 434／Chromium virtual authenticator 已验；未部署） | 无 Passkey 的浏览器出示一次性挑战；已登录设备明确批准后，等待方获得普通会话 Cookie。不恢复 PIN 配对 |
+| 0146 | [经典会话就绪与 Puck 小组](0146-classic-session-readiness-and-puck-group.md) | Implemented（2026-11-10；相关单测通过，Darwin 截图基线待重拍） | 切换经典会话时先显示已有内容并在超时后自动重试；明显的回到最新；Puck 建组；活体头像光环；收起已处理授权卡 |
 
 ## 设计基线
 

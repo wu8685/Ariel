@@ -106,7 +106,7 @@ test("keeps read-only history when the owner sync times out", async ({ page }) =
   ws!.send(JSON.stringify({ type: "response", v: 1, requestId: pendingSubscribeId, outcome: "rejected", error: { code: "TIMEOUT", message: "TIMEOUT" } }));
 
   await expect(page.getByText("turn-stored-1")).toBeVisible();
-  await expect(page.getByText(/历史只读.*Desktop 状态未确认/)).toBeVisible();
+  await expect(page.getByText(/历史只读.*响应超时/)).toBeVisible();
   await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
 });
 
@@ -148,7 +148,7 @@ test("renders a late persisted history response after the owner sync times out",
 
   await expect(page.getByText("turn-stored-1")).toBeVisible();
   await expect(page.getByRole("heading", { name: "正在同步会话…" })).toHaveCount(0);
-  await expect(page.getByText(/历史只读.*Desktop 状态未确认/)).toBeVisible();
+  await expect(page.getByText(/历史只读.*响应超时/)).toBeVisible();
   await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
   await expect(page.getByRole("alert")).not.toContainText("不要直接重发");
 });

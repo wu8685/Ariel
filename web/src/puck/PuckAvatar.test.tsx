@@ -30,6 +30,17 @@ describe("PuckAvatar", () => {
     expect(expressionForState("done")).toBe("happy");
   });
 
+	it("keeps a live presence ring on animated avatars and hides it on static previews", () => {
+		const { container } = render(<PuckAvatar assistantId="assistant-a" name="小帕" animated/>);
+		expect(container.querySelector(".puck-avatar")?.getAttribute("data-live")).toBe("true");
+		expect(container.querySelector(".puck-avatar-presence")).toBeTruthy();
+		cleanup();
+		const preview = render(<PuckAvatar assistantId="assistant-a" name="小帕" animated={false}/>);
+		expect(preview.container.querySelector(".puck-avatar")?.getAttribute("data-live")).toBe("false");
+		expect(avatarStyle).toMatch(/\.puck-avatar\[data-live="false"\] \.puck-avatar-presence\s*\{[^}]*display:\s*none/s);
+		expect(avatarStyle).not.toMatch(/\.puck-avatar-presence\s*\{[^}]*animation:/s);
+	});
+
 	it("renders every shape with exactly two ears and no botanical or facial extras", () => {
 		const { container } = render(<>{avatarShapes.map(option => <PuckAvatar key={option.value} assistantId={option.value} name={option.label} design={{ shape: option.value, color: "#1db9aa" }} animated={false}/>)}</>);
 		const avatars = Array.from(container.querySelectorAll<HTMLElement>(".puck-avatar"));

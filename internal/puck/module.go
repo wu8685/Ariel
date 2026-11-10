@@ -49,12 +49,12 @@ type Module struct {
 }
 
 type pendingBrainTurn struct {
-	threadID, turnID, messageID, responseID string
-	startedAt                               time.Time
-	steps                                   int
-	toolFailures                            map[string]int
-	ack                                     bool
-	timer                                   *time.Timer
+	threadID, turnID, messageID, responseID, groupID string
+	startedAt                                        time.Time
+	steps                                            int
+	toolFailures                                     map[string]int
+	ack                                              bool
+	timer                                            *time.Timer
 }
 
 func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
@@ -184,6 +184,10 @@ func (m *Module) handleBrainDeliveryFailure(ctx context.Context, failure relay.B
 	message := Message{ID: newUUID(), AssistantID: failure.AssistantID, Role: "assistant", Kind: "error", Text: "助理事件队列繁忙，本次操作已停止，请重试。"}
 	if pending.responseID != "" {
 		message.ID = pending.responseID
+		if pending.groupID != "" {
+			_ = m.store.UpsertGroupMessage(ctx, GroupMessage{ID: message.ID, GroupID: pending.groupID, Role: "assistant", AuthorAssistantID: failure.AssistantID, Kind: "error", Text: message.Text, CreatedAt: pending.startedAt})
+			return
+		}
 		_ = m.store.UpsertMessage(ctx, message)
 		return
 	}
@@ -375,6 +379,10 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	// interrupt the turn and leave the tool call without contentItems.
 	pending := m.pendingTurn(event.AssistantID)
 	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == params.TurnID) {
+		if pending.groupID != "" {
+			_ = m.store.UpsertGroupMessage(ctx, GroupMessage{ID: pending.responseID, GroupID: pending.groupID, Role: "assistant", AuthorAssistantID: event.AssistantID, Kind: "processing", Text: text, CreatedAt: pending.startedAt})
+			return
+		}
 		kind := "processing"
 		if current, err := m.store.Message(ctx, event.AssistantID, pending.responseID); err == nil && current.Kind == "greeting_processing" {
 			kind = "greeting_processing"
@@ -396,7 +404,11 @@ func (m *Module) finishBrainTurn(ctx context.Context, assistantID, turnID string
 	pending := m.pendingTurn(assistantID)
 	text := ""
 	if pending.responseID != "" {
-		if current, err := m.store.Message(ctx, assistantID, pending.responseID); err == nil {
+		if pending.groupID != "" {
+			if current, err := m.store.GroupMessage(ctx, pending.groupID, pending.responseID); err == nil {
+				text = current.Text
+			}
+		} else if current, err := m.store.Message(ctx, assistantID, pending.responseID); err == nil {
 			text = current.Text
 		}
 	}
@@ -409,6 +421,13 @@ func (m *Module) finishBrainTurn(ctx context.Context, assistantID, turnID string
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
 	pending := m.clearPendingForTurn(assistantID, turnID)
 	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == turnID) {
+		if pending.groupID != "" {
+			if text == "" || text == "正在处理…" || text == "收到，我正在处理。" {
+				text = "完成。"
+			}
+			_ = m.store.UpsertGroupMessage(ctx, GroupMessage{ID: pending.responseID, GroupID: pending.groupID, Role: "assistant", AuthorAssistantID: assistantID, Kind: kind, Text: text, CreatedAt: pending.startedAt})
+			return
+		}
 		elapsed := m.now().Sub(pending.startedAt)
 		if elapsed < 0 {
 			elapsed = 0
@@ -642,6 +661,14 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.listAuthorizationRules(ctx, params)
 		case "puck.authorization.rule.revoke":
 			response = m.revokeAuthorizationRule(ctx, params)
+		case "puck.group.list":
+			response = m.groupList(ctx)
+		case "puck.group.create":
+			response = m.groupCreate(ctx, params)
+		case "puck.group.history":
+			response = m.groupHistory(ctx, params)
+		case "puck.group.message.send":
+			response = m.groupMessage(ctx, params)
 		default:
 			response = moduleError("UNSUPPORTED", "Puck method is not available in P0")
 		}
@@ -739,7 +766,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.interrupt", mustJSON(map[string]any{"threadId": a.BrainThreadID, "expectedTurnId": turnID}))
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	m.setPending(a, turnID, greetingID, greetingID, startedAt, false)
+	m.setPending(a, turnID, greetingID, greetingID, startedAt, false, "")
 	return accepted(map[string]any{"assistant": assistantData(a), "greeting": map[string]any{"state": "processing", "messageId": greetingID, "startedAt": startedAt.UTC()}})
 }
 
@@ -1000,10 +1027,8 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if previous.turnID != "" {
 		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.interrupt", mustJSON(map[string]any{"threadId": previous.threadID, "expectedTurnId": previous.turnID}))
 	}
-	if previous.responseID != "" {
-		if err := m.store.DeleteMessage(ctx, a.ID, previous.responseID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return moduleError("PUCK_UNAVAILABLE", err.Error())
-		}
+	if err := m.deletePendingResponse(ctx, a.ID, previous); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	cardJSON := ""
 	if len(input.Images) > 0 {
@@ -1039,7 +1064,7 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if err := m.store.AppendMessage(ctx, Message{ID: responseID, AssistantID: a.ID, Role: "assistant", Kind: "processing", Text: "正在处理…", WorkSummary: string(summary), BrainTurnID: turnID, CreatedAt: startedAt}); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	m.setPending(a, turnID, input.ClientMessageID, responseID, startedAt, true)
+	m.setPending(a, turnID, input.ClientMessageID, responseID, startedAt, true, "")
 	return accepted(map[string]any{"messageId": input.ClientMessageID, "responseId": responseID, "state": "processing", "startedAt": startedAt.UTC(), "templateAfterMs": 3000})
 }
 
@@ -1083,9 +1108,9 @@ func (m *Module) dispatchExplicitExecution(ctx context.Context, a Assistant, mes
 	return moduleError(result.Code, result.Message)
 }
 
-func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, startedAt time.Time, ack bool) {
+func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, startedAt time.Time, ack bool, groupID string) {
 	m.clearPending(a.ID)
-	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, startedAt: startedAt, toolFailures: map[string]int{}, ack: ack}
+	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, groupID: groupID, startedAt: startedAt, toolFailures: map[string]int{}, ack: ack}
 	if !ack {
 		m.pendingMu.Lock()
 		m.pending[a.ID] = pending
@@ -1101,6 +1126,10 @@ func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, s
 		}
 		m.pendingMu.Unlock()
 		if ok && current.messageID == messageID {
+			if current.groupID != "" {
+				_ = m.store.UpsertGroupMessage(context.Background(), GroupMessage{ID: responseID, GroupID: current.groupID, Role: "assistant", AuthorAssistantID: a.ID, Kind: "acknowledged", Text: "收到，我正在处理。", CreatedAt: startedAt})
+				return
+			}
 			summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
 			_ = m.store.UpsertMessage(context.Background(), Message{ID: responseID, AssistantID: a.ID, Role: "assistant", Kind: "acknowledged", Text: "收到，我正在处理。", WorkSummary: string(summary), BrainTurnID: turnID})
 		}
@@ -1108,6 +1137,22 @@ func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, s
 	m.pendingMu.Lock()
 	m.pending[a.ID] = pending
 	m.pendingMu.Unlock()
+}
+
+func (m *Module) deletePendingResponse(ctx context.Context, assistantID string, pending pendingBrainTurn) error {
+	if pending.responseID == "" {
+		return nil
+	}
+	var err error
+	if pending.groupID != "" {
+		err = m.store.DeleteGroupMessage(ctx, pending.groupID, pending.responseID)
+	} else {
+		err = m.store.DeleteMessage(ctx, assistantID, pending.responseID)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	return err
 }
 
 func (m *Module) clearPending(assistantID string) pendingBrainTurn {
@@ -1197,10 +1242,8 @@ func (m *Module) stop(ctx context.Context, raw json.RawMessage) relay.PuckRespon
 		return notFound()
 	}
 	brain := m.clearPending(a.ID)
-	if brain.responseID != "" {
-		if err := m.store.DeleteMessage(ctx, a.ID, brain.responseID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return moduleError("PUCK_UNAVAILABLE", err.Error())
-		}
+	if err := m.deletePendingResponse(ctx, a.ID, brain); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	results := make([]map[string]any, 0)
 	brainStopped := false
