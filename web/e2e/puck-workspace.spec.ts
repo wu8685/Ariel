@@ -242,7 +242,7 @@ for (const width of [320, 390, 1280]) {
       expect(listAvatarBox!.height).toBeGreaterThanOrEqual(42);
       expect(listAvatarBox!.height).toBeLessThanOrEqual(46);
       const listRowBox = await page.locator(".puck-assistant-row").first().boundingBox();
-      expect(listRowBox!.height).toBe(96);
+      expect(listRowBox!.height).toBe(64);
       await expect(page.locator(".puck-shape-option .puck-avatar").first()).toHaveCSS("width", "28px");
       await expect(page.locator(".puck-info .puck-avatar-large")).toHaveCSS("width", "96px");
       await expect(processingRow).toHaveScreenshot(`puck-processing-avatar-${width}.png`, { animations: "disabled", caret: "hide" });
@@ -500,7 +500,7 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 			}
 			if (width >= 700) {
 				await expect(page.locator(".puck-assistants")).toHaveCSS("width", "280px");
-				await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "96px");
+				await expect(page.locator(".puck-assistant-row").first()).toHaveCSS("height", "64px");
 			}
 			const gaps = await page.locator(".puck-message").evaluateAll(elements => ({
 				group: elements[1].getBoundingClientRect().top - elements[0].getBoundingClientRect().bottom,

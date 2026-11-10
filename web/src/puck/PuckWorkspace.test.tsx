@@ -870,12 +870,25 @@ describe("PuckWorkspace", () => {
 		fireEvent.change(screen.getByLabelText("分组名称"), { target: { value: "工作" } });
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
 		expect(await screen.findByRole("button", { name: "收起工作" })).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "重命名分组 工作" }));
+		expect(document.querySelector(".puck-assistant-row select")).toBeNull();
+		expect(screen.queryByRole("menuitem", { name: "移动到分组" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "重命名分组 工作" })).toBeNull();
+		fireEvent.contextMenu(screen.getByRole("button", { name: "收起工作" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
 		fireEvent.change(screen.getByLabelText("新的分组名称"), { target: { value: "工作机" } });
 		fireEvent.click(screen.getByRole("button", { name: "保存" }));
 		expect(await screen.findByRole("button", { name: "收起工作机" })).toBeTruthy();
-		fireEvent.change(screen.getByLabelText("移动 罗宾 到分组"), { target: { value: "section-1" } });
-		fireEvent.change(screen.getByLabelText("移动群聊 研究组 到分组"), { target: { value: "section-1" } });
+		const header = screen.getByRole("button", { name: "收起工作机" });
+		Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => header });
+		const hit = vi.spyOn(document, "elementFromPoint").mockReturnValue(header);
+		for (const name of [/罗宾/, /研究组/]) {
+			const row = screen.getByRole("button", { name });
+			fireEvent.pointerDown(row, { pointerId: 1, pointerType: "mouse", clientX: 20, clientY: 20, button: 0 });
+			await act(async () => { await new Promise(resolve => setTimeout(resolve, 460)); });
+			fireEvent.pointerMove(row, { pointerId: 1, clientX: 24, clientY: 40 });
+			fireEvent.pointerUp(row, { pointerId: 1, clientX: 24, clientY: 40 });
+		}
+		hit.mockRestore();
 		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.section.move", "relay", expect.objectContaining({ kind: "group", entryId: "group-1", sectionId: "section-1" })));
 		const section = screen.getByRole("button", { name: "收起工作机" }).closest("section");
 		expect(section?.textContent).toContain("罗宾");
@@ -885,7 +898,10 @@ describe("PuckWorkspace", () => {
 		expect(section?.querySelector(".puck-group-mark")).toBeNull();
 		expect(screen.getByLabelText("罗宾有 3 条未读消息").textContent).toBe("3");
 		expect(document.querySelector(".puck-conversation-title strong")?.textContent).toBe("小帕");
-		fireEvent.click(screen.getByRole("button", { name: "收起工作机" }));
+		const collapse = screen.getByRole("button", { name: "收起工作机" });
+		fireEvent.pointerDown(collapse, { pointerId: 9, button: 0, clientX: 8, clientY: 8 });
+		fireEvent.pointerUp(collapse, { pointerId: 9, button: 0, clientX: 8, clientY: 8 });
+		fireEvent.click(collapse);
 		await waitFor(() => expect(screen.queryByRole("button", { name: /罗宾/ })).toBeNull());
 		expect(screen.getByRole("button", { name: "展开工作机" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: /小帕/ })).toBeTruthy();
@@ -896,12 +912,76 @@ describe("PuckWorkspace", () => {
 		fireEvent.click(screen.getByRole("button", { name: "展开工作机" }));
 		expect(await screen.findByLabelText("罗宾有 3 条未读消息")).toBeTruthy();
 		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "删除分组 工作机" }));
+		fireEvent.contextMenu(screen.getByRole("button", { name: "收起工作机" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "删除分组" }));
 		expect(screen.getByText(/不会删除 Bot、群聊、会话或历史/)).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "确认删除分组 工作机" }));
 		expect(await screen.findByRole("button", { name: /罗宾/ })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "收起工作机" })).toBeNull();
 		expect(screen.getByRole("button", { name: /研究组/ })).toBeTruthy();
 		expect(request.mock.calls.some(call => call[0] === "puck.delete")).toBe(false);
+	});
+
+	it("long-presses then drags a bot into a section, and ignores a drop outside", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-10T02:00:00Z"));
+		const assistants = [
+			{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", lastActivityAt: "2026-11-10T01:57:00Z", lastMessagePreview: "刚刚" },
+			{ assistantId: "a-2", name: "罗宾", brainDeviceId: "brain-a", status: "ready", lastActivityAt: "2026-11-07T02:00:00Z", lastMessagePreview: "周六的结论" },
+		];
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants });
+			if (method === "puck.group.list") return accepted({ groups: [] });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.section.list") return accepted({ sections: [{ sectionId: "section-1", name: "工作机", collapsed: true }], placements: [], ungroupedCollapsed: false });
+			if (method === "puck.section.collapse") return accepted({ sections: [{ sectionId: "section-1", name: "工作机", collapsed: false }], placements: [], ungroupedCollapsed: false });
+			if (method === "puck.section.move") return accepted({ sections: [{ sectionId: "section-1", name: "工作机", collapsed: false }], placements: [{ kind: "assistant", entryId: params.entryId, sectionId: "section-1", position: 0 }], ungroupedCollapsed: false });
+			return accepted({});
+		});
+		Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null });
+		const hit = vi.spyOn(document, "elementFromPoint").mockReturnValue(null);
+		const frames: FrameRequestCallback[] = [];
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		const row = screen.getByRole("button", { name: /罗宾/ });
+		expect(row.textContent).toContain("星期六");
+		expect(screen.getByRole("button", { name: /小帕/ }).textContent).toContain("09:57");
+		expect(screen.queryByRole("menuitem", { name: "移动到分组" })).toBeNull();
+		fireEvent.pointerDown(row, { pointerId: 3, pointerType: "touch", clientX: 20, clientY: 20, button: 0 });
+		fireEvent.pointerMove(row, { pointerId: 3, pointerType: "touch", clientX: 40, clientY: 20 });
+		await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+		expect(document.querySelector(".puck-drag-ghost")).toBeNull();
+		fireEvent.pointerUp(row, { pointerId: 3, clientX: 40, clientY: 20 });
+		fireEvent.pointerDown(row, { pointerId: 4, pointerType: "touch", clientX: 20, clientY: 20, button: 0 });
+		await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+		expect(document.querySelector(".puck-drag-ghost")?.textContent).toBe("罗宾");
+		expect(row.className).toContain("lifting");
+		const list = document.querySelector<HTMLElement>(".puck-assistant-list");
+		expect(list).toBeTruthy();
+		list!.getBoundingClientRect = () => ({ top: 0, bottom: 400, left: 0, right: 280, width: 280, height: 400, x: 0, y: 0, toJSON() { return {}; } }) as DOMRect;
+		list!.scrollTop = 80;
+		fireEvent.pointerMove(row, { pointerId: 4, clientX: 30, clientY: 10 });
+		await act(async () => { frames.splice(0).forEach(callback => callback(0)); });
+		expect(list!.scrollTop).toBeLessThan(80);
+		hit.mockReturnValue(document.body);
+		fireEvent.pointerMove(row, { pointerId: 4, clientX: 20, clientY: 80 });
+		fireEvent.pointerUp(row, { pointerId: 4, clientX: 20, clientY: 80 });
+		expect(request.mock.calls.some(call => call[0] === "puck.section.move")).toBe(false);
+		hit.mockReturnValue(screen.getByRole("button", { name: "展开工作机" }));
+		fireEvent.pointerDown(row, { pointerId: 5, pointerType: "mouse", clientX: 20, clientY: 20, button: 0 });
+		await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+		fireEvent.pointerMove(row, { pointerId: 5, clientX: 20, clientY: 90 });
+		expect(screen.getByRole("button", { name: "展开工作机" }).closest("section")?.className).toContain("drop-target");
+		await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+		expect(request).toHaveBeenCalledWith("puck.section.collapse", "relay", { sectionId: "section-1", collapsed: false });
+		await act(async () => { fireEvent.pointerUp(row, { pointerId: 5, clientX: 20, clientY: 90 }); });
+		expect(request).toHaveBeenCalledWith("puck.section.move", "relay", expect.objectContaining({ kind: "assistant", entryId: "a-2", sectionId: "section-1" }));
+		expect(screen.getByRole("button", { name: "收起工作机" }).closest("section")?.textContent).toContain("罗宾");
+		hit.mockRestore();
 	});
 });

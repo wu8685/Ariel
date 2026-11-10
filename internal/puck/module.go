@@ -1474,7 +1474,11 @@ func (m *Module) syncBrainThreads(ctx context.Context) {
 }
 
 func assistantData(a Assistant) map[string]any {
-	return map[string]any{"assistantId": a.ID, "name": a.Name, "avatar": a.Avatar, "description": a.Description, "brainDeviceId": a.BrainDeviceID, "brainThreadId": a.BrainThreadID, "status": a.Status, "toolsetVersion": a.ToolsetVersion, "permissionMode": permissionMode(a), "unreadCount": a.UnreadCount, "lastMessagePreview": a.LastMessagePreview}
+	data := map[string]any{"assistantId": a.ID, "name": a.Name, "avatar": a.Avatar, "description": a.Description, "brainDeviceId": a.BrainDeviceID, "brainThreadId": a.BrainThreadID, "status": a.Status, "toolsetVersion": a.ToolsetVersion, "permissionMode": permissionMode(a), "unreadCount": a.UnreadCount, "lastMessagePreview": a.LastMessagePreview}
+	if !a.LastActivityAt.IsZero() {
+		data["lastActivityAt"] = a.LastActivityAt.UTC().Format(time.RFC3339Nano)
+	}
+	return data
 }
 
 func permissionMode(a Assistant) string {

@@ -77,7 +77,7 @@ func TestSidebarSectionsPersistWithoutDeletingEntries(t *testing.T) {
 		t.Fatalf("restored=%+v collapsed=%v", restored, listed.Data["ungroupedCollapsed"])
 	}
 	groups, err := reopened.store.Groups(ctx)
-	if err != nil || len(groups) != 1 || groups[0].LastMessagePreview != "一起看一下" {
+	if err != nil || len(groups) != 1 || groups[0].LastMessagePreview != "一起看一下" || groups[0].LastActivityAt.IsZero() {
 		t.Fatalf("groups=%+v err=%v", groups, err)
 	}
 	deleted := reopened.Handle(ctx, "puck.section.delete", mustJSON(map[string]any{"sectionId": sectionID}))

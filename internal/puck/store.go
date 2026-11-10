@@ -35,6 +35,7 @@ type Assistant struct {
 	ToolsetVersion                                                  int
 	UnreadCount                                                     int
 	LastMessagePreview                                              string
+	LastActivityAt                                                  time.Time
 }
 
 type Message struct {
@@ -301,7 +302,7 @@ func (s *Store) Assistant(ctx context.Context, id string) (Assistant, error) {
 }
 
 func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,COALESCE((SELECT created_at FROM conversation_messages WHERE assistant_id=assistants.id ORDER BY created_at DESC,rowid DESC LIMIT 1), updated_at) FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -309,9 +310,11 @@ func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
 	var out []Assistant
 	for rows.Next() {
 		var a Assistant
-		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview); err != nil {
+		var activity string
+		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview, &activity); err != nil {
 			return nil, err
 		}
+		a.LastActivityAt, _ = time.Parse(time.RFC3339Nano, activity)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -666,6 +669,7 @@ type Group struct {
 	Name               string        `json:"name"`
 	Members            []GroupMember `json:"members"`
 	LastMessagePreview string        `json:"lastMessagePreview,omitempty"`
+	LastActivityAt     time.Time     `json:"lastActivityAt,omitempty"`
 }
 
 type GroupMember struct {
@@ -731,12 +735,15 @@ func (s *Store) Groups(ctx context.Context) ([]Group, error) {
 			return nil, err
 		}
 		groups[index].Members = members
-		var preview string
-		err = s.db.QueryRowContext(ctx, `SELECT text FROM group_messages WHERE group_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1`, groups[index].ID).Scan(&preview)
+		var preview, created string
+		err = s.db.QueryRowContext(ctx, `SELECT text, created_at FROM group_messages WHERE group_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1`, groups[index].ID).Scan(&preview, &created)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
 		groups[index].LastMessagePreview = previewText(preview)
+		if created != "" {
+			groups[index].LastActivityAt, _ = time.Parse(time.RFC3339Nano, created)
+		}
 	}
 	return groups, nil
 }

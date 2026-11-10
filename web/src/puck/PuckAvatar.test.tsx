@@ -45,7 +45,7 @@ describe("PuckAvatar", () => {
 		expect(avatarStyle).not.toMatch(/puck-avatar-presence/);
 		expect(avatarStyle).toMatch(/--puck-avatar-row:\s*44px/);
 		expect(avatarStyle).toMatch(/--puck-avatar-gap:\s*17px/);
-		expect(avatarStyle).toMatch(/--puck-row-height:\s*96px/);
+		expect(avatarStyle).toMatch(/--puck-row-height:\s*64px/);
 		expect(avatarStyle).toMatch(/--puck-sidebar-width:\s*280px/);
 		expect(avatarStyle).toMatch(/\.puck-assistant-row\s*\{[^}]*min-height:\s*var\(--puck-row-height\)/s);
 		for (const avatar of avatars) {
