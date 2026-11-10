@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { avatarColors, avatarShapes, canonicalShape, deriveAvatar, expressionForState, nearestAvatarColor, PuckAvatar } from "./PuckAvatar";
+import { tracedAvatarMetrics, tracedCloudOnSmallCell } from "./tracedAvatars";
 import { resetAvatarMotionSchedulerForTests } from "./PuckAvatarScheduler";
 import avatarSource from "./PuckAvatar.tsx?raw";
 const avatarStyle = readFileSync("src/puck/puck.css", "utf8");
@@ -60,22 +61,35 @@ describe("PuckAvatar", () => {
 		expect(container.querySelector(".puck-avatar-body")).toBeNull();
 	});
 
-	it("renders two slanted dark capsule eyes directly on one moving face", () => {
-		const { container } = render(<PuckAvatar assistantId="assistant-eyes" name="眼睛测试" animated={false}/>);
-		const face = container.querySelector(".puck-avatar-face");
-		const eyes = Array.from(face?.querySelectorAll(".puck-avatar-eye-shape") || []);
-		expect(eyes).toHaveLength(2);
-		expect(eyes.every(eye => eye.tagName.toLowerCase() === "rect")).toBe(true);
-		expect(face?.querySelector(".puck-avatar-eyes")?.getAttribute("transform")).toContain("rotate(-18");
-		expect(eyes.map(eye => [eye.getAttribute("width"), eye.getAttribute("height"), eye.getAttribute("rx")])).toEqual([
-			["7", "14", "3.5"],
-			["7", "14", "3.5"],
-		]);
-		expect(Number(eyes[0].getAttribute("y"))).toBeLessThan(47);
-		expect(Number(eyes[1].getAttribute("x")) - Number(eyes[0].getAttribute("x"))).toBe(10);
-		expect(face?.querySelector("ellipse")).toBeNull();
-		expect(container.querySelector(".puck-avatar-eye-white, .puck-avatar-pupil, clipPath")).toBeNull();
-		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();
+	it("records exact hard-mask overlap for every traced picker shape", () => {
+		expect(tracedAvatarMetrics.map(item => item.name)).toEqual(avatarShapes.map(option => option.value));
+		for (const item of tracedAvatarMetrics) {
+			expect(item.blueIou).toBeGreaterThanOrEqual(0.98);
+			expect(item.edgePx).toBeLessThanOrEqual(1);
+		}
+		expect(tracedCloudOnSmallCell.blueIou).toBeLessThan(0.98);
+	});
+
+	it("traces a separate eye pair for each picker shape and keeps the gray ring off the normal avatar", () => {
+		const { container } = render(<>
+			<PuckAvatar assistantId="assistant-blob" name="团块" design={{ shape: "blob", color: "blue", colorHex: "#3c82f6" }} animated={false}/>
+			<PuckAvatar assistantId="assistant-square" name="方形" design={{ shape: "square", color: "blue", colorHex: "#3c82f6" }} animated={false}/>
+			<PuckAvatar assistantId="assistant-pebble" name="卵石" design={{ shape: "pebble", color: "blue", colorHex: "#3c82f6" }} animated={false}/>
+		</>);
+		const faces = Array.from(container.querySelectorAll(".puck-avatar-face"));
+		const blobEyes = Array.from(faces[0].querySelectorAll(".puck-avatar-eye-shape"));
+		const squareEyes = Array.from(faces[1].querySelectorAll(".puck-avatar-eye-shape"));
+		expect(blobEyes).toHaveLength(2);
+		expect(squareEyes).toHaveLength(2);
+		expect(blobEyes.every(eye => eye.tagName.toLowerCase() === "path")).toBe(true);
+		expect(blobEyes[0].getAttribute("d")).not.toBe(squareEyes[0].getAttribute("d"));
+		expect(blobEyes[0].getAttribute("d")).not.toBe(blobEyes[1].getAttribute("d"));
+		expect(faces[2].querySelectorAll("rect.puck-avatar-eye-shape")).toHaveLength(2);
+		expect(container.querySelector(".puck-avatar-presence")).toBeNull();
+		expect(avatarStyle).toMatch(/\.puck-avatar-select-ring \{ display: none;/);
+		expect(avatarStyle).toMatch(/\.puck-shape-option\.selected \.puck-avatar-select-ring \{ display: inline; \}/);
+		expect(avatarStyle).toMatch(/stroke: #656569/);
+		expect(avatarStyle).not.toMatch(/puck-avatar-presence/);
 	});
 
 	it("keeps the body and face in one moving head group", () => {

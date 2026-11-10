@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import { registerAvatarMotion, restPoseForKey, type AvatarPose, type BlinkPhase } from "./PuckAvatarScheduler";
+import { tracedAvatars } from "./tracedAvatars";
 
 export type AvatarShape = "blob" | "pebble" | "bean" | "egg" | "squircle" | "tablet" | "capsule" | "cylinder" | "hex" | "gem" | "crystal" | "wedge" | "shield" | "dome" | "arch" | "cloud" | "teardrop" | "leaf" | "square" | "sparkle" | "clover" | "flower" | "heart" | "house" | "star";
 export type AvatarColor = "black" | "white" | "brown" | "red" | "orange" | "yellow" | "green" | "cyan" | "blue" | "violet" | "magenta" | "gray";
@@ -152,7 +153,20 @@ export const avatarShapePaths: Record<AvatarShape, string> = {
 };
 
 function shapePath(shape: AvatarShape): ReactNode {
-  return <path d={avatarShapePaths[shape]} />;
+  const traced = tracedAvatars[shape];
+  if (!traced) return <path d={avatarShapePaths[shape]} />;
+  return <><path className="puck-avatar-select-ring" d={traced.ring} /><path d={traced.body} /></>;
+}
+
+function shapeEyes(shape: AvatarShape): ReactNode {
+  const traced = tracedAvatars[shape];
+  if (!traced) {
+    return <g className="puck-avatar-eyes" transform="translate(10 -8) rotate(-18 44 42)">
+      <g className="puck-avatar-eye puck-avatar-eye-left"><rect className="puck-avatar-eye-shape" x="34" y="38" width="7" height="14" rx="3.5"/></g>
+      <g className="puck-avatar-eye puck-avatar-eye-right"><rect className="puck-avatar-eye-shape" x="44" y="38" width="7" height="14" rx="3.5"/></g>
+    </g>;
+  }
+  return <>{traced.eyes.map((d, index) => <g className={`puck-avatar-eye puck-avatar-eye-${index === 0 ? "left" : "right"}`} key={index}><path className="puck-avatar-eye-shape" d={d} /></g>)}</>;
 }
 
 export function PuckAvatar({ assistantId, name, state = "idle", design, size = "medium", attention = false, animated = true }: { assistantId: string; name: string; state?: PuckState; design?: AvatarDesign; size?: "small" | "medium" | "large"; attention?: boolean; animated?: boolean }) {
@@ -270,12 +284,7 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     {avatar.image ? <img className="puck-avatar-photo" src={avatar.image} alt="" /> : <span className="puck-avatar-motion"><svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
       <g className="puck-avatar-head">
       <g className="puck-avatar-body">{shapePath(avatar.shape)}</g>
-      <g className="puck-avatar-face">
-        <g className="puck-avatar-eyes" transform="translate(10 -8) rotate(-18 44 42)">
-          <g className="puck-avatar-eye puck-avatar-eye-left"><rect className="puck-avatar-eye-shape" x="34" y="38" width="7" height="14" rx="3.5"/></g>
-          <g className="puck-avatar-eye puck-avatar-eye-right"><rect className="puck-avatar-eye-shape" x="44" y="38" width="7" height="14" rx="3.5"/></g>
-        </g>
-      </g>
+      <g className="puck-avatar-face">{shapeEyes(avatar.shape)}</g>
       </g>
     </svg></span>}
     <span className="puck-avatar-sparkles" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <i className="puck-avatar-sparkle" key={index}/>)}</span>

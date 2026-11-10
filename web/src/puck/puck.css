@@ -1056,7 +1056,9 @@
   background: transparent;
 }
 .puck-workspace .puck-shape-option:hover { background: var(--puck-hover); }
-.puck-workspace .puck-shape-option.selected { background: var(--puck-selected); box-shadow: 0 0 0 var(--puck-ring) #fff inset; }
+.puck-workspace .puck-shape-option.selected { background: transparent; box-shadow: none; }
+.puck-workspace .puck-avatar-select-ring { display: none; fill: none; stroke: #656569; stroke-width: 9; stroke-linejoin: round; }
+.puck-workspace .puck-shape-option.selected .puck-avatar-select-ring { display: inline; }
 .puck-workspace .puck-shape-option .puck-avatar {
   width: var(--puck-avatar-picker);
   height: var(--puck-avatar-picker);
