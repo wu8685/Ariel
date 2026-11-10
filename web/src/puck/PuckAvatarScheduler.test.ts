@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { avatarShapes, eyeCentersForShape } from "./PuckAvatar";
 import {
   getAvatarMotionSchedulerDebug,
+  horizontalEyeCenters,
   motionDirections,
   motionLoops,
   poseForDirection,
@@ -9,6 +11,8 @@ import {
   restPoseForKey,
   resetAvatarMotionSchedulerForTests,
   type AvatarMotionTarget,
+  type AvatarPose,
+  type EyeCenter,
 } from "./PuckAvatarScheduler";
 
 afterEach(() => {
@@ -21,6 +25,24 @@ function target(): AvatarMotionTarget {
   return { setBlinkPhase: vi.fn(), setPose: vi.fn() };
 }
 
+function gazeCloserEyeIsRight(eyes: readonly [EyeCenter, EyeCenter], gazeX: number, gazeY: number, rotationDeg: number) {
+  const radians = rotationDeg * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = eyes[1].x - eyes[0].x;
+  const dy = eyes[1].y - eyes[0].y;
+  return (dx * cos - dy * sin) * gazeX + (dx * sin + dy * cos) * gazeY > 0;
+}
+
+function expectNearerEyeNarrower(pose: AvatarPose, eyes: readonly [EyeCenter, EyeCenter], gazeX: number, gazeY: number, nearScaleX: number, nearScaleY: number) {
+  const rightNearer = gazeCloserEyeIsRight(eyes, gazeX, gazeY, pose.headRotate + pose.faceRotate);
+  expect(pose.leftEyeScaleX).toBe(rightNearer ? 1 : nearScaleX);
+  expect(pose.rightEyeScaleX).toBe(rightNearer ? nearScaleX : 1);
+  expect(pose.leftEyeScaleY).toBe(rightNearer ? 1 : nearScaleY);
+  expect(pose.rightEyeScaleY).toBe(rightNearer ? nearScaleY : 1);
+  expect(Math.min(pose.leftEyeScaleX, pose.rightEyeScaleX)).toBeLessThan(Math.max(pose.leftEyeScaleX, pose.rightEyeScaleX));
+}
+
 describe("Puck avatar global motion scheduler", () => {
   it("derives a stable angled rest face and eight larger directional head turns with near-eye perspective", () => {
     expect(restPoseForKey("indy")).toEqual(restPoseForKey("indy"));
@@ -28,8 +50,7 @@ describe("Puck avatar global motion scheduler", () => {
     expect(Math.abs(rest.faceRotate)).toBeGreaterThanOrEqual(20);
     expect(Math.abs(rest.faceRotate)).toBeLessThanOrEqual(30);
     expect(Math.min(rest.leftEyeScaleX, rest.rightEyeScaleX)).toBeLessThan(1);
-    if (rest.faceX < 0) expect(rest.leftEyeScaleX).toBeLessThan(rest.rightEyeScaleX);
-    if (rest.faceX > 0) expect(rest.rightEyeScaleX).toBeLessThan(rest.leftEyeScaleX);
+    expectNearerEyeNarrower(rest, horizontalEyeCenters, Math.sign(rest.faceX), Math.sign(rest.faceY), .72, .86);
 
     expect(motionDirections.filter(direction => direction.name !== "rest")).toHaveLength(8);
     for (const direction of motionDirections.filter(direction => direction.name !== "rest")) {
@@ -47,21 +68,47 @@ describe("Puck avatar global motion scheduler", () => {
       expect(pose.eyeRoundness).toBeLessThanOrEqual(2);
       expect(pose.motionDuration).toBeGreaterThanOrEqual(600);
       expect(pose.motionDuration).toBeLessThanOrEqual(800);
-      if (direction.x < 0) {
-        expect(pose.leftEyeScaleX).toBeLessThan(pose.rightEyeScaleX);
-        expect(pose.leftEyeScaleY).toBeLessThan(pose.rightEyeScaleY);
-      }
-      if (direction.x > 0) {
-        expect(pose.rightEyeScaleX).toBeLessThan(pose.leftEyeScaleX);
-        expect(pose.rightEyeScaleY).toBeLessThan(pose.leftEyeScaleY);
-      }
-      if (direction.x === 0) {
-        expect(pose.leftEyeScaleX).toBe(pose.rightEyeScaleX);
-        expect(pose.leftEyeScaleY).toBe(pose.rightEyeScaleY);
-      }
+      expectNearerEyeNarrower(pose, horizontalEyeCenters, direction.x, direction.y, .55, .78);
     }
     expect(rest.motionDuration).toBeGreaterThanOrEqual(700);
     expect(rest.motionDuration).toBeLessThanOrEqual(900);
+  });
+
+  it("narrows the eye closer to the gaze after head and face rotation for every shape", () => {
+    const tilted = { ...restPoseForKey("indy"), faceRotate: -24 };
+    const flower = eyeCentersForShape("flower");
+    const upLeft = poseForDirection(motionDirections.find(direction => direction.name === "up-left")!, tilted, flower);
+    expect(upLeft.headRotate + upLeft.faceRotate).toBe(-56);
+    expect(upLeft.rightEyeScaleX).toBe(.55);
+    expect(upLeft.leftEyeScaleX).toBe(1);
+    expect(upLeft.rightEyeScaleY).toBe(.78);
+    expect(upLeft.leftEyeScaleY).toBe(1);
+    const up = poseForDirection(motionDirections.find(direction => direction.name === "up")!, tilted, flower);
+    expect(up.rightEyeScaleX).toBe(.55);
+    expect(up.leftEyeScaleX).toBe(1);
+    const down = poseForDirection(motionDirections.find(direction => direction.name === "down")!, tilted, flower);
+    expect(down.leftEyeScaleX).toBe(.55);
+    expect(down.rightEyeScaleX).toBe(1);
+    const left = poseForDirection(motionDirections.find(direction => direction.name === "left")!, tilted, flower);
+    expect(left.leftEyeScaleX).toBe(.55);
+    expect(left.rightEyeScaleX).toBe(1);
+
+    for (const shape of [...avatarShapes.map(option => option.value), "pebble"]) {
+      const eyes = eyeCentersForShape(shape);
+      for (const faceRotate of [-24, 24]) {
+        const rest = { ...tilted, faceRotate };
+        for (const direction of motionDirections.filter(item => item.name !== "rest")) {
+          expectNearerEyeNarrower(poseForDirection(direction, rest, eyes), eyes, direction.x, direction.y, .55, .78);
+        }
+      }
+    }
+
+    const resting = restPoseForKey("bot-12", flower);
+    expect(resting.faceX).toBeLessThan(0);
+    expect(resting.faceY).toBeLessThan(0);
+    expect(resting.rightEyeScaleX).toBe(.72);
+    expect(resting.leftEyeScaleX).toBe(1);
+    expectNearerEyeNarrower(resting, flower, Math.sign(resting.faceX), Math.sign(resting.faceY), .72, .86);
   });
 
   it("defines horizontal and vertical orbit loops that sweep every side without returning to center", () => {
