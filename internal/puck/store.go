@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 6
+const storeSchemaVersion = 7
 
 type Store struct {
 	db       *sql.DB
@@ -35,6 +35,7 @@ type Assistant struct {
 	ToolsetVersion                                                  int
 	UnreadCount                                                     int
 	LastMessagePreview                                              string
+	LastActivityAt                                                  time.Time
 }
 
 type Message struct {
@@ -211,6 +212,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE INDEX IF NOT EXISTS group_messages_group_at ON group_messages(group_id, created_at)`,
 		)
 	}
+	if version < 7 {
+		statements = append(statements,
+			`CREATE TABLE IF NOT EXISTS sidebar_sections (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, collapsed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`,
+			`CREATE TABLE IF NOT EXISTS sidebar_placements (
+            kind TEXT NOT NULL, entry_id TEXT NOT NULL, section_id TEXT NOT NULL DEFAULT '', position INTEGER NOT NULL, PRIMARY KEY (kind, entry_id))`,
+			`CREATE INDEX IF NOT EXISTS sidebar_placements_section ON sidebar_placements(section_id, position)`,
+			`CREATE TABLE IF NOT EXISTS sidebar_state (
+            id TEXT PRIMARY KEY, collapsed INTEGER NOT NULL DEFAULT 0)`,
+		)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
@@ -290,7 +302,7 @@ func (s *Store) Assistant(ctx context.Context, id string) (Assistant, error) {
 }
 
 func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,COALESCE((SELECT created_at FROM conversation_messages WHERE assistant_id=assistants.id ORDER BY created_at DESC,rowid DESC LIMIT 1), updated_at) FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -298,9 +310,11 @@ func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
 	var out []Assistant
 	for rows.Next() {
 		var a Assistant
-		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview); err != nil {
+		var activity string
+		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview, &activity); err != nil {
 			return nil, err
 		}
+		a.LastActivityAt, _ = time.Parse(time.RFC3339Nano, activity)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -383,6 +397,9 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM authorization_rules WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sidebar_placements WHERE kind='assistant' AND entry_id=?`, assistantID); err != nil {
 		return err
 	}
 	return s.changed(tx.Commit())
@@ -648,9 +665,11 @@ func (s *Store) Audit(ctx context.Context, entry AuditEntry) error {
 }
 
 type Group struct {
-	ID      string        `json:"groupId"`
-	Name    string        `json:"name"`
-	Members []GroupMember `json:"members"`
+	ID                 string        `json:"groupId"`
+	Name               string        `json:"name"`
+	Members            []GroupMember `json:"members"`
+	LastMessagePreview string        `json:"lastMessagePreview,omitempty"`
+	LastActivityAt     time.Time     `json:"lastActivityAt,omitempty"`
 }
 
 type GroupMember struct {
@@ -716,8 +735,26 @@ func (s *Store) Groups(ctx context.Context) ([]Group, error) {
 			return nil, err
 		}
 		groups[index].Members = members
+		var preview, created string
+		err = s.db.QueryRowContext(ctx, `SELECT text, created_at FROM group_messages WHERE group_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1`, groups[index].ID).Scan(&preview, &created)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		groups[index].LastMessagePreview = previewText(preview)
+		if created != "" {
+			groups[index].LastActivityAt, _ = time.Parse(time.RFC3339Nano, created)
+		}
 	}
 	return groups, nil
+}
+
+func previewText(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) > 80 {
+		return string(runes[:80])
+	}
+	return value
 }
 
 func (s *Store) Group(ctx context.Context, groupID string) (Group, error) {
@@ -806,4 +843,168 @@ func (s *Store) GroupMessages(ctx context.Context, groupID string) ([]GroupMessa
 		messages = append(messages, message)
 	}
 	return messages, rows.Err()
+}
+
+type SidebarSection struct {
+	ID        string `json:"sectionId"`
+	Name      string `json:"name"`
+	Position  int    `json:"position"`
+	Collapsed bool   `json:"collapsed"`
+}
+
+type SidebarPlacement struct {
+	Kind      string `json:"kind"`
+	EntryID   string `json:"entryId"`
+	SectionID string `json:"sectionId"`
+	Position  int    `json:"position"`
+}
+
+type SidebarView struct {
+	Sections           []SidebarSection   `json:"sections"`
+	Placements         []SidebarPlacement `json:"placements"`
+	UngroupedCollapsed bool               `json:"ungroupedCollapsed"`
+}
+
+func (s *Store) Sidebar(ctx context.Context) (SidebarView, error) {
+	view := SidebarView{Sections: []SidebarSection{}, Placements: []SidebarPlacement{}}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,position,collapsed FROM sidebar_sections ORDER BY position,id`)
+	if err != nil {
+		return view, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var section SidebarSection
+		var collapsed int
+		if err := rows.Scan(&section.ID, &section.Name, &section.Position, &collapsed); err != nil {
+			return view, err
+		}
+		section.Collapsed = collapsed != 0
+		view.Sections = append(view.Sections, section)
+	}
+	if err := rows.Err(); err != nil {
+		return view, err
+	}
+	rows.Close()
+	placements, err := s.db.QueryContext(ctx, `SELECT kind,entry_id,section_id,position FROM sidebar_placements ORDER BY position,entry_id`)
+	if err != nil {
+		return view, err
+	}
+	defer placements.Close()
+	for placements.Next() {
+		var placement SidebarPlacement
+		if err := placements.Scan(&placement.Kind, &placement.EntryID, &placement.SectionID, &placement.Position); err != nil {
+			return view, err
+		}
+		view.Placements = append(view.Placements, placement)
+	}
+	if err := placements.Err(); err != nil {
+		return view, err
+	}
+	var collapsed int
+	err = s.db.QueryRowContext(ctx, `SELECT collapsed FROM sidebar_state WHERE id='ungrouped'`).Scan(&collapsed)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return view, err
+	}
+	view.UngroupedCollapsed = collapsed != 0
+	return view, nil
+}
+
+func (s *Store) CreateSidebarSection(ctx context.Context, name string) (SidebarSection, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SidebarSection{}, err
+	}
+	defer tx.Rollback()
+	var count, position int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(MAX(position), -1) FROM sidebar_sections`).Scan(&count, &position); err != nil {
+		return SidebarSection{}, err
+	}
+	if count >= 20 {
+		return SidebarSection{}, ErrAssistantLimitReached
+	}
+	section := SidebarSection{ID: randomID("section"), Name: name, Position: position + 1}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sidebar_sections(id,name,position,collapsed,created_at) VALUES(?,?,?,0,?)`, section.ID, section.Name, section.Position, nowText(time.Time{})); err != nil {
+		return SidebarSection{}, err
+	}
+	return section, s.changed(tx.Commit())
+}
+
+func (s *Store) RenameSidebarSection(ctx context.Context, sectionID, name string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE sidebar_sections SET name=? WHERE id=?`, name, sectionID)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return sql.ErrNoRows
+	}
+	s.markChanged()
+	return nil
+}
+
+func (s *Store) DeleteSidebarSection(ctx context.Context, sectionID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM sidebar_sections WHERE id=?`, sectionID)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sidebar_placements SET section_id='' WHERE section_id=?`, sectionID); err != nil {
+		return err
+	}
+	return s.changed(tx.Commit())
+}
+
+func (s *Store) CollapseSidebar(ctx context.Context, sectionID string, collapsed bool) error {
+	flag := 0
+	if collapsed {
+		flag = 1
+	}
+	if sectionID == "" {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO sidebar_state(id,collapsed) VALUES('ungrouped',?) ON CONFLICT(id) DO UPDATE SET collapsed=excluded.collapsed`, flag)
+		return s.changed(err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE sidebar_sections SET collapsed=? WHERE id=?`, flag, sectionID)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return sql.ErrNoRows
+	}
+	s.markChanged()
+	return nil
+}
+
+func (s *Store) MoveSidebarEntry(ctx context.Context, kind, entryID, sectionID string, position int) error {
+	if kind != "assistant" && kind != "group" {
+		return errors.New("invalid sidebar entry")
+	}
+	if sectionID != "" {
+		var exists int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sidebar_sections WHERE id=?`, sectionID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists != 1 {
+			return sql.ErrNoRows
+		}
+	}
+	var exists int
+	query := `SELECT COUNT(*) FROM groups WHERE id=? AND deleted_at IS NULL`
+	if kind == "assistant" {
+		query = `SELECT COUNT(*) FROM assistants WHERE id=? AND deleted_at IS NULL`
+	}
+	if err := s.db.QueryRowContext(ctx, query, entryID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists != 1 {
+		return sql.ErrNoRows
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sidebar_placements(kind,entry_id,section_id,position) VALUES(?,?,?,?)
+		ON CONFLICT(kind,entry_id) DO UPDATE SET section_id=excluded.section_id, position=excluded.position`, kind, entryID, sectionID, position)
+	return s.changed(err)
 }

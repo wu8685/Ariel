@@ -1,19 +1,23 @@
-import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { readScreenshotFiles, type ScreenshotDraft } from "../screenshots";
 import { useImeEnterGuard } from "../ime-enter";
-import { avatarColors, avatarShapes, deriveAvatar, PuckAvatar, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
+import { avatarColorHex, avatarColors, avatarImage, avatarShapes, canonicalShape, deriveAvatar, nearestAvatarColor, PuckAvatar, type AvatarColor, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
 import "./puck.css";
 
 type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: { code?: string; message?: string } };
 type Request = (method: string, target: string, params: Record<string, unknown>) => Promise<PuckResponse>;
 type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
-type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string };
+type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string; lastActivityAt?: string };
 type AuthorizationRule = { id: string; assistantId: string; actionType: string; deviceId: string; cwd: string; createdAt: string };
 type Message = { id: string; assistantId?: string; authorAssistantId?: string; authorName?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string; replyTo?: string };
-type PuckGroup = { groupId: string; name: string; members: Array<{ assistantId: string; name: string }> };
+type PuckGroup = { groupId: string; name: string; members: Array<{ assistantId: string; name: string }>; lastMessagePreview?: string; lastActivityAt?: string };
+type SidebarMenu = { x: number; y: number; kind: "section"; id: string; name: string };
+type RowDrag = { kind: "assistant" | "group"; id: string; name: string; x: number; y: number; target: string | null };
+type SidebarSection = { sectionId: string; name: string; collapsed?: boolean };
+type Placement = { kind: "assistant" | "group"; entryId: string; sectionId?: string; position: number };
 const reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 const lastAssistantStorageKey = "ariel.puck.lastAssistantId.v1";
 const latestScrollThreshold = 48;
@@ -137,7 +141,13 @@ function mergeHistory(current: Message[], durable: Message[]): Message[] {
   return [...durable, ...pending];
 }
 function avatarDesign(assistant: Assistant): AvatarDesign {
-  try { const value = JSON.parse(assistant.avatar || "") as AvatarDesign; if (value.shape && value.color) return value; } catch { /* deterministic fallback */ }
+  try {
+    const value = JSON.parse(assistant.avatar || "") as { shape?: string; color?: string; image?: unknown };
+    if (value.shape && value.color) {
+      const color = nearestAvatarColor(value.color);
+      return { shape: canonicalShape(value.shape), color, colorHex: /^#/.test(value.color) ? avatarColorHex(value.color) : avatarColorHex(color), image: avatarImage(value.image) };
+    }
+  } catch { /* deterministic fallback */ }
   return deriveAvatar(assistant.assistantId);
 }
 function moveRadio(event: KeyboardEvent<HTMLButtonElement>, values: readonly string[], current: string, select: (value: string) => void) {
@@ -298,6 +308,38 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
   }
   return null;
 }
+function stackSlots(count: number): Array<{ x: number; y: number; size: number }> {
+  if (count <= 1) return [{ x: 0, y: 0, size: 1 }];
+  if (count === 2) return [{ x: 0, y: 0, size: 2 / 3 }, { x: 1 / 3, y: 1 / 3, size: 2 / 3 }];
+  const size = 5 / 9;
+  const rest = 1 - size;
+  if (count === 3) return [{ x: rest / 2, y: 0, size }, { x: 0, y: rest, size }, { x: rest, y: rest, size }];
+  return [{ x: 0, y: 0, size }, { x: rest, y: 0, size }, { x: 0, y: rest, size }, { x: rest, y: rest, size }];
+}
+function GroupCluster({ group, assistants }: { group: PuckGroup; assistants: Assistant[] }) {
+  const overflow = group.members.length > 4 ? group.members.length - 3 : 0;
+  const shown = group.members.slice(0, overflow ? 3 : Math.min(4, group.members.length));
+  const slots = stackSlots(shown.length + (overflow ? 1 : 0));
+  return <span className="puck-group-cluster" aria-hidden="true">{shown.map((member, index) => {
+    const slot = slots[index];
+    const assistant = assistants.find(item => item.assistantId === member.assistantId);
+    return <span className="puck-group-slot" key={member.assistantId} style={{ left: `${slot.x * 100}%`, top: `${slot.y * 100}%`, width: `${slot.size * 100}%`, height: `${slot.size * 100}%`, zIndex: index + 1 }}><PuckAvatar assistantId={member.assistantId} name={member.name} design={avatarDesign(assistant || { assistantId: member.assistantId, name: member.name, brainDeviceId: "", status: "ready" })} size="small" animated={false}/></span>;
+  })}{overflow > 0 && <span className="puck-group-overflow" style={{ left: `${slots[3].x * 100}%`, top: `${slots[3].y * 100}%`, width: `${slots[3].size * 100}%`, height: `${slots[3].size * 100}%` }}>+{overflow}</span>}</span>;
+}
+function sidebarTime(value: string | undefined, now = Date.now()): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const zone = "Asia/Shanghai";
+  const dayKey = (instant: number) => new Date(instant).toLocaleDateString("en-CA", { timeZone: zone });
+  if (dayKey(date.getTime()) === dayKey(now)) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: zone });
+  const elapsedDays = (new Date(`${dayKey(now)}T00:00:00+08:00`).getTime() - new Date(`${dayKey(date.getTime())}T00:00:00+08:00`).getTime()) / 86400000;
+  if (elapsedDays >= 0 && elapsedDays < 7) return date.toLocaleDateString("zh-CN", { weekday: "long", timeZone: zone });
+  return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", timeZone: zone });
+}
+function SectionChevron({ collapsed }: { collapsed: boolean }) {
+  return <svg className={`puck-section-chevron${collapsed ? " collapsed" : ""}`} viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 4.2 6 8l3.8-3.8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+}
 function archivedAuthorization(message: Message, now = Date.now()): boolean {
   if (message.kind !== "authorization") return false;
   const data = cardData(message);
@@ -312,6 +354,20 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const composerIme = useImeEnterGuard();
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [groups, setGroups] = useState<PuckGroup[]>([]);
+  const [sections, setSections] = useState<SidebarSection[]>([]);
+  const [placements, setPlacements] = useState<Placement[]>([]);
+  const [ungroupedCollapsed, setUngroupedCollapsed] = useState(false);
+  const [creatingSection, setCreatingSection] = useState(false);
+  const [sectionName, setSectionName] = useState("");
+  const [renamingSection, setRenamingSection] = useState<SidebarSection>();
+  const [renameDraft, setRenameDraft] = useState("");
+  const [deletingSection, setDeletingSection] = useState<SidebarSection>();
+  const [sidebarMenu, setSidebarMenu] = useState<SidebarMenu>();
+  const [rowDrag, setRowDrag] = useState<RowDrag>();
+  const sidebarPress = useRef<{ timer?: number; x: number; y: number }>(undefined);
+  const dragRef = useRef<RowDrag | null>(null);
+  const suppressRowClick = useRef(false);
+  const expandDragTarget = useRef<string | null>(null);
   const [activeGroup, setActiveGroup] = useState<PuckGroup | null>(null);
   const [groupMessages, setGroupMessages] = useState<Message[]>([]);
   const [creatingGroup, setCreatingGroup] = useState(false);
@@ -427,6 +483,17 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	return () => window.clearInterval(timer);
   }, [messages]);
 
+  function applySections(data?: Record<string, unknown>) {
+    setSections(arrayData<SidebarSection>(data?.sections).flatMap(item => item?.sectionId ? [{ sectionId: String(item.sectionId), name: String(item.name || "分组"), collapsed: item.collapsed === true }] : []));
+    setPlacements(arrayData<Placement>(data?.placements).flatMap(item => item?.entryId && (item.kind === "assistant" || item.kind === "group") ? [{ kind: item.kind, entryId: String(item.entryId), sectionId: String(item.sectionId || ""), position: Number(item.position) || 0 }] : []));
+    setUngroupedCollapsed(data?.ungroupedCollapsed === true);
+  }
+  async function mutateSections(method: string, params: Record<string, unknown>) {
+    const response = await request(method, "relay", params);
+    if (response.outcome !== "accepted") { setNotice(responseError(response)); return false; }
+    applySections(response.data);
+    return true;
+  }
   async function loadList() {
     const sequence = ++listSequence.current;
     const response = await request("puck.list", "relay", {});
@@ -438,6 +505,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       setGroups(nextGroups);
       setActiveGroup(current => current ? nextGroups.find(group => group.groupId === current.groupId) || null : current);
     }
+    const sectionResponse = await request("puck.section.list", "relay", {});
+    if (sequence === listSequence.current && sectionResponse.outcome === "accepted") applySections(sectionResponse.data);
     const next = arrayData<Assistant>(response.data?.assistants);
     const reportedLimit = Number(response.data?.maxActiveAssistants);
     if (Number.isInteger(reportedLimit) && reportedLimit > 0) setMaxActiveAssistants(reportedLimit);
@@ -543,7 +612,29 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       setGroupMessages(current => current.map(item => item.id.startsWith(`${clientMessageId}-`) ? { ...item, kind: "error", text: responseError(response) } : item));
       return;
     }
-    setGroupMessages(arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage));
+    const nextMessages = arrayData<Record<string, unknown>>(response.data?.messages).map(normalizeMessage);
+    setGroupMessages(nextMessages);
+    const preview = [...nextMessages].reverse().find(item => item.text.trim())?.text || "";
+    if (preview) setGroups(current => current.map(item => item.groupId === groupID ? { ...item, lastMessagePreview: preview } : item));
+  }
+  async function createSection() {
+    const name = sectionName.trim();
+    if (!name) return;
+    if (await mutateSections("puck.section.create", { name })) { setCreatingSection(false); setSectionName(""); }
+  }
+  async function renameSection() {
+    if (!renamingSection) return;
+    const name = renameDraft.trim();
+    if (!name) return;
+    if (await mutateSections("puck.section.rename", { sectionId: renamingSection.sectionId, name })) setRenamingSection(undefined);
+  }
+  async function removeSection() {
+    if (!deletingSection) return;
+    if (await mutateSections("puck.section.delete", { sectionId: deletingSection.sectionId })) setDeletingSection(undefined);
+  }
+  function moveEntry(kind: "assistant" | "group", entryId: string, sectionId: string) {
+    const position = placements.filter(item => (item.sectionId || "") === sectionId).reduce((max, item) => Math.max(max, item.position), -1) + 1;
+    void mutateSections("puck.section.move", { kind, entryId, sectionId, position });
   }
   async function createAssistant() {
     if (maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants) { setNotice(`最多可创建 ${maxActiveAssistants} 个 Bot。`); return; }
@@ -656,15 +747,16 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		} else setNotice(responseError(response));
 		setSubmittingCard("__none__");
 	}
-	async function updateAvatar(shape: AvatarShape, color: string) {
+	async function updateAvatar(shape: AvatarShape, color: AvatarColor) {
 		if (!selected) return;
 		const currentDesign = avatarDesign(selected);
 		if (currentDesign.shape === shape && currentDesign.color === color) return;
 		const previousAvatar = selected.avatar;
-		const optimistic = { ...selected, avatar: JSON.stringify({ shape, color }) };
+		const nextAvatar = { shape, color, ...(currentDesign.image ? { image: currentDesign.image } : {}) };
+		const optimistic = { ...selected, avatar: JSON.stringify(nextAvatar) };
 		const sequence = ++avatarUpdateSequence.current;
 		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? optimistic : item));
-		const response = await request("puck.update", "relay", { assistantId: selected.assistantId, avatar: { shape, color } });
+		const response = await request("puck.update", "relay", { assistantId: selected.assistantId, avatar: nextAvatar });
 		if (sequence !== avatarUpdateSequence.current) return;
 		if (response.outcome !== "accepted") {
 			setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? { ...item, avatar: previousAvatar } : item));
@@ -733,7 +825,44 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (!faviconOriginal.current) faviconOriginal.current = { href:link.getAttribute("href") || "", type:link.getAttribute("type") || "" };
 		return () => { const original=faviconOriginal.current; if (original) { link.href=original.href; link.type=original.type; } };
 	}, []);
-	useEffect(() => () => { cancelReactionLongPress(); if (highlightTimer.current !== undefined) window.clearTimeout(highlightTimer.current); }, []);
+	useEffect(() => () => { cancelReactionLongPress(); if (highlightTimer.current !== undefined) window.clearTimeout(highlightTimer.current); if (sidebarPress.current?.timer) window.clearTimeout(sidebarPress.current.timer); }, []);
+	useEffect(() => {
+		if (!sidebarMenu) return;
+		const close = (event: PointerEvent) => {
+			const target = event.target as Element | null;
+			if (target?.closest(".puck-context-menu")) return;
+			setSidebarMenu(undefined);
+		};
+		const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setSidebarMenu(undefined); };
+		window.addEventListener("pointerdown", close);
+		window.addEventListener("keydown", onKey);
+		return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", onKey); };
+	}, [sidebarMenu]);
+	useEffect(() => {
+		if (!rowDrag) return;
+		let frame = 0;
+		const tick = () => {
+			const list = document.querySelector<HTMLElement>(".puck-assistant-list");
+			const current = dragRef.current;
+			if (list && current) {
+				const box = list.getBoundingClientRect();
+				if (current.y < box.top + 36) list.scrollTop -= 12;
+				else if (current.y > box.bottom - 36) list.scrollTop += 12;
+			}
+			frame = window.requestAnimationFrame(tick);
+		};
+		frame = window.requestAnimationFrame(tick);
+		return () => window.cancelAnimationFrame(frame);
+	}, [Boolean(rowDrag)]);
+	useEffect(() => {
+		if (!rowDrag || rowDrag.target === null || expandDragTarget.current === rowDrag.target) return;
+		const target = rowDrag.target;
+		const collapsed = target === "" ? ungroupedCollapsed : sections.some(section => section.sectionId === target && section.collapsed);
+		if (!collapsed) return;
+		expandDragTarget.current = target;
+		const timer = window.setTimeout(() => { void mutateSections("puck.section.collapse", target ? { sectionId: target, collapsed: false } : { collapsed: false }); }, 400);
+		return () => window.clearTimeout(timer);
+	}, [rowDrag?.target, sections, ungroupedCollapsed]);
 	useEffect(() => {
 		if (!selected || navigator.userAgent.includes("jsdom")) return;
 		let cancelled=false; const svg=document.querySelector<SVGSVGElement>(".puck-conversation > header .puck-avatar svg"); if (!svg) return;
@@ -749,15 +878,110 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   </main>;
 
   const statusLabel = puckState === "waiting_user" ? "等你回复" : puckState === "awaiting_authorization" ? "等待授权" : puckState === "working" || puckState === "thinking" ? "思考中" : puckState === "error" ? "出错" : "可用";
+  function sidebarItems(sectionId: string): Placement[] {
+    const explicit = placements.filter(item => (item.sectionId || "") === sectionId).slice().sort((left, right) => left.position - right.position || left.entryId.localeCompare(right.entryId));
+    const seen = new Set(placements.map(item => `${item.kind}:${item.entryId}`));
+    const items = explicit.filter(item => item.kind === "group" ? groups.some(group => group.groupId === item.entryId) : assistants.some(assistant => assistant.assistantId === item.entryId));
+    if (sectionId === "") {
+      for (const group of groups) if (!seen.has(`group:${group.groupId}`)) items.push({ kind: "group", entryId: group.groupId, sectionId: "", position: items.length });
+      for (const assistant of assistants) if (!seen.has(`assistant:${assistant.assistantId}`)) items.push({ kind: "assistant", entryId: assistant.assistantId, sectionId: "", position: items.length });
+    }
+    return items;
+  }
+  function openSidebarMenu(point: { clientX: number; clientY: number }, menu: Omit<SidebarMenu, "x" | "y">) {
+    const x = Math.max(8, Math.min(point.clientX, window.innerWidth - 180));
+    const y = Math.max(8, Math.min(point.clientY, window.innerHeight - 120));
+    setSidebarMenu({ ...menu, x, y });
+  }
+  function sectionUnder(x: number, y: number): string | null {
+    if (typeof document.elementFromPoint !== "function") return null;
+    const hit = document.elementFromPoint(x, y);
+    const section = hit?.closest<HTMLElement>("[data-section-id]");
+    if (!section) return null;
+    return section.dataset.sectionId === "ungrouped" ? "" : section.dataset.sectionId || "";
+  }
+  function beginSidebarPress(event: ReactPointerEvent, action: "drag" | "menu", menu: { kind: "assistant" | "group" | "section"; id: string; name: string }) {
+    if (event.button !== 0) return;
+    suppressRowClick.current = false;
+    const element = event.currentTarget as HTMLElement;
+    const pointerId = event.pointerId;
+    const point = { clientX: event.clientX, clientY: event.clientY };
+    window.clearTimeout(sidebarPress.current?.timer);
+    const timer = window.setTimeout(() => {
+      suppressRowClick.current = true;
+      if (action === "menu") { openSidebarMenu(point, { kind: "section", id: menu.id, name: menu.name }); return; }
+      try { element.setPointerCapture(pointerId); } catch { /* jsdom has no pointer capture */ }
+      const next: RowDrag = { kind: menu.kind === "group" ? "group" : "assistant", id: menu.id, name: menu.name, x: point.clientX, y: point.clientY, target: sectionUnder(point.clientX, point.clientY) };
+      dragRef.current = next;
+      setRowDrag(next);
+    }, 450);
+    sidebarPress.current = { timer, x: point.clientX, y: point.clientY };
+  }
+  function trackSidebarPress(event: ReactPointerEvent) {
+    const drag = dragRef.current;
+    if (drag) {
+      const next = { ...drag, x: event.clientX, y: event.clientY, target: sectionUnder(event.clientX, event.clientY) };
+      dragRef.current = next;
+      setRowDrag(next);
+      return;
+    }
+    const press = sidebarPress.current;
+    if (!press) return;
+    if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) {
+      window.clearTimeout(press.timer);
+      sidebarPress.current = undefined;
+    }
+  }
+  function finishSidebarPress() {
+    if (sidebarPress.current?.timer) window.clearTimeout(sidebarPress.current.timer);
+    sidebarPress.current = undefined;
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    expandDragTarget.current = null;
+    setRowDrag(undefined);
+    if (drag.target === null) return;
+    const current = placements.find(item => item.kind === drag.kind && item.entryId === drag.id)?.sectionId || "";
+    if (drag.target === current) return;
+    moveEntry(drag.kind, drag.id, drag.target);
+  }
+  function rowHandlers(menu: { kind: "assistant" | "group"; id: string; name: string }, activate: () => void) {
+    return {
+      onClick: () => { if (suppressRowClick.current) { suppressRowClick.current = false; return; } activate(); },
+      onPointerDown: (event: ReactPointerEvent) => beginSidebarPress(event, "drag", menu),
+      onPointerMove: trackSidebarPress,
+      onPointerUp: finishSidebarPress,
+      onPointerCancel: finishSidebarPress,
+    };
+  }
+  function renderSidebarEntry(item: Placement) {
+    if (item.kind === "group") {
+      const group = groups.find(entry => entry.groupId === item.entryId);
+      if (!group) return null;
+      const when = sidebarTime(group.lastActivityAt);
+      return <button className={`puck-assistant-row${activeGroup?.groupId === group.groupId ? " active" : ""}${rowDrag?.kind === "group" && rowDrag.id === group.groupId ? " lifting" : ""}`} type="button" key={`group:${group.groupId}`} {...rowHandlers({ kind: "group", id: group.groupId, name: group.name }, () => selectGroup(group))}><GroupCluster group={group} assistants={assistants}/><span className="puck-assistant-copy"><span className="puck-assistant-title"><strong>{group.name}</strong>{when && <time dateTime={group.lastActivityAt}>{when}</time>}</span><span className="puck-assistant-preview"><small>{group.lastMessagePreview || group.members.map(member => member.name).join("、")}</small></span></span></button>;
+    }
+    const assistant = assistants.find(entry => entry.assistantId === item.entryId);
+    if (!assistant) return null;
+    const when = sidebarTime(assistant.lastActivityAt);
+    const preview = assistant.assistantId === selectedID && messages.at(-1)?.text || assistant.lastMessagePreview || (assistant.status === "ready" ? "在线" : "准备中");
+    return <button className={`puck-assistant-row${!activeGroup && assistant.assistantId === selectedID ? " active" : ""}${rowDrag?.kind === "assistant" && rowDrag.id === assistant.assistantId ? " lifting" : ""}`} type="button" key={assistant.assistantId} {...rowHandlers({ kind: "assistant", id: assistant.assistantId, name: assistant.name }, () => { selectAssistant(assistant.assistantId); setMobilePanel(""); })}><PuckAvatar assistantId={assistant.assistantId} name={assistant.name} design={avatarDesign(assistant)} state={assistant.assistantId === selectedID ? puckState : "idle"} size="small" attention={Boolean(assistant.unreadCount) || assistant.assistantId === selectedID && ["waiting_user", "awaiting_authorization", "error"].includes(puckState)}/><span className="puck-assistant-copy"><span className="puck-assistant-title"><strong>{assistant.name}</strong>{when && <time dateTime={assistant.lastActivityAt}>{when}</time>}</span><span className="puck-assistant-preview"><small>{preview}</small>{Boolean(assistant.unreadCount) && <span className={assistant.unreadCount === 1 ? "puck-unread-dot" : "puck-unread-count"} aria-label={`${assistant.name}有 ${assistant.unreadCount} 条未读消息`}>{assistant.unreadCount === 1 ? "" : Math.min(99, assistant.unreadCount || 0)}</span>}</span></span></button>;
+  }
+  function renderSidebarSection(sectionId: string, name: string, collapsed: boolean) {
+    const headerMenu = sectionId ? {
+      onContextMenu: (event: ReactMouseEvent) => { event.preventDefault(); openSidebarMenu(event, { kind: "section", id: sectionId, name }); },
+      onPointerDown: (event: ReactPointerEvent) => beginSidebarPress(event, "menu", { kind: "section", id: sectionId, name }),
+      onPointerMove: trackSidebarPress,
+      onPointerUp: finishSidebarPress,
+      onPointerCancel: finishSidebarPress,
+    } : {};
+    return <section className={`puck-section${rowDrag && rowDrag.target === sectionId ? " drop-target" : ""}`} data-section-id={sectionId || "ungrouped"} key={sectionId || "ungrouped"}><div className="puck-section-header" {...headerMenu}><button className="puck-section-toggle" type="button" aria-expanded={!collapsed} aria-label={collapsed ? `展开${name}` : `收起${name}`} onClick={() => { if (suppressRowClick.current) { suppressRowClick.current = false; return; } void mutateSections("puck.section.collapse", sectionId ? { sectionId, collapsed: !collapsed } : { collapsed: !collapsed }); }}><span>{name}</span><SectionChevron collapsed={collapsed}/></button></div>{!collapsed && sidebarItems(sectionId).map(renderSidebarEntry)}</section>;
+  }
   return <main className="puck-workspace">
     {mobilePanel && <button className="puck-panel-backdrop" aria-label="关闭面板" onClick={()=>setMobilePanel("")}/>}
     <aside className={`puck-assistants ${mobilePanel === "assistants" ? "mobile-open" : ""}`}>
-      <header><b>Puck</b><span className="puck-assistant-capacity" aria-label={maxActiveAssistants === undefined ? `助理数量 ${assistants.length}` : `助理数量 ${assistants.length}/${maxActiveAssistants}`}>{assistants.length}{maxActiveAssistants === undefined ? "" : ` / ${maxActiveAssistants}`}</span><button className="puck-group-create" type="button" aria-label="建组聊天" disabled={assistants.length < 2} onClick={() => { setGroupName(""); setGroupMemberIDs([]); setCreatingGroup(true); }}>建组</button><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理" disabled={maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants}>＋</button></header>
-      <div className="puck-assistant-list">{groups.map(group => <button className={`puck-assistant-row${activeGroup?.groupId === group.groupId ? " active" : ""}`} key={group.groupId} onClick={() => selectGroup(group)}><span className="puck-group-mark" aria-hidden="true">组</span><span className="puck-assistant-copy"><strong>{group.name}</strong><small>{group.members.map(member => member.name).join("、")}</small></span></button>)}{assistants.map(item => <button className={`puck-assistant-row${!activeGroup && item.assistantId === selectedID ? " active" : ""}`} key={item.assistantId} onClick={() => { selectAssistant(item.assistantId); setMobilePanel(""); }}>
-        <PuckAvatar assistantId={item.assistantId} name={item.name} design={avatarDesign(item)} state={item.assistantId === selectedID ? puckState : "idle"} size="small" attention={Boolean(item.unreadCount) || item.assistantId === selectedID && ["waiting_user","awaiting_authorization","error"].includes(puckState)}/>
-        <span className="puck-assistant-copy"><strong>{item.name}</strong><small>{item.assistantId === selectedID && messages.at(-1)?.text || item.lastMessagePreview || (item.status === "ready" ? "在线" : "准备中")}</small></span>
-        {Boolean(item.unreadCount) && <span className="puck-unread-count" aria-label={`${item.name}有 ${item.unreadCount} 条未读消息`}>{Math.min(99,item.unreadCount || 0)}</span>}
-      </button>)}</div>
+      <header><b>Puck</b><span className="puck-assistant-capacity" aria-label={maxActiveAssistants === undefined ? `助理数量 ${assistants.length}` : `助理数量 ${assistants.length}/${maxActiveAssistants}`}>{assistants.length}{maxActiveAssistants === undefined ? "" : ` / ${maxActiveAssistants}`}</span><button className="puck-group-create" type="button" aria-label="建组聊天" disabled={assistants.length < 2} onClick={() => { setGroupName(""); setGroupMemberIDs([]); setCreatingGroup(true); }}>建组</button><button className="puck-group-create" type="button" aria-label="新建分组" onClick={() => { setSectionName(""); setCreatingSection(true); }}>分组</button><button className="puck-icon-btn puck-add" type="button" onClick={() => setCreating(true)} aria-label="新建助理" disabled={maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants}>＋</button></header>
+      <div className="puck-assistant-list">{sections.map(section => renderSidebarSection(section.sectionId, section.name, section.collapsed === true))}{renderSidebarSection("", "未分组", ungroupedCollapsed)}</div>
       <button className="puck-back" type="button" onClick={onBack}><span aria-hidden="true">←</span> Codex 会话</button>
     </aside>
 
@@ -807,15 +1031,15 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </article>;
       })}</PuckConversationErrorBoundary>}</div>
       {notice && <div className="puck-notice" role="alert">{notice}<button className="puck-btn" onClick={() => setNotice("")}>关闭</button></div>}
-      {(selected || activeGroup) && <footer ref={composerFooterRef}><div className="puck-composer-shell">{!activeGroup && replyTarget && <div className="puck-reply-preview" aria-label={`正在回复${replyAuthor(replyTarget).possessive}消息`}><span aria-hidden="true" className="puck-reply-preview-mark"/><div><strong>{replyAuthor(replyTarget).short}</strong><span>{messageSummary(replyTarget)}</span></div><button type="button" aria-label="取消回复" onClick={()=>setReplyTarget(undefined)}>×</button></div>}{!activeGroup && screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected || assistants[0] || { assistantId: "group", name: activeGroup?.name || "组" }).color,"--puck-send-foreground":avatarForeground(avatarDesign(selected || assistants[0] || { assistantId: "group", name: activeGroup?.name || "组" }).color)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()} disabled={!!activeGroup}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onCompositionStart={composerIme.compositionStart} onCompositionEnd={composerIme.compositionEnd} onBlur={composerIme.blur} onKeyDown={event => { if (composerIme.classify(event) === "submit") { event.preventDefault(); void send(); } }} placeholder={activeGroup ? "给小组发消息…" : "说说你想做什么…"}/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={activeGroup ? !draft.trim() : !draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
+      {(selected || activeGroup) && <footer ref={composerFooterRef}><div className="puck-composer-shell">{!activeGroup && replyTarget && <div className="puck-reply-preview" aria-label={`正在回复${replyAuthor(replyTarget).possessive}消息`}><span aria-hidden="true" className="puck-reply-preview-mark"/><div><strong>{replyAuthor(replyTarget).short}</strong><span>{messageSummary(replyTarget)}</span></div><button type="button" aria-label="取消回复" onClick={()=>setReplyTarget(undefined)}>×</button></div>}{!activeGroup && screenshots.length > 0 && <div className="puck-screenshot-drafts" aria-label="待发送截图">{screenshots.map((image,index)=><div className="puck-screenshot-draft" key={`${image.name}:${index}`}><img src={image.dataUri} alt={image.name}/><button type="button" aria-label={`移除截图：${image.name}`} onClick={()=>setScreenshots(current=>current.filter((_,position)=>position!==index))}>×</button></div>)}</div>}<div className="puck-composer" style={{"--puck-avatar-color":avatarDesign(selected || assistants[0] || { assistantId: "group", name: activeGroup?.name || "组", brainDeviceId: "", status: "ready" }).colorHex,"--puck-send-foreground":avatarForeground(avatarDesign(selected || assistants[0] || { assistantId: "group", name: activeGroup?.name || "组", brainDeviceId: "", status: "ready" }).colorHex)} as CSSProperties}><input ref={screenshotInputRef} className="puck-screenshot-file" type="file" aria-label="附加截图" accept="image/png,image/jpeg" multiple onChange={event=>void addScreenshots(event.target.files)}/><button className="puck-attach puck-icon-btn" type="button" aria-label="选择截图" onClick={()=>screenshotInputRef.current?.click()} disabled={!!activeGroup}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button><textarea rows={1} aria-label="给 Puck 发消息" value={draft} onChange={event => setDraft(event.target.value)} onCompositionStart={composerIme.compositionStart} onCompositionEnd={composerIme.compositionEnd} onBlur={composerIme.blur} onKeyDown={event => { if (composerIme.classify(event) === "submit") { event.preventDefault(); void send(); } }} placeholder={activeGroup ? "给小组发消息…" : "说说你想做什么…"}/><button className="primary puck-send puck-icon-btn" type="button" aria-label="发送" onClick={() => void send()} disabled={activeGroup ? !draft.trim() : !draft.trim() && screenshots.length === 0}><svg className="puck-send-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg></button></div></div></footer>}
     </section>
 
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>
       <header><h3>助理信息</h3></header>
       {activeGroup ? <div className="puck-info-content"><section className="puck-info-details"><h4>小组成员</h4><ul className="puck-group-members">{activeGroup.members.map(member => <li key={member.assistantId}><PuckAvatar assistantId={member.assistantId} name={member.name} design={avatarDesign(assistants.find(item => item.assistantId === member.assistantId) || { assistantId: member.assistantId, name: member.name, brainDeviceId: "", status: "ready" })} size="small"/><span>{member.name}</span></li>)}</ul><p>每位成员会用自己的大脑简短回复。这会打断该成员正在进行的一对一回合。</p></section></div> : selected ? <div className="puck-info-content">
         <div className="puck-avatar-editor"><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/><strong>{selected.name}</strong>{editingDescription ? <div className="puck-description-editor"><textarea aria-label="助理说明" maxLength={512} value={descriptionDraft} onChange={event=>setDescriptionDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={()=>{setEditingDescription(false);setDescriptionDraft(selected.description || "");}}>取消</button><button className="puck-btn primary" type="button" aria-label="保存说明" onClick={()=>void saveDescription()}>保存</button></div></div> : <><p>{selected.description || "尚未添加说明"}</p><button className="puck-description-edit" type="button" aria-label="编辑说明" onClick={()=>{setDescriptionDraft(selected.description || "");setEditingDescription(true);}}>编辑说明</button></>}</div>
-        <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color}} size="small" animated={false}/></button>; })}</div></div>
-          <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.value} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value))}><span aria-hidden="true"/></button>; })}</div></div>
+        <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color,colorHex:avatarDesign(selected).colorHex}} size="small" animated={false}/></button>; })}</div></div>
+          <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.hex} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value as AvatarColor))}><span aria-hidden="true"/></button>; })}</div></div>
         </div>
 		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
 		<section className="puck-authorization-rules"><h4>以后都允许</h4>{authorizationRules.length === 0 ? <p>尚未保存规则</p> : <ul>{authorizationRules.map(rule=><li key={rule.id}><div><strong>{rule.actionType}</strong><span>{rule.deviceId}</span><code>{rule.cwd}</code><time dateTime={rule.createdAt}>{new Date(rule.createdAt).toLocaleString("zh-CN")}</time></div><button className="puck-btn" type="button" aria-label={`撤销规则 ${rule.actionType} ${rule.cwd}`} onClick={()=>void revokeAuthorizationRule(rule.id)}>撤销</button></li>)}</ul>}</section>
@@ -823,8 +1047,13 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}
     </aside>
 
+    {creatingSection && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); void createSection(); }}><h2>新建分组</h2><label>分组名称<input aria-label="分组名称" value={sectionName} onChange={event => setSectionName(event.target.value)} maxLength={24} autoFocus/></label><p className="puck-dialog-note">分组只整理侧边栏。未放入分组的 Bot 和群聊留在「未分组」。</p><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreatingSection(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" disabled={!sectionName.trim()}>创建</button></div></form></div>}
+    {renamingSection && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); void renameSection(); }}><h2>重命名分组</h2><label>分组名称<input aria-label="新的分组名称" value={renameDraft} onChange={event => setRenameDraft(event.target.value)} maxLength={24} autoFocus/></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setRenamingSection(undefined)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" disabled={!renameDraft.trim()}>保存</button></div></form></div>}
+    {deletingSection && <div className="puck-dialog-backdrop" role="presentation"><section className="puck-dialog" role="dialog" aria-modal="true" aria-labelledby="puck-section-delete-title"><h2 id="puck-section-delete-title">删除分组</h2><p>删除“{deletingSection.name}”只会把里面的 Bot 和群聊移回「未分组」。</p><p className="puck-dialog-note">不会删除 Bot、群聊、会话或历史。</p><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setDeletingSection(undefined)}>取消</button><button className="puck-btn puck-btn-md danger" type="button" aria-label={`确认删除分组 ${deletingSection.name}`} onClick={() => void removeSection()}>删除</button></div></section></div>}
     {creatingGroup && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); if (!createIme.blocksFormSubmit()) void createGroup(); }}><h2>建组聊天</h2><label>组名<input aria-label="组名" value={groupName} onChange={event => setGroupName(event.target.value)} maxLength={40} autoFocus/></label><fieldset className="puck-group-members"><legend>选择成员</legend>{assistants.map(item => <label key={item.assistantId}><input type="checkbox" checked={groupMemberIDs.includes(item.assistantId)} onChange={event => setGroupMemberIDs(current => event.target.checked ? [...current, item.assistantId] : current.filter(id => id !== item.assistantId))}/>{item.name}</label>)}</fieldset><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreatingGroup(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" disabled={!groupName.trim() || groupMemberIDs.length < 2}>创建</button></div></form></div>}
     {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); if (!createIme.blocksFormSubmit()) void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} onCompositionStart={createIme.compositionStart} onCompositionEnd={createIme.compositionEnd} onBlur={createIme.blur} onKeyDown={event=>{createIme.classify(event);}} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreating(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" onPointerDown={createIme.allowExplicitFormSubmit}>创建</button></div></form></div>}
+		{rowDrag && <div className="puck-drag-ghost" aria-hidden="true" style={{ left: rowDrag.x, top: rowDrag.y }}>{rowDrag.name}</div>}
+		{sidebarMenu?.kind === "section" && <div className="puck-context-menu" role="menu" aria-label={`${sidebarMenu.name}分组菜单`} style={{ left: sidebarMenu.x, top: sidebarMenu.y }}><button type="button" role="menuitem" onClick={() => { setRenamingSection({ sectionId: sidebarMenu.id, name: sidebarMenu.name }); setRenameDraft(sidebarMenu.name); setSidebarMenu(undefined); }}>重命名</button><button type="button" role="menuitem" onClick={() => { setDeletingSection({ sectionId: sidebarMenu.id, name: sidebarMenu.name }); setSidebarMenu(undefined); }}>删除分组</button></div>}
 		{deleteTarget && <div className="puck-dialog-backdrop" role="presentation"><section className="puck-dialog puck-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="puck-delete-title"><h2 id="puck-delete-title">删除 Bot</h2><p>将删除“{deleteTarget.name}”，停止该 Bot 的后台大脑，历史不再显示。</p><p className="puck-dialog-note">已派发的 Codex 任务不会被强制停止，仍可在 Ariel 会话中继续查看。</p><div><button className="puck-btn puck-btn-md" type="button" disabled={deleting} onClick={()=>setDeleteTarget(undefined)}>取消</button><button className="puck-btn puck-btn-md danger" type="button" aria-label={`确认删除${deleteTarget.name}`} disabled={deleting} onClick={()=>void deleteAssistant()}>{deleting ? "正在删除…" : "删除"}</button></div></section></div>}
   </main>;
 }
