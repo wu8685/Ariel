@@ -1,9 +1,11 @@
-import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { readScreenshotFiles, type ScreenshotDraft } from "../screenshots";
 import { useImeEnterGuard } from "../ime-enter";
-import { avatarColorHex, avatarColors, avatarImage, avatarShapes, canonicalShape, deriveAvatar, nearestAvatarColor, PuckAvatar, type AvatarColor, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
+import { readAvatarImageFile } from "./avatarImageFile";
+import { avatarColorHex, avatarImage, canonicalShape, deriveAvatar, nearestAvatarColor, PuckAvatar, type AvatarColor, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
+import { PuckAvatarSheet } from "./PuckAvatarSheet";
 import "./puck.css";
 
 type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: { code?: string; message?: string } };
@@ -149,19 +151,6 @@ function avatarDesign(assistant: Assistant): AvatarDesign {
     }
   } catch { /* deterministic fallback */ }
   return deriveAvatar(assistant.assistantId);
-}
-function moveRadio(event: ReactKeyboardEvent<HTMLButtonElement>, values: readonly string[], current: string, select: (value: string) => void) {
-	let index = values.indexOf(current);
-	if (["ArrowRight", "ArrowDown"].includes(event.key)) index = (index + 1) % values.length;
-	else if (["ArrowLeft", "ArrowUp"].includes(event.key)) index = (index - 1 + values.length) % values.length;
-	else if (event.key === "Home") index = 0;
-	else if (event.key === "End") index = values.length - 1;
-	else return;
-	event.preventDefault();
-	const next = values[index];
-	const group = event.currentTarget.parentElement;
-	select(next);
-	window.requestAnimationFrame(() => group?.querySelector<HTMLButtonElement>(`[data-avatar-choice="${next}"]`)?.focus());
 }
 function messageState(messages: Message[]): PuckState {
   const latest = [...messages].reverse();
@@ -407,6 +396,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const highlightTimer = useRef<number | undefined>(undefined);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [avatarSheetOpen, setAvatarSheetOpen] = useState(false);
   const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
 
   useEffect(() => {
@@ -747,24 +737,46 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		} else setNotice(responseError(response));
 		setSubmittingCard("__none__");
 	}
-	async function updateAvatar(shape: AvatarShape, color: AvatarColor) {
-		if (!selected) return;
+	async function updateAvatar(shape: AvatarShape, color: AvatarColor, image?: string | null) {
+		if (!selected) return false;
 		const currentDesign = avatarDesign(selected);
-		if (currentDesign.shape === shape && currentDesign.color === color) return;
+		const nextImage = image === undefined ? currentDesign.image : image || undefined;
+		if (currentDesign.shape === shape && currentDesign.color === color && (currentDesign.image || "") === (nextImage || "")) return true;
 		const previousAvatar = selected.avatar;
-		const nextAvatar = { shape, color, ...(currentDesign.image ? { image: currentDesign.image } : {}) };
+		const assistantId = selected.assistantId;
+		const nextAvatar = { shape, color, ...(nextImage ? { image: nextImage } : {}) };
 		const optimistic = { ...selected, avatar: JSON.stringify(nextAvatar) };
 		const sequence = ++avatarUpdateSequence.current;
-		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? optimistic : item));
-		const response = await request("puck.update", "relay", { assistantId: selected.assistantId, avatar: nextAvatar });
-		if (sequence !== avatarUpdateSequence.current) return;
+		setAssistants(current => current.map(item => item.assistantId === assistantId ? optimistic : item));
+		const response = await request("puck.update", "relay", { assistantId, avatar: nextAvatar });
+		if (sequence !== avatarUpdateSequence.current) return false;
 		if (response.outcome !== "accepted") {
-			setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? { ...item, avatar: previousAvatar } : item));
+			setAssistants(current => current.map(item => item.assistantId === assistantId ? { ...item, avatar: previousAvatar } : item));
 			setNotice(responseError(response));
-			return;
+			return false;
 		}
 		const confirmed = response.data?.assistant as Assistant | undefined;
 		if (confirmed) setAssistants(current => current.map(item => item.assistantId === confirmed.assistantId ? confirmed : item));
+		return true;
+	}
+	function resetAvatar() {
+		if (!selected) return;
+		const fallback = deriveAvatar(selected.assistantId);
+		void updateAvatar(fallback.shape, fallback.color, null);
+	}
+	function clearAvatarImage() {
+		if (!selected) return;
+		const design = avatarDesign(selected);
+		void updateAvatar(design.shape, design.color, null);
+	}
+	async function uploadAvatar(file: File) {
+		if (!selected) throw new Error("请先选择助理。");
+		const assistantId = selected.assistantId;
+		const design = avatarDesign(selected);
+		const image = await readAvatarImageFile(file);
+		if (selectedRef.current !== assistantId) return;
+		const saved = await updateAvatar(design.shape, design.color, image);
+		if (!saved) throw new Error("头像没有保存，请重试。");
 	}
 	async function saveDescription() {
 		if (!selected) return; const description = descriptionDraft.trim();
@@ -820,6 +832,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		updateScopedMessages(assistantID, current => current.map(item => item.id === message.id ? { ...item, reaction:String(response.data?.reaction || "") } : item)); if (selectedRef.current === assistantID) setReactionTarget("");
 	}
 
+	useEffect(() => { setAvatarSheetOpen(false); }, [selectedID]);
 	useEffect(() => {
 		const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]'); if (!link) return;
 		if (!faviconOriginal.current) faviconOriginal.current = { href:link.getAttribute("href") || "", type:link.getAttribute("type") || "" };
@@ -1037,10 +1050,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     <aside className={`puck-info ${mobilePanel === "info" ? "mobile-open" : ""}`}>
       <header><h3>助理信息</h3></header>
       {activeGroup ? <div className="puck-info-content"><section className="puck-info-details"><h4>小组成员</h4><ul className="puck-group-members">{activeGroup.members.map(member => <li key={member.assistantId}><PuckAvatar assistantId={member.assistantId} name={member.name} design={avatarDesign(assistants.find(item => item.assistantId === member.assistantId) || { assistantId: member.assistantId, name: member.name, brainDeviceId: "", status: "ready" })} size="small"/><span>{member.name}</span></li>)}</ul><p>每位成员会用自己的大脑简短回复。这会打断该成员正在进行的一对一回合。</p></section></div> : selected ? <div className="puck-info-content">
-        <div className="puck-avatar-editor"><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/><strong>{selected.name}</strong>{editingDescription ? <div className="puck-description-editor"><textarea aria-label="助理说明" maxLength={512} value={descriptionDraft} onChange={event=>setDescriptionDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={()=>{setEditingDescription(false);setDescriptionDraft(selected.description || "");}}>取消</button><button className="puck-btn primary" type="button" aria-label="保存说明" onClick={()=>void saveDescription()}>保存</button></div></div> : <><p>{selected.description || "尚未添加说明"}</p><button className="puck-description-edit" type="button" aria-label="编辑说明" onClick={()=>{setDescriptionDraft(selected.description || "");setEditingDescription(true);}}>编辑说明</button></>}</div>
-        <div className="puck-avatar-picker"><div className="puck-picker-section"><span className="puck-avatar-picker-label">形状</span><div className="puck-shape-options" role="radiogroup" aria-label="头像形状">{avatarShapes.map(option => { const checked = avatarDesign(selected).shape === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-shape-option ${checked ? "selected" : ""}`} key={option.value} onClick={()=>void updateAvatar(option.value,avatarDesign(selected).color)} onKeyDown={event=>moveRadio(event,avatarShapes.map(item=>item.value),avatarDesign(selected).shape,value=>void updateAvatar(value as AvatarShape,avatarDesign(selected).color))}><PuckAvatar assistantId={`${selected.assistantId}-${option.value}`} name={option.label} design={{shape:option.value,color:avatarDesign(selected).color,colorHex:avatarDesign(selected).colorHex}} size="small" animated={false}/></button>; })}</div></div>
-          <div className="puck-picker-section"><span className="puck-avatar-picker-label">颜色</span><div className="puck-color-options" role="radiogroup" aria-label="头像颜色">{avatarColors.map(option => { const checked = avatarDesign(selected).color === option.value; return <button type="button" role="radio" aria-label={option.label} aria-checked={checked} tabIndex={checked ? 0 : -1} data-avatar-choice={option.value} className={`puck-color-option ${checked ? "selected" : ""}`} style={{"--puck-choice-color":option.hex} as CSSProperties} key={option.value} onClick={()=>void updateAvatar(avatarDesign(selected).shape,option.value)} onKeyDown={event=>moveRadio(event,avatarColors.map(item=>item.value),avatarDesign(selected).color,value=>void updateAvatar(avatarDesign(selected).shape,value as AvatarColor))}><span aria-hidden="true"/></button>; })}</div></div>
-        </div>
+        <div className="puck-avatar-editor"><button className="puck-avatar-edit" type="button" aria-label="编辑头像" onClick={() => setAvatarSheetOpen(true)}><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/></button><strong>{selected.name}</strong>{editingDescription ? <div className="puck-description-editor"><textarea aria-label="助理说明" maxLength={512} value={descriptionDraft} onChange={event=>setDescriptionDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={()=>{setEditingDescription(false);setDescriptionDraft(selected.description || "");}}>取消</button><button className="puck-btn primary" type="button" aria-label="保存说明" onClick={()=>void saveDescription()}>保存</button></div></div> : <><p>{selected.description || "尚未添加说明"}</p><button className="puck-description-edit" type="button" aria-label="编辑说明" onClick={()=>{setDescriptionDraft(selected.description || "");setEditingDescription(true);}}>编辑说明</button></>}</div>
 		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
 		<section className="puck-authorization-rules"><h4>以后都允许</h4>{authorizationRules.length === 0 ? <p>尚未保存规则</p> : <ul>{authorizationRules.map(rule=><li key={rule.id}><div><strong>{rule.actionType}</strong><span>{rule.deviceId}</span><code>{rule.cwd}</code><time dateTime={rule.createdAt}>{new Date(rule.createdAt).toLocaleString("zh-CN")}</time></div><button className="puck-btn" type="button" aria-label={`撤销规则 ${rule.actionType} ${rule.cwd}`} onClick={()=>void revokeAuthorizationRule(rule.id)}>撤销</button></li>)}</ul>}</section>
 		<section className="puck-danger-zone"><h4>危险操作</h4><p>删除后，这个 Bot 及其历史将不再显示。</p><button className="puck-btn danger" type="button" onClick={()=>setDeleteTarget(selected)}>删除 Bot</button></section>
@@ -1054,6 +1064,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); if (!createIme.blocksFormSubmit()) void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} onCompositionStart={createIme.compositionStart} onCompositionEnd={createIme.compositionEnd} onBlur={createIme.blur} onKeyDown={event=>{createIme.classify(event);}} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreating(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" onPointerDown={createIme.allowExplicitFormSubmit}>创建</button></div></form></div>}
 		{rowDrag && <div className="puck-drag-ghost" aria-hidden="true" style={{ left: rowDrag.x, top: rowDrag.y }}>{rowDrag.name}</div>}
 		{sidebarMenu?.kind === "section" && <div className="puck-context-menu" role="menu" aria-label={`${sidebarMenu.name}分组菜单`} style={{ left: sidebarMenu.x, top: sidebarMenu.y }}><button type="button" role="menuitem" onClick={() => { setRenamingSection({ sectionId: sidebarMenu.id, name: sidebarMenu.name }); setRenameDraft(sidebarMenu.name); setSidebarMenu(undefined); }}>重命名</button><button type="button" role="menuitem" onClick={() => { setDeletingSection({ sectionId: sidebarMenu.id, name: sidebarMenu.name }); setSidebarMenu(undefined); }}>删除分组</button></div>}
+		{avatarSheetOpen && selected && <PuckAvatarSheet assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} onClose={() => setAvatarSheetOpen(false)} onShape={shape => void updateAvatar(shape, avatarDesign(selected).color)} onColor={color => void updateAvatar(avatarDesign(selected).shape, color)} onReset={resetAvatar} onUpload={uploadAvatar} onClearImage={clearAvatarImage}/>}
 		{deleteTarget && <div className="puck-dialog-backdrop" role="presentation"><section className="puck-dialog puck-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="puck-delete-title"><h2 id="puck-delete-title">删除 Bot</h2><p>将删除“{deleteTarget.name}”，停止该 Bot 的后台大脑，历史不再显示。</p><p className="puck-dialog-note">已派发的 Codex 任务不会被强制停止，仍可在 Ariel 会话中继续查看。</p><div><button className="puck-btn puck-btn-md" type="button" disabled={deleting} onClick={()=>setDeleteTarget(undefined)}>取消</button><button className="puck-btn puck-btn-md danger" type="button" aria-label={`确认删除${deleteTarget.name}`} disabled={deleting} onClick={()=>void deleteAssistant()}>{deleting ? "正在删除…" : "删除"}</button></div></section></div>}
   </main>;
 }

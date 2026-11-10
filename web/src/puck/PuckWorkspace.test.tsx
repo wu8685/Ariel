@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { avatarShapes, deriveAvatar } from "./PuckAvatar";
 import { PuckWorkspace } from "./PuckWorkspace";
 
 const accepted = (data: Record<string, unknown>) => ({ type: "response", v: 1, requestId: crypto.randomUUID(), outcome: "accepted", data } as const);
@@ -119,6 +120,7 @@ describe("PuckWorkspace", () => {
     expect(send.querySelector("svg")).toBeTruthy();
     const composer = view.container.querySelector<HTMLElement>(".puck-composer")!;
     expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#ff2f92");
+    fireEvent.click(screen.getByRole("button", { name: "编辑头像" }));
     fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
     await waitFor(() => expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#3c82f6"));
     const css = readFileSync("src/puck/puck.css", "utf8");
@@ -690,10 +692,16 @@ describe("PuckWorkspace", () => {
 		});
 		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
 		await screen.findAllByText("小帕");
+		fireEvent.click(screen.getByRole("button", { name: "编辑头像" }));
 		const shapes = screen.getByRole("radiogroup", { name: "头像形状" });
 		const colors = screen.getByRole("radiogroup", { name: "头像颜色" });
 		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(13);
 		expect(colors.querySelectorAll('[role="radio"]')).toHaveLength(11);
+		expect(Array.from(shapes.querySelectorAll(".puck-shape-row")).map(row => row.querySelectorAll('[role="radio"]').length)).toEqual([4, 4, 5]);
+		expect(Array.from(colors.querySelectorAll(".puck-color-row")).map(row => row.querySelectorAll('[role="radio"]').length)).toEqual([6, 5]);
+		expect(screen.getByRole("tab", { name: "生成" })).toBeTruthy();
+		expect(screen.getByRole("tab", { name: "上传" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "重置为默认" })).toBeTruthy();
 		expect(screen.getByRole("radio", { name: "团块" }).getAttribute("aria-checked")).toBe("true");
 		expect(screen.getByRole("radio", { name: "紫" }).getAttribute("aria-checked")).toBe("true");
 		expect(document.querySelector(".puck-avatar-large img")?.getAttribute("src")).toBe("https://cdn.example.test/bot.png");
@@ -712,6 +720,43 @@ describe("PuckWorkspace", () => {
 		await waitFor(() => expect(screen.getByRole("radio", { name: "蓝" }).getAttribute("aria-checked")).toBe("true"));
 		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#3c82f6");
 		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "blob", color: "blue", image: "https://cdn.example.test/bot.png" } });
+	});
+
+	it("resets to the derived avatar, uploads a photo, and does not generate one", async () => {
+		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "star", color: "green", image: "https://cdn.example.test/bot.png" }) };
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [assistant] });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.update") {
+				assistant = { ...assistant, avatar: JSON.stringify(params.avatar) };
+				return accepted({ assistant });
+			}
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findAllByText("小帕");
+		fireEvent.click(screen.getByRole("button", { name: "编辑头像" }));
+		const fallback = deriveAvatar("a-1");
+		fireEvent.click(screen.getByRole("button", { name: "重置为默认" }));
+		await waitFor(() => expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: fallback.shape, color: fallback.color } }));
+		expect(document.querySelector(".puck-avatar-large img")).toBeNull();
+		const fallbackLabel = avatarShapes.find(option => option.value === fallback.shape)?.label || "";
+		expect(screen.getByRole("radio", { name: fallbackLabel }).getAttribute("aria-checked")).toBe("true");
+
+		const updatesBeforeGenerate = request.mock.calls.filter(call => call[0] === "puck.update").length;
+		fireEvent.click(screen.getByRole("tab", { name: "生成" }));
+		expect(screen.getByText("头像生成还没有接到 Puck。这里不会发起生成请求。")).toBeTruthy();
+		expect(request.mock.calls.filter(call => call[0] === "puck.update")).toHaveLength(updatesBeforeGenerate);
+
+		fireEvent.click(screen.getByRole("tab", { name: "上传" }));
+		const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), char => char.charCodeAt(0));
+		fireEvent.change(screen.getByLabelText("上传头像图片"), { target: { files: [new File([png], "avatar.png", { type: "image/png" })] } });
+		await waitFor(() => expect(request.mock.calls.some(call => call[0] === "puck.update" && String((call[2] as { avatar?: { image?: string } }).avatar?.image || "").startsWith("data:image/png;base64,"))).toBe(true));
+		expect(document.querySelector(".puck-avatar-large img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+		fireEvent.change(screen.getByLabelText("上传头像图片"), { target: { files: [new File(["<svg/>"], "avatar.svg", { type: "image/svg+xml" })] } });
+		expect((await screen.findByRole("alert")).textContent).toContain("仅支持 PNG、JPEG 或 WebP。");
+		fireEvent.keyDown(window, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "头像" })).toBeNull());
 	});
 
 	it("shows server unread counts, clears them on open, and persists editable instructions", async () => {
