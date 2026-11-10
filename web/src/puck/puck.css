@@ -62,7 +62,7 @@
   --puck-status-height: 20px;
   --puck-avatar-msg: 56px;
   --puck-avatar-picker: 28px;
-  --puck-avatar-row: 80px;
+  --puck-avatar-row: 40px;
   --puck-avatar-header: 32px;
   --puck-avatar-hero: 96px;
   --puck-empty-avatar: 64px;
@@ -233,6 +233,7 @@
   padding-top: var(--puck-space-1);
   overflow: auto;
 }
+.puck-workspace .puck-assistant-row .puck-group-mark { width: var(--puck-avatar-row); height: var(--puck-avatar-row); font-size: 14px; }
 .puck-workspace .puck-assistant-row {
   width: 100%;
   min-width: 0;
@@ -1190,19 +1191,7 @@
   width:100%;
   height:100%;
 }
-.puck-workspace .puck-avatar-presence {
-  fill: none;
-  stroke: var(--puck-avatar-color);
-  stroke-width: 3;
-  opacity: .55;
-  transform-box: fill-box;
-  transform-origin: center;
-  transform: scale(var(--puck-presence-scale, 1));
-  transition: transform var(--puck-motion-duration) var(--puck-motion-easing), opacity var(--puck-motion-duration) var(--puck-motion-easing);
-}
-.puck-workspace .puck-avatar[data-live="false"] .puck-avatar-presence { display: none; }
-.puck-workspace .puck-avatar[data-expression="searching"] .puck-avatar-presence,
-.puck-workspace .puck-avatar[data-expression="waiting"] .puck-avatar-presence { opacity: .9; }
+.puck-workspace .puck-avatar-photo { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 .puck-workspace .puck-avatar-head {
   transform:translate(var(--puck-head-x),var(--puck-head-y)) rotate(var(--puck-head-rotate));
   transform-box:fill-box;
@@ -1232,7 +1221,6 @@
 .puck-workspace .puck-avatar[data-blink-phase="closing"] .puck-avatar-eye-shape,
 .puck-workspace .puck-avatar[data-blink-phase="closed"] .puck-avatar-eye-shape { transform:scaleX(var(--puck-eye-roundness)) scaleY(.05); transition-duration:100ms; transition-timing-function:ease-in; }
 .puck-workspace .puck-avatar[data-blink-phase="opening"] .puck-avatar-eye-shape { transition-duration:110ms; transition-timing-function:ease-out; }
-.puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-presence,
 .puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-head,
 .puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-face,
 .puck-workspace .puck-avatar[data-moving="true"] .puck-avatar-eye,

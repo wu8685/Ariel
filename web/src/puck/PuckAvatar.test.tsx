@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { avatarColors, avatarShapes, deriveAvatar, expressionForState, PuckAvatar } from "./PuckAvatar";
+import { avatarColors, avatarShapes, canonicalShape, deriveAvatar, expressionForState, nearestAvatarColor, PuckAvatar } from "./PuckAvatar";
 import { resetAvatarMotionSchedulerForTests } from "./PuckAvatarScheduler";
 import avatarSource from "./PuckAvatar.tsx?raw";
 const avatarStyle = readFileSync("src/puck/puck.css", "utf8");
@@ -14,12 +14,13 @@ describe("PuckAvatar", () => {
     expect(deriveAvatar("assistant-a")).toEqual(deriveAvatar("assistant-a"));
     expect(deriveAvatar("assistant-a")).not.toEqual(deriveAvatar("assistant-b"));
     expect(avatarShapes.map(option => option.value)).toEqual([
-      "circle", "cloud", "tilted_square", "four_star", "clover", "heart", "flower",
-      "drop", "capsule", "triangle", "tilted_rect", "burst", "hexagon", "pumpkin",
+      "blob", "pebble", "bean", "egg", "squircle", "tablet", "capsule", "cylinder", "hex", "gem", "crystal", "wedge", "shield", "dome", "arch", "cloud", "teardrop", "leaf", "square", "sparkle", "clover", "flower", "heart", "house", "star",
     ]);
-    expect(avatarColors.map(option => option.label)).toEqual(["白", "棕", "红", "橙", "琥珀", "绿", "青绿", "蓝", "紫", "粉", "灰"]);
+    expect(avatarColors.map(option => option.value)).toEqual(["black", "brown", "red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray"]);
     expect(avatarShapes.map(option => option.value)).toContain(deriveAvatar("assistant-a").shape);
-    expect(deriveAvatar("assistant-a").color).toMatch(/^#[0-9a-f]{6}$/);
+    expect(avatarColors.map(option => option.hex)).toContain(deriveAvatar("assistant-a").colorHex);
+    expect(canonicalShape("pumpkin")).toBe("dome");
+    expect(nearestAvatarColor("#ff2f92")).toBe("magenta");
   });
 
   it("maps real states to distinct expressions", () => {
@@ -30,26 +31,27 @@ describe("PuckAvatar", () => {
     expect(expressionForState("done")).toBe("happy");
   });
 
-	it("keeps a live presence ring on animated avatars and hides it on static previews", () => {
-		const { container } = render(<PuckAvatar assistantId="assistant-a" name="小帕" animated/>);
-		expect(container.querySelector(".puck-avatar")?.getAttribute("data-live")).toBe("true");
-		expect(container.querySelector(".puck-avatar-presence")).toBeTruthy();
-		cleanup();
-		const preview = render(<PuckAvatar assistantId="assistant-a" name="小帕" animated={false}/>);
-		expect(preview.container.querySelector(".puck-avatar")?.getAttribute("data-live")).toBe("false");
-		expect(avatarStyle).toMatch(/\.puck-avatar\[data-live="false"\] \.puck-avatar-presence\s*\{[^}]*display:\s*none/s);
-		expect(avatarStyle).not.toMatch(/\.puck-avatar-presence\s*\{[^}]*animation:/s);
+	it("does not draw a presence ring and renders every picker shape once", () => {
+		const { container } = render(<>{avatarShapes.map(option => <PuckAvatar key={option.value} assistantId={option.value} name={option.label} design={{ shape: option.value, color: "cyan", colorHex: "#00bca6" }} animated={false}/>)}</>);
+		const avatars = Array.from(container.querySelectorAll<HTMLElement>(".puck-avatar"));
+		expect(avatars).toHaveLength(25);
+		expect(container.querySelector(".puck-avatar-presence")).toBeNull();
+		expect(avatarStyle).not.toMatch(/puck-avatar-presence/);
+		expect(avatarStyle).toMatch(/--puck-avatar-row:\s*40px/);
+		expect(avatarStyle).toMatch(/--puck-row-height:\s*96px/);
+		expect(avatarStyle).toMatch(/--puck-sidebar-width:\s*280px/);
+		expect(avatarStyle).toMatch(/\.puck-assistant-row\s*\{[^}]*min-height:\s*var\(--puck-row-height\)/s);
+		for (const avatar of avatars) {
+			expect(avatar.querySelectorAll(".puck-avatar-ear")).toHaveLength(0);
+			expect(avatar.querySelector(".puck-avatar-body path")?.getAttribute("d")).toBeTruthy();
+		}
 	});
 
-	it("renders every shape with exactly two ears and no botanical or facial extras", () => {
-		const { container } = render(<>{avatarShapes.map(option => <PuckAvatar key={option.value} assistantId={option.value} name={option.label} design={{ shape: option.value, color: "#1db9aa" }} animated={false}/>)}</>);
-		const avatars = Array.from(container.querySelectorAll<HTMLElement>(".puck-avatar"));
-		expect(avatars).toHaveLength(14);
-		for (const avatar of avatars) {
-			expect(avatar.querySelectorAll(".puck-avatar-ear")).toHaveLength(2);
-			expect(avatar.querySelector(".puck-avatar-body")?.childElementCount).toBeGreaterThan(0);
-			expect(avatar.querySelector(".puck-avatar-crown, .puck-avatar-leaf, .puck-avatar-flower, .puck-avatar-mouth, .puck-avatar-brows")).toBeNull();
-		}
+	it("renders a stored photo instead of the shape and keeps the shape available without one", () => {
+		const photo = "data:image/png;base64,AAAA";
+		const { container } = render(<PuckAvatar assistantId="assistant-photo" name="照片" design={{ shape: "blob", color: "black", colorHex: "#000000", image: photo }} animated={false}/>);
+		expect(container.querySelector("img")?.getAttribute("src")).toBe(photo);
+		expect(container.querySelector(".puck-avatar-body")).toBeNull();
 	});
 
 	it("renders two parallel black capsule eyes directly on one moving face", () => {
@@ -68,14 +70,12 @@ describe("PuckAvatar", () => {
 		expect(container.querySelector(".puck-avatar-body")?.getAttribute("style")).toBeNull();
 	});
 
-	it("keeps both embedded ears, body and face in one moving head group", () => {
+	it("keeps the body and face in one moving head group", () => {
 		const { container } = render(<PuckAvatar assistantId="assistant-head" name="头部测试" animated={false}/>);
 		const head = container.querySelector(".puck-avatar-head");
 		expect(head).not.toBeNull();
-		expect(head?.querySelectorAll(":scope > .puck-avatar-ears > .puck-avatar-ear")).toHaveLength(2);
 		expect(head?.querySelector(":scope > .puck-avatar-body")).not.toBeNull();
 		expect(head?.querySelector(":scope > .puck-avatar-face")).not.toBeNull();
-		expect(Array.from(head?.querySelectorAll(".puck-avatar-ear") || []).every(ear => /43/.test(ear.getAttribute("d") || ""))).toBe(true);
 	});
 
   it("is accessible, non-draggable and reacts to touch", () => {
@@ -83,8 +83,8 @@ describe("PuckAvatar", () => {
     const avatar = screen.getByRole("img", { name: "小帕，等待你的回复" });
     expect(avatar.getAttribute("draggable")).toBe("false");
     expect(avatar.getAttribute("data-expression")).toBe("waiting");
-    expect(avatar.querySelector(".puck-avatar-badge")).toBeTruthy();
-		expect(avatar.querySelectorAll(".puck-avatar-ear")).toHaveLength(2);
+		expect(avatar.querySelector(".puck-avatar-badge")).toBeTruthy();
+		expect(avatar.querySelectorAll(".puck-avatar-ear")).toHaveLength(0);
 		expect(avatar.querySelector(".puck-avatar-crown")).toBeNull();
 		expect(avatar.querySelector(".puck-avatar-leaf")).toBeNull();
 		expect(avatar.querySelector(".puck-avatar-flower")).toBeNull();

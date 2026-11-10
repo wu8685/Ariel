@@ -120,7 +120,7 @@ describe("PuckWorkspace", () => {
     const composer = view.container.querySelector<HTMLElement>(".puck-composer")!;
     expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#ff2f92");
     fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
-    await waitFor(() => expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#2588f7"));
+    await waitFor(() => expect(composer.style.getPropertyValue("--puck-avatar-color")).toBe("#1084fe"));
     const css = readFileSync("src/puck/puck.css", "utf8");
     expect(css).toMatch(/\.puck-workspace \.puck-send\.primary\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*background:\s*var\(--puck-avatar-color\);[^}]*color:\s*var\(--puck-send-foreground\)/s);
     expect(css).toMatch(/\.puck-workspace \.puck-send\.primary:disabled\s*\{[^}]*background:\s*[^;]+;[^}]*color:\s*[^;]+;/s);
@@ -678,7 +678,7 @@ describe("PuckWorkspace", () => {
   });
 
 	it("renders direct accessible avatar choices and persists click and keyboard selection", async () => {
-		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "circle", color: "#8957f5" }) };
+		let assistant = { assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready", avatar: JSON.stringify({ shape: "circle", color: "#8957f5", image: "https://cdn.example.test/bot.png" }) };
 		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
 			if (method === "puck.list") return accepted({ assistants: [assistant] });
 			if (method === "puck.history") return accepted({ messages: [] });
@@ -692,23 +692,24 @@ describe("PuckWorkspace", () => {
 		await screen.findAllByText("小帕");
 		const shapes = screen.getByRole("radiogroup", { name: "头像形状" });
 		const colors = screen.getByRole("radiogroup", { name: "头像颜色" });
-		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(14);
+		expect(shapes.querySelectorAll('[role="radio"]')).toHaveLength(25);
 		expect(colors.querySelectorAll('[role="radio"]')).toHaveLength(11);
-		expect(screen.getByRole("radio", { name: "圆" }).getAttribute("aria-checked")).toBe("true");
+		expect(screen.getByRole("radio", { name: "团块" }).getAttribute("aria-checked")).toBe("true");
 		expect(screen.getByRole("radio", { name: "紫" }).getAttribute("aria-checked")).toBe("true");
+		expect(document.querySelector(".puck-avatar-large img")?.getAttribute("src")).toBe("https://cdn.example.test/bot.png");
 		expect(screen.queryByRole("combobox", { name: "头像形状" })).toBeNull();
 		expect(screen.queryByLabelText("头像颜色", { selector: 'input[type="color"]' })).toBeNull();
 
-		fireEvent.click(screen.getByRole("radio", { name: "尖刺星" }));
-		await waitFor(() => expect(screen.getByRole("radio", { name: "尖刺星" }).getAttribute("aria-checked")).toBe("true"));
-		expect(document.querySelector(".puck-avatar-large")?.getAttribute("data-shape")).toBe("burst");
-		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "burst", color: "#8957f5" } });
-		fireEvent.keyDown(screen.getByRole("radio", { name: "尖刺星" }), { key: "ArrowRight" });
-		await waitFor(() => expect(screen.getByRole("radio", { name: "圆角六边形" }).getAttribute("aria-checked")).toBe("true"));
+		fireEvent.click(screen.getByRole("radio", { name: "星" }));
+		await waitFor(() => expect(screen.getByRole("radio", { name: "星" }).getAttribute("aria-checked")).toBe("true"));
+		expect(document.querySelector(".puck-avatar-large")?.getAttribute("data-shape")).toBe("star");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "star", color: "violet", image: "https://cdn.example.test/bot.png" } });
+		fireEvent.keyDown(screen.getByRole("radio", { name: "星" }), { key: "ArrowRight" });
+		await waitFor(() => expect(screen.getByRole("radio", { name: "团块" }).getAttribute("aria-checked")).toBe("true"));
 		fireEvent.click(screen.getByRole("radio", { name: "蓝" }));
 		await waitFor(() => expect(screen.getByRole("radio", { name: "蓝" }).getAttribute("aria-checked")).toBe("true"));
-		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#2588f7");
-		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "hexagon", color: "#2588f7" } });
+		expect((document.querySelector(".puck-avatar-large") as HTMLElement).style.getPropertyValue("--puck-avatar-color")).toBe("#1084fe");
+		expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", avatar: { shape: "blob", color: "blue", image: "https://cdn.example.test/bot.png" } });
 	});
 
 	it("shows server unread counts, clears them on open, and persists editable instructions", async () => {

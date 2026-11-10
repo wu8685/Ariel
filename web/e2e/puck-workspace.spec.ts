@@ -702,17 +702,17 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await openPuck(page);
 		const shapeGroup = page.getByRole("radiogroup", { name: "头像形状" });
 		const colorGroup = page.getByRole("radiogroup", { name: "头像颜色" });
-		await expect(shapeGroup.getByRole("radio")).toHaveCount(14);
+		await expect(shapeGroup.getByRole("radio")).toHaveCount(25);
 		await expect(colorGroup.getByRole("radio")).toHaveCount(11);
-		expect(await shapeGroup.getByRole("radio").evaluateAll(radios => radios.map(radio => radio.getAttribute("aria-label")))).toEqual(["圆", "云团", "倾斜圆角方块", "四角星", "四叶花", "心形团", "波浪花", "梨形水滴", "胶囊", "圆角三角", "倾斜圆角矩形", "尖刺星", "圆角六边形", "南瓜"]);
-		await page.getByRole("radio", { name: "尖刺星" }).click();
-		await expect(page.getByRole("radio", { name: "尖刺星" })).toHaveAttribute("aria-checked", "true");
-		await expect(page.locator(".puck-avatar-large")).toHaveAttribute("data-shape", "burst");
-		await page.getByRole("radio", { name: "尖刺星" }).press("ArrowRight");
-		await expect(page.getByRole("radio", { name: "圆角六边形" })).toHaveAttribute("aria-checked", "true");
+		expect(await shapeGroup.getByRole("radio").evaluateAll(radios => radios.map(radio => radio.getAttribute("aria-label")))).toEqual(["团块", "卵石", "豆形", "蛋形", "超椭圆", "平板", "胶囊", "圆柱", "六边形", "宝石", "晶体", "楔形", "盾形", "圆顶", "拱形", "云", "水滴", "叶", "方形", "闪光", "四叶", "花", "心", "房子", "星"]);
+		await page.getByRole("radio", { name: "星" }).click();
+		await expect(page.getByRole("radio", { name: "星" })).toHaveAttribute("aria-checked", "true");
+		await expect(page.locator(".puck-avatar-large")).toHaveAttribute("data-shape", "star");
+		await page.getByRole("radio", { name: "星" }).press("ArrowRight");
+		await expect(page.getByRole("radio", { name: "团块" })).toHaveAttribute("aria-checked", "true");
 		await page.getByRole("radio", { name: "蓝" }).press("Enter");
 		await expect(page.getByRole("radio", { name: "蓝" })).toHaveAttribute("aria-checked", "true");
-		await expect.poll(() => avatarUpdates.at(-1)?.avatar).toEqual({ shape: "hexagon", color: "#2588f7" });
+		await expect.poll(() => avatarUpdates.at(-1)?.avatar).toEqual({ shape: "blob", color: "blue" });
 	});
 
 	test("syncs unread, reactions, editable instructions and a selected-assistant PNG favicon", async ({ page }) => {

@@ -1475,16 +1475,20 @@ func TestModuleUpdatesAvatar(t *testing.T) {
 	defer module.Close()
 	created := module.Handle(context.Background(), "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
-	shapes := []string{"circle", "cloud", "tilted_square", "four_star", "clover", "heart", "flower", "drop", "capsule", "triangle", "tilted_rect", "burst", "hexagon", "pumpkin"}
-	for _, shape := range shapes {
-		updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": shape, "color": "#ff2f92"}}))
+	legacy := map[string]string{"circle": "blob", "cloud": "cloud", "tilted_square": "square", "four_star": "sparkle", "clover": "clover", "heart": "heart", "flower": "flower", "drop": "teardrop", "capsule": "capsule", "triangle": "wedge", "tilted_rect": "tablet", "burst": "star", "hexagon": "hex", "pumpkin": "dome"}
+	for shape, canonical := range legacy {
+		updated := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": shape, "color": "#ff2f92", "image": "https://cdn.example.test/bot.png"}}))
 		if updated.Error != nil {
 			t.Fatalf("shape=%s update=%+v", shape, updated)
 		}
-		avatar := updated.Data["assistant"].(map[string]any)["avatar"]
-		if avatar != fmt.Sprintf(`{"color":"#ff2f92","shape":"%s"}`, shape) {
-			t.Fatalf("shape=%s avatar=%v", shape, avatar)
+		var stored map[string]string
+		if json.Unmarshal([]byte(updated.Data["assistant"].(map[string]any)["avatar"].(string)), &stored) != nil || stored["shape"] != canonical || stored["color"] != "magenta" || stored["image"] != "https://cdn.example.test/bot.png" {
+			t.Fatalf("shape=%s avatar=%v", shape, updated.Data["assistant"].(map[string]any)["avatar"])
 		}
+	}
+	rejected := module.Handle(context.Background(), "puck.update", mustJSON(map[string]any{"assistantId": id, "avatar": map[string]any{"shape": "octagon", "color": "blue"}}))
+	if rejected.Error == nil {
+		t.Fatal("invalid shape accepted")
 	}
 }
 
