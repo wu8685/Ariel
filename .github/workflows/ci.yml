@@ -1,0 +1,69 @@
+# Pull request 与 main 推送的必选门禁：Web 生产构建（含 tsc）和 Vitest，以及 Go 测试。
+#
+# 不跑 Playwright（web 的 npm run test:ui）。用例自己启动 Vite，并用页面内
+# WebSocket fixture，不依赖密钥或生产环境；但截图基线只有 darwin
+# （web/e2e/**/*-darwin.png）。GitHub 托管的 Linux runner 会查找 *-linux.png，
+# 视觉结果也跟 macOS 字体和渲染不一致，不能当作稳定的合并门禁。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Typecheck and production build
+        working-directory: web
+        run: npm run build
+
+      - name: Unit tests
+        working-directory: web
+        run: npm test
+
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOFLAGS: -mod=readonly
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1

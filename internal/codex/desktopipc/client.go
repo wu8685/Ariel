@@ -204,15 +204,7 @@ func (c *Client) Call(ctx context.Context, req Request) (Reply, error) {
 	if err != nil {
 		return failure(ErrInvalidFrame)
 	}
-	attempted, err := c.write(ctx, body)
-	if attempted {
-		outcome = "unknown"
-	}
-	if err != nil {
-		return failure(err)
-	}
-	select {
-	case r := <-ch:
+	accept := func(r Reply) (Reply, error) {
 		if req.TargetClientID != "" && r.HandledByClientID != req.TargetClientID {
 			c.fail(ErrProtocol)
 			return failure(ErrProtocol)
@@ -226,10 +218,39 @@ func (c *Client) Call(ctx context.Context, req Request) (Reply, error) {
 			return failure(ErrProtocol)
 		}
 		return r, nil
+	}
+	attempted, err := c.write(ctx, body)
+	if attempted {
+		outcome = "unknown"
+	}
+	// The peer can answer and then close, for example when that broadcast
+	// invalidates the follower, before Write returns or before this select
+	// observes the reply. A reply already queued for this request is the result.
+	if err != nil {
+		select {
+		case r := <-ch:
+			return accept(r)
+		default:
+			return failure(err)
+		}
+	}
+	select {
+	case r := <-ch:
+		return accept(r)
 	case <-ctx.Done():
-		return failure(ctx.Err())
+		select {
+		case r := <-ch:
+			return accept(r)
+		default:
+			return failure(ctx.Err())
+		}
 	case <-c.done:
-		return failure(c.Err())
+		select {
+		case r := <-ch:
+			return accept(r)
+		default:
+			return failure(c.Err())
+		}
 	}
 }
 
