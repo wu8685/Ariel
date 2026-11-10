@@ -6,6 +6,8 @@
 
 以下步骤用于在 Mac 安装当前 Ariel 实现。先确定是本机局域网模式，还是连接已有远程 Relay；不要向他人提供 Codex 登录信息，也不要把 Relay token 或六位连接码写入公开文档或日志。安装验收只做只读状态检查，写测试只作用于隔离 fixture。
 
+要在另一台 Mac 上使用该机自己的 Codex，同时继续使用现有公网入口，不要走下面的模式 A 或模式 B。模式 A 会携带目标 Relay 的 Agent token；接到公网 Relay 且 device id 与已在线 Agent 相同时，新连接会替换旧 Agent。模式 B 是局域网 PIN，不是 Passkey。那条并存路径见 [macOS 本机 Passkey](macos-local-passkey.md)。
+
 ## 共同前提与行为
 
 1. 在目标 Mac 上取得可信的 Ariel 仓库（例如 `git clone https://github.com/wu8685/Ariel.git`），进入仓库根目录。不要使用 `curl | sh`，也不要自动 `git pull` 覆盖用户工作区。

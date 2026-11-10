@@ -10,6 +10,7 @@ README 用于快速了解项目；这里按使用目的组织详细说明。当�
 | --- | --- |
 | 了解功能、使用方式与限制 | [功能与使用指南](guide/features.md) |
 | 在 Mac 安装，或把 Agent 连接到已有 Relay | [安装、配置与排障](operations/agent-install.md) |
+| 在另一台 Mac 上使用本机 Codex，并保留公网 Passkey | [macOS 本机 Passkey](operations/macos-local-passkey.md) |
 | 开启文件浏览、原文／Diff、阅读模式和图片 | [内置文件能力配置](operations/file-context.md) |
 | 在服务器部署 Relay＋Web | [Docker 部署](operations/container-deployment.md)／[ECS 一键部署](operations/ecs-single-node-deployment.md) |
 | 配置公网认证与安全边界 | [Passkey 部署](operations/public-passkey-deployment.md) |
