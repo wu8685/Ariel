@@ -25,10 +25,14 @@ type Thread struct {
 	Turns     []Turn          `json:"turns"`
 	IsPinned  *bool           `json:"isPinned,omitempty"`
 	Section   *ThreadSection  `json:"section,omitempty"`
+	// SessionCWD is the workspace from session_meta, when thread/read includes
+	// it. Top-level cwd can be the app-server process directory instead.
+	SessionCWD string `json:"-"`
 }
 type Turn struct {
 	ID     string            `json:"id"`
 	Status string            `json:"status"`
+	CWD    string            `json:"cwd,omitempty"`
 	Items  []json.RawMessage `json:"items"`
 }
 type Page struct {
@@ -170,6 +174,43 @@ func (h HistoryReader) read(ctx context.Context, threadID string, includeTurns b
 		err = ErrProtocol
 	}
 	return out.Thread, err
+}
+
+func (t *Thread) UnmarshalJSON(raw []byte) error {
+	type alias Thread
+	var decoded alias
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*t = Thread(decoded)
+	t.SessionCWD = SessionMetaCWD(raw)
+	return nil
+}
+
+// SessionMetaCWD reads the workspace recorded on the Codex session. thread/read
+// may put the app-server process directory in the top-level cwd.
+func SessionMetaCWD(raw json.RawMessage) string {
+	var body map[string]any
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	for _, key := range []string{"sessionMeta", "session_meta", "sessionMetadata"} {
+		if cwd := nestedCWD(body[key]); cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
+func nestedCWD(value any) string {
+	meta, _ := value.(map[string]any)
+	if meta == nil {
+		return ""
+	}
+	if cwd, _ := meta["cwd"].(string); strings.TrimSpace(cwd) != "" {
+		return cwd
+	}
+	return nestedCWD(meta["payload"])
 }
 
 func (h HistoryReader) Turns(ctx context.Context, threadID, cursor string, limit int, itemsView string) (TurnPage, error) {

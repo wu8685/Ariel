@@ -109,6 +109,21 @@ func TestNormalizeStoredThreadPreservesIdentityAndText(t *testing.T) {
 	}
 }
 
+func TestNormalizeStoredThreadKeepsSessionAndTurnWorkspace(t *testing.T) {
+	thread, err := NormalizeStored(appserver.Thread{
+		ID: "thread-1", Name: "Workspace", CWD: "/Users/owner/.ariel/puck/assistant", SessionCWD: "/work/watched",
+		Status: json.RawMessage(`{"type":"idle"}`),
+		Turns:  []appserver.Turn{{ID: "turn-1", Status: "completed", CWD: "/work/from-turn"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := thread["turns"].([]any)
+	if thread["cwd"] != "/Users/owner/.ariel/puck/assistant" || thread["sessionCwd"] != "/work/watched" || turns[0].(map[string]any)["cwd"] != "/work/from-turn" {
+		t.Fatalf("thread=%v", thread)
+	}
+}
+
 func TestNormalizeStoredThreadProjectsNativePinnedState(t *testing.T) {
 	pinned := true
 	thread, err := NormalizeStored(appserver.Thread{ID: "pinned", Name: "Pinned", CWD: "/fixture", IsPinned: &pinned, Status: json.RawMessage(`{"type":"idle"}`)})

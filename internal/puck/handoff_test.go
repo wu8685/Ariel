@@ -79,14 +79,15 @@ func TestWatchedConclusionTravelsWithTheNextStartTask(t *testing.T) {
 		t.Fatalf("brain instruction was rewritten: %s", text)
 	}
 	for _, want := range []string{
-		"请按会话 " + threadID, "最终结论：可以按方案 B 发布。", "方案讨论", "/work/watched", "执行机",
-		"codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】", "已省略",
+		"请按会话 " + threadID, "CONCLUSION-MARKER: use approach B", "status: completed", "watch: closed",
+		"方案讨论", "/work/watched", "执行机",
+		"codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】", "已省略开头",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in %s", want, text)
 		}
 	}
-	for _, absent := range []string{"USER_TAIL_OMITTED", "CONCLUSION_TAIL_OMITTED", "EARLY_TURN_NOT_FOR_HANDOFF", "SUPER_SECRET_PROMPT", "UNRELATED_SHOULD_STAY_OUT", "FOREIGN_SECRET_CONCLUSION", "BRAIN_THREAD_SECRET", unrelatedID, foreignID} {
+	for _, absent := range []string{"USER_TAIL_OMITTED", "HEAD_ONLY_AT_START", "EARLY_TURN_NOT_FOR_HANDOFF", "SUPER_SECRET_PROMPT", "UNRELATED_SHOULD_STAY_OUT", "FOREIGN_SECRET_CONCLUSION", "BRAIN_THREAD_SECRET", "/.ariel/puck", "/work/from-turn", "status: closed", unrelatedID, foreignID} {
 		if strings.Contains(text, absent) {
 			t.Fatalf("pack included %s", absent)
 		}
@@ -182,12 +183,13 @@ func watchedThreadSnapshot(threadID string) map[string]any {
 	return map[string]any{
 		"freshness": "fresh",
 		"thread": map[string]any{
-			"threadId": threadID, "title": "方案讨论", "cwd": "/work/watched", "runtime": "idle",
+			"threadId": threadID, "title": "方案讨论", "cwd": "/Users/owner/.ariel/puck/assistant-watch", "runtime": "idle",
+			"session_meta":        map[string]any{"payload": map[string]any{"cwd": "/work/watched"}},
 			"pendingInteractions": []any{map[string]any{"prompt": "SUPER_SECRET_PROMPT"}},
 			"turns": []any{
 				map[string]any{"turnId": "turn-1", "status": "completed", "items": []any{map[string]any{"role": "assistant", "text": "EARLY_TURN_NOT_FOR_HANDOFF" + strings.Repeat("前", 1500)}}},
 				map[string]any{"turnId": "turn-2", "status": "completed", "items": []any{map[string]any{"role": "user", "text": "SUPER_SECRET_PROMPT"}}},
-				map[string]any{"turnId": "turn-3", "status": "completed", "items": []any{map[string]any{"role": "assistant", "text": "最终结论：可以按方案 B 发布。" + strings.Repeat("结", 800) + "CONCLUSION_TAIL_OMITTED"}}},
+				map[string]any{"turnId": "turn-3", "status": "completed", "cwd": "/work/from-turn", "items": []any{map[string]any{"role": "assistant", "text": "HEAD_ONLY_AT_START\n" + strings.Repeat("中", 800) + "\nCONCLUSION-MARKER: use approach B"}}},
 			},
 		},
 	}

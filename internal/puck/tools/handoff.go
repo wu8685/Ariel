@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -13,7 +14,7 @@ const (
 	HandoffSentinel = "[puck-handoff]"
 
 	MaxHandoffUserRunes       = 400
-	MaxHandoffConclusionRunes = 240
+	MaxHandoffConclusionRunes = 400
 	MaxHandoffSessions        = 4
 	MaxHandoffRunes           = 1800
 )
@@ -29,7 +30,7 @@ type HandoffQuery struct {
 }
 
 type HandoffSession struct {
-	Title, DeviceName, DeviceID, CWD, ThreadID, Status, Outcome, Conclusion string
+	Title, DeviceName, DeviceID, CWD, ThreadID, Status, Watch, Outcome, Conclusion string
 }
 
 type Handoff struct {
@@ -124,14 +125,22 @@ func writeSession(body *strings.Builder, session HandoffSession) {
 	if name := strings.TrimSpace(session.DeviceName); name != "" {
 		device = name + " (" + session.DeviceID + ")"
 	}
-	conclusion, omitted := clipRunes(compactLine(session.Conclusion), MaxHandoffConclusionRunes)
+	conclusion, _ := clipConclusion(session.Conclusion, MaxHandoffConclusionRunes)
+	conclusion = compactLine(conclusion)
 	if conclusion == "" {
 		conclusion = "（无）"
-	} else if omitted > 0 {
-		conclusion += omissionMarker(omitted)
 	}
-	fmt.Fprintf(body, "- title: %s\n  device: %s\n  cwd: %s\n  threadId: %s\n  status: %s\n  outcome: %s\n  conclusion: %s\n  session: deviceId=%s threadId=%s\n",
-		compactLine(title), compactLine(device), compactLine(session.CWD), session.ThreadID, compactLine(session.Status), compactLine(session.Outcome), conclusion, session.DeviceID, session.ThreadID)
+	status := compactLine(session.Status)
+	if status == "" {
+		status = "（无）"
+	}
+	fmt.Fprintf(body, "- title: %s\n  device: %s\n  cwd: %s\n  threadId: %s\n  status: %s\n",
+		compactLine(title), compactLine(device), compactLine(session.CWD), session.ThreadID, status)
+	if watch := compactLine(session.Watch); watch != "" {
+		fmt.Fprintf(body, "  watch: %s\n", watch)
+	}
+	fmt.Fprintf(body, "  outcome: %s\n  conclusion: %s\n  session: deviceId=%s threadId=%s\n",
+		compactLine(session.Outcome), conclusion, session.DeviceID, session.ThreadID)
 	if link := CodexThreadLink(session.ThreadID); link != "" {
 		fmt.Fprintf(body, "  link: %s\n", link)
 	}
@@ -149,24 +158,178 @@ func clipRunes(text string, max int) (string, int) {
 	return string(runes[:max]), len(runes) - max
 }
 
+func clipConclusion(text string, max int) (string, int) {
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if text == "" || len(runes) <= max {
+		return text, 0
+	}
+	if tail, omitted, ok := lastParagraph(text, max); ok {
+		return omissionPrefix(omitted) + tail, omitted
+	}
+	return omissionPrefix(len(runes)-max) + string(runes[len(runes)-max:]), len(runes) - max
+}
+
+func lastParagraph(text string, max int) (string, int, bool) {
+	lines := strings.Split(text, "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	start := end
+	for start > 0 && strings.TrimSpace(lines[start-1]) != "" {
+		start--
+	}
+	if start == 0 {
+		return "", 0, false
+	}
+	tail := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	if tail == "" || utf8.RuneCountInString(tail) > max {
+		return "", 0, false
+	}
+	omitted := utf8.RuneCountInString(text) - utf8.RuneCountInString(tail)
+	if omitted <= 0 {
+		return "", 0, false
+	}
+	return tail, omitted, true
+}
+
 func omissionMarker(omitted int) string {
 	return fmt.Sprintf("…（已省略 %d 字）", omitted)
 }
 
-// ExtractSessionFacts reads a thread.read or cache snapshot and returns the
-// title, cwd, and last assistant message only. Earlier turns and approval
-// prompts are not copied.
-func ExtractSessionFacts(data map[string]any) (title, cwd, conclusion string) {
+func omissionPrefix(omitted int) string {
+	return fmt.Sprintf("（已省略开头 %d 字）…", omitted)
+}
+
+// SessionFacts is the bounded reading of one referenced Codex thread.
+// CWD candidates stay separate so the caller can prefer a recorded workspace
+// over the app-server process directory.
+type SessionFacts struct {
+	Title, Conclusion, Status      string
+	SessionCWD, TurnCWD, ThreadCWD string
+}
+
+// ChooseWorkspace picks the session workspace. session_meta wins, then the
+// cwd Puck recorded on the task or watch, then a turn cwd, then thread.cwd.
+// The Ariel agent state directory is never a workspace.
+func ChooseWorkspace(sessionCWD, recordedCWD, turnCWD, threadCWD string) string {
+	for _, candidate := range []string{sessionCWD, recordedCWD, turnCWD, threadCWD} {
+		if acceptableWorkspace(candidate) {
+			return filepath.Clean(candidate)
+		}
+	}
+	return ""
+}
+
+func acceptableWorkspace(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == string(filepath.Separator) {
+		return false
+	}
+	return !agentStateDir(cleaned)
+}
+
+func agentStateDir(path string) bool {
+	slash := strings.ToLower(filepath.ToSlash(path))
+	if strings.Contains(slash, "/.ariel/") || strings.HasSuffix(slash, "/.ariel") {
+		return true
+	}
+	return strings.Contains(slash, "/agent-managed/")
+}
+
+// ExtractSessionFacts reads a thread.read or cache snapshot. Earlier turns and
+// approval prompts are not copied. The top-level cwd is returned separately
+// because it may be the agent state directory rather than the workspace.
+func ExtractSessionFacts(data map[string]any) SessionFacts {
 	thread := threadObject(data)
 	if thread == nil {
-		return "", "", ""
+		return SessionFacts{}
 	}
-	title, _ = thread["title"].(string)
+	title, _ := thread["title"].(string)
 	if title == "" {
 		title, _ = thread["name"].(string)
 	}
-	cwd, _ = thread["cwd"].(string)
-	return title, cwd, lastAssistantText(thread)
+	threadCWD, _ := thread["cwd"].(string)
+	return SessionFacts{
+		Title:      title,
+		Conclusion: lastAssistantText(thread),
+		Status:     sessionStatus(thread),
+		SessionCWD: firstCWD(nestedCWD(thread["sessionMeta"]), nestedCWD(thread["session_meta"]), nestedCWD(thread["sessionMetadata"]), stringField(thread, "sessionCwd")),
+		TurnCWD:    lastTurnCWD(thread),
+		ThreadCWD:  threadCWD,
+	}
+}
+
+func nestedCWD(value any) string {
+	meta, _ := value.(map[string]any)
+	if meta == nil {
+		return ""
+	}
+	if cwd := stringField(meta, "cwd"); cwd != "" {
+		return cwd
+	}
+	return nestedCWD(meta["payload"])
+}
+
+func stringField(value map[string]any, key string) string {
+	text, _ := value[key].(string)
+	return strings.TrimSpace(text)
+}
+
+func firstCWD(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func lastTurnCWD(thread map[string]any) string {
+	turns, _ := thread["turns"].([]any)
+	for index := len(turns) - 1; index >= 0; index-- {
+		turn, _ := turns[index].(map[string]any)
+		if turn == nil {
+			continue
+		}
+		if cwd := stringField(turn, "cwd"); cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
+func sessionStatus(thread map[string]any) string {
+	turns, _ := thread["turns"].([]any)
+	for index := len(turns) - 1; index >= 0; index-- {
+		turn, _ := turns[index].(map[string]any)
+		if turn == nil {
+			continue
+		}
+		switch stringField(turn, "status") {
+		case "completed":
+			return "completed"
+		case "failed":
+			return "failed"
+		case "interrupted":
+			return "interrupted"
+		case "inProgress":
+			return "active"
+		}
+	}
+	switch stringField(thread, "runtime") {
+	case "inProgress":
+		return "active"
+	case "idle":
+		return "idle"
+	default:
+		return ""
+	}
 }
 
 func threadObject(data map[string]any) map[string]any {

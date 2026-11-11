@@ -13,7 +13,7 @@ import (
 )
 
 type handoffCandidate struct {
-	taskID, deviceID, threadID, cwd, title, status, outcome, conclusion string
+	taskID, deviceID, threadID, cwd, title, watchStatus, outcome, conclusion string
 }
 
 func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.HandoffQuery) (pucktools.Handoff, error) {
@@ -62,21 +62,19 @@ func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.Handoff
 	sessions := make([]pucktools.HandoffSession, 0, len(keys))
 	for _, key := range keys {
 		candidate := candidates[key]
+		facts := b.readSessionFacts(ctx, query.AssistantID, candidate.deviceID, candidate.threadID)
 		session := pucktools.HandoffSession{
 			Title: candidate.title, DeviceName: deviceName(b.module.bridge.Devices(), candidate.deviceID),
-			DeviceID: candidate.deviceID, CWD: candidate.cwd, ThreadID: candidate.threadID,
-			Status: candidate.status, Outcome: candidate.outcome, Conclusion: candidate.conclusion,
+			DeviceID: candidate.deviceID, ThreadID: candidate.threadID,
+			Status: facts.Status, Watch: candidate.watchStatus, Outcome: candidate.outcome,
+			Conclusion: candidate.conclusion,
+			CWD:        pucktools.ChooseWorkspace(facts.SessionCWD, candidate.cwd, facts.TurnCWD, facts.ThreadCWD),
 		}
-		if title, cwd, conclusion := b.readSessionFacts(ctx, query.AssistantID, candidate.deviceID, candidate.threadID); conclusion != "" || title != "" || cwd != "" {
-			if title != "" {
-				session.Title = title
-			}
-			if cwd != "" {
-				session.CWD = cwd
-			}
-			if conclusion != "" {
-				session.Conclusion = conclusion
-			}
+		if facts.Title != "" {
+			session.Title = facts.Title
+		}
+		if facts.Conclusion != "" {
+			session.Conclusion = facts.Conclusion
 		}
 		sessions = append(sessions, session)
 	}
@@ -104,7 +102,7 @@ func (b toolBackend) handoffCandidates(ctx context.Context, assistant Assistant)
 		}
 		key := watch.DeviceID + "\x00" + watch.ThreadID
 		candidates[key] = handoffCandidate{
-			deviceID: watch.DeviceID, threadID: watch.ThreadID, status: watch.Status,
+			deviceID: watch.DeviceID, threadID: watch.ThreadID, watchStatus: watch.Status,
 			outcome: watch.NotifiedKey, conclusion: watch.LastSummary,
 		}
 	}
@@ -126,9 +124,6 @@ func (b toolBackend) handoffCandidates(ctx context.Context, assistant Assistant)
 		}
 		if current.title == "" {
 			current.title = task.Goal
-		}
-		if current.status == "" {
-			current.status = task.Status
 		}
 		if current.outcome == "" {
 			current.outcome = task.Status
@@ -246,10 +241,10 @@ func deviceName(devices []map[string]any, deviceID string) string {
 	return ""
 }
 
-func (b toolBackend) readSessionFacts(ctx context.Context, assistantID, deviceID, threadID string) (string, string, string) {
+func (b toolBackend) readSessionFacts(ctx context.Context, assistantID, deviceID, threadID string) pucktools.SessionFacts {
 	result := b.module.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: assistantID, Trigger: "tool"}, deviceID, "thread.read", mustJSON(map[string]any{"threadId": threadID}))
 	if result.Outcome != "accepted" || result.Error != nil || result.Data == nil {
-		return "", "", ""
+		return pucktools.SessionFacts{}
 	}
 	return pucktools.ExtractSessionFacts(result.Data)
 }

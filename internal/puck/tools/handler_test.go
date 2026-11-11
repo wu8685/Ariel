@@ -889,13 +889,13 @@ func TestFinishTaskArchivesWithoutExecutionOrAuthorization(t *testing.T) {
 func TestStartTaskHandoffIsVerbatimOnceAndMarksTruncation(t *testing.T) {
 	threadID := "11111111-1111-4111-8111-111111111111"
 	user := "原话一字不差。" + strings.Repeat("长", MaxHandoffUserRunes) + "USER_TAIL_OMITTED"
-	conclusion := "最终结论：可以按方案 B 发布。" + strings.Repeat("结", MaxHandoffConclusionRunes) + "CONCLUSION_TAIL_OMITTED"
+	conclusion := "最终结论：可以按方案 B 发布。\n" + strings.Repeat("结", MaxHandoffConclusionRunes) + "\nCONCLUSION-MARKER: use approach B"
 	orchestrator := &fakeOrchestrator{}
 	backend := &fakeBackend{tasks: map[string]Task{}, handoff: Handoff{
 		UserText: user,
 		Sessions: []HandoffSession{{
 			Title: "方案讨论", DeviceName: "执行机", DeviceID: "exec-a", CWD: "/work/watched",
-			ThreadID: threadID, Status: "closed", Outcome: "review", Conclusion: conclusion,
+			ThreadID: threadID, Status: "completed", Watch: "closed", Outcome: "review", Conclusion: conclusion,
 		}},
 	}}
 	handler := New(orchestrator, backend)
@@ -915,13 +915,13 @@ func TestStartTaskHandoffIsVerbatimOnceAndMarksTruncation(t *testing.T) {
 	if strings.Count(pack, HandoffSentinel) != 1 || !strings.HasPrefix(pack, "【Bot 对任务的理解】\n我理解为要在新目录实现发布步骤。") {
 		t.Fatalf("pack did not keep the brain instruction first: %s", pack)
 	}
-	for _, want := range []string{"原话一字不差。", "最终结论：可以按方案 B 发布。", "方案讨论", "/work/watched", "执行机", "codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】"} {
+	for _, want := range []string{"原话一字不差。", "CONCLUSION-MARKER: use approach B", "status: completed", "watch: closed", "方案讨论", "/work/watched", "执行机", "codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】"} {
 		if !strings.Contains(pack, want) {
 			t.Fatalf("missing %q in %s", want, pack)
 		}
 	}
-	if strings.Contains(pack, "USER_TAIL_OMITTED") || strings.Contains(pack, "CONCLUSION_TAIL_OMITTED") || strings.Count(pack, "已省略") < 2 {
-		t.Fatalf("truncation was not marked: %s", pack)
+	if strings.Contains(pack, "USER_TAIL_OMITTED") || strings.Contains(pack, "最终结论：可以按方案 B 发布。") || strings.Contains(pack, "status: closed") || strings.Count(pack, "已省略") < 2 {
+		t.Fatalf("truncation or status was wrong: %s", pack)
 	}
 	suffix := pack[strings.Index(pack, HandoffSentinel):]
 	if runeCount(suffix) > MaxHandoffRunes {
