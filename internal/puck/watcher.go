@@ -174,27 +174,50 @@ func (m *Module) primeSnapshot(ctx context.Context, assistantID, deviceID, threa
 	m.applyThreadSnapshot(ctx, assistantID, deviceID, threadID, taskID, watchOnly, result.Data)
 }
 
+func watchMark(seen, told string) string {
+	return "seen=" + seen + ";told=" + told
+}
+
+func parseWatchMark(raw string) (seen, told string) {
+	if strings.HasPrefix(raw, "seen=") {
+		body := strings.TrimPrefix(raw, "seen=")
+		seen, told, _ = strings.Cut(body, ";told=")
+		return seen, told
+	}
+	if index := strings.IndexByte(raw, '|'); index > 0 {
+		return raw, raw[:index]
+	}
+	return raw, ""
+}
+
 func (m *Module) applyThreadSnapshot(ctx context.Context, assistantID, deviceID, threadID, taskID string, watchOnly bool, data map[string]any) {
 	view, ok := pucktools.ClassifySnapshot(data)
 	if !ok || view.Runtime == "unknown" || view.Freshness != "fresh" {
 		return
 	}
-	notified := view.Status + "|" + view.TurnID
+	seenKey := view.Status + "|" + view.TurnID
 	if watchOnly {
-		if !view.Notable {
-			return
-		}
 		m.wakeMu.Lock()
 		watch, err := m.store.ThreadWatch(ctx, assistantID, deviceID, threadID)
-		if err != nil || watch.Status != "watching" || watch.NotifiedKey == notified {
+		if err != nil || watch.Status != "watching" {
 			m.wakeMu.Unlock()
 			return
 		}
-		if err := m.store.SetWatchNotified(ctx, assistantID, deviceID, threadID, notified, view.Summary); err != nil {
+		if watch.LastTurnID == seenKey && view.Status != "running" {
 			m.wakeMu.Unlock()
 			return
 		}
-		m.enqueueLocked(ctx, BrainWake{AssistantID: assistantID, TaskKey: watch.ID, DedupeKey: notified, Status: view.Status, Summary: view.Summary, WatchOnly: true})
+		decision := pucktools.DecideOutcome(view, watch.Until, watch.NotifiedKey, watch.LastSummary)
+		if !decision.Notify {
+			_ = m.store.RememberThreadSeen(ctx, assistantID, deviceID, threadID, seenKey)
+			m.wakeMu.Unlock()
+			return
+		}
+		if err := m.store.SetWatchNotified(ctx, assistantID, deviceID, threadID, decision.Status, view.Summary, seenKey); err != nil {
+			m.wakeMu.Unlock()
+			return
+		}
+		m.enqueueLocked(ctx, BrainWake{AssistantID: assistantID, TaskKey: watch.ID, DedupeKey: decision.Status + "|" + seenKey, Status: decision.Status, Summary: view.Summary, WatchOnly: true})
 		_ = m.store.CloseThreadWatch(ctx, assistantID, deviceID, threadID)
 		m.wakeMu.Unlock()
 		m.releaseWatch(deviceID, threadID, assistantID)
@@ -204,27 +227,37 @@ func (m *Module) applyThreadSnapshot(ctx context.Context, assistantID, deviceID,
 	if err != nil || !taskWatchable(task.Status) {
 		return
 	}
+	seen, told := parseWatchMark(task.LastSeenRevision)
 	if view.Status == "running" {
-		if task.Status != "running" && task.Status != "dispatching" {
-			_ = m.store.UpdateTaskObservation(ctx, assistantID, taskID, "running", view.TurnID, task.LastSummary, task.LastSeenRevision)
+		if told != "" || (task.Status != "running" && task.Status != "dispatching") {
+			_ = m.store.UpdateTaskObservation(ctx, assistantID, taskID, "running", view.TurnID, task.LastSummary, watchMark(seenKey, ""))
 			_ = m.updateTaskCardDetails(ctx, assistantID, taskID, "running", "")
 		}
 		return
 	}
-	if !view.Notable {
+	if seen == seenKey {
+		return
+	}
+	decision := pucktools.DecideOutcome(view, task.Goal, told, task.LastSummary)
+	if !decision.Notify {
+		_ = m.store.RememberTaskSeen(ctx, assistantID, taskID, watchMark(seenKey, told))
 		return
 	}
 	m.wakeMu.Lock()
 	defer m.wakeMu.Unlock()
 	current, err := m.store.Task(ctx, assistantID, taskID)
-	if err != nil || !taskWatchable(current.Status) || current.LastSeenRevision == notified {
+	if err != nil || !taskWatchable(current.Status) {
 		return
 	}
-	if err := m.store.UpdateTaskObservation(ctx, assistantID, taskID, view.Status, view.TurnID, view.Summary, notified); err != nil {
+	if seenNow, toldNow := parseWatchMark(current.LastSeenRevision); seenNow == seenKey || (toldNow == decision.Status && (decision.Status == "waiting_user" || decision.Status == "attention" || decision.Status == "stopped")) {
+		_ = m.store.RememberTaskSeen(ctx, assistantID, taskID, watchMark(seenKey, toldNow))
 		return
 	}
-	_ = m.updateTaskCardDetails(ctx, assistantID, taskID, view.Status, view.Summary)
-	m.enqueueLocked(ctx, BrainWake{AssistantID: assistantID, TaskKey: current.ID, DedupeKey: notified, Status: view.Status, Summary: view.Summary, WatchOnly: false})
+	if err := m.store.UpdateTaskObservation(ctx, assistantID, taskID, decision.Status, view.TurnID, view.Summary, watchMark(seenKey, decision.Status)); err != nil {
+		return
+	}
+	_ = m.updateTaskCardDetails(ctx, assistantID, taskID, decision.Status, view.Summary)
+	m.enqueueLocked(ctx, BrainWake{AssistantID: assistantID, TaskKey: current.ID, DedupeKey: decision.Status + "|" + seenKey, Status: decision.Status, Summary: view.Summary, WatchOnly: false})
 }
 
 func (m *Module) releaseWatch(deviceID, threadID, assistantID string) {
@@ -393,10 +426,6 @@ func (m *Module) deliverWakeLocked(ctx context.Context, wake BrainWake) {
 		responseID = newUUID()
 	}
 	started := m.now()
-	if err := m.store.AppendMessage(ctx, Message{ID: responseID, AssistantID: assistant.ID, Role: "assistant", Kind: "processing", Text: "正在根据任务状态写一条说明…", CreatedAt: started}); err != nil {
-		_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: assistant.ID, Role: "assistant", Kind: "text", Text: text, CardJSON: string(card)})
-		return
-	}
 	request := mustJSON(map[string]any{
 		"assistantId": assistant.ID, "threadId": assistant.BrainThreadID, "clientMessageId": responseID,
 		"text": taskEventEnvelope(assistant, wake), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
@@ -439,5 +468,5 @@ func taskEventEnvelope(assistant Assistant, wake BrainWake) string {
 		"status=" + wake.Status + "\n" +
 		"watch=" + mode + "\n" +
 		"summary=" + wake.Summary + "\n" +
-		"请用一条简短中文消息告知用户当前状态。watch_only 时不要调用 send_turn 或 start_task。执行任务进入 review 只表示这一轮结束，不等于任务完成。"
+		"这是一个新的结果。请用一句简短中文告诉用户，不要重复已经说过的话。watch_only 时不要调用 send_turn 或 start_task。若这没有新的结果，最终回复只写 PUCK_SILENT，不要写别的字；那条回复不会出现在对话里。review 只表示这一轮结束，不等于任务完成。"
 }

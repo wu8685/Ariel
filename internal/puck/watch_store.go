@@ -6,7 +6,7 @@ import (
 )
 
 type ThreadWatch struct {
-	ID, AssistantID, DeviceID, ThreadID, Status, LastTurnID, LastSummary, NotifiedKey string
+	ID, AssistantID, DeviceID, ThreadID, Status, LastTurnID, LastSummary, NotifiedKey, Until string
 }
 
 type BrainWake struct {
@@ -82,22 +82,22 @@ func (s *Store) BrainThreadMatch(ctx context.Context, threadID string) (bool, er
 
 func (s *Store) SaveThreadWatch(ctx context.Context, watch ThreadWatch) error {
 	now := nowText(time.Time{})
-	_, err := s.db.ExecContext(ctx, `INSERT INTO thread_watches(id,assistant_id,device_id,thread_id,status,last_turn_id,last_summary,notified_key,created_at,updated_at)
-		VALUES(?,?,?,?, 'watching', '', '', '', ?, ?)
-		ON CONFLICT(assistant_id, device_id, thread_id) DO UPDATE SET status='watching', notified_key='', updated_at=excluded.updated_at`,
-		watch.ID, watch.AssistantID, watch.DeviceID, watch.ThreadID, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO thread_watches(id,assistant_id,device_id,thread_id,status,last_turn_id,last_summary,notified_key,until_text,created_at,updated_at)
+		VALUES(?,?,?,?, 'watching', '', '', '', ?, ?, ?)
+		ON CONFLICT(assistant_id, device_id, thread_id) DO UPDATE SET status='watching', notified_key='', until_text=CASE WHEN excluded.until_text='' THEN thread_watches.until_text ELSE excluded.until_text END, updated_at=excluded.updated_at`,
+		watch.ID, watch.AssistantID, watch.DeviceID, watch.ThreadID, watch.Until, now, now)
 	return s.changed(err)
 }
 
 func (s *Store) ThreadWatch(ctx context.Context, assistantID, deviceID, threadID string) (ThreadWatch, error) {
 	var watch ThreadWatch
-	err := s.db.QueryRowContext(ctx, `SELECT id,assistant_id,device_id,thread_id,status,last_turn_id,last_summary,notified_key FROM thread_watches WHERE assistant_id=? AND device_id=? AND thread_id=?`, assistantID, deviceID, threadID).Scan(
-		&watch.ID, &watch.AssistantID, &watch.DeviceID, &watch.ThreadID, &watch.Status, &watch.LastTurnID, &watch.LastSummary, &watch.NotifiedKey)
+	err := s.db.QueryRowContext(ctx, `SELECT id,assistant_id,device_id,thread_id,status,last_turn_id,last_summary,notified_key,until_text FROM thread_watches WHERE assistant_id=? AND device_id=? AND thread_id=?`, assistantID, deviceID, threadID).Scan(
+		&watch.ID, &watch.AssistantID, &watch.DeviceID, &watch.ThreadID, &watch.Status, &watch.LastTurnID, &watch.LastSummary, &watch.NotifiedKey, &watch.Until)
 	return watch, err
 }
 
 func (s *Store) ActiveThreadWatches(ctx context.Context) ([]ThreadWatch, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT thread_watches.id,thread_watches.assistant_id,thread_watches.device_id,thread_watches.thread_id,thread_watches.status,thread_watches.last_turn_id,thread_watches.last_summary,thread_watches.notified_key
+	rows, err := s.db.QueryContext(ctx, `SELECT thread_watches.id,thread_watches.assistant_id,thread_watches.device_id,thread_watches.thread_id,thread_watches.status,thread_watches.last_turn_id,thread_watches.last_summary,thread_watches.notified_key,thread_watches.until_text
 		FROM thread_watches JOIN assistants ON assistants.id=thread_watches.assistant_id
 		WHERE thread_watches.status='watching' AND assistants.deleted_at IS NULL`)
 	if err != nil {
@@ -107,7 +107,7 @@ func (s *Store) ActiveThreadWatches(ctx context.Context) ([]ThreadWatch, error) 
 	var watches []ThreadWatch
 	for rows.Next() {
 		var watch ThreadWatch
-		if err := rows.Scan(&watch.ID, &watch.AssistantID, &watch.DeviceID, &watch.ThreadID, &watch.Status, &watch.LastTurnID, &watch.LastSummary, &watch.NotifiedKey); err != nil {
+		if err := rows.Scan(&watch.ID, &watch.AssistantID, &watch.DeviceID, &watch.ThreadID, &watch.Status, &watch.LastTurnID, &watch.LastSummary, &watch.NotifiedKey, &watch.Until); err != nil {
 			return nil, err
 		}
 		watches = append(watches, watch)
@@ -115,8 +115,18 @@ func (s *Store) ActiveThreadWatches(ctx context.Context) ([]ThreadWatch, error) 
 	return watches, rows.Err()
 }
 
-func (s *Store) SetWatchNotified(ctx context.Context, assistantID, deviceID, threadID, key, summary string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE thread_watches SET notified_key=?, last_summary=?, updated_at=? WHERE assistant_id=? AND device_id=? AND thread_id=?`, key, summary, nowText(time.Time{}), assistantID, deviceID, threadID)
+func (s *Store) RememberTaskSeen(ctx context.Context, assistantID, taskID, seen string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET last_seen_revision=?, updated_at=? WHERE assistant_id=? AND task_id=?`, seen, nowText(time.Time{}), assistantID, taskID)
+	return s.changed(err)
+}
+
+func (s *Store) RememberThreadSeen(ctx context.Context, assistantID, deviceID, threadID, seen string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE thread_watches SET last_turn_id=?, updated_at=? WHERE assistant_id=? AND device_id=? AND thread_id=?`, seen, nowText(time.Time{}), assistantID, deviceID, threadID)
+	return s.changed(err)
+}
+
+func (s *Store) SetWatchNotified(ctx context.Context, assistantID, deviceID, threadID, told, summary, seen string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE thread_watches SET notified_key=?, last_summary=?, last_turn_id=?, updated_at=? WHERE assistant_id=? AND device_id=? AND thread_id=?`, told, summary, seen, nowText(time.Time{}), assistantID, deviceID, threadID)
 	return s.changed(err)
 }
 

@@ -446,7 +446,7 @@ sequenceDiagram
 | `interrupt` | `taskId`／`threadId`, `turnId`, `reason` | 精确停止 | 策略引擎（B2／B3）→ `turn.interrupt` |
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
 | `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要。先读 Relay 热 cache，不新鲜时回退 `thread.read`；读不到现场时 `runtime=unknown`，不得把库里的旧 `running` 说成已完成 | Service 本地 cache，回退 `thread.read` |
-| `watch_thread` | `deviceId`, `threadId` | 只读监听一条本助理没有启动的现有会话，直到这一轮结束、被阻塞或失败，然后唤醒并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
+| `watch_thread` | `deviceId`, `threadId`, `until?` | 只读监听一条本助理没有启动的现有会话。`until` 是用户要等的结果。进度和重复状态不发消息；明确结果、失败、卡住或停止才通知并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
 | `request_authorization` | `summary`, `action` | Brain 主动就某事请用户授权（例如“是否部署”） | 生成授权卡片 |
 | `memory_read`／`memory_write`／`memory_delete` | — | 本助理记忆 | 删除命中 B9 |
 | `routine_list`／`routine_upsert`／`routine_delete` | — | 本助理 routine；创建／修改后在对话中显示例行卡片（E8） | 事件唤醒中命中 B7 |
@@ -608,11 +608,12 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 本切片按上面的原因补上，不把整份 P1（审批卡、通知中心、按类型开关、头像 PNG、B7–B9、brain 轮换）一次做完。
 
 1. **监听什么**：本助理 `tasks` 里仍可跟踪的执行线程（有 native thread，且状态不是 `done`／`cancelled`／`failed_dispatch`／`stopped`），以及 `thread_watches` 里状态为 `watching` 的只读监听。订阅走 `PuckBridge.Watch`，与 Web 共用同一个 Agent follower，不另开 native follower。
-2. **何时唤醒**：cache 或 `thread.read` 的新鲜快照显示这一轮 `completed`（任务进入 `review`，native turn 成功仍不等于任务完成）、出现待审批／待输入（`waiting_user`），或 turn `failed`／`interrupted`（`attention`）。唤醒信封是受信的 `kind=task_event`，只含 task id、新状态、最后一条助理消息的短摘要（折叠空白，最多 240 字）。不把交互 prompt、命令或完整 thread id 写进日志。
+2. **何时唤醒**：只在结果发生有意义的变化时唤醒。明确结果包括：这一轮给出了新的完成结论（`review`）、失败（`attention`）、需要审批或补充输入（`waiting_user`）、已停止（`stopped`），以及摘要满足本次监听的 `until`（例如“发布完成”或“卡住了”）。同一种状态重复出现、摘要没有变化、以及只是进度或心跳的 turn 结束（“还在检查”“没有变化”）不唤醒，任务保持进行中并继续听。长跑或定时汇报的线程因此不会每个 turn 都发一条聊天。唤醒信封是受信的 `kind=task_event`，只含 task id、新状态、最后一条助理消息的短摘要（折叠空白，最多 240 字）。不把交互 prompt、命令或完整 thread id 写进日志。
+2a. **沉默**：服务端先合并、去重，再决定是否唤醒。被唤醒后，大脑如果判断没有新的话要说，最终回复只写 `PUCK_SILENT`。这条约不入库、不出现在对话里，也不触发浏览器通知。每个明确结果最多一条简短摘要，不重复已经说过的内容。浏览器通知只对着这种用户可见的任务消息。
 3. **大脑忙或超限**：同一助理已有 brain turn 时，唤醒写入 `brain_wakes`，等当前 turn 结束后再发，不丢。同一任务 5 分钟内只交付一次，同一助理每分钟最多 6 次；多出来的合并进下一次窗口，保留最新状态和摘要。大脑离线时改写一条模板消息，仍然让用户看见。
 4. **重启**：监听对象就是 SQLite 里的任务行和 `thread_watches`。进程重启后按这些行重新 `Watch`，并用 `thread.read` 对账；Agent 重新上线时只重连该设备上的监听。不重放写操作。
-5. **只读监听**：`watch_thread` 给大脑一个办法盯住用户点名的、不是自己启动的会话。brain thread 仍是 `PUCK_SELF_TARGET`；别的助理的执行线程仍拒绝。监听期间和取消之后，对这条线程的 `send_turn` 都返回 `WATCH_ONLY`，除非它本来就是本助理自己的任务。B5／B6／B10／B8 的执行门禁不因监听而放宽。
-6. **对用户说话**：只有 `start_task` 成功或 `watch_thread` 返回 `watching:true` 之后，大脑才能答应“做完告诉你”。否则必须说明只能在用户再问时汇报。这句话写在 `developerInstructions` 里，也写进之后的每个受信 envelope，这样还没轮换的旧 brain thread 下一轮就能看到。`watch_thread` 使工具集版本变为 6；主机跟上之后，下一次用户消息会按既有规则轮换 brain thread。
+5. **只读监听**：`watch_thread` 给大脑一个办法盯住用户点名的、不是自己启动的会话，可选 `until` 写明要等到的结果。brain thread 仍是 `PUCK_SELF_TARGET`；别的助理的执行线程仍拒绝。监听期间和取消之后，对这条线程的 `send_turn` 都返回 `WATCH_ONLY`，除非它本来就是本助理自己的任务。B5／B6／B10／B8 的执行门禁不因监听而放宽。只读监听在出现明确结果后取消；进度汇报不取消、也不发消息。
+6. **对用户说话**：只有 `start_task` 成功或 `watch_thread` 返回 `watching:true` 之后，大脑才能答应“做完告诉你”。否则必须说明只能在用户再问时汇报。这句话写在 `developerInstructions` 里，也写进之后的每个受信 envelope，这样还没轮换的旧 brain thread 下一轮就能看到。`watch_thread` 的 `until` 使工具集版本变为 7；主机跟上之后，下一次用户消息会按既有规则轮换 brain thread。旧线程靠 envelope 里的 `PUCK_SILENT` 说明也能保持沉默。
 7. **页内通知**：任务事件落成用户可见消息后，如果本机已经在信息栏打开通知、浏览器权限是 granted、并且页面不在前台，Web 调用 Notification API；Service Worker 已注册时改由它 `showNotification`。`/sw.js` 不拦截 fetch。信息栏的开关在用户点击后才申请权限。
 
 ## 10. Web Push 通知（Q4 已决）
