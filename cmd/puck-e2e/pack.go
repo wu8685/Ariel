@@ -59,11 +59,25 @@ func cwdTrusted(cwd, workspace, agentDir string) bool {
 	if strings.TrimSpace(cwd) == "" {
 		return true
 	}
-	cleaned := filepath.Clean(cwd)
-	if agentDir != "" && pathWithin(cleaned, filepath.Clean(agentDir)) {
+	cwdPath := resolvePath(cwd)
+	agentPath := resolvePath(agentDir)
+	if agentPath != "" && pathWithin(cwdPath, agentPath) {
 		return false
 	}
-	return workspace != "" && cleaned == filepath.Clean(workspace)
+	workspacePath := resolvePath(workspace)
+	return workspacePath != "" && cwdPath == workspacePath
+}
+
+func resolvePath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if cleaned == "" || cleaned == "." {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	return resolved
 }
 
 func pathWithin(path, root string) bool {

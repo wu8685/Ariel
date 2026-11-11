@@ -98,7 +98,7 @@ func execute(ctx context.Context, opt options) (Report, error) {
 		{"C", "restart mid-queue", true, run.scenarioC},
 		{"D", "semantic merge", false, run.scenarioD},
 		{"E", "completion cleanup", true, run.scenarioE},
-		{"G", "ux metrics", false, run.scenarioG},
+		{"G", "ux metrics", true, run.scenarioG},
 		{"F", "unlink and delete", true, run.scenarioF},
 	}
 	for _, scenario := range order {
@@ -313,12 +313,12 @@ func (r *runner) scenarioG() ScenarioResult {
 	after := r.countSendMessages()
 	r.metrics.SendMessageCards = after
 	checks := []Check{
-		{Name: "ack-recorded", Pass: true, Detail: fmt.Sprintf("seen=%t", r.metrics.AckSeen)},
+		{Name: "ack-recorded", Pass: r.metrics.AckSeen, Detail: fmt.Sprintf("seen=%t", r.metrics.AckSeen)},
 		{Name: "send-message-once", Pass: after-before == 1, Detail: fmt.Sprintf("delta=%d", after-before)},
 		{Name: "tool-error-recovery", Pass: r.metrics.Fallbacks == 0, Detail: fmt.Sprintf("retries=%d fallbacks=%d", r.metrics.RetryNotices, r.metrics.Fallbacks)},
-		{Name: "system-context-lines", Pass: !r.metrics.SystemObserved || (r.metrics.HasHandoff && r.metrics.HasSave && r.metrics.HasMerge), Detail: fmt.Sprintf("lines=%d observed=%t", r.metrics.SystemLines, r.metrics.SystemObserved)},
+		{Name: "system-context-lines", Pass: r.metrics.SystemObserved && r.metrics.HasHandoff && r.metrics.HasSave && r.metrics.HasMerge, Detail: fmt.Sprintf("lines=%d observed=%t", r.metrics.SystemLines, r.metrics.SystemObserved)},
 	}
-	return softResult("G", "ux metrics", 1, checks)
+	return passResult("G", "ux metrics", checks)
 }
 
 func (r *runner) scenarioF() ScenarioResult {
@@ -326,26 +326,50 @@ func (r *runner) scenarioF() ScenarioResult {
 	if threadID == "" {
 		threadID = r.fixtureThread
 	}
-	linksBefore, _ := sessionLinksForThread(r.ctx, r.stack.iso.DBPath, r.assistantID, threadID)
+	if threadID == "" {
+		boot, err := r.client.call(r.ctx, "thread.bootstrap", r.stack.deviceID, map[string]any{
+			"cwd": r.stack.iso.WorkspaceB, "clientMessageId": newID(), "text": "FIXTURE_LINK 子会话，回复一句即可。",
+		}, r.step)
+		if err == nil && outcomeCode(boot) == "accepted" {
+			threadID, _ = dataOf(boot)["threadId"].(string)
+		}
+	}
+	linkErr := linkChildSession(r.ctx, r.stack.iso.DBPath, r.assistantID, r.stack.deviceID, threadID)
+	linksBefore, beforeErr := sessionLinksForThread(r.ctx, r.stack.iso.DBPath, r.assistantID, threadID)
+	archiveCode := "not-called"
 	if threadID != "" {
-		_, _ = r.client.call(r.ctx, "thread.archive.update", r.stack.deviceID, map[string]any{"threadId": threadID, "archived": true}, 30*time.Second)
+		archived, err := r.client.call(r.ctx, "thread.archive.update", r.stack.deviceID, map[string]any{"threadId": threadID, "archived": true}, 30*time.Second)
+		if err != nil {
+			archiveCode = "request-failed"
+		} else {
+			archiveCode = outcomeCode(archived)
+		}
 	}
 	deadline := time.Now().Add(45 * time.Second)
 	links := linksBefore
 	for time.Now().Before(deadline) {
 		links, _ = sessionLinksForThread(r.ctx, r.stack.iso.DBPath, r.assistantID, threadID)
-		if linksBefore == 0 || links == 0 {
+		if linksBefore > 0 && links == 0 {
 			break
 		}
 		time.Sleep(time.Second)
 	}
 	tasksBefore, _ := readSnapshot(r.ctx, r.stack.iso.DBPath, r.assistantID)
 	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": r.assistantID}, 30*time.Second)
-	gone, goneErr := assistantGone(r.ctx, r.stack.iso.DBPath, r.assistantID)
+	gone, goneDetail, goneErr := assistantGone(r.ctx, r.stack.iso.DBPath, r.assistantID)
+	deleteDetail := goneDetail
+	if err != nil {
+		deleteDetail = "request-failed " + deleteDetail
+	} else if outcomeCode(deleted) != "accepted" {
+		deleteDetail = outcomeCode(deleted) + " " + deleteDetail
+	}
+	if goneErr != nil && goneDetail == "" {
+		deleteDetail = goneErr.Error()
+	}
 	return passResult("F", "unlink and delete", []Check{
-		{Name: "unlink-session", Pass: linksBefore == 0 || links == 0, Detail: fmt.Sprintf("before=%d after=%d", linksBefore, links)},
-		{Name: "task-remained-until-delete", Pass: tasksBefore.BotTasks > 0 || linksBefore == 0, Detail: fmt.Sprintf("tasks=%d", tasksBefore.BotTasks)},
-		{Name: "delete-bot", Pass: err == nil && outcomeCode(deleted) == "accepted" && goneErr == nil && gone},
+		{Name: "unlink-session", Pass: linkErr == nil && beforeErr == nil && linksBefore > 0 && links == 0, Detail: fmt.Sprintf("before=%d after=%d archive=%s", linksBefore, links, archiveCode)},
+		{Name: "task-remained-until-delete", Pass: tasksBefore.BotTasks > 0, Detail: fmt.Sprintf("tasks=%d", tasksBefore.BotTasks)},
+		{Name: "delete-bot", Pass: err == nil && outcomeCode(deleted) == "accepted" && goneErr == nil && gone, Detail: deleteDetail},
 	})
 }
 
@@ -479,9 +503,19 @@ func (r *runner) countSendMessages() int {
 		return r.metrics.SendMessageCards
 	}
 	count := 0
+	seen := map[string]struct{}{}
 	for _, message := range messagesOf(history) {
+		id, _ := message["id"].(string)
+		if id == "" {
+			id = fmt.Sprintf("row-%d", count)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		text, _ := message["text"].(string)
 		card, _ := message["cardJSON"].(string)
-		if strings.Contains(card, "notify_user") {
+		if strings.Contains(card, "notify_user") || strings.Contains(text, "FIXTURE_NOTICE") {
+			seen[id] = struct{}{}
 			count++
 		}
 	}

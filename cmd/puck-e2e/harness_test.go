@@ -74,6 +74,30 @@ func TestInspectPackPrefersWorkspaceAndOmitsAgentState(t *testing.T) {
 	}
 }
 
+func TestCwdTrustedResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(real, "workspace-a")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	viaLink := filepath.Join(link, "workspace-a")
+	agentDir := filepath.Join(root, "agent-state")
+	if !cwdTrusted(viaLink, workspace, agentDir) {
+		t.Fatalf("symlink cwd was rejected: %s vs %s", viaLink, workspace)
+	}
+	if cwdTrusted(agentDir, workspace, agentDir) {
+		t.Fatal("agent state dir was accepted")
+	}
+}
+
 func TestSystemContextLineCount(t *testing.T) {
 	text := "【系统上下文】\nintro\n- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。\n- 接住的事用 save_bot_task 记成任务。\n- 新请求可能是旧任务的延续时，先 list_bot_tasks，是的话用 merge_bot_tasks。\n【机主自定义上下文】\n无\n"
 	lines, observed, handoff, save, merge := systemContextLines(text)

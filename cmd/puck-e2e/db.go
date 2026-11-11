@@ -3,10 +3,16 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+func openStateDB(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+}
 
 func openHarnessDB(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
@@ -67,7 +73,7 @@ type snapshot struct {
 }
 
 func readSnapshot(ctx context.Context, dbPath, assistantID string) (snapshot, error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)&mode=ro")
+	db, err := openStateDB(dbPath)
 	if err != nil {
 		return snapshot{}, err
 	}
@@ -96,7 +102,7 @@ func readSnapshot(ctx context.Context, dbPath, assistantID string) (snapshot, er
 }
 
 func messagePersisted(ctx context.Context, dbPath, assistantID, messageID string) (bool, error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)&mode=ro")
+	db, err := openStateDB(dbPath)
 	if err != nil {
 		return false, err
 	}
@@ -112,7 +118,7 @@ func messagePersisted(ctx context.Context, dbPath, assistantID, messageID string
 }
 
 func messageTask(ctx context.Context, dbPath, assistantID, messageID string) (string, string, string, error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)&mode=ro")
+	db, err := openStateDB(dbPath)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -128,7 +134,7 @@ func messageTask(ctx context.Context, dbPath, assistantID, messageID string) (st
 }
 
 func taskByFixture(ctx context.Context, dbPath, assistantID, fixture string) (id, status, merged string, err error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)&mode=ro")
+	db, err := openStateDB(dbPath)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -143,7 +149,7 @@ func taskByFixture(ctx context.Context, dbPath, assistantID, fixture string) (id
 }
 
 func sessionLinksForThread(ctx context.Context, dbPath, assistantID, threadID string) (int, error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)&mode=ro")
+	db, err := openStateDB(dbPath)
 	if err != nil {
 		return 0, err
 	}
@@ -153,19 +159,67 @@ func sessionLinksForThread(ctx context.Context, dbPath, assistantID, threadID st
 	return count, err
 }
 
-func assistantGone(ctx context.Context, dbPath, assistantID string) (bool, error) {
+func assistantGone(ctx context.Context, dbPath, assistantID string) (bool, string, error) {
 	snap, err := readSnapshot(ctx, dbPath, assistantID)
 	if err != nil {
-		return false, err
+		return false, "snapshot: " + err.Error(), err
 	}
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)&mode=ro")
+	db, err := openStateDB(dbPath)
 	if err != nil {
-		return false, err
+		return false, "open: " + err.Error(), err
 	}
 	defer db.Close()
 	var messages int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bot_task_messages WHERE assistant_id=?`, assistantID).Scan(&messages); err != nil {
-		return false, err
+		return false, "bot_task_messages: " + err.Error(), err
 	}
-	return snap.BotTasks == 0 && snap.Inbox == 0 && snap.SessionLinks == 0 && snap.Watches == 0 && snap.Wakes == 0 && messages == 0, nil
+	var left []string
+	if snap.BotTasks != 0 {
+		left = append(left, fmt.Sprintf("bot_tasks=%d", snap.BotTasks))
+	}
+	if messages != 0 {
+		left = append(left, fmt.Sprintf("bot_task_messages=%d", messages))
+	}
+	if snap.SessionLinks != 0 {
+		left = append(left, fmt.Sprintf("bot_task_sessions=%d", snap.SessionLinks))
+	}
+	if snap.Inbox != 0 {
+		left = append(left, fmt.Sprintf("bot_inbox=%d", snap.Inbox))
+	}
+	if snap.Watches != 0 {
+		left = append(left, fmt.Sprintf("watches=%d", snap.Watches))
+	}
+	if snap.Wakes != 0 {
+		left = append(left, fmt.Sprintf("wakes=%d", snap.Wakes))
+	}
+	if len(left) == 0 {
+		return true, "gone", nil
+	}
+	return false, strings.Join(left, " "), nil
+}
+
+func linkChildSession(ctx context.Context, dbPath, assistantID, deviceID, threadID string) error {
+	if assistantID == "" || deviceID == "" || threadID == "" {
+		return fmt.Errorf("missing link identity")
+	}
+	db, err := openStateDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var taskID string
+	err = db.QueryRowContext(ctx, `SELECT id FROM bot_tasks WHERE assistant_id=? AND status<>'merged' ORDER BY created_at LIMIT 1`, assistantID).Scan(&taskID)
+	if err == sql.ErrNoRows {
+		taskID = "e2e-linked-task"
+		if _, err = db.ExecContext(ctx, `INSERT INTO bot_tasks(id, assistant_id, title, goal, status, merged_into, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)`, taskID, assistantID, "FIXTURE_LINK", "linked child", "accepted", "", now, now); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO bot_task_sessions(bot_task_id, assistant_id, kind, ref_id, device_id, thread_id, created_at) VALUES(?,?,?,?,?,?,?)
+		ON CONFLICT(bot_task_id, kind, ref_id) DO UPDATE SET device_id=excluded.device_id, thread_id=excluded.thread_id`,
+		taskID, assistantID, "watch", threadID, deviceID, threadID, now)
+	return err
 }
