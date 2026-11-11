@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11；2026-11-11 用户要求实现分层 Bot 上下文与任务收尾：系统上下文由代码维护，每 Bot 自定义上下文存 SQLite，创建与右键「编辑」均可改；改自定义上下文不轮换 brain thread，下一轮受信 envelope 生效。`finish_task` 使工具集版本变为 8，见 §6.1.2）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -108,6 +108,7 @@
 
 1. 轻量表单（一屏）：名称（必填）、头像（可选，默认生成）、描述／用途（一句话，作为人设种子）、大脑主机选择器（只列在线且具备能力的主机）、允许的主机与目录（默认只含用户在此处勾选的主机与目录，不预填，可稍后改）。
 2. 提交后立即进入该助理的对话，显示“正在准备”；准备完成后由 **助理主动**发一条简短问候与入门引导（自我介绍、能做什么、一个问题卡片问用户第一件想交给它的事）。准备失败时在同一对话中说明原因并提供“重试”。
+3. 表单另有可选的「自定义上下文」（最多 4000 个 Unicode 字符）。它只补充该助理的习惯，不能改写系统安全规则。右键 Bot「编辑」打开的配置栏可以之后再改，保存后不更换大脑会话，从下一轮对话生效。系统上下文不在此编辑。
 
 #### UI6 设置（信息栏标签页内完成）
 
@@ -447,6 +448,7 @@ sequenceDiagram
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
 | `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要。先读 Relay 热 cache，不新鲜时回退 `thread.read`；读不到现场时 `runtime=unknown`，不得把库里的旧 `running` 说成已完成 | Service 本地 cache，回退 `thread.read` |
 | `watch_thread` | `deviceId`, `threadId`, `until?` | 只读监听一条本助理没有启动的现有会话。`until` 是用户要等的结果。进度和重复状态不发消息；明确结果、失败、卡住或停止才通知并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
+| `finish_task` | `taskId`, `outcome`（`completed`／`failed`／`cancelled`）, `note?` | 归档本助理自己的一条任务，关闭该执行线程上本助理的 watch，并删掉尚未投递的唤醒。不删除对话消息，不发送 turn | 只接受调用者自己的任务；brain thread 返回 `PUCK_SELF_TARGET`；不经过 `turn.start`，因此不能绕过 B2／B5／B6／B10／B8 |
 | `request_authorization` | `summary`, `action` | Brain 主动就某事请用户授权（例如“是否部署”） | 生成授权卡片 |
 | `memory_read`／`memory_write`／`memory_delete` | — | 本助理记忆 | 删除命中 B9 |
 | `routine_list`／`routine_upsert`／`routine_delete` | — | 本助理 routine；创建／修改后在对话中显示例行卡片（E8） | 事件唤醒中命中 B7 |
@@ -478,6 +480,31 @@ sequenceDiagram
 **仍然生效的门禁**：B2（只续投本助理任务表中的线程）、B5／B6、B10（执行策略无法强制时仍要授权，不自动派发）、B8（续投不新建执行线程，因此不占用新的并发线程名额；每小时派发上限只计实际新建）、`PUCK_SELF_TARGET`（不得把 brain 工作区或 brain thread 当成执行目标）。导流发生在这些检查之前或之中，不能绕过它们。
 
 **兼容**：不新增 `start_task`／`send_turn` 必填字段，不改变旧 Agent／旧 Web 的既有帧（0109）。结果里多出的 `reused` 等字段可被旧客户端忽略。显式新会话由用户原文和本次 `goal`／`prompt` 识别，不依赖新的工具参数，因此尚未轮换的 brain thread 也能被服务端纠正。
+
+### 6.1.2 分层上下文与任务收尾（2026-11-11）
+
+Puck 没有自己的定时器或 Codex automation。Bot 能留下的“定时任务”只存在于它用 `send_turn` 驱动的执行会话里。任务和 watch 记录在 Puck SQLite。会话监听、事件订阅和唤醒队列仍是 Puck 基础设施，不放进每个 Bot 的自定义上下文，自定义上下文也不能把它们关掉。
+
+**两层上下文**
+
+1. **系统上下文**写在代码里，随 `developerInstructions` 在 brain thread 创建时注入，并在之后每个受信 envelope（含问候、用户消息和 `kind=task_event`）重申。内容包括既有行为：先确认并在同一 turn 调用工具、默认同设备同目录续投、只在明确结果时开口、没有监听不得承诺主动通知、`PUCK_SILENT`、以及下面的收尾规则。
+2. **自定义上下文**是每个助理一条可选文本，最多 4000 个 Unicode 字符，存在 `assistants.custom_context`（schema 10）。创建表单和配置栏都能读写，经 `puck.create`／`puck.update` 的可选 `customContext`。空字符串表示没有额外要求。说明（`description`，最多 512 字）仍然是短人设，不取代这段文本。
+
+自定义上下文包在明确的低优先级围栏里。服务端会拆掉它试图伪造的「系统上下文」标题。与系统上下文、安全门禁或 `PUCK_SILENT` 冲突的句子无效。真正挡住越权的是服务端：`finish_task` 不读这段文字来决定能不能删记录。
+
+**编辑后如何生效**
+
+Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` 时固定，`thread/resume` 不会改写已经在跑的 brain。因此只改自定义上下文**不轮换、不 retire** 现有 brain thread，避免丢掉这段会话。下一轮受信 envelope 带上新的自定义上下文和仍然更高优先级的系统提醒。之后若因工具集升级或更换大脑主机而新建 brain thread，新的 `developerInstructions` 使用当时保存的自定义上下文。
+
+**收尾**
+
+任务有明确结果（完成、失败或用户要求停止）后，大脑应先收拾现场再汇报：
+
+1. 若它曾让执行会话创建定时、周期检查或 Codex automation，先 `send_turn(taskId)` 让那个会话关掉。`send_turn` 仍走 B2、B5、B6、B10、B8 和 `PUCK_SELF_TARGET`。
+2. 再调用 `finish_task`。服务端把该任务标为 `archived`（不再进入可复用线程列表，也不再被执行监听拉起），关闭**这个助理**在该设备与线程上的 watch，并删除这个助理尚未投递的对应唤醒。任务卡片改为「已归档」，对话消息原样保留。
+3. 别人的任务、watch、唤醒和聊天记录不动。目标若是任一 brain thread，返回 `PUCK_SELF_TARGET` 且不改记录。重复调用是成功且 `alreadyArchived=true`。`finish_task` 本身不调用 `turn.start` 或 `thread.bootstrap`，所以不能借它绕过执行门禁。
+
+`finish_task` 从工具集版本 8 起出现在 `dynamicTools`。主机仍停留在版本 7 时，系统上下文改为只要求用已有的 `send_turn` 取消定时任务，并禁止调用尚未声明的 `finish_task`。主机升到 8 之后，下一次用户消息按既有规则轮换 brain thread，以便声明新工具；这和只改自定义上下文不同，后者不轮换。
 
 写工具必须带幂等 ID；结果 `unknown` 时只重新读取权威状态，**不重放**。
 

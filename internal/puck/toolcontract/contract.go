@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 7
+const Version = 8
 const canonicalMutationToolVersion = 2
 
 const (
@@ -122,6 +122,11 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 		return Definition{Name: name, Description: "请求用户授权敏感动作；说明 action、reason，并尽量提供 deviceId、绝对 cwd 与摘要供卡片展示。", InputSchema: authorizationSchema()}, true
 	case "watch_thread":
 		return Definition{Name: name, Description: "只读监听一条本助理没有启动的现有 Codex 会话。until 写用户要等的结果，例如“发布完成”或“卡住了”。中间进度不会打扰用户；出现明确结果、失败、卡住或停止时才通知，然后取消监听。不会发送 turn，也不授予执行权。只有返回 watching 为 true 之后，才能向用户承诺会主动通知。", InputSchema: watchThreadSchema()}, true
+	case "finish_task":
+		if version < 8 {
+			return Definition{}, false
+		}
+		return Definition{Name: name, Description: "任务有明确结果后归档本助理自己的任务，并关闭这条执行线程上本助理的 watch 与尚未投递的唤醒。不删除对话历史，不发送 turn，不取消别人的任务。调用前如果曾在该执行会话里创建定时或周期任务，先用 send_turn 让那个会话关掉它。", InputSchema: finishTaskSchema()}, true
 	default:
 		return Definition{}, false
 	}
@@ -129,6 +134,9 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 
 func DynamicTools(version int) []map[string]any {
 	names := []string{"list_devices", "list_threads", "read_thread", "start_task", "send_turn", "interrupt", "respond_interaction", "get_task_status", "watch_thread", "request_authorization", "ask_user", "share_result", "react"}
+	if version >= 8 {
+		names = append(names, "finish_task")
+	}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		description := "Ariel Puck tool: " + name
@@ -157,6 +165,9 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 		return value, details
 	case "request_authorization":
 		value, details := DecodeAuthorization(raw)
+		return value, details
+	case "finish_task":
+		value, details := DecodeFinishTask(raw)
 		return value, details
 	default:
 		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "documented Puck tool"}}
@@ -747,6 +758,59 @@ func authorizationSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action", "reason"}, "properties": map[string]any{
 		"action": stringProperty(1, 512), "reason": stringProperty(1, 2048), "deviceId": stringProperty(1, maxIDLength), "cwd": map[string]any{"type": "string", "minLength": 1, "maxLength": maxCWDLength, "pattern": "^/"}, "summary": stringProperty(1, 2048),
 	}, "examples": []any{map[string]any{"action": "deploy", "reason": "需要发布已验证版本", "deviceId": "desktop-local", "cwd": "/workspace", "summary": "部署测试环境"}}}
+}
+
+type FinishTaskRequest struct {
+	TaskID  string `json:"taskId"`
+	Outcome string `json:"outcome"`
+	Note    string `json:"note,omitempty"`
+}
+
+func DecodeFinishTask(raw json.RawMessage) (FinishTaskRequest, []FieldError) {
+	var result FinishTaskRequest
+	fields, detail := decodeObject(raw)
+	if detail != nil {
+		return result, []FieldError{*detail}
+	}
+	if details := rejectUnknown(fields, "taskId", "outcome", "note"); len(details) != 0 {
+		return result, details
+	}
+	if detail := requiredString(fields, "taskId", &result.TaskID, "non-empty string with at most 128 characters"); detail != nil {
+		return result, []FieldError{*detail}
+	}
+	if len(result.TaskID) > maxIDLength {
+		return result, fieldError("taskId", "value is too long", "at most 128 characters")
+	}
+	if detail := requiredString(fields, "outcome", &result.Outcome, "completed, failed, or cancelled"); detail != nil {
+		return result, []FieldError{*detail}
+	}
+	switch result.Outcome {
+	case "completed", "failed", "cancelled":
+	default:
+		return result, fieldError("outcome", "unknown enum value", "completed, failed, or cancelled")
+	}
+	if rawNote, ok := fields["note"]; ok {
+		if json.Unmarshal(rawNote, &result.Note) != nil {
+			return result, fieldError("note", "value has invalid type", "string")
+		}
+		result.Note = strings.TrimSpace(result.Note)
+		if result.Note == "" || utf8.RuneCountInString(result.Note) > 240 {
+			return result, fieldError("note", "value has invalid length", "1 to 240 characters")
+		}
+	}
+	return result, nil
+}
+
+func finishTaskSchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"taskId", "outcome"},
+		"properties": map[string]any{
+			"taskId":  stringProperty(1, maxIDLength),
+			"outcome": map[string]any{"type": "string", "enum": []any{"completed", "failed", "cancelled"}},
+			"note":    stringProperty(1, 240),
+		},
+		"examples": []any{map[string]any{"taskId": "task-a", "outcome": "completed", "note": "定时检查已关闭"}},
+	}
 }
 
 func watchThreadSchema() map[string]any {

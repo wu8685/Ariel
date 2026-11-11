@@ -2,6 +2,8 @@ package puck
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -133,6 +135,71 @@ func (s *Store) SetWatchNotified(ctx context.Context, assistantID, deviceID, thr
 func (s *Store) CloseThreadWatch(ctx context.Context, assistantID, deviceID, threadID string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE thread_watches SET status='closed', updated_at=? WHERE assistant_id=? AND device_id=? AND thread_id=?`, nowText(time.Time{}), assistantID, deviceID, threadID)
 	return s.changed(err)
+}
+
+type TaskArchiveResult struct {
+	AlreadyArchived bool
+	ClosedWatches   int
+	ClosedWakes     int
+}
+
+// ArchiveOwnedTask marks one assistant's task archived and closes that assistant's
+// watch plus pending wakes for the task. It does not delete conversation messages.
+func (s *Store) ArchiveOwnedTask(ctx context.Context, assistantID, taskID, note string) (TaskArchiveResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskArchiveResult{}, err
+	}
+	defer tx.Rollback()
+	var status, deviceID, threadID string
+	err = tx.QueryRowContext(ctx, `SELECT status, device_id, native_thread_id FROM tasks WHERE assistant_id=? AND task_id=?`, assistantID, taskID).Scan(&status, &deviceID, &threadID)
+	if err != nil {
+		return TaskArchiveResult{}, err
+	}
+	result := TaskArchiveResult{AlreadyArchived: status == "archived"}
+	now := nowText(time.Time{})
+	if !result.AlreadyArchived {
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='archived', last_summary=CASE WHEN ?='' THEN last_summary ELSE ? END, updated_at=? WHERE assistant_id=? AND task_id=?`, note, note, now, assistantID, taskID); err != nil {
+			return TaskArchiveResult{}, err
+		}
+	}
+	if deviceID != "" && threadID != "" {
+		var watchID string
+		watchErr := tx.QueryRowContext(ctx, `SELECT id FROM thread_watches WHERE assistant_id=? AND device_id=? AND thread_id=?`, assistantID, deviceID, threadID).Scan(&watchID)
+		if watchErr != nil && !errors.Is(watchErr, sql.ErrNoRows) {
+			return TaskArchiveResult{}, watchErr
+		}
+		closed, err := tx.ExecContext(ctx, `UPDATE thread_watches SET status='closed', updated_at=? WHERE assistant_id=? AND device_id=? AND thread_id=? AND status<>'closed'`, now, assistantID, deviceID, threadID)
+		if err != nil {
+			return TaskArchiveResult{}, err
+		}
+		affected, _ := closed.RowsAffected()
+		result.ClosedWatches = int(affected)
+		keys := []string{taskID}
+		if watchID != "" && watchID != taskID {
+			keys = append(keys, watchID)
+		}
+		for _, key := range keys {
+			removed, err := tx.ExecContext(ctx, `DELETE FROM brain_wakes WHERE assistant_id=? AND task_key=?`, assistantID, key)
+			if err != nil {
+				return TaskArchiveResult{}, err
+			}
+			n, _ := removed.RowsAffected()
+			result.ClosedWakes += int(n)
+		}
+	} else {
+		removed, err := tx.ExecContext(ctx, `DELETE FROM brain_wakes WHERE assistant_id=? AND task_key=?`, assistantID, taskID)
+		if err != nil {
+			return TaskArchiveResult{}, err
+		}
+		n, _ := removed.RowsAffected()
+		result.ClosedWakes = int(n)
+	}
+	if err := tx.Commit(); err != nil {
+		return TaskArchiveResult{}, err
+	}
+	s.markChanged()
+	return result, nil
 }
 
 func (s *Store) UpsertBrainWake(ctx context.Context, wake BrainWake) error {

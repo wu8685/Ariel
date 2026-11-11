@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 9
+const storeSchemaVersion = 10
 
 type Store struct {
 	db       *sql.DB
@@ -28,7 +28,7 @@ type Store struct {
 var ErrAssistantLimitReached = errors.New("active assistant limit reached")
 
 type Assistant struct {
-	ID, Name, Avatar, Description, Persona                          string
+	ID, Name, Avatar, Description, Persona, CustomContext           string
 	BrainDeviceID, BrainCWD, BrainModel, BrainReasoning             string
 	BrainThreadID, BrainThreadHistory, AllowedScope, Policy, Limits string
 	Status                                                          string
@@ -244,6 +244,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version < 9 {
 		statements = append(statements, `ALTER TABLE thread_watches ADD COLUMN until_text TEXT NOT NULL DEFAULT ''`)
 	}
+	if version < 10 {
+		statements = append(statements, `ALTER TABLE assistants ADD COLUMN custom_context TEXT NOT NULL DEFAULT ''`)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
@@ -280,8 +283,8 @@ type assistantInserter interface {
 func insertAssistant(ctx context.Context, target assistantInserter, a Assistant) error {
 	now := nowText(time.Time{})
 	_, err := target.ExecContext(ctx, `INSERT INTO assistants
-		(id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Name, a.Avatar, a.Description, a.Persona, a.BrainDeviceID, a.BrainCWD, a.BrainModel, a.BrainReasoning, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), defaultJSON(a.Limits, "{}"), a.Status, a.UnreadCount, a.LastMessagePreview, now, now)
+		(id,name,avatar,description,persona,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Name, a.Avatar, a.Description, a.Persona, a.CustomContext, a.BrainDeviceID, a.BrainCWD, a.BrainModel, a.BrainReasoning, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), defaultJSON(a.Limits, "{}"), a.Status, a.UnreadCount, a.LastMessagePreview, now, now)
 	return err
 }
 
@@ -318,12 +321,12 @@ func defaultJSON(value, fallback string) string {
 
 func (s *Store) Assistant(ctx context.Context, id string) (Assistant, error) {
 	var a Assistant
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview FROM assistants WHERE id=? AND deleted_at IS NULL`, id).Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview)
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,avatar,description,persona,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview FROM assistants WHERE id=? AND deleted_at IS NULL`, id).Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.CustomContext, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview)
 	return a, err
 }
 
 func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,COALESCE((SELECT created_at FROM conversation_messages WHERE assistant_id=assistants.id ORDER BY created_at DESC,rowid DESC LIMIT 1), updated_at) FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,COALESCE((SELECT created_at FROM conversation_messages WHERE assistant_id=assistants.id ORDER BY created_at DESC,rowid DESC LIMIT 1), updated_at) FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +335,7 @@ func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
 	for rows.Next() {
 		var a Assistant
 		var activity string
-		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview, &activity); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.CustomContext, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview, &activity); err != nil {
 			return nil, err
 		}
 		a.LastActivityAt, _ = time.Parse(time.RFC3339Nano, activity)
@@ -355,8 +358,8 @@ func (s *Store) SetAssistantBrain(ctx context.Context, assistantID, threadID, st
 }
 
 func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,persona=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,policy=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
-		a.Name, a.Avatar, a.Description, a.Persona, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), a.Status, nowText(time.Time{}), a.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,persona=?,custom_context=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,policy=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
+		a.Name, a.Avatar, a.Description, a.Persona, a.CustomContext, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), a.Status, nowText(time.Time{}), a.ID)
 	if err != nil {
 		return err
 	}

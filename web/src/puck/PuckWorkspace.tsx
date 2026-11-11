@@ -13,7 +13,7 @@ type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: {
 type Request = (method: string, target: string, params: Record<string, unknown>) => Promise<PuckResponse>;
 type SubscribeEvents = (listener: (event: Record<string, unknown>) => void) => () => void;
 type Device = { deviceId: string; name?: string; capabilities?: Record<string, boolean> };
-type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string; lastActivityAt?: string };
+type Assistant = { assistantId: string; name: string; avatar?: string; description?: string; customContext?: string; brainDeviceId: string; status: string; permissionMode?: "full" | "ask"; unreadCount?: number; lastMessagePreview?: string; lastActivityAt?: string };
 type AuthorizationRule = { id: string; assistantId: string; actionType: string; deviceId: string; cwd: string; createdAt: string };
 type Message = { id: string; assistantId?: string; authorAssistantId?: string; authorName?: string; role: string; kind: string; text: string; cardJSON?: string; createdAt?: string; workSummary?: string; reaction?: string; replyTo?: string };
 type PuckGroup = { groupId: string; name: string; members: Array<{ assistantId: string; name: string }>; lastMessagePreview?: string; lastActivityAt?: string };
@@ -214,7 +214,7 @@ class PuckConversationErrorBoundary extends Component<{ children: ReactNode }, {
     return this.props.children;
   }
 }
-const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"需要你处理", awaiting_authorization:"等待授权", review:"这一轮已结束", attention:"需要关注", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败" };
+const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"需要你处理", awaiting_authorization:"等待授权", review:"这一轮已结束", attention:"需要关注", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败", archived:"已归档", cancelled:"已取消" };
 function QuestionCard({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:unknown)=>void }) {
   const customAnswerIme = useImeEnterGuard();
   const data = normalizeQuestionData(message);
@@ -380,6 +380,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	const [deleteTarget, setDeleteTarget] = useState<Assistant | undefined>(undefined);
 	const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState("");
+  const [createContext, setCreateContext] = useState("");
   const [brainDeviceID, setBrainDeviceID] = useState("");
 	const [submittingCard, setSubmittingCard] = useState("__none__");
 	const [authorizationRules, setAuthorizationRules] = useState<AuthorizationRule[]>([]);
@@ -409,6 +410,8 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const highlightTimer = useRef<number | undefined>(undefined);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [editingCustomContext, setEditingCustomContext] = useState(false);
+  const [customContextDraft, setCustomContextDraft] = useState("");
   const [avatarSheetOpen, setAvatarSheetOpen] = useState(false);
   const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
 
@@ -538,6 +541,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	let active = true;
 	if (messageAssistantRef.current !== selectedID) { messageAssistantRef.current = selectedID; setMessages([]); }
 	setEditingDescription(false); setDescriptionDraft(assistants.find(item => item.assistantId === selectedID)?.description || "");
+	setEditingCustomContext(false); setCustomContextDraft(assistants.find(item => item.assistantId === selectedID)?.customContext || "");
 	setAssistants(current => current.map(item => item.assistantId === selectedID ? { ...item, unreadCount: 0 } : item));
 	void request("puck.read", "relay", { assistantId: selectedID });
 	setAuthorizationRules([]);
@@ -679,13 +683,14 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     if (maxActiveAssistants !== undefined && assistants.length >= maxActiveAssistants) { setNotice(`最多可创建 ${maxActiveAssistants} 个 Bot。`); return; }
     const deviceID = brainDeviceID || readyBrains[0]?.deviceId;
     if (!name.trim() || !deviceID) { setNotice("请填写名称并选择可用的大脑主机。"); return; }
-    const response = await request("puck.create", "relay", { name: name.trim(), brainDeviceId: deviceID, allowedScope: {}, permissionMode: "full" });
+    const customContext = createContext.trim();
+    const response = await request("puck.create", "relay", { name: name.trim(), brainDeviceId: deviceID, allowedScope: {}, permissionMode: "full", ...(customContext ? { customContext } : {}) });
     if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
     listSequence.current += 1;
     const assistant = response.data?.assistant as Assistant;
     const greeting = response.data?.greeting as Record<string,unknown> | undefined;
 	const greetingMessages: Message[] = greeting?.state === "processing" ? [{ id:String(greeting.messageId), assistantId:assistant.assistantId, role:"assistant", kind:"processing", text:"正在准备…", workSummary:JSON.stringify({startedAt:greeting.startedAt,state:"running"}) }] : [];
-    setAssistants(current => [...current, assistant]); selectAssistant(assistant.assistantId, greetingMessages); setName(""); setCreating(false);
+    setAssistants(current => [...current, assistant]); selectAssistant(assistant.assistantId, greetingMessages); setName(""); setCreateContext(""); setCreating(false);
   }
   async function send() {
     if (activeGroup) { await sendGroup(); return; }
@@ -833,6 +838,16 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
 		const confirmed = response.data?.assistant as Assistant | undefined;
 		setAssistants(current => current.map(item => item.assistantId === selected.assistantId ? (confirmed || { ...item, description }) : item)); setEditingDescription(false);
+	}
+	async function saveCustomContext() {
+		if (!selected) return;
+		const customContext = customContextDraft.trim();
+		const assistantId = selected.assistantId;
+		const response = await request("puck.update", "relay", { assistantId, customContext });
+		if (response.outcome !== "accepted") { setNotice(responseError(response)); return; }
+		const confirmed = response.data?.assistant as Assistant | undefined;
+		setAssistants(current => current.map(item => item.assistantId === assistantId ? (confirmed || { ...item, customContext }) : item));
+		setEditingCustomContext(false);
 	}
 	async function updatePermissionMode(permissionMode: "full" | "ask") {
 		if (!selected || (selected.permissionMode || "full") === permissionMode) return;
@@ -1147,6 +1162,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       <header><h3>助理信息</h3><button className="puck-icon-btn" type="button" aria-label="关闭助理信息" onClick={closeInfo}>×</button></header>
       {activeGroup ? <div className="puck-info-content"><section className="puck-info-details"><h4>小组成员</h4><ul className="puck-group-members">{activeGroup.members.map(member => <li key={member.assistantId}><PuckAvatar assistantId={member.assistantId} name={member.name} design={avatarDesign(assistants.find(item => item.assistantId === member.assistantId) || { assistantId: member.assistantId, name: member.name, brainDeviceId: "", status: "ready" })} size="small"/><span>{member.name}</span></li>)}</ul><p>每位成员会用自己的大脑简短回复。这会打断该成员正在进行的一对一回合。</p></section></div> : selected ? <div className="puck-info-content">
         <div className="puck-avatar-editor"><button className="puck-avatar-edit" type="button" aria-label="编辑头像" onClick={() => setAvatarSheetOpen(true)}><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/></button><strong>{selected.name}</strong>{editingDescription ? <div className="puck-description-editor"><textarea aria-label="助理说明" maxLength={512} value={descriptionDraft} onChange={event=>setDescriptionDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={()=>{setEditingDescription(false);setDescriptionDraft(selected.description || "");}}>取消</button><button className="puck-btn primary" type="button" aria-label="保存说明" onClick={()=>void saveDescription()}>保存</button></div></div> : <><p>{selected.description || "尚未添加说明"}</p><button className="puck-description-edit" type="button" aria-label="编辑说明" onClick={()=>{setDescriptionDraft(selected.description || "");setEditingDescription(true);}}>编辑说明</button></>}</div>
+		<section className="puck-info-details"><h4>自定义上下文</h4>{editingCustomContext ? <div className="puck-description-editor"><textarea aria-label="自定义上下文" maxLength={4000} value={customContextDraft} onChange={event => setCustomContextDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={() => { setEditingCustomContext(false); setCustomContextDraft(selected.customContext || ""); }}>取消</button><button className="puck-btn primary" type="button" aria-label="保存自定义上下文" onClick={() => void saveCustomContext()}>保存</button></div></div> : <><p className={`puck-custom-context${selected.customContext ? "" : " is-empty"}`}>{selected.customContext || "尚未添加自定义上下文"}</p><button className="puck-description-edit" type="button" aria-label="编辑自定义上下文" onClick={() => { setCustomContextDraft(selected.customContext || ""); setEditingCustomContext(true); }}>编辑</button></>}<small>系统安全规则始终优先。修改从下一轮对话生效，不会更换大脑会话。</small></section>
 		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd><dt>任务通知</dt><dd><button className="puck-btn" type="button" aria-label="任务通知" aria-pressed={noticePref === "granted"} onClick={() => void enableTaskNotifications().then(setNoticePref)}>{noticePref === "granted" ? "已开启" : noticePref === "denied" ? "已被浏览器拒绝" : noticePref === "unsupported" ? "当前环境不可用" : "开启通知"}</button><small>离开这个页面时，任务完成、卡住或失败会弹出系统通知。关闭标签页后的推送还没接上。</small></dd></dl></section>
 		<section className="puck-authorization-rules"><h4>以后都允许</h4>{authorizationRules.length === 0 ? <p>尚未保存规则</p> : <ul>{authorizationRules.map(rule=><li key={rule.id}><div><strong>{rule.actionType}</strong><span>{rule.deviceId}</span><code>{rule.cwd}</code><time dateTime={rule.createdAt}>{new Date(rule.createdAt).toLocaleString("zh-CN")}</time></div><button className="puck-btn" type="button" aria-label={`撤销规则 ${rule.actionType} ${rule.cwd}`} onClick={()=>void revokeAuthorizationRule(rule.id)}>撤销</button></li>)}</ul>}</section>
 		<section className="puck-danger-zone"><h4>危险操作</h4><p>删除后，这个 Bot 及其历史将不再显示。</p><button className="puck-btn danger" type="button" onClick={()=>setDeleteTarget(selected)}>删除 Bot</button></section>
@@ -1157,7 +1173,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
     {renamingSection && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); void renameSection(); }}><h2>重命名分组</h2><label>分组名称<input aria-label="新的分组名称" value={renameDraft} onChange={event => setRenameDraft(event.target.value)} maxLength={24} autoFocus/></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setRenamingSection(undefined)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" disabled={!renameDraft.trim()}>保存</button></div></form></div>}
     {deletingSection && <div className="puck-dialog-backdrop" role="presentation"><section className="puck-dialog" role="dialog" aria-modal="true" aria-labelledby="puck-section-delete-title"><h2 id="puck-section-delete-title">删除分组</h2><p>删除“{deletingSection.name}”只会把里面的 Bot 和群聊移回「未分组」。</p><p className="puck-dialog-note">不会删除 Bot、群聊、会话或历史。</p><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setDeletingSection(undefined)}>取消</button><button className="puck-btn puck-btn-md danger" type="button" aria-label={`确认删除分组 ${deletingSection.name}`} onClick={() => void removeSection()}>删除</button></div></section></div>}
     {creatingGroup && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); if (!createIme.blocksFormSubmit()) void createGroup(); }}><h2>建群</h2><label>群名<input aria-label="群名" value={groupName} onChange={event => setGroupName(event.target.value)} maxLength={40} autoFocus/></label><fieldset className="puck-group-members"><legend>选择成员</legend>{assistants.map(item => <label key={item.assistantId}><input type="checkbox" checked={groupMemberIDs.includes(item.assistantId)} onChange={event => setGroupMemberIDs(current => event.target.checked ? [...current, item.assistantId] : current.filter(id => id !== item.assistantId))}/>{item.name}</label>)}</fieldset><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreatingGroup(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" disabled={!groupName.trim() || groupMemberIDs.length < 2}>创建</button></div></form></div>}
-    {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); if (!createIme.blocksFormSubmit()) void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} onCompositionStart={createIme.compositionStart} onCompositionEnd={createIme.compositionEnd} onBlur={createIme.blur} onKeyDown={event=>{createIme.classify(event);}} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><div><button className="puck-btn puck-btn-md" type="button" onClick={() => setCreating(false)}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" onPointerDown={createIme.allowExplicitFormSubmit}>创建</button></div></form></div>}
+    {creating && <div className="puck-dialog-backdrop" role="presentation"><form className="puck-dialog" onSubmit={event => { event.preventDefault(); if (!createIme.blocksFormSubmit()) void createAssistant(); }}><h2>新建助理</h2><label>助理名称<input aria-label="助理名称" value={name} onChange={event => setName(event.target.value)} onCompositionStart={createIme.compositionStart} onCompositionEnd={createIme.compositionEnd} onBlur={createIme.blur} onKeyDown={event=>{createIme.classify(event);}} autoFocus maxLength={80}/></label><label>大脑主机<select aria-label="大脑主机" value={brainDeviceID} onChange={event => setBrainDeviceID(event.target.value)}><option value="">请选择</option>{readyBrains.map(device => <option key={device.deviceId} value={device.deviceId}>{device.name || device.deviceId}</option>)}</select></label><label>自定义上下文<textarea aria-label="自定义上下文" value={createContext} onChange={event => setCreateContext(event.target.value)} maxLength={4000} placeholder="补充这个助理的习惯。系统安全规则始终优先，这里不能改写。"/></label><p className="puck-dialog-note">可选，最多 4000 字。保存后从下一轮对话生效，不更换大脑会话。</p><div><button className="puck-btn puck-btn-md" type="button" onClick={() => { setCreating(false); setCreateContext(""); }}>取消</button><button className="puck-btn puck-btn-md primary" type="submit" onPointerDown={createIme.allowExplicitFormSubmit}>创建</button></div></form></div>}
 		{rowDrag && <div className="puck-drag-ghost" aria-hidden="true" style={{ left: rowDrag.x, top: rowDrag.y }}>{rowDrag.name}</div>}
 		{sidebarMenu?.kind === "section" && <div className="puck-context-menu" role="menu" aria-label={`${sidebarMenu.name}分组菜单`} style={{ left: sidebarMenu.x, top: sidebarMenu.y }}><button type="button" role="menuitem" onClick={() => { setRenamingSection({ sectionId: sidebarMenu.id, name: sidebarMenu.name }); setRenameDraft(sidebarMenu.name); setSidebarMenu(undefined); }}>重命名</button><button type="button" role="menuitem" onClick={() => { setDeletingSection({ sectionId: sidebarMenu.id, name: sidebarMenu.name }); setSidebarMenu(undefined); }}>删除分组</button></div>}
 		{sidebarMenu?.kind === "blank" && <div className="puck-context-menu" role="menu" aria-label="侧边栏菜单" style={{ left: sidebarMenu.x, top: sidebarMenu.y }}><button type="button" role="menuitem" onClick={() => { setSectionName(""); setCreatingSection(true); setSidebarMenu(undefined); }}>建分组</button></div>}

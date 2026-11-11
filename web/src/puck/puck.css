@@ -1088,6 +1088,20 @@
   gap: var(--puck-space-2);
   margin-top: var(--puck-space-2);
 }
+.puck-workspace .puck-custom-context {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--color-text);
+}
+.puck-workspace .puck-custom-context.is-empty { color: var(--color-muted); }
+.puck-workspace .puck-info-details > small {
+  display: block;
+  margin-top: var(--puck-space-2);
+  color: var(--color-muted);
+  font-size: var(--puck-text-caption);
+  line-height: 1.5;
+}
 .puck-workspace .puck-info-details h4 {
   margin: 0;
   color: var(--color-muted);
@@ -1357,6 +1371,7 @@
 	font-size: var(--puck-text-ui);
 	line-height: var(--puck-leading-body);
 }
+.puck-dialog > .puck-dialog-note,
 .puck-delete-dialog > .puck-dialog-note {
 	margin-top: var(--puck-space-3);
 	color: var(--color-muted);
@@ -1369,6 +1384,19 @@
   color: var(--color-muted);
   font-size: var(--puck-text-caption);
   font-weight: var(--puck-weight-medium);
+}
+.puck-dialog textarea {
+  min-height: 120px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: var(--puck-space-3);
+  border: var(--puck-border) solid var(--color-border-strong);
+  border-radius: calc(var(--puck-radius-sm) + var(--puck-space-1) / 2);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--puck-text-ui);
+  line-height: 1.5;
 }
 .puck-dialog input,
 .puck-dialog select {
