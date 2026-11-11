@@ -577,6 +577,14 @@ Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒
 
 删除 Bot 时删掉它的任务、链接和 inbox。子会话消失时只解开 `bot_task_sessions` 里对应的链接，不删任务。主机广告到 11 后，下一次用户消息经 `ensureCurrentToolset` 轮换 brain thread。
 
+### 6.1.6 无头验收（2026-11-11）
+
+`cmd/puck-e2e` 与 `scripts/e2e/puck-e2e.sh` 只用于开发机验收 #93 与 #94，不进入 Relay 或 Desktop Agent 的生产启动路径，也不注册到 `ariel.sh`。
+
+它在临时目录启动隔离的 Relay（随机本机端口、临时 SQLite、临时 PIN）和隔离的 Desktop Agent（独立 `cwd` 与 Puck root，接本机 Codex app-server）。Owner 会话直接写进临时库，不走 Passkey，不读取、不修改 ArielLocal、真实 token、Passkey 凭据或 `~/.codex/config.toml`。驱动方式与 Web 相同：WebSocket `hello` 之后调用 `puck.*` 与 `thread.*`。
+
+场景 A–G 把断言写成 JSON。除 fixture 标记外不打印消息正文。D 与 G 依赖模型，记录结果并允许重试；失败记为 soft，不把整次验收当成硬失败。A、B、C、E、F 是硬断言。
+
 ## 7. Relay 内的入口与门禁
 
 ### 7.1 进程内编排接口（取代 `role=assistant` 连接）
