@@ -142,6 +142,7 @@
 | 0146 | [经典会话就绪与 Puck 小组](0146-classic-session-readiness-and-puck-group.md) | Implemented（2026-11-10；相关单测通过，Darwin 截图基线待重拍） | 切换经典会话时先显示已有内容并在超时后自动重试；明显的回到最新；Puck 加号菜单里建群；活体头像光环；收起已处理授权卡 |
 | 0147 | [Puck 头像与侧边栏对照截图](0147-grok-avatar-option-parity.md) | Implemented（2026-11-10；轮廓为截图外轮廓简化，侧栏尺寸是比例换算） | 选择器按截图的 13 个形状和白色起首的 11 色；侧栏头像 44px、间距 17px；群聊行叠放成员头像 |
 | 0148 | [Puck 侧边栏分组](0148-puck-sidebar-sections.md) | Implemented（2026-11-10） | 空白处右键建分组；可改名、收起和移动 Bot 与群聊；删除分组只取消归属；加号菜单与名称搜索；状态保存在 owner 的 Puck SQLite |
+| 0150 | [Puck Bot 配置栏默认收起](0150-puck-bot-config-column.md) | Implemented（2026-11-10；未合并、未部署） | 日常会话右侧配置栏默认收起；Bot 行右键「编辑」打开；空白处右键仍是「建分组」 |
 
 ## 设计基线
 
