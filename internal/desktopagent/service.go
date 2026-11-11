@@ -192,6 +192,7 @@ type Service struct {
 	placeholderGrace time.Duration
 	idleGrace        time.Duration
 	archiveUndo      []archiveUndoRecord
+	agentStateDir    string
 }
 
 type archiveUndoRecord struct {
@@ -214,6 +215,23 @@ func NewService(history History, attach LiveFactory, queue ...FollowUpQueue) *Se
 }
 
 func (s *Service) QueueEnabled() bool { return s.queue != nil }
+
+// SetAgentStateDir records the working directory this agent was started with.
+// thread/read often reports that directory as thread.cwd; callers can reject
+// it instead of treating it as the session workspace.
+func (s *Service) SetAgentStateDir(dir string) {
+	if s == nil {
+		return
+	}
+	s.agentStateDir = strings.TrimSpace(dir)
+}
+
+func (s *Service) annotateAgentState(thread map[string]any) {
+	if thread == nil || strings.TrimSpace(s.agentStateDir) == "" {
+		return
+	}
+	thread["agentStateDir"] = s.agentStateDir
+}
 
 func (s *Service) SetThreadCreator(creator ThreadCreator) { s.creator = creator }
 func (s *Service) ThreadCreationEnabled() bool            { return s.creator != nil }
@@ -888,6 +906,7 @@ func (s *Service) List(ctx context.Context, limit int, cursor string) ([]map[str
 		if e != nil {
 			return nil, "", e
 		}
+		s.annotateAgentState(thread)
 		if e = checkThreadSize(thread); e != nil {
 			return nil, "", e
 		}
@@ -922,6 +941,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int, cursor st
 			snippet = snippet[:400]
 		}
 		thread["searchSnippet"] = string(snippet)
+		s.annotateAgentState(thread)
 		if err := checkThreadSize(thread); err != nil {
 			return nil, "", err
 		}
@@ -948,6 +968,7 @@ func (s *Service) Read(ctx context.Context, id string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.annotateAgentState(thread)
 	if _, ok := s.history.(PagedHistory); !ok {
 		thread["historyComplete"] = true
 		thread["recentComplete"] = true

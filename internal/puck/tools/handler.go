@@ -233,6 +233,10 @@ func (h *Handler) startTask(ctx context.Context, call Call, authorized bool) Too
 	}
 	if call.SourceMessageID != "" {
 		input.ClientTaskID = stableTaskID(call.AssistantID, call.SourceMessageID)
+	} else if input.ClientTaskID == "" {
+		input.ClientTaskID = toolcontract.FillUUID("")
+	}
+	if call.SourceMessageID != "" {
 		if existing, err := h.backend.TaskBySourceMessage(ctx, call.AssistantID, call.SourceMessageID); err == nil {
 			if sameExecutionTarget(existing, input.DeviceID, input.CWD) {
 				return ToolResult{Success: true, Data: taskData(existing)}
@@ -639,6 +643,7 @@ func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) Tool
 	if len(details) != 0 {
 		return invalidArguments("invalid send_turn arguments", details)
 	}
+	input.ClientMessageID = toolcontract.FillUUID(input.ClientMessageID)
 	deviceID, threadID := input.DeviceID, input.ThreadID
 	if input.TaskID != "" {
 		task, err := h.backend.Task(ctx, call.AssistantID, input.TaskID)
@@ -805,8 +810,23 @@ func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
 		ThreadID string `json:"threadId"`
 		Until    string `json:"until"`
 	}
-	if json.Unmarshal(call.Arguments, &input) != nil || strings.TrimSpace(input.DeviceID) == "" || strings.TrimSpace(input.ThreadID) == "" || len(input.DeviceID) > 128 || len(input.ThreadID) > 128 || len([]rune(input.Until)) > 240 {
-		return toolError("INVALID_ARGUMENT", "deviceId and threadId are required")
+	if json.Unmarshal(call.Arguments, &input) != nil {
+		return toolError("INVALID_ARGUMENT", "threadId is required")
+	}
+	input.DeviceID = strings.TrimSpace(input.DeviceID)
+	input.ThreadID = strings.TrimSpace(input.ThreadID)
+	if input.ThreadID == "" || len(input.ThreadID) > 128 || len(input.DeviceID) > 128 || len([]rune(input.Until)) > 240 {
+		return toolError("INVALID_ARGUMENT", "threadId is required")
+	}
+	if input.DeviceID == "" {
+		deviceID, err := h.defaultWatchDevice(ctx, call.AssistantID, input.ThreadID)
+		if err != nil {
+			return toolError("PUCK_UNAVAILABLE", err.Error())
+		}
+		input.DeviceID = deviceID
+	}
+	if input.DeviceID == "" {
+		return toolError("INVALID_ARGUMENT", "deviceId is required when more than one device is online")
 	}
 	code, err := h.backend.ThreadAccess(ctx, call.AssistantID, input.DeviceID, input.ThreadID)
 	if err != nil {
@@ -837,6 +857,48 @@ func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return ToolResult{Success: true, Data: map[string]any{"watchId": watchID, "deviceId": input.DeviceID, "threadId": input.ThreadID, "watching": true, "watchOnly": true}}
+}
+
+type deviceHint interface {
+	DeviceHint(context.Context, string, string) (string, []string, error)
+}
+
+func (h *Handler) defaultWatchDevice(ctx context.Context, assistantID, threadID string) (string, error) {
+	online := onlineDeviceIDs(h.orchestrator.Devices())
+	var brain string
+	var known []string
+	if hint, ok := h.backend.(deviceHint); ok {
+		var err error
+		brain, known, err = hint.DeviceHint(ctx, assistantID, threadID)
+		if err != nil {
+			return "", err
+		}
+	}
+	if len(known) == 1 {
+		return known[0], nil
+	}
+	if len(online) == 1 {
+		return online[0], nil
+	}
+	brain = strings.TrimSpace(brain)
+	for _, id := range online {
+		if id == brain {
+			return brain, nil
+		}
+	}
+	return "", nil
+}
+
+func onlineDeviceIDs(devices []map[string]any) []string {
+	var ids []string
+	for _, device := range devices {
+		id, _ := device["deviceId"].(string)
+		if strings.TrimSpace(id) == "" || device["agentOnline"] != true {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (h *Handler) sendMessage(ctx context.Context, call Call) ToolResult {

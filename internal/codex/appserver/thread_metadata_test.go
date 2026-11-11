@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -45,9 +46,11 @@ func (f *metadataRPC) Call(_ context.Context, method string, params any, result 
 		if f.readErr != nil {
 			return f.readErr
 		}
-		result.(*struct {
-			Thread Thread `json:"thread"`
-		}).Thread = f.thread
+		body, err := json.Marshal(map[string]any{"thread": f.thread})
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(body, result)
 	case "thread/list":
 		page := result.(*Page)
 		if f.pinned {

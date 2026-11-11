@@ -16,6 +16,49 @@ type handoffCandidate struct {
 	taskID, deviceID, threadID, cwd, title string
 }
 
+func (b toolBackend) DeviceHint(ctx context.Context, assistantID, threadID string) (string, []string, error) {
+	assistant, err := b.module.store.Assistant(ctx, assistantID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+	var known []string
+	tasks, err := b.module.store.Tasks(ctx, assistantID)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, task := range tasks {
+		if task.NativeThreadID == threadID {
+			known = addDevice(known, task.DeviceID)
+		}
+	}
+	watches, err := b.module.store.ThreadWatches(ctx, assistantID)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, watch := range watches {
+		if watch.ThreadID == threadID {
+			known = addDevice(known, watch.DeviceID)
+		}
+	}
+	return assistant.BrainDeviceID, known, nil
+}
+
+func addDevice(known []string, deviceID string) []string {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return known
+	}
+	for _, existing := range known {
+		if existing == deviceID {
+			return known
+		}
+	}
+	return append(known, deviceID)
+}
+
 func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.HandoffQuery) (pucktools.Handoff, error) {
 	assistant, err := b.module.store.Assistant(ctx, query.AssistantID)
 	if err != nil {
@@ -70,7 +113,7 @@ func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.Handoff
 		}
 		sessions = append(sessions, pucktools.HandoffSession{
 			Title: title, DeviceID: candidate.deviceID, ThreadID: candidate.threadID,
-			CWD: pucktools.ChooseWorkspace(facts.SessionCWD, candidate.cwd, facts.TurnCWD, facts.ThreadCWD),
+			CWD: pucktools.ChooseWorkspace(facts.SessionCWD, candidate.cwd, facts.TurnCWD, facts.ThreadCWD, facts.AgentStateDir),
 		})
 	}
 	return pucktools.Handoff{Sessions: sessions}, nil

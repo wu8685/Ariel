@@ -2,6 +2,7 @@ package toolcontract
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -117,7 +118,7 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 	case "start_task":
 		return Definition{Name: name, Description: "在指定设备和已存在的绝对 workspace 中创建执行任务，并原子发送首条输入。如果可信上下文里已有同一 deviceId 与 cwd 的可复用执行线程，应改调用 send_turn；即使用户没说新会话，Relay 也会把 start_task 续投到该线程。只有设备或目录不同、旧线程不可用，或用户明确要求新会话／独立任务时才新建。cwd 必须直接使用 list_threads/read_thread 返回的值或用户确认的路径，不得猜测 /workspace 等路径。taskId 由 Relay 分配，不要生成 clientTaskId。无论 Bot 是 Full Access 还是每次询问模式，只要需要目标 workspace 实际执行就调用；授权由 Relay 处理，调用本工具不代表绕过授权。", InputSchema: startTaskSchema(version)}, true
 	case "send_turn":
-		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。", InputSchema: sendTurnSchema(version)}, true
+		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。clientMessageId 可省略；给出合法 UUID 时用它去重，否则由 Relay 生成。", InputSchema: sendTurnSchema(version)}, true
 	case "ask_user":
 		return Definition{Name: name, Description: "向用户展示结构化问题卡。通常只传 question 与 options；确需同时决定多个相关事项时才传 questions。必须使用本工具，不要调用 Codex request_user_input。", InputSchema: askUserSchema()}, true
 	case "share_result":
@@ -125,7 +126,7 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 	case "request_authorization":
 		return Definition{Name: name, Description: "请求用户授权敏感动作；说明 action、reason，并尽量提供 deviceId、绝对 cwd 与摘要供卡片展示。", InputSchema: authorizationSchema()}, true
 	case "watch_thread":
-		return Definition{Name: name, Description: "只读监听一条本助理没有启动的现有 Codex 会话。until 写用户要等的结果，例如“发布完成”或“卡住了”。中间进度不会打扰用户；出现明确结果、失败、卡住或停止时才通知，然后取消监听。不会发送 turn，也不授予执行权。只有返回 watching 为 true 之后，才能向用户承诺会主动通知。", InputSchema: watchThreadSchema()}, true
+		return Definition{Name: name, Description: "只读监听一条本助理没有启动的现有 Codex 会话。deviceId 可省略：这条会话只绑定过一台设备、只有一台设备在线，或能确定大脑自己的主机时会自动选。until 写用户要等的结果，例如“发布完成”或“卡住了”。中间进度不会打扰用户；出现明确结果、失败、卡住或停止时才通知，然后取消监听。不会发送 turn，也不授予执行权。只有返回 watching 为 true 之后，才能向用户承诺会主动通知。", InputSchema: watchThreadSchema()}, true
 	case "finish_task":
 		if version < 8 {
 			return Definition{}, false
@@ -480,7 +481,6 @@ func DecodeStartTask(raw json.RawMessage) (StartTaskRequest, []FieldError) {
 		{"cwd", &value.CWD, "absolute path with at most 4096 characters"},
 		{"goal", &value.Goal, "non-empty string with at most 512 characters"},
 		{"prompt", &value.Prompt, "non-empty string with at most 65536 characters"},
-		{"clientTaskId", &value.ClientTaskID, "UUID"},
 	}
 	for _, check := range checks {
 		if detail := requiredString(fields, check.name, check.target, check.expected); detail != nil {
@@ -499,9 +499,7 @@ func DecodeStartTask(raw json.RawMessage) (StartTaskRequest, []FieldError) {
 	if utf8.RuneCountInString(value.Prompt) > maxTextLength {
 		return value, fieldError("prompt", "value is too long", checks[3].expected)
 	}
-	if !uuidPattern.MatchString(value.ClientTaskID) {
-		return value, fieldError("clientTaskId", "value has invalid format", checks[4].expected)
-	}
+	value.ClientTaskID = optionalUUID(fields, "clientTaskId")
 	tags, details := decodeRiskTags(fields)
 	if len(details) != 0 {
 		return value, details
@@ -531,12 +529,7 @@ func DecodeSendTurn(raw json.RawMessage) (SendTurnRequest, []FieldError) {
 	if utf8.RuneCountInString(value.Text) > maxTextLength {
 		return value, fieldError("text", "value is too long", "non-empty string with at most 65536 characters")
 	}
-	if detail := requiredString(fields, "clientMessageId", &value.ClientMessageID, "UUID"); detail != nil {
-		return value, []FieldError{*detail}
-	}
-	if !uuidPattern.MatchString(value.ClientMessageID) {
-		return value, fieldError("clientMessageId", "value has invalid format", "UUID")
-	}
+	value.ClientMessageID = optionalUUID(fields, "clientMessageId")
 	tags, details := decodeRiskTags(fields)
 	if len(details) != 0 {
 		return value, details
@@ -729,7 +722,7 @@ func startTaskSchema(version int) map[string]any {
 		"goal":         stringProperty(1, maxGoalLength),
 		"prompt":       stringProperty(1, maxTextLength),
 		"riskTags":     riskTagsProperty(),
-		"clientTaskId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "Legacy compatibility only; Relay ignores this value for trusted Brain calls and assigns the task id."},
+		"clientTaskId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "可选。合法 UUID 会保留给没有来源消息的调用去重；缺省或不是 UUID 时由 Relay 分配，可信 Brain 调用仍按来源消息分配。"},
 	}
 	if version >= 10 {
 		properties["includeMessages"] = idListSchema("可选。这些 Ariel 消息里点名的、本助理拥有或监听过的会话会作为参考附上，不会把消息正文贴进子会话。")
@@ -751,7 +744,7 @@ func sendTurnSchema(version int) map[string]any {
 		"threadId":        stringProperty(1, maxIDLength),
 		"text":            stringProperty(1, maxTextLength),
 		"riskTags":        riskTagsProperty(),
-		"clientMessageId": map[string]any{"type": "string", "format": "uuid", "pattern": uuidPattern.String()},
+		"clientMessageId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "可选。合法 UUID 会原样保留，用来去重；缺省或不是 UUID 时由 Relay 生成。"},
 	}
 	if version >= 10 {
 		properties["includeMessages"] = idListSchema("可选。这些 Ariel 消息里点名的、本助理拥有或监听过的会话会作为参考附上，不会把消息正文贴进子会话。")
@@ -760,7 +753,7 @@ func sendTurnSchema(version int) map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"text", "riskTags", "clientMessageId"},
+		"required":             []string{"text", "riskTags"},
 		"properties":           properties,
 		"oneOf": []any{
 			map[string]any{"required": []string{"taskId"}, "not": map[string]any{"anyOf": []any{map[string]any{"required": []string{"deviceId"}}, map[string]any{"required": []string{"threadId"}}}}},
@@ -890,12 +883,39 @@ func DecodeSendMessage(raw json.RawMessage) (SendMessageRequest, []FieldError) {
 	if result.Text == "" || utf8.RuneCountInString(result.Text) > 4000 {
 		return result, fieldError("text", "value has invalid length", "1 to 4000 characters")
 	}
-	if rawID, ok := fields["clientMessageId"]; ok {
-		if json.Unmarshal(rawID, &result.ClientMessageID) != nil || !uuidPattern.MatchString(result.ClientMessageID) {
-			return result, fieldError("clientMessageId", "value is not a UUID", "UUID")
-		}
-	}
+	result.ClientMessageID = optionalUUID(fields, "clientMessageId")
 	return result, nil
+}
+
+// optionalUUID keeps a valid UUID and drops a missing or invalid one so the
+// caller can generate a replacement. Idempotency stays with the UUID the
+// caller actually supplied.
+func optionalUUID(fields map[string]json.RawMessage, name string) string {
+	raw, ok := fields[name]
+	if !ok || string(raw) == "null" {
+		return ""
+	}
+	var id string
+	if json.Unmarshal(raw, &id) != nil || !uuidPattern.MatchString(strings.TrimSpace(id)) {
+		return ""
+	}
+	return id
+}
+
+// FillUUID returns id when it is a UUID and a new UUID otherwise.
+func FillUUID(id string) string {
+	if uuidPattern.MatchString(id) {
+		return id
+	}
+	return NewUUID()
+}
+
+func NewUUID() string {
+	var buf [16]byte
+	_, _ = rand.Read(buf[:])
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
 func sendMessageSchema() map[string]any {
@@ -903,7 +923,7 @@ func sendMessageSchema() map[string]any {
 		"type": "object", "additionalProperties": false, "required": []string{"text"},
 		"properties": map[string]any{
 			"text":            stringProperty(1, 4000),
-			"clientMessageId": map[string]any{"type": "string", "minLength": 36, "maxLength": 36},
+			"clientMessageId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "可选。合法 UUID 会原样保留；缺省或不是 UUID 时由 Relay 生成。"},
 		},
 	}
 }
@@ -921,7 +941,8 @@ func finishTaskSchema() map[string]any {
 }
 
 func watchThreadSchema() map[string]any {
-	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"deviceId", "threadId"}, "properties": map[string]any{
-		"deviceId": stringProperty(1, maxIDLength), "threadId": stringProperty(1, maxIDLength), "until": stringProperty(1, 240),
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"threadId"}, "properties": map[string]any{
+		"deviceId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "可选。省略时，优先用这条会话已经绑定的唯一设备，否则用唯一在线设备或大脑自己的主机。"},
+		"threadId": stringProperty(1, maxIDLength), "until": stringProperty(1, 240),
 	}}
 }

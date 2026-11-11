@@ -312,27 +312,32 @@ func TestStartTaskUsesTrustedSourceIdentityInsteadOfBrainGeneratedID(t *testing.
 	}
 }
 
-func TestStartTaskWithoutTrustedSourceStillRequiresUUID(t *testing.T) {
-	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+func TestStartTaskWithoutTrustedSourceGeneratesUUID(t *testing.T) {
+	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).ExecuteAuthorized(context.Background(), Call{
 		AssistantID: "assistant-a", Tool: "start_task",
 		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[]}`),
 	})
-	if result.Success || result.Code != "INVALID_ARGUMENT" || len(result.Details) == 0 || result.Details[0].Field != "clientTaskId" {
-		t.Fatalf("untrusted missing identity was accepted: %+v", result)
+	taskID, _ := result.Data["taskId"].(string)
+	if !result.Success || taskID == "" {
+		t.Fatalf("missing clientTaskId was not generated: %+v", result)
 	}
 }
 
-func TestStartTaskTrustedIdentityDoesNotRelaxUnknownOrInvalidFields(t *testing.T) {
-	for _, raw := range []string{
-		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":7}`,
-		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"unknown":true}`,
-	} {
-		result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
-			AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task", Arguments: json.RawMessage(raw),
-		})
-		if result.Success || result.Code != "INVALID_ARGUMENT" {
-			t.Fatalf("unsafe field was accepted: raw=%s result=%+v", raw, result)
-		}
+func TestStartTaskTrustedIdentityDoesNotRelaxUnknownFields(t *testing.T) {
+	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"unknown":true}`),
+	})
+	if result.Success || result.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("unknown field was accepted: %+v", result)
+	}
+	generated := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":7}`),
+	})
+	taskID, _ := generated.Data["taskId"].(string)
+	if !generated.Success || taskID == "" || taskID == "7" {
+		t.Fatalf("numeric clientTaskId was not replaced: %+v", generated)
 	}
 }
 
@@ -417,7 +422,7 @@ func TestMutationValidationReturnsSafeFieldDetails(t *testing.T) {
 		tool, raw, field string
 	}{
 		{"start_task", `{}`, "deviceId"},
-		{"send_turn", `{"taskId":"task-a","text":"x","riskTags":[],"clientMessageId":"bad"}`, "clientMessageId"},
+		{"send_turn", `{"taskId":"task-a","text":"","riskTags":[]}`, "text"},
 	} {
 		result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: test.tool, Arguments: json.RawMessage(test.raw)})
 		if result.Code != "INVALID_ARGUMENT" || len(result.Details) == 0 || result.Details[0].Field != test.field {
@@ -428,6 +433,91 @@ func TestMutationValidationReturnsSafeFieldDetails(t *testing.T) {
 			t.Fatalf("error echoed arguments: %s", encoded)
 		}
 	}
+}
+
+func TestSendTurnFillsClientMessageID(t *testing.T) {
+	valid := "00000000-0000-4000-8000-000000000002"
+	for _, raw := range []string{
+		`{"taskId":"task-a","text":"continue","riskTags":[]}`,
+		`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"not-a-uuid"}`,
+		`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"` + valid + `"}`,
+	} {
+		orchestrator := &fakeOrchestrator{}
+		handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{"task-a": {ID: "task-a", AssistantID: "assistant-a", DeviceID: "exec-a", NativeThreadID: "thread-a"}}})
+		result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(raw)})
+		if !result.Success || len(orchestrator.params) != 1 {
+			t.Fatalf("raw=%s result=%+v", raw, result)
+		}
+		var params struct {
+			ClientMessageID string `json:"clientMessageId"`
+		}
+		if json.Unmarshal(orchestrator.params[0], &params) != nil || params.ClientMessageID == "" || params.ClientMessageID == "not-a-uuid" {
+			t.Fatalf("raw=%s params=%s", raw, orchestrator.params[0])
+		}
+		if strings.Contains(raw, valid) && params.ClientMessageID != valid {
+			t.Fatalf("valid id was replaced: %s", params.ClientMessageID)
+		}
+	}
+}
+
+func TestStartTaskWithoutClientTaskIDStillBootstraps(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"task-a"}`)})
+	if !result.Success || result.Data["taskId"] == "task-a" || result.Data["taskId"] == "" {
+		t.Fatalf("result=%+v", result)
+	}
+	var params struct {
+		ClientMessageID string `json:"clientMessageId"`
+	}
+	if json.Unmarshal(orchestrator.params[0], &params) != nil || params.ClientMessageID != result.Data["taskId"] {
+		t.Fatalf("params=%s data=%v", orchestrator.params[0], result.Data)
+	}
+}
+
+func TestWatchThreadDefaultsDevice(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	handler := New(orchestrator, &fakeBackend{})
+	only := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"deviceId":"","threadId":"thread-a"}`)})
+	if !only.Success || only.Data["deviceId"] != "exec-a" {
+		t.Fatalf("only online=%+v", only)
+	}
+	many := &deviceList{devices: []map[string]any{
+		{"deviceId": "brain-a", "agentOnline": true},
+		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"send": true}},
+	}}
+	hinted := New(many, &hintBackend{brain: "brain-a", known: []string{"exec-a"}})
+	known := hinted.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"threadId":"thread-a"}`)})
+	if !known.Success || known.Data["deviceId"] != "exec-a" {
+		t.Fatalf("known device=%+v", known)
+	}
+	brain := New(many, &hintBackend{brain: "brain-a"})
+	fallback := brain.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"threadId":"thread-b"}`)})
+	if !fallback.Success || fallback.Data["deviceId"] != "brain-a" {
+		t.Fatalf("brain device=%+v", fallback)
+	}
+	ambiguous := New(many, &fakeBackend{})
+	rejected := ambiguous.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"threadId":"thread-c"}`)})
+	if rejected.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("ambiguous=%+v", rejected)
+	}
+}
+
+type deviceList struct {
+	fakeOrchestrator
+	devices []map[string]any
+}
+
+func (d *deviceList) Devices() []map[string]any { return d.devices }
+
+type hintBackend struct {
+	fakeBackend
+	brain string
+	known []string
+}
+
+func (h *hintBackend) DeviceHint(context.Context, string, string) (string, []string, error) {
+	return h.brain, h.known, nil
 }
 
 func TestStartTaskUsesAtomicBootstrapAdapter(t *testing.T) {

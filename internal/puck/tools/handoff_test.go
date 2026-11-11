@@ -39,14 +39,54 @@ func TestExtractSessionFactsReadsWorkspaceMetadataOnly(t *testing.T) {
 			},
 		},
 	})
-	cwd := ChooseWorkspace(facts.SessionCWD, "/work/recorded", facts.TurnCWD, facts.ThreadCWD)
+	cwd := ChooseWorkspace(facts.SessionCWD, "/work/recorded", facts.TurnCWD, facts.ThreadCWD, facts.AgentStateDir)
 	if facts.Title != "方案讨论" || cwd != "/work/watched" {
 		t.Fatalf("facts=%+v cwd=%s", facts, cwd)
 	}
-	if got := ChooseWorkspace("", "/work/recorded", "/work/from-turn", "/Users/owner/.ariel/puck/assistant"); got != "/work/recorded" {
+	agentDir := "/Users/owner/Library/Application Support/ArielLocal"
+	if got := ChooseWorkspace("", "/work/recorded", "/work/from-turn", agentDir, agentDir); got != "/work/recorded" {
 		t.Fatalf("recorded cwd lost: %s", got)
 	}
-	if got := ChooseWorkspace("", "", "", "/Users/owner/.ariel/puck/assistant"); got != "" {
+	if got := ChooseWorkspace("", "", "", agentDir, agentDir); got != "" {
 		t.Fatalf("agent state dir used as workspace: %s", got)
+	}
+	if got := ChooseWorkspace("/work/session", "/work/recorded", agentDir, agentDir, agentDir); got != "/work/session" {
+		t.Fatalf("session_meta lost: %s", got)
+	}
+}
+
+func TestRealisticThreadReadPrefersSessionMetaOverAgentStateDir(t *testing.T) {
+	const agentDir = "/Users/owner/Library/Application Support/ArielLocal"
+	const workspace = "/Users/owner/tmp/real-workspace"
+	const threadID = "22222222-2222-4222-8222-222222222222"
+	facts := ExtractSessionFacts(map[string]any{
+		"thread": map[string]any{
+			"threadId": threadID, "title": "fix tests", "cwd": agentDir, "agentStateDir": agentDir,
+			"session_meta": map[string]any{
+				"type": "session_meta",
+				"payload": map[string]any{
+					"id": threadID, "cwd": workspace, "originator": "codex_cli_rs", "cli_version": "0.160.0", "source": "vscode",
+				},
+			},
+			"turns": []any{map[string]any{"turnId": "turn-1", "cwd": agentDir, "items": []any{}}},
+		},
+	})
+	cwd := ChooseWorkspace(facts.SessionCWD, "", facts.TurnCWD, facts.ThreadCWD, facts.AgentStateDir)
+	if cwd != workspace {
+		t.Fatalf("cwd=%q facts=%+v", cwd, facts)
+	}
+	normalized := ExtractSessionFacts(map[string]any{
+		"thread": map[string]any{
+			"threadId": threadID, "cwd": agentDir, "sessionCwd": workspace, "agentStateDir": agentDir,
+		},
+	})
+	if got := ChooseWorkspace(normalized.SessionCWD, "/work/recorded", normalized.TurnCWD, normalized.ThreadCWD, normalized.AgentStateDir); got != workspace {
+		t.Fatalf("normalized session cwd lost: %s", got)
+	}
+	omitted := ExtractSessionFacts(map[string]any{
+		"thread": map[string]any{"threadId": threadID, "cwd": agentDir, "agentStateDir": agentDir},
+	})
+	if got := ChooseWorkspace(omitted.SessionCWD, "", omitted.TurnCWD, omitted.ThreadCWD, omitted.AgentStateDir); got != "" {
+		t.Fatalf("untrustworthy cwd was kept: %s", got)
 	}
 }

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -86,23 +87,25 @@ func oneLine(text string) string {
 // SessionFacts is plain metadata for a referenced session. Message text is
 // not read.
 type SessionFacts struct {
-	Title                          string
-	SessionCWD, TurnCWD, ThreadCWD string
+	Title                                         string
+	SessionCWD, TurnCWD, ThreadCWD, AgentStateDir string
 }
 
 // ChooseWorkspace picks the session workspace. session_meta wins, then the
-// cwd Puck recorded on the task, then a turn cwd, then thread.cwd.
-// The Ariel agent state directory is never a workspace.
-func ChooseWorkspace(sessionCWD, recordedCWD, turnCWD, threadCWD string) string {
+// cwd Puck recorded on the task or watch, then a turn cwd, then thread.cwd.
+// agentDirs are this agent's configured state/working directories. A path
+// equal to or inside one of them is not a workspace. When nothing trustworthy
+// remains, the field is omitted.
+func ChooseWorkspace(sessionCWD, recordedCWD, turnCWD, threadCWD string, agentDirs ...string) string {
 	for _, candidate := range []string{sessionCWD, recordedCWD, turnCWD, threadCWD} {
-		if acceptableWorkspace(candidate) {
+		if trustworthyWorkspace(candidate, agentDirs) {
 			return filepath.Clean(candidate)
 		}
 	}
 	return ""
 }
 
-func acceptableWorkspace(path string) bool {
+func trustworthyWorkspace(path string, agentDirs []string) bool {
 	path = strings.TrimSpace(path)
 	if path == "" || !filepath.IsAbs(path) {
 		return false
@@ -111,15 +114,18 @@ func acceptableWorkspace(path string) bool {
 	if cleaned == string(filepath.Separator) {
 		return false
 	}
-	return !agentStateDir(cleaned)
-}
-
-func agentStateDir(path string) bool {
-	slash := strings.ToLower(filepath.ToSlash(path))
-	if strings.Contains(slash, "/.ariel/") || strings.HasSuffix(slash, "/.ariel") {
-		return true
+	slash := strings.ToLower(filepath.ToSlash(cleaned))
+	for _, dir := range agentDirs {
+		root := filepath.Clean(strings.TrimSpace(dir))
+		if root == "" || root == "." || !filepath.IsAbs(root) {
+			continue
+		}
+		rootSlash := strings.ToLower(filepath.ToSlash(root))
+		if slash == rootSlash || strings.HasPrefix(slash, strings.TrimRight(rootSlash, "/")+"/") {
+			return false
+		}
 	}
-	return strings.Contains(slash, "/agent-managed/")
+	return true
 }
 
 // ExtractSessionFacts reads title and workspace fields only.
@@ -134,22 +140,49 @@ func ExtractSessionFacts(data map[string]any) SessionFacts {
 	}
 	threadCWD, _ := thread["cwd"].(string)
 	return SessionFacts{
-		Title:      title,
-		SessionCWD: firstCWD(nestedCWD(thread["sessionMeta"]), nestedCWD(thread["session_meta"]), nestedCWD(thread["sessionMetadata"]), stringField(thread, "sessionCwd")),
-		TurnCWD:    lastTurnCWD(thread),
-		ThreadCWD:  threadCWD,
+		Title: title,
+		SessionCWD: firstCWD(
+			nestedCWD(thread["sessionMeta"]), nestedCWD(thread["session_meta"]),
+			nestedCWD(thread["sessionMetadata"]), nestedCWD(thread["session_metadata"]),
+			stringField(thread, "sessionCwd"),
+			nestedCWD(data["sessionMeta"]), nestedCWD(data["session_meta"]),
+			stringField(data, "sessionCwd"),
+		),
+		TurnCWD:       lastTurnCWD(thread),
+		ThreadCWD:     threadCWD,
+		AgentStateDir: firstCWD(stringField(thread, "agentStateDir"), stringField(data, "agentStateDir")),
 	}
 }
 
 func nestedCWD(value any) string {
-	meta, _ := value.(map[string]any)
-	if meta == nil {
-		return ""
+	switch typed := value.(type) {
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" || (text[0] != '{' && text[0] != '[') {
+			return ""
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+			return ""
+		}
+		return nestedCWD(decoded)
+	case []any:
+		for _, item := range typed {
+			if cwd := nestedCWD(item); cwd != "" {
+				return cwd
+			}
+		}
+	case map[string]any:
+		if cwd := stringField(typed, "cwd"); cwd != "" {
+			return cwd
+		}
+		for _, key := range []string{"payload", "session", "sessionMeta", "session_meta"} {
+			if cwd := nestedCWD(typed[key]); cwd != "" {
+				return cwd
+			}
+		}
 	}
-	if cwd := stringField(meta, "cwd"); cwd != "" {
-		return cwd
-	}
-	return nestedCWD(meta["payload"])
+	return ""
 }
 
 func stringField(value map[string]any, key string) string {

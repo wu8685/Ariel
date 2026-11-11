@@ -442,14 +442,14 @@ sequenceDiagram
 | `list_devices` | — | 本助理允许范围内的设备、在线、`codexReady`、能力 | `device.list` + 作用域过滤 |
 | `list_threads` | `deviceId`, `search?`, `limit≤50` | 会话元数据；brain thread 不出现 | `thread.list` |
 | `read_thread` | `deviceId`, `threadId`, `turns≤4` | 最近 turn 有界摘要、runtime、pendingInteractions | `thread.cache.read` 优先，回退 `thread.read`；越界读取需授权（B1） |
-| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId`；可选 `includeMessages[]`、`referenceThreads[]`（§6.1.4） | 新建执行 thread 并发首个 turn，写任务记录。若本助理已有同一设备与目录的可复用线程，且用户没有明确要求新会话，则改为续投（§6.1.1）。真正发出的首条输入由服务端附上交接包 | 策略引擎；新建时放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射）；续投走 `send_turn` 的同一门禁 |
-| `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId`；可选 `includeMessages[]`、`referenceThreads[]`（§6.1.4） | 续投同一执行 thread；同一设备与目录的后续请求默认走这条路径。真正发出的输入由服务端附上交接包 | 策略引擎（B2／B5／B6／B10）→ `turn.start` |
+| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`；`clientTaskId` 可选；可选 `includeMessages[]`、`referenceThreads[]`（§6.1.4） | 新建执行 thread 并发首个 turn，写任务记录。若本助理已有同一设备与目录的可复用线程，且用户没有明确要求新会话，则改为续投（§6.1.1）。真正发出的首条输入由服务端附上交接包。缺省或不是 UUID 的 `clientTaskId` 由 Relay 分配；没有来源消息时，给出的合法 UUID 保留 | 策略引擎；新建时放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射）；续投走 `send_turn` 的同一门禁 |
+| `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`；`clientMessageId` 可选；可选 `includeMessages[]`、`referenceThreads[]`（§6.1.4） | 续投同一执行 thread；同一设备与目录的后续请求默认走这条路径。真正发出的输入由服务端附上交接包。合法 UUID 原样用于去重，缺省或非法时由 Relay 生成 | 策略引擎（B2／B5／B6／B10）→ `turn.start` |
 | `interrupt` | `taskId`／`threadId`, `turnId`, `reason` | 精确停止 | 策略引擎（B2／B3）→ `turn.interrupt` |
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
 | `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要。先读 Relay 热 cache，不新鲜时回退 `thread.read`；读不到现场时 `runtime=unknown`，不得把库里的旧 `running` 说成已完成 | Service 本地 cache，回退 `thread.read` |
-| `watch_thread` | `deviceId`, `threadId`, `until?` | 只读监听一条本助理没有启动的现有会话。`until` 是用户要等的结果。进度和重复状态不发消息；明确结果、失败、卡住或停止才通知并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
+| `watch_thread` | `threadId`, `deviceId?`, `until?` | 只读监听一条本助理没有启动的现有会话。省略 `deviceId` 时，优先用这条会话已经绑定的唯一设备，否则用唯一在线设备或大脑自己的主机。`until` 是用户要等的结果。进度和重复状态不发消息；明确结果、失败、卡住或停止才通知并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
 | `finish_task` | `taskId`, `outcome`（`completed`／`failed`／`cancelled`）, `note?` | 归档本助理自己的一条任务，关闭该执行线程上本助理的 watch，并删掉尚未投递的唤醒。不删除对话消息，不发送 turn | 只接受调用者自己的任务；brain thread 返回 `PUCK_SELF_TARGET`；不经过 `turn.start`，因此不能绕过 B2／B5／B6／B10／B8 |
-| `send_message` | `text`（1–4000 字）, `clientMessageId?` | 把一句 Bot 决定要说的话写进本助理的 Ariel 对话，并标成可通知的 `notify_user`。同一 `clientMessageId` 只保留一条 | 只写调用者自己的对话；参数里的 `assistantId` 拒绝；不能改别人的消息。工具集版本 9 起声明 |
+| `send_message` | `text`（1–4000 字）, `clientMessageId?` | 把一句 Bot 决定要说的话写进本助理的 Ariel 对话，并标成可通知的 `notify_user`。合法 UUID 原样保留，同一 id 只保留一条；缺省或不是 UUID 时由 Relay 生成 | 只写调用者自己的对话；参数里的 `assistantId` 拒绝；不能改别人的消息。工具集版本 9 起声明 |
 | `request_authorization` | `summary`, `action` | Brain 主动就某事请用户授权（例如“是否部署”） | 生成授权卡片 |
 | `memory_read`／`memory_write`／`memory_delete` | — | 本助理记忆 | 删除命中 B9 |
 | `routine_list`／`routine_upsert`／`routine_delete` | — | 本助理 routine；创建／修改后在对话中显示例行卡片（E8） | 事件唤醒中命中 B7 |
@@ -555,7 +555,7 @@ Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原�
 
 引用来自本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch），并且只包括这一轮点了名的会话：Brain 指令、触发这轮的用户消息、它所回复的消息、`includeMessages` 里的消息提到了 `taskId`／`threadId`，或者 `referenceThreads` 明确列出了它们。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现会话，不把消息正文贴进去。最多 4 条，多出来的直接丢掉，不做文字截断，也不写省略标记。
 
-每条引用含 `deviceId`、`threadId`，以及 Codex Desktop 的 `codex://threads/<uuid>`（`internal/desktopagent/load.go`，0074／0004；非 UUID 不写链接）。标题和 cwd 只在已有元数据时附上，不从对话里摘结论。cwd 按 `session_meta.cwd`、任务记录的 cwd、turn cwd 的顺序选取；`thread.cwd` 只有在它不是 Agent 状态目录时才用。`~/.ariel` 和 `/agent-managed/` 一律不用。不写 watch 状态、turn 状态或结论摘录。
+每条引用含 `deviceId`、`threadId`，以及 Codex Desktop 的 `codex://threads/<uuid>`（`internal/desktopagent/load.go`，0074／0004；非 UUID 不写链接）。标题和 cwd 只在已有元数据时附上，不从对话里摘结论。cwd 按 `session_meta.cwd`、任务或 watch 记录的 cwd、turn cwd、`thread.cwd` 的顺序选取。Agent 配置并传给 app-server 的状态／工作目录，以及它下面的路径，都不是工作区；没有可信 cwd 时省略该字段。`thread.read` 会从线程对象或 rollout 的 `session_meta` 取出工作区，并带上这个 Agent 目录供比较。不写路径黑名单，不写 watch 状态、turn 状态或结论摘录。
 
 可选参数从工具集 10 起出现在 schema 里，都不是必填。旧调用不带它们仍然有效。主机广告的工具集到达 10 后，下一次用户消息或子会话唤醒经既有 `ensureCurrentToolset` 轮换 brain thread。工具集 10 的系统上下文只多一行：交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。这一行不写入每轮 envelope。
 
