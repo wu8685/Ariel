@@ -862,6 +862,72 @@ describe("PuckWorkspace", () => {
 		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 		expect(request).toHaveBeenCalledWith("puck.message.react", "relay", { assistantId: "a-1", messageId: "user-a", emoji: "👍" });
 		expect(screen.getByRole("button", { name: "你回应 👍，1 个" })).toBeTruthy();
+		expect(screen.getByText("检查测试").closest(".puck-message")?.querySelector(".puck-reactions.has-reactions")).toBeTruthy();
+		expect(screen.getByText("检查测试").closest(".puck-message")?.querySelector(".puck-reaction-float")).toBeNull();
+	});
+
+	it("omits the reaction row until a reaction exists and floats the add control outside the bubble", async () => {
+		vi.useFakeTimers();
+		const css = readFileSync("src/puck/puck.css", "utf8");
+		expect(css).toMatch(/\.puck-workspace \.puck-reaction-float\s*\{[^}]*position:\s*absolute;[^}]*left:\s*0;[^}]*transform:\s*translate\(-8px,\s*6px\);[^}]*pointer-events:\s*none;/s);
+		expect(css).toMatch(/\.puck-workspace \.puck-message\.user \.puck-reaction-float\s*\{[^}]*right:\s*0;[^}]*transform:\s*translate\(8px,\s*6px\);/s);
+		expect(css).toMatch(/\.puck-workspace \.puck-message:hover \.puck-reaction-float,\s*\.puck-workspace \.puck-message:focus-within \.puck-reaction-float,\s*\.puck-workspace \.puck-reaction-float\.picker-open\s*\{[^}]*pointer-events:\s*auto;/s);
+		expect(css).toMatch(/\.puck-workspace \.puck-reaction-float \.puck-reaction-add,\s*\.puck-workspace \.puck-reaction-float \.puck-reaction-picker\s*\{[^}]*pointer-events:\s*auto;/s);
+		expect(css).toMatch(/\.puck-workspace \.puck-message:hover \.puck-reaction-add,\s*\.puck-workspace \.puck-message:focus-within \.puck-reaction-add/s);
+		expect(css).toMatch(/@media \(hover: none\)\s*\{[\s\S]*?\.puck-workspace \.puck-reply-action\s*\{\s*display:\s*none;\s*\}\s*\.puck-workspace \.puck-reaction-add\s*\{\s*display:\s*none;/);
+		const request = vi.fn(async (method: string) => method === "puck.list"
+			? accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] })
+			: method === "puck.history" ? accepted({ messages: [
+				{ id: "user-plain", role: "user", kind: "text", text: "没有回应" },
+				{ id: "assistant-plain", role: "assistant", kind: "text", text: "我也没有" },
+				{ id: "assistant-reacted", role: "assistant", kind: "text", text: "这条已经有回应", reaction: JSON.stringify({ assistant: "👀" }) },
+			] }) : accepted({}));
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		const messageByText = (text: string) => {
+			const message = screen.getAllByText(text).map(node => node.closest(".puck-message")).find(Boolean);
+			if (!message) throw new Error(`missing message ${text}`);
+			return message;
+		};
+		const user = messageByText("没有回应");
+		const assistant = messageByText("我也没有");
+		const reacted = messageByText("这条已经有回应");
+		expect(user.classList.contains("user")).toBe(true);
+		expect(assistant.classList.contains("assistant")).toBe(true);
+		for (const message of [user, assistant]) {
+			expect(message.querySelector(".puck-reactions")).toBeNull();
+			const float = message.querySelector(".puck-reaction-float");
+			const content = message.querySelector(".puck-message-content");
+			expect(float).toBeTruthy();
+			expect(content?.contains(float!)).toBe(true);
+			expect(content?.querySelector(":scope > .puck-reactions")).toBeNull();
+			expect(message.querySelector(":scope > .puck-reply-action")).toBeTruthy();
+			expect(float?.contains(message.querySelector(".puck-reply-action")!)).toBe(false);
+		}
+		expect(reacted.querySelector(".puck-reaction-float")).toBeNull();
+		const row = reacted.querySelector(".puck-reactions.has-reactions");
+		expect(row).toBeTruthy();
+		expect(reacted.querySelector(".puck-message-content")?.contains(row!)).toBe(true);
+		expect(row?.querySelector(".puck-reaction-add")).toBeTruthy();
+		expect(row?.querySelector(".puck-reaction-pill")?.textContent).toContain("👀");
+
+		const add = user.querySelector(".puck-reaction-add") as HTMLButtonElement;
+		add.focus();
+		expect(document.activeElement).toBe(add);
+		fireEvent.click(add);
+		expect(user.querySelector(".puck-reaction-picker")).toBeTruthy();
+		expect(user.querySelector(".puck-reactions")).toBeNull();
+		fireEvent.click(add);
+		expect(user.querySelector(".puck-reaction-picker")).toBeNull();
+
+		fireEvent.pointerDown(assistant, { pointerType: "touch", clientX: 24, clientY: 40 });
+		await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+		expect(assistant.querySelector(".puck-reaction-picker")).toBeNull();
+		await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+		expect(assistant.querySelector(".puck-reaction-picker")).toBeTruthy();
+		expect(assistant.querySelector(".puck-reactions")).toBeNull();
+		fireEvent.pointerUp(assistant, { pointerType: "touch", clientX: 24, clientY: 40 });
+		expect(assistant.querySelector(".puck-reaction-picker")).toBeTruthy();
 	});
 
 	it("collapses consecutive handled authorization cards and explains an empty result", async () => {
