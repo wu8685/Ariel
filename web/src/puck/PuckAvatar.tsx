@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, type CSSProperties, type PointerEvent, type ReactNode } from "react";
-import { registerAvatarMotion, restPoseForKey, type AvatarPose, type BlinkPhase } from "./PuckAvatarScheduler";
+import { perspectiveEyeScales, registerAvatarMotion, restPoseForKey, type AvatarPose, type BlinkPhase, type EyeCenter } from "./PuckAvatarScheduler";
 import { tracedAvatars } from "./tracedAvatars";
 
 export type AvatarShape = "blob" | "pebble" | "bean" | "egg" | "squircle" | "tablet" | "capsule" | "cylinder" | "hex" | "gem" | "crystal" | "wedge" | "shield" | "dome" | "arch" | "cloud" | "teardrop" | "leaf" | "square" | "sparkle" | "clover" | "flower" | "heart" | "house" | "star";
@@ -152,6 +152,45 @@ export const avatarShapePaths: Record<AvatarShape, string> = {
   star: "M 35.7 7.0 L 42.3 8.5 L 54.8 21.0 L 59.2 21.0 L 68.7 15.8 L 76.1 18.0 L 78.3 21.7 L 76.1 37.9 L 79.0 41.5 L 89.3 47.4 L 93.0 52.6 L 93.0 58.5 L 86.4 66.5 L 74.6 69.5 L 75.4 79.8 L 73.2 84.2 L 65.8 90.8 L 57.7 90.1 L 46.7 78.3 L 43.0 76.8 L 30.5 82.7 L 23.9 80.5 L 21.7 77.6 L 23.9 60.7 L 7.0 46.7 L 7.7 37.9 L 14.4 31.3 L 25.4 28.3 L 25.4 16.6 L 31.3 9.2 Z",
 };
 
+function pathBoxCenter(d: string): EyeCenter {
+  const numbers = d.match(/-?\d+(?:\.\d+)?/g) || [];
+  let minX = Number.POSITIVE_INFINITY, minY = Number.POSITIVE_INFINITY, maxX = Number.NEGATIVE_INFINITY, maxY = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index + 1 < numbers.length; index += 2) {
+    const x = Number(numbers[index]);
+    const y = Number(numbers[index + 1]);
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+}
+
+function rotateClockwise(point: EyeCenter, origin: EyeCenter, degrees: number): EyeCenter {
+  const radians = degrees * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = point.x - origin.x;
+  const dy = point.y - origin.y;
+  return { x: origin.x + dx * cos - dy * sin, y: origin.y + dy * cos + dx * sin };
+}
+
+// Untraced shapes draw both capsules inside translate(10 -8) rotate(-18 44 42). Centers stay in that face space.
+const fallbackEyeCenters: readonly [EyeCenter, EyeCenter] = (() => {
+  const pivot = { x: 44, y: 42 };
+  const place = (point: EyeCenter) => {
+    const rotated = rotateClockwise(point, pivot, -18);
+    return { x: rotated.x + 10, y: rotated.y - 8 };
+  };
+  return [place({ x: 37.5, y: 45 }), place({ x: 47.5, y: 45 })];
+})();
+
+export function eyeCentersForShape(shape: string): readonly [EyeCenter, EyeCenter] {
+  const traced = tracedAvatars[shape];
+  if (!traced || traced.eyes.length < 2) return fallbackEyeCenters;
+  return [pathBoxCenter(traced.eyes[0]), pathBoxCenter(traced.eyes[1])];
+}
+
 function shapePath(shape: AvatarShape): ReactNode {
   const traced = tracedAvatars[shape];
   if (!traced) return <path d={avatarShapePaths[shape]} />;
@@ -173,9 +212,10 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
   const instanceId = useId().replaceAll(":", "");
   const root = useRef<HTMLDivElement>(null);
   const reducedMotion = useRef(false);
-  const restPose = useMemo(() => restPoseForKey(`${assistantId}:${instanceId}`), [assistantId, instanceId]);
-  const currentPose = useRef(restPose);
   const avatar = useMemo(() => design || deriveAvatar(assistantId), [assistantId, design]);
+  const eyes = useMemo(() => eyeCentersForShape(avatar.shape), [avatar.shape]);
+  const restPose = useMemo(() => restPoseForKey(`${assistantId}:${instanceId}`, eyes), [assistantId, instanceId, eyes]);
+  const currentPose = useRef(restPose);
   const expression = expressionForState(state);
 
   useEffect(() => {
@@ -193,7 +233,7 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-reduced-motion: reduce)") : undefined;
     reducedMotion.current = media?.matches ?? false;
     element.dataset.reducedMotion = String(reducedMotion.current);
-    const registration = registerAvatarMotion(`${assistantId}:${instanceId}`, target, { reducedMotion: reducedMotion.current });
+    const registration = registerAvatarMotion(`${assistantId}:${instanceId}`, target, { reducedMotion: reducedMotion.current, eyes });
     const mediaChanged = () => {
       reducedMotion.current = media?.matches ?? false;
       element.dataset.reducedMotion = String(reducedMotion.current);
@@ -210,7 +250,7 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
       media?.removeEventListener("change", mediaChanged);
       registration.unregister();
     };
-  }, [animated, assistantId, instanceId]);
+  }, [animated, assistantId, eyes, instanceId]);
 
   useEffect(() => {
     const element = root.current;
@@ -241,11 +281,16 @@ export function PuckAvatar({ assistantId, name, state = "idle", design, size = "
     const box = root.current.getBoundingClientRect();
     const x = Math.max(-1, Math.min(1, (event.clientX - box.left) / box.width * 2 - 1));
     const y = Math.max(-1, Math.min(1, (event.clientY - box.top) / box.height * 2 - 1));
+    const headRotate = Math.abs(x) > .12 ? x * 24 : y * 20;
+    const faceRotate = Math.abs(x) > .12 ? x * 28 + y * 4 : currentPose.current.faceRotate;
+    const gazing = Math.max(Math.abs(x), Math.abs(y)) > .12;
+    const scales = gazing
+      ? perspectiveEyeScales({ gazeX: x, gazeY: y, rotationDeg: headRotate + faceRotate, eyes, nearScaleX: .55, nearScaleY: .78 })
+      : { leftEyeScaleX: 1, rightEyeScaleX: 1, leftEyeScaleY: 1, rightEyeScaleY: 1 };
     applyPose(root.current, {
-      name: "pointer", motionDuration: 720, headX: x * 7.5, headY: y * 6.8, headRotate: Math.abs(x) > .12 ? x * 24 : y * 20,
-      faceX: x * 11.5, faceY: y * 10, faceRotate: Math.abs(x) > .12 ? x * 28 + y * 4 : currentPose.current.faceRotate,
-      leftEyeScaleX: x < -.12 ? .55 : 1, rightEyeScaleX: x > .12 ? .55 : 1,
-      leftEyeScaleY: x < -.12 ? .78 : 1, rightEyeScaleY: x > .12 ? .78 : 1, eyeRoundness: 1.7,
+      name: "pointer", motionDuration: 720, headX: x * 7.5, headY: y * 6.8, headRotate,
+      faceX: x * 11.5, faceY: y * 10, faceRotate,
+      ...scales, eyeRoundness: 1.7,
     });
   }
 
