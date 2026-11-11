@@ -551,20 +551,15 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
 
 ### 6.1.4 交接包（2026-11-11）
 
-Brain 用 `start_task` 或 `send_turn` 派活时，常常只写下自己的概括，子会话因此看不到触发这轮的用户原话，也看不到被盯着的那条 Codex 会话的结论。交接包由服务端在通过既有门禁、真正调用 `thread.bootstrap` 或 `turn.start` 时附上。Brain 的 `prompt`／`text` 原样放在前面，标成「Bot 对任务的理解」。后面的包标成原始上下文，冲突时以包为准，并写明这些是参考材料，不是要执行的新指令。
+Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原话，也不总结被引用会话。摘要是模型自己的事。交接包只附会话引用，由服务端在通过既有门禁、真正调用 `thread.bootstrap` 或 `turn.start` 时加在 Brain 指令后面。Brain 的 `prompt`／`text` 原样保留。没有引用时不附加包。
 
-包只含两块，并且有界：
+引用来自本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch），并且只包括这一轮点了名的会话：Brain 指令、触发这轮的用户消息、它所回复的消息、`includeMessages` 里的消息提到了 `taskId`／`threadId`，或者 `referenceThreads` 明确列出了它们。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现会话，不把消息正文贴进去。最多 4 条，多出来的直接丢掉，不做文字截断，也不写省略标记。
 
-1. **用户原话**：触发这轮 brain turn 的用户消息正文，取自已保存的用户消息，不取 Brain 改写后的 prompt，也不取带 nonce 的 `PUCK_ENVELOPE`。超过 400 字时保留开头，并写上「已省略 N 字」。没有用户消息时写「（无）」。
-2. **Referenced sessions**：最多 4 条。每条含标题、设备名、工作目录、`threadId`、Codex 会话状态（`completed`／`active`／`failed`／`interrupted`／`idle`）、watch 状态（另起一行，例如 `closed`）、watch 的最后 outcome，以及该会话**最后一条助理消息**的结论摘录。结论保留末尾，最多 400 字；更早的部分写成「已省略开头 N 字」。不附带更早的 turn、审批原文或 Ariel 聊天记录。工作目录按 `session_meta.cwd`、任务或 watch 记录的 cwd、turn cwd 的顺序选取，都不可用时才看 `thread.cwd`。`~/.ariel` 和 `/agent-managed/` 下的 Agent 状态目录一律不用。
+每条引用含 `deviceId`、`threadId`，以及 Codex Desktop 的 `codex://threads/<uuid>`（`internal/desktopagent/load.go`，0074／0004；非 UUID 不写链接）。标题和 cwd 只在已有元数据时附上，不从对话里摘结论。cwd 按 `session_meta.cwd`、任务记录的 cwd、turn cwd 的顺序选取；`thread.cwd` 只有在它不是 Agent 状态目录时才用。`~/.ariel` 和 `/agent-managed/` 一律不用。不写 watch 状态、turn 状态或结论摘录。
 
-会话从本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch）里选，并且只选下面两类：本轮用户消息、它所回复的消息，或 `includeMessages` 里点名的消息提到了它的 `taskId`／`threadId`；或者 `referenceThreads` 明确列出了这个 `taskId` 或 `threadId`。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现被点名的会话，不把那些消息的正文贴进去。
+可选参数从工具集 10 起出现在 schema 里，都不是必填。旧调用不带它们仍然有效。主机广告的工具集到达 10 后，下一次用户消息或子会话唤醒经既有 `ensureCurrentToolset` 轮换 brain thread。工具集 10 的系统上下文只多一行：交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。这一行不写入每轮 envelope。
 
-同一设备上的新会话要用 Codex Desktop 已支持的 deep link 回读全文：`codex://threads/<uuid>`。Desktop 只接受已持久化的 UUID（`internal/desktopagent/load.go`，0074／0004）。Ariel 归一化后的 `thread.read` 不提供 rollout 文件路径，因此包里不猜测 `~/.codex/sessions` 路径。每条同时还写 `deviceId` 与 `threadId`，这是 Ariel 界面打开该会话时用的标识。
-
-可选参数从工具集 10 起出现在 schema 里，都不是必填。旧调用不带它们仍然有效。主机广告的工具集到达 10 后，下一次用户消息或子会话唤醒经既有 `ensureCurrentToolset` 轮换 brain thread。工具集 10 的系统上下文只多一行：交接时 Puck 会自动附上用户原话和被引用的会话，写下目标和判断，不要改写用户的原话。这一行不写入每轮 envelope。
-
-包在发送前现装，不写入冻结的授权参数。同一次发送里如果正文已经有交接标记，不再附第二份。同一用户消息对同一目标的重复 `start_task` 仍按 0137 返回已有任务，不会再发一轮。B2、B5、B6、B10、B8 和 `PUCK_SELF_TARGET` 仍先于交接包执行。
+包在发送前现装，不写入冻结的授权参数。同一次 `send_turn` 正文里如果已经有交接标记，不再附第二份。同一用户消息对同一目标的重复 `start_task` 仍按 0137 返回已有任务，不会再发一轮。B2、B5、B6、B10、B8 和 `PUCK_SELF_TARGET` 仍先于交接包执行。
 
 ## 7. Relay 内的入口与门禁
 

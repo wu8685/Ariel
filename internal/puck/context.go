@@ -102,7 +102,7 @@ func handoffPromptLine(toolset int) string {
 	if toolset < handoffToolset {
 		return ""
 	}
-	return "- 交接时 Puck 会自动附上用户原话和被引用的会话；写下目标和判断，不要改写用户的原话。"
+	return "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
 }
 
 func legacyBrainInstructions(id, name, description, custom string, toolset int) string {

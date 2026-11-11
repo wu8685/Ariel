@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	pucktools "github.com/wu8685/Ariel/internal/puck/tools"
 	"github.com/wu8685/Ariel/internal/relay"
@@ -72,29 +71,20 @@ func TestWatchedConclusionTravelsWithTheNextStartTask(t *testing.T) {
 	start("call-handoff")
 	start("call-handoff-retry")
 	text := bootstrapText(t, bridge)
-	if strings.Count(text, pucktools.HandoffSentinel) != 1 {
-		t.Fatalf("sentinel count in %s", text)
-	}
-	if !strings.HasPrefix(text, "【Bot 对任务的理解】\n我理解为要在新目录实现发布步骤。") {
-		t.Fatalf("brain instruction was rewritten: %s", text)
+	if strings.Count(text, pucktools.HandoffSentinel) != 1 || !strings.HasPrefix(text, "我理解为要在新目录实现发布步骤。\n") {
+		t.Fatalf("pack=%s", text)
 	}
 	for _, want := range []string{
-		"请按会话 " + threadID, "CONCLUSION-MARKER: use approach B", "status: completed", "watch: closed",
-		"方案讨论", "/work/watched", "执行机",
-		"codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】", "已省略开头",
+		"方案讨论", "/work/watched", "codex://threads/" + threadID, "deviceId: exec-a", "threadId: " + threadID, "【Referenced sessions】",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in %s", want, text)
 		}
 	}
-	for _, absent := range []string{"USER_TAIL_OMITTED", "HEAD_ONLY_AT_START", "EARLY_TURN_NOT_FOR_HANDOFF", "SUPER_SECRET_PROMPT", "UNRELATED_SHOULD_STAY_OUT", "FOREIGN_SECRET_CONCLUSION", "BRAIN_THREAD_SECRET", "/.ariel/puck", "/work/from-turn", "status: closed", unrelatedID, foreignID} {
+	for _, absent := range []string{"USER_TAIL_OMITTED", "请按会话", "HEAD_ONLY_AT_START", "CONCLUSION-MARKER", "EARLY_TURN_NOT_FOR_HANDOFF", "SUPER_SECRET_PROMPT", "UNRELATED_SHOULD_STAY_OUT", "FOREIGN_SECRET_CONCLUSION", "BRAIN_THREAD_SECRET", "/.ariel/puck", "/work/from-turn", "status:", "watch:", unrelatedID, foreignID} {
 		if strings.Contains(text, absent) {
-			t.Fatalf("pack included %s", absent)
+			t.Fatalf("pack included %s in %s", absent, text)
 		}
-	}
-	suffix := text[strings.Index(text, pucktools.HandoffSentinel):]
-	if utf8.RuneCountInString(suffix) > pucktools.MaxHandoffRunes {
-		t.Fatalf("pack runes=%d", utf8.RuneCountInString(suffix))
 	}
 	if strings.Count(bootstrapCalls(bridge), "x") != 1 {
 		t.Fatalf("bootstrap calls=%d", strings.Count(bootstrapCalls(bridge), "x"))
@@ -130,11 +120,11 @@ func TestIncludeMessagesAttachesSessionWithoutDumpingTheMessage(t *testing.T) {
 		}}),
 	})
 	text := bootstrapText(t, bridge)
-	if !strings.Contains(text, "INCLUDE_CONCLUSION") || !strings.Contains(text, "codex://threads/"+threadID) || !strings.Contains(text, "请在另一个目录处理。") {
+	if !strings.HasPrefix(text, "我来处理。\n") || !strings.Contains(text, "codex://threads/"+threadID) || !strings.Contains(text, "被点名的会话") || !strings.Contains(text, "/work/cited") {
 		t.Fatalf("cited session missing: %s", text)
 	}
-	if strings.Contains(text, "UNIQUE_MESSAGE_BODY") {
-		t.Fatalf("includeMessages dumped the message body: %s", text)
+	if strings.Contains(text, "UNIQUE_MESSAGE_BODY") || strings.Contains(text, "INCLUDE_CONCLUSION") || strings.Contains(text, "请在另一个目录处理。") {
+		t.Fatalf("handoff copied message text: %s", text)
 	}
 }
 
@@ -147,10 +137,15 @@ func TestSendTurnHandoffUsesTheTriggerMessage(t *testing.T) {
 	defer module.Close()
 	ctx := context.Background()
 	assistantID := seedWatchAssistant(t, module)
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: "55555555-5555-4555-8555-555555555555", Goal: "续投", Status: "running", CreatedBy: "puck"}); err != nil {
+	const referenced = "55555555-5555-4555-8555-555555555555"
+	const target = "66666666-6666-4666-8666-666666666666"
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: target, Goal: "续投", Status: "running", CreatedBy: "puck"}); err != nil {
 		t.Fatal(err)
 	}
-	sent := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": assistantID, "clientMessageId": "user-follow", "text": "请按原话继续。"}))
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-ref", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/ref", NativeThreadID: referenced, Goal: "被引用", Status: "review", CreatedBy: "puck"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": assistantID, "clientMessageId": "user-follow", "text": "请看会话 " + referenced + "，这句话不要抄进子会话。"}))
 	if sent.Error != nil {
 		t.Fatal(sent.Error)
 	}
@@ -161,9 +156,17 @@ func TestSendTurnHandoffUsesTheTriggerMessage(t *testing.T) {
 			"clientMessageId": "00000000-0000-4000-8000-000000000403",
 		}}),
 	})
+	module.handleBrainEvent(ctx, relay.BrainEvent{
+		AssistantID: assistantID, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall",
+		Payload: mustJSON(map[string]any{"callId": "call-send-retry", "tool": "send_turn", "arguments": map[string]any{
+			"taskId": "task-live", "text": "我来续上。", "riskTags": []string{},
+			"clientMessageId": "00000000-0000-4000-8000-000000000404",
+		}}),
+	})
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	var text string
+	sends := 0
 	for index, method := range bridge.calls {
 		if method != "turn.start" {
 			continue
@@ -173,9 +176,16 @@ func TestSendTurnHandoffUsesTheTriggerMessage(t *testing.T) {
 			t.Fatal(err)
 		}
 		text, _ = params["text"].(string)
+		sends++
+		if strings.Count(text, pucktools.HandoffSentinel) != 1 {
+			t.Fatalf("send %d duplicated the pack: %s", sends, text)
+		}
 	}
-	if !strings.Contains(text, "请按原话继续。") || !strings.Contains(text, "我来续上。") || strings.Count(text, pucktools.HandoffSentinel) != 1 {
-		t.Fatalf("send_turn text=%s", text)
+	if sends != 2 || !strings.HasPrefix(text, "我来续上。\n") || !strings.Contains(text, "codex://threads/"+referenced) {
+		t.Fatalf("sends=%d text=%s", sends, text)
+	}
+	if strings.Contains(text, "这句话不要抄进子会话") || strings.Contains(text, target) {
+		t.Fatalf("send_turn copied the user text or the target thread: %s", text)
 	}
 }
 

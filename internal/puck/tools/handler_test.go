@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -435,7 +436,7 @@ func TestStartTaskUsesAtomicBootstrapAdapter(t *testing.T) {
 			t.Fatalf("method=%s", method)
 		}
 		var input struct{ CWD, ClientMessageID, Text string }
-		if json.Unmarshal(params, &input) != nil || input.CWD != "/work" || !strings.Contains(input.Text, "【Bot 对任务的理解】\ndo it\n") || !strings.Contains(input.Text, HandoffSentinel) || input.ClientMessageID != "00000000-0000-4000-8000-000000000001" {
+		if json.Unmarshal(params, &input) != nil || input.CWD != "/work" || input.Text != "do it" || input.ClientMessageID != "00000000-0000-4000-8000-000000000001" {
 			t.Fatalf("params=%s", params)
 		}
 		return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a", "turnId": "turn-a"}}
@@ -571,7 +572,7 @@ func TestStartTaskReusesSameDeviceAndCwd(t *testing.T) {
 		if method == "thread.bootstrap" {
 			t.Fatalf("follow-up created a thread: %s", params)
 		}
-		if method != "turn.start" || !strings.Contains(string(params), `"threadId":"thread-old"`) || !strings.Contains(string(params), "继续修失败测试") || !strings.Contains(string(params), HandoffSentinel) {
+		if method != "turn.start" || !strings.Contains(string(params), `"threadId":"thread-old"`) || !strings.Contains(string(params), `"text":"继续修失败测试"`) {
 			t.Fatalf("method=%s params=%s", method, params)
 		}
 		return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-follow"}}
@@ -886,18 +887,15 @@ func TestFinishTaskArchivesWithoutExecutionOrAuthorization(t *testing.T) {
 	}
 }
 
-func TestStartTaskHandoffIsVerbatimOnceAndMarksTruncation(t *testing.T) {
+func TestStartTaskHandoffAttachesSessionLinksOnce(t *testing.T) {
 	threadID := "11111111-1111-4111-8111-111111111111"
-	user := "原话一字不差。" + strings.Repeat("长", MaxHandoffUserRunes) + "USER_TAIL_OMITTED"
-	conclusion := "最终结论：可以按方案 B 发布。\n" + strings.Repeat("结", MaxHandoffConclusionRunes) + "\nCONCLUSION-MARKER: use approach B"
 	orchestrator := &fakeOrchestrator{}
-	backend := &fakeBackend{tasks: map[string]Task{}, handoff: Handoff{
-		UserText: user,
-		Sessions: []HandoffSession{{
-			Title: "方案讨论", DeviceName: "执行机", DeviceID: "exec-a", CWD: "/work/watched",
-			ThreadID: threadID, Status: "completed", Watch: "closed", Outcome: "review", Conclusion: conclusion,
-		}},
-	}}
+	sessions := make([]HandoffSession, 0, MaxHandoffSessions+1)
+	for i := 0; i < MaxHandoffSessions+1; i++ {
+		sessions = append(sessions, HandoffSession{DeviceID: "exec-a", ThreadID: fmt.Sprintf("thread-%d", i), Title: "extra"})
+	}
+	sessions[0] = HandoffSession{Title: "方案讨论", DeviceID: "exec-a", CWD: "/work/watched", ThreadID: threadID}
+	backend := &fakeBackend{tasks: map[string]Task{}, handoff: Handoff{Sessions: sessions}}
 	handler := New(orchestrator, backend)
 	call := Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work/new","goal":"落地","prompt":"我理解为要在新目录实现发布步骤。","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000201"}`)}
 	first := handler.Execute(context.Background(), call)
@@ -912,25 +910,19 @@ func TestStartTaskHandoffIsVerbatimOnceAndMarksTruncation(t *testing.T) {
 		t.Fatal("bootstrap payload")
 	}
 	pack := payload.Text
-	if strings.Count(pack, HandoffSentinel) != 1 || !strings.HasPrefix(pack, "【Bot 对任务的理解】\n我理解为要在新目录实现发布步骤。") {
-		t.Fatalf("pack did not keep the brain instruction first: %s", pack)
+	if strings.Count(pack, HandoffSentinel) != 1 || !strings.HasPrefix(pack, "我理解为要在新目录实现发布步骤。\n") {
+		t.Fatalf("pack=%s", pack)
 	}
-	for _, want := range []string{"原话一字不差。", "CONCLUSION-MARKER: use approach B", "status: completed", "watch: closed", "方案讨论", "/work/watched", "执行机", "codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】"} {
+	for _, want := range []string{"方案讨论", "/work/watched", "codex://threads/" + threadID, "deviceId: exec-a", "threadId: " + threadID, "【Referenced sessions】"} {
 		if !strings.Contains(pack, want) {
 			t.Fatalf("missing %q in %s", want, pack)
 		}
 	}
-	if strings.Contains(pack, "USER_TAIL_OMITTED") || strings.Contains(pack, "最终结论：可以按方案 B 发布。") || strings.Contains(pack, "status: closed") || strings.Count(pack, "已省略") < 2 {
-		t.Fatalf("truncation or status was wrong: %s", pack)
-	}
-	suffix := pack[strings.Index(pack, HandoffSentinel):]
-	if runeCount(suffix) > MaxHandoffRunes {
-		t.Fatalf("pack rune count=%d", runeCount(suffix))
+	if strings.Contains(pack, "thread-4") || strings.Contains(pack, "已省略") || strings.Contains(pack, "conclusion") || strings.Contains(pack, "用户原话") {
+		t.Fatalf("pack included clipped or extracted text: %s", pack)
 	}
 	again := AppendHandoff(pack, backend.handoff)
 	if again != pack || strings.Count(again, HandoffSentinel) != 1 {
 		t.Fatal("retry duplicated the handoff pack")
 	}
 }
-
-func runeCount(text string) int { return len([]rune(text)) }

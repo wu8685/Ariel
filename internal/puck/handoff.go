@@ -13,7 +13,7 @@ import (
 )
 
 type handoffCandidate struct {
-	taskID, deviceID, threadID, cwd, title, watchStatus, outcome, conclusion string
+	taskID, deviceID, threadID, cwd, title string
 }
 
 func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.HandoffQuery) (pucktools.Handoff, error) {
@@ -24,15 +24,16 @@ func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.Handoff
 		}
 		return pucktools.Handoff{}, err
 	}
-	userText := ""
 	var blobs []string
+	if strings.TrimSpace(query.Instruction) != "" {
+		blobs = append(blobs, query.Instruction)
+	}
 	if query.SourceMessageID != "" {
 		message, messageErr := b.module.store.Message(ctx, query.AssistantID, query.SourceMessageID)
 		if messageErr != nil && !errors.Is(messageErr, sql.ErrNoRows) {
 			return pucktools.Handoff{}, messageErr
 		}
 		if messageErr == nil && message.Role == "user" {
-			userText = message.Text
 			blobs = append(blobs, message.Text, message.CardJSON)
 			if message.ReplyTo != "" {
 				reply, replyErr := b.module.store.Message(ctx, query.AssistantID, message.ReplyTo)
@@ -58,27 +59,21 @@ func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.Handoff
 	if err != nil {
 		return pucktools.Handoff{}, err
 	}
-	keys, omitted := selectHandoffKeys(candidates, query, strings.Join(blobs, "\n"))
+	keys, _ := selectHandoffKeys(candidates, query, strings.Join(blobs, "\n"))
 	sessions := make([]pucktools.HandoffSession, 0, len(keys))
 	for _, key := range keys {
 		candidate := candidates[key]
 		facts := b.readSessionFacts(ctx, query.AssistantID, candidate.deviceID, candidate.threadID)
-		session := pucktools.HandoffSession{
-			Title: candidate.title, DeviceName: deviceName(b.module.bridge.Devices(), candidate.deviceID),
-			DeviceID: candidate.deviceID, ThreadID: candidate.threadID,
-			Status: facts.Status, Watch: candidate.watchStatus, Outcome: candidate.outcome,
-			Conclusion: candidate.conclusion,
-			CWD:        pucktools.ChooseWorkspace(facts.SessionCWD, candidate.cwd, facts.TurnCWD, facts.ThreadCWD),
-		}
+		title := candidate.title
 		if facts.Title != "" {
-			session.Title = facts.Title
+			title = facts.Title
 		}
-		if facts.Conclusion != "" {
-			session.Conclusion = facts.Conclusion
-		}
-		sessions = append(sessions, session)
+		sessions = append(sessions, pucktools.HandoffSession{
+			Title: title, DeviceID: candidate.deviceID, ThreadID: candidate.threadID,
+			CWD: pucktools.ChooseWorkspace(facts.SessionCWD, candidate.cwd, facts.TurnCWD, facts.ThreadCWD),
+		})
 	}
-	return pucktools.Handoff{UserText: userText, Sessions: sessions, OmittedSessions: omitted}, nil
+	return pucktools.Handoff{Sessions: sessions}, nil
 }
 
 func (b toolBackend) handoffCandidates(ctx context.Context, assistant Assistant) (map[string]handoffCandidate, error) {
@@ -101,10 +96,7 @@ func (b toolBackend) handoffCandidates(ctx context.Context, assistant Assistant)
 			continue
 		}
 		key := watch.DeviceID + "\x00" + watch.ThreadID
-		candidates[key] = handoffCandidate{
-			deviceID: watch.DeviceID, threadID: watch.ThreadID, watchStatus: watch.Status,
-			outcome: watch.NotifiedKey, conclusion: watch.LastSummary,
-		}
+		candidates[key] = handoffCandidate{deviceID: watch.DeviceID, threadID: watch.ThreadID}
 	}
 	for _, task := range tasks {
 		blockedThread, blockErr := threadBlocked(ctx, b, blocked, task.NativeThreadID)
@@ -124,12 +116,6 @@ func (b toolBackend) handoffCandidates(ctx context.Context, assistant Assistant)
 		}
 		if current.title == "" {
 			current.title = task.Goal
-		}
-		if current.outcome == "" {
-			current.outcome = task.Status
-		}
-		if current.conclusion == "" {
-			current.conclusion = task.LastSummary
 		}
 		candidates[key] = current
 	}
@@ -229,16 +215,6 @@ func mentionAt(blob, id string) int {
 		return -1
 	}
 	return strings.Index(blob, id)
-}
-
-func deviceName(devices []map[string]any, deviceID string) string {
-	for _, device := range devices {
-		if device["deviceId"] == deviceID {
-			name, _ := device["deviceName"].(string)
-			return name
-		}
-	}
-	return ""
 }
 
 func (b toolBackend) readSessionFacts(ctx context.Context, assistantID, deviceID, threadID string) pucktools.SessionFacts {

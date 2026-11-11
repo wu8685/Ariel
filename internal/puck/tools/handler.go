@@ -363,7 +363,7 @@ func (h *Handler) bootstrapStart(ctx context.Context, call Call, input toolcontr
 func (h *Handler) handoffText(ctx context.Context, call Call, instruction, deviceID, threadID string, includeMessages, referenceThreads []string) (string, ToolResult) {
 	handoff, err := h.backend.HandoffContext(ctx, HandoffQuery{
 		AssistantID: call.AssistantID, SourceMessageID: call.SourceMessageID,
-		TargetDeviceID: deviceID, TargetThreadID: threadID,
+		TargetDeviceID: deviceID, TargetThreadID: threadID, Instruction: instruction,
 		IncludeMessages: includeMessages, ReferenceThreads: referenceThreads,
 	})
 	if err != nil {

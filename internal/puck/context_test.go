@@ -111,7 +111,7 @@ func TestCustomContextStaysBelowSystemSafetyRules(t *testing.T) {
 }
 
 func TestHandoffPromptAddsOneLineOnlyOnTheCurrentToolset(t *testing.T) {
-	line := "交接时 Puck 会自动附上用户原话和被引用的会话；写下目标和判断，不要改写用户的原话。"
+	line := "交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
 	current := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
 	previous := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion-1)
 	if strings.Count(current, line) != 1 {
