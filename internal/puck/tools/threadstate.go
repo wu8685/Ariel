@@ -56,11 +56,18 @@ func ClassifySnapshot(data map[string]any) (ThreadView, bool) {
 		return view, true
 	}
 	switch view.TurnStatus {
-	case "failed", "interrupted":
+	case "failed":
 		view.Status = "attention"
 		view.Notable = true
 		if view.Summary == "" {
-			view.Summary = "这一轮失败或被中断"
+			view.Summary = "这一轮失败了"
+		}
+		return view, true
+	case "interrupted":
+		view.Status = "stopped"
+		view.Notable = true
+		if view.Summary == "" {
+			view.Summary = "这一轮已停止"
 		}
 		return view, true
 	}

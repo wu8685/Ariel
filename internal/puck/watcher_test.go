@@ -315,3 +315,178 @@ func TestWatchOfUnownedThreadCannotSendTurns(t *testing.T) {
 		}
 	}
 }
+
+func taskEventMessages(t *testing.T, module *Module, assistantID string) []Message {
+	t.Helper()
+	messages, err := module.store.Messages(context.Background(), assistantID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visible []Message
+	for _, message := range messages {
+		if message.Role == "assistant" && message.Kind == "text" && strings.Contains(message.CardJSON, `"source":"task_event"`) {
+			visible = append(visible, message)
+		}
+		if strings.Contains(message.Text, "PUCK_SILENT") || strings.Contains(message.Text, "正在根据任务状态写一条说明") {
+			t.Fatalf("noise was rendered: %+v", message)
+		}
+	}
+	return visible
+}
+
+func TestRepeatedSameStatusDoesNotPostAgain(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	assistantID := seedWatchAssistant(t, module)
+	task := runningTask(assistantID, "task-repeat", "exec-thread-repeat")
+	if err := module.store.UpsertTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	module.watchExecutionTask(module.rootCtx, task)
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-block-1", "inProgress", "inProgress", "需要你批准发布", true)) {
+		t.Fatal("not watched")
+	}
+	waitFor(t, func() bool { return len(taskEventTurns(bridge)) == 1 })
+	finishBrain(module, assistantID, "发布卡住了，需要你批准。")
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-block-2", "inProgress", "inProgress", "还是需要你批准发布", true)) {
+		t.Fatal("second event was not delivered")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if len(taskEventTurns(bridge)) != 1 {
+		t.Fatalf("same blocked state woke again: %d", len(taskEventTurns(bridge)))
+	}
+	if got := taskEventMessages(t, module, assistantID); len(got) != 1 {
+		t.Fatalf("messages=%+v", got)
+	}
+}
+
+func TestIntermediateTurnEndStaysSilent(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	assistantID := seedWatchAssistant(t, module)
+	task := runningTask(assistantID, "task-progress", "exec-thread-progress")
+	if err := module.store.UpsertTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	module.watchExecutionTask(module.rootCtx, task)
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-progress", "idle", "completed", "还在检查，没有变化", false)) {
+		t.Fatal("not watched")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if len(taskEventTurns(bridge)) != 0 {
+		t.Fatalf("progress woke the brain: %v", taskEventTurns(bridge))
+	}
+	stored, err := module.store.Task(context.Background(), assistantID, task.ID)
+	if err != nil || stored.Status != "running" {
+		t.Fatalf("task=%+v err=%v", stored, err)
+	}
+	if got := taskEventMessages(t, module, assistantID); len(got) != 0 {
+		t.Fatalf("messages=%+v", got)
+	}
+}
+
+func TestFinalCompletionPostsOneSummary(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	assistantID := seedWatchAssistant(t, module)
+	task := runningTask(assistantID, "task-final", "exec-thread-final")
+	task.Goal = "发布完成"
+	if err := module.store.UpsertTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	module.watchExecutionTask(module.rootCtx, task)
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-mid", "idle", "completed", "还在发布，稍后再看", false)) {
+		t.Fatal("not watched")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-final", "idle", "completed", "发布已经完成。", false)) {
+		t.Fatal("final snapshot was not delivered")
+	}
+	waitFor(t, func() bool { return len(taskEventTurns(bridge)) == 1 })
+	finishBrain(module, assistantID, "发布已经完成。")
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-again", "idle", "completed", "发布已经完成。", false)) {
+		t.Fatal("repeat snapshot was not delivered")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if len(taskEventTurns(bridge)) != 1 {
+		t.Fatalf("completion was repeated: %d", len(taskEventTurns(bridge)))
+	}
+	got := taskEventMessages(t, module, assistantID)
+	if len(got) != 1 || got[0].Text != "发布已经完成。" {
+		t.Fatalf("messages=%+v", got)
+	}
+}
+
+func TestFailurePostsOneMessage(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	assistantID := seedWatchAssistant(t, module)
+	task := runningTask(assistantID, "task-failed", "exec-thread-failed")
+	if err := module.store.UpsertTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	module.watchExecutionTask(module.rootCtx, task)
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-fail", "idle", "failed", "构建失败了", false)) {
+		t.Fatal("not watched")
+	}
+	waitFor(t, func() bool { return len(taskEventTurns(bridge)) == 1 })
+	if !strings.Contains(taskEventTurns(bridge)[0], "status=attention") {
+		t.Fatalf("envelope=%s", taskEventTurns(bridge)[0])
+	}
+	finishBrain(module, assistantID, "构建失败了。")
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-fail-2", "idle", "failed", "构建还是失败", false)) {
+		t.Fatal("second failure was not delivered")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if len(taskEventTurns(bridge)) != 1 {
+		t.Fatalf("failure woke again: %d", len(taskEventTurns(bridge)))
+	}
+	if got := taskEventMessages(t, module, assistantID); len(got) != 1 {
+		t.Fatalf("messages=%+v", got)
+	}
+}
+
+func TestBrainSilentOutcomeIsNotRendered(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	assistantID := seedWatchAssistant(t, module)
+	task := runningTask(assistantID, "task-silent", "exec-thread-silent")
+	if err := module.store.UpsertTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	module.watchExecutionTask(module.rootCtx, task)
+	if !bridge.emitThread(task.DeviceID, task.NativeThreadID, freshThread("turn-silent", "idle", "completed", "发布已经完成。", false)) {
+		t.Fatal("not watched")
+	}
+	waitFor(t, func() bool { return len(taskEventTurns(bridge)) == 1 })
+	finishBrain(module, assistantID, "PUCK_SILENT")
+	messages, err := module.store.Messages(context.Background(), assistantID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if strings.Contains(message.Text, "PUCK_SILENT") || strings.Contains(message.CardJSON, `"source":"task_event"`) || message.Text == "完成。" {
+			t.Fatalf("silent outcome was rendered: %+v", message)
+		}
+	}
+}

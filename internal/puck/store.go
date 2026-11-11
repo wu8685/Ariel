@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 8
+const storeSchemaVersion = 9
 
 type Store struct {
 	db       *sql.DB
@@ -240,6 +240,9 @@ func (s *Store) migrate(ctx context.Context) error {
             id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, task_key TEXT NOT NULL, at TEXT NOT NULL)`,
 			`CREATE INDEX IF NOT EXISTS wake_log_assistant_at ON wake_log(assistant_id, at)`,
 		)
+	}
+	if version < 9 {
+		statements = append(statements, `ALTER TABLE thread_watches ADD COLUMN until_text TEXT NOT NULL DEFAULT ''`)
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {

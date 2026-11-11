@@ -190,7 +190,7 @@ func (f *fakeBackend) ThreadAccess(context.Context, string, string, string) (str
 func (f *fakeBackend) ForeignThread(context.Context, string, string, string) (bool, error) {
 	return f.foreign, nil
 }
-func (f *fakeBackend) SaveWatch(_ context.Context, _, deviceID, threadID string) (string, error) {
+func (f *fakeBackend) SaveWatch(_ context.Context, _, deviceID, threadID, _ string) (string, error) {
 	f.watches = append(f.watches, deviceID+"/"+threadID)
 	return "watch-1", nil
 }

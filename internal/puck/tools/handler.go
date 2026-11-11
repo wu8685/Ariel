@@ -88,7 +88,7 @@ type Backend interface {
 	ApplyRuntime(context.Context, string, RuntimeUpdate) error
 	ThreadAccess(context.Context, string, string, string) (string, error)
 	ForeignThread(context.Context, string, string, string) (bool, error)
-	SaveWatch(context.Context, string, string, string) (string, error)
+	SaveWatch(context.Context, string, string, string, string) (string, error)
 	ReadOnlyThread(context.Context, string, string, string) (bool, error)
 }
 
@@ -693,9 +693,19 @@ func (h *Handler) taskStatus(ctx context.Context, call Call) ToolResult {
 		data["summary"] = view.Summary
 	}
 	if view.Status != "" {
-		data["status"] = view.Status
-		if view.Status != task.Status {
-			_ = h.backend.ApplyRuntime(ctx, call.AssistantID, RuntimeUpdate{TaskID: task.ID, Status: view.Status, TurnID: view.TurnID, Summary: view.Summary})
+		outcome := DecideOutcome(view, task.Goal, "", "")
+		status := view.Status
+		if view.Status == "review" && !outcome.Notify {
+			status = task.Status
+			if status == "" {
+				status = "running"
+			}
+		} else if outcome.Notify && outcome.Status != "" {
+			status = outcome.Status
+		}
+		data["status"] = status
+		if status != task.Status && outcome.Notify {
+			_ = h.backend.ApplyRuntime(ctx, call.AssistantID, RuntimeUpdate{TaskID: task.ID, Status: status, TurnID: view.TurnID, Summary: view.Summary})
 		}
 	}
 	return ToolResult{Success: true, Data: data}
@@ -729,8 +739,9 @@ func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
 	var input struct {
 		DeviceID string `json:"deviceId"`
 		ThreadID string `json:"threadId"`
+		Until    string `json:"until"`
 	}
-	if json.Unmarshal(call.Arguments, &input) != nil || strings.TrimSpace(input.DeviceID) == "" || strings.TrimSpace(input.ThreadID) == "" || len(input.DeviceID) > 128 || len(input.ThreadID) > 128 {
+	if json.Unmarshal(call.Arguments, &input) != nil || strings.TrimSpace(input.DeviceID) == "" || strings.TrimSpace(input.ThreadID) == "" || len(input.DeviceID) > 128 || len(input.ThreadID) > 128 || len([]rune(input.Until)) > 240 {
 		return toolError("INVALID_ARGUMENT", "deviceId and threadId are required")
 	}
 	code, err := h.backend.ThreadAccess(ctx, call.AssistantID, input.DeviceID, input.ThreadID)
@@ -757,7 +768,7 @@ func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
 	if !known {
 		return toolError("DEVICE_OFFLINE", "target device is offline")
 	}
-	watchID, err := h.backend.SaveWatch(ctx, call.AssistantID, input.DeviceID, input.ThreadID)
+	watchID, err := h.backend.SaveWatch(ctx, call.AssistantID, input.DeviceID, input.ThreadID, strings.TrimSpace(input.Until))
 	if err != nil {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}

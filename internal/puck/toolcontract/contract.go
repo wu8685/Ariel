@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 6
+const Version = 7
 const canonicalMutationToolVersion = 2
 
 const (
@@ -121,7 +121,7 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 	case "request_authorization":
 		return Definition{Name: name, Description: "请求用户授权敏感动作；说明 action、reason，并尽量提供 deviceId、绝对 cwd 与摘要供卡片展示。", InputSchema: authorizationSchema()}, true
 	case "watch_thread":
-		return Definition{Name: name, Description: "只读监听一条本助理没有启动的现有 Codex 会话，直到这一轮结束、被阻塞或失败，然后通知用户并取消监听。不会发送 turn，也不授予执行权。只有返回 watching 为 true 之后，才能向用户承诺会主动通知；否则只能在用户再次询问时汇报。", InputSchema: watchThreadSchema()}, true
+		return Definition{Name: name, Description: "只读监听一条本助理没有启动的现有 Codex 会话。until 写用户要等的结果，例如“发布完成”或“卡住了”。中间进度不会打扰用户；出现明确结果、失败、卡住或停止时才通知，然后取消监听。不会发送 turn，也不授予执行权。只有返回 watching 为 true 之后，才能向用户承诺会主动通知。", InputSchema: watchThreadSchema()}, true
 	default:
 		return Definition{}, false
 	}
@@ -751,6 +751,6 @@ func authorizationSchema() map[string]any {
 
 func watchThreadSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"deviceId", "threadId"}, "properties": map[string]any{
-		"deviceId": stringProperty(1, maxIDLength), "threadId": stringProperty(1, maxIDLength),
+		"deviceId": stringProperty(1, maxIDLength), "threadId": stringProperty(1, maxIDLength), "until": stringProperty(1, 240),
 	}}
 }
