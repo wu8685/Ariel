@@ -111,7 +111,7 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 	}
 	switch name {
 	case "start_task":
-		return Definition{Name: name, Description: "在指定设备和已存在的绝对 workspace 中创建执行任务，并原子发送首条输入。cwd 必须直接使用 list_threads/read_thread 返回的值或用户确认的路径，不得猜测 /workspace 等路径。taskId 由 Relay 分配，不要生成 clientTaskId。无论 Bot 是 Full Access 还是每次询问模式，只要需要目标 workspace 实际执行就调用；授权由 Relay 处理，调用本工具不代表绕过授权。", InputSchema: startTaskSchema()}, true
+		return Definition{Name: name, Description: "在指定设备和已存在的绝对 workspace 中创建执行任务，并原子发送首条输入。如果可信上下文里已有同一 deviceId 与 cwd 的可复用执行线程，应改调用 send_turn；即使用户没说新会话，Relay 也会把 start_task 续投到该线程。只有设备或目录不同、旧线程不可用，或用户明确要求新会话／独立任务时才新建。cwd 必须直接使用 list_threads/read_thread 返回的值或用户确认的路径，不得猜测 /workspace 等路径。taskId 由 Relay 分配，不要生成 clientTaskId。无论 Bot 是 Full Access 还是每次询问模式，只要需要目标 workspace 实际执行就调用；授权由 Relay 处理，调用本工具不代表绕过授权。", InputSchema: startTaskSchema()}, true
 	case "send_turn":
 		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。", InputSchema: sendTurnSchema()}, true
 	case "ask_user":
