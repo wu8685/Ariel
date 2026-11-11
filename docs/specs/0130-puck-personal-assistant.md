@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11；2026-11-11 用户要求实现分层 Bot 上下文与任务收尾：系统上下文由代码维护，每 Bot 自定义上下文存 SQLite，创建与右键「编辑」均可改；改自定义上下文不轮换 brain thread，下一轮受信 envelope 生效。`finish_task` 使工具集版本变为 8，见 §6.1.2）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11；2026-11-11 用户要求实现分层 Bot 上下文与任务收尾：系统上下文由代码维护，每 Bot 自定义上下文存 SQLite，创建与右键「编辑」均可改；改自定义上下文不轮换 brain thread，下一轮受信 envelope 生效。`finish_task` 使工具集版本变为 8，见 §6.1.2；2026-11-11 用户批准把每个 Bot 改成拥有 Full Access 的主助理：brain 使用 `never` + `danger-full-access`，对用户主动开口只走 `send_message`／`ask_user`／`share_result`，子会话结果各自唤醒一次，删除 Bot 时清掉它的 Puck 记录，子会话消失时唤醒一次，见 §6.1.3 与 §10.12。工具集版本变为 9）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -288,10 +288,10 @@ flowchart LR
 
 1. **进程**：Agent 能力 `puckBrain` 开启时，Agent 的 brain supervisor 启动**一个**常驻子进程 `<codex> app-server --listen stdio://`（复用 `appserver.StartInteractive`／`InteractiveSession`），该主机上的全部 brain thread 共用它。二进制选择与 Agent 现有逻辑一致（`probe.SelectBinary`：`ARIEL_CODEX_BINARY` 覆盖，否则取 Desktop 内置 codex，即 `/Applications/ChatGPT.app` 内的 CLI），并记录版本；低于验证过的最低版本时 `puckBrain` 报告不可用。进程使用用户现有 Codex 登录与 `CODEX_HOME`，Ariel 不读取、不复制任何凭据文件，也不改用户全局配置。
 2. **工作目录**：每个助理一个专用空目录 `~/.ariel/puck/<assistantId>/`（0700，由 Agent 创建，只允许在该根下），作为 brain thread 的 `cwd`；不写 `AGENTS.md` 或 MCP 配置（Q15）。
-3. **创建**：`thread/start {cwd, ephemeral:false, serviceName:"ariel-puck", threadSource:"chatgpt_hidden", developerInstructions, sandbox:"read-only", approvalPolicy:"never", approvalsReviewer:"user", model?, dynamicTools:[§6.1 工具], config?}`。常驻进程以进程级参数关闭内置本地能力（写探针 D 组合，§4.2.2）：`--disable shell_tool unified_exec view_image image_generation goals browser_use browser_use_external computer_use in_app_browser sleep_tool multi_agent apps plugins tool_suggest skill_search`、`-c web_search="disabled"`、`-c include_apply_patch_tool=false`、用户全局 MCP 逐个 `enabled=false`；**不得关闭 `code_mode_host`**（0.160 中动态工具经它暴露）。启动子进程前清洗环境（丢弃非 UTF-8 值，探针中 `ARIEL_DEVICE_NAME` 导致 codex shell panic）。创建后立即 `thread/name/set {name:"[Puck] <助理名称>"}`（改名时同步）。`developerInstructions` = 人设 + 硬规则 + Desktop 误输入守卫（第 11 条）（E1、E3、E6、E9、E13 行为要求，禁止自批，只经工具行动，默认中文）。Brain 不执行本地写命令；`approvalPolicy` 取 `never`（无内置执行工具后无审批对象；动态工具不经审批，探针确认）（Q28 已决）。
-4. **后续 turn**：`turn/start {threadId, clientUserMessageId, input, model?, effort?, approvalPolicy:"never", sandboxPolicy:{type:"readOnly"}}`（逐 turn 显式携带策略，因 sandbox 不随 thread 持久，见 §4.2.2） 直接发往常驻进程，**不经 Desktop IPC**；Agent 以 `turn/started` 与 exact `clientUserMessageId` 读回确认后向 Relay 回复 `accepted`，否则 `unknown`（不重放）。停止用 `turn/interrupt`（exact turnId）。
+3. **创建**：`thread/start {cwd, ephemeral:false, serviceName:"ariel-puck", threadSource:"chatgpt_hidden", developerInstructions, sandbox:"danger-full-access", approvalPolicy:"never", model?, dynamicTools:[§6.1 工具], config?}`。常驻进程以进程级参数关闭内置本地能力（写探针 D 组合，§4.2.2）：`--disable shell_tool unified_exec view_image image_generation goals browser_use browser_use_external computer_use in_app_browser sleep_tool multi_agent apps plugins tool_suggest skill_search`、`-c web_search="disabled"`、`-c include_apply_patch_tool=false`、用户全局 MCP 逐个 `enabled=false`；**不得关闭 `code_mode_host`**（0.160 中动态工具经它暴露）。启动子进程前清洗环境（丢弃非 UTF-8 值，探针中 `ARIEL_DEVICE_NAME` 导致 codex shell panic）。创建后立即 `thread/name/set {name:"[Puck] <助理名称>"}`（改名时同步）。`developerInstructions` = 人设 + 硬规则 + Desktop 误输入守卫（第 11 条）（E1、E3、E6、E9、E13 行为要求，禁止自批，只经工具行动，默认中文）。Brain 不执行本地写命令；`approvalPolicy` 取 `never`（无内置执行工具后无审批对象；动态工具不经审批，探针确认）（Q28 已决）。
+4. **后续 turn**：`turn/start {threadId, clientUserMessageId, input, model?, effort?, approvalPolicy:"never", sandboxPolicy:{type:"dangerFullAccess"}}`（逐 turn 显式携带策略，因 sandbox 不随 thread 持久，见 §4.2.2） 直接发往常驻进程，**不经 Desktop IPC**；Agent 以 `turn/started` 与 exact `clientUserMessageId` 读回确认后向 Relay 回复 `accepted`，否则 `unknown`（不重放）。停止用 `turn/interrupt`（exact turnId）。
 5. **工具集版本**：`dynamicTools` 只能在创建时声明，因此助理记录 `toolset_version`；工具集变更（新增／改 schema）通过**轮换 brain thread** 生效（与 #64 体积轮换同一机制：新建 thread、注入记忆与近期对话摘要、旧 thread 保留只读）。工具 handler 对未知或旧版本工具名返回结构化错误，不崩溃。
-6. **监督与恢复**：子进程退出时 supervisor 指数退避重启（1 s 起，上限 60 s）；10 分钟内崩溃 5 次则 `puckBrain` 进入 `degraded` 并上报 Relay，停止重启直到 Agent 重启或用户在 Web 重试。重启后对已知 brain thread 惰性 `thread/resume`（下一次 turn 时），**必须显式携带 `sandbox:"read-only"`、`approvalPolicy:"never"`**：裸 resume 会回落到全局 `danger-full-access` 并改写持久设置（探针 P1／P4）。进行中的 brain turn 随进程丢失：Agent 上报 `turn.lost`，模块把该轮标为中断，在对话中如实说明（“刚才中断了，我重新看一下”，E13），由用户消息或模块一次性重唤醒；已发出的工具写操作按幂等 ID 只读回、不重放。
+6. **监督与恢复**：子进程退出时 supervisor 指数退避重启（1 s 起，上限 60 s）；10 分钟内崩溃 5 次则 `puckBrain` 进入 `degraded` 并上报 Relay，停止重启直到 Agent 重启或用户在 Web 重试。重启后对已知 brain thread 惰性 `thread/resume`（下一次 turn 时），**必须显式携带 `sandbox:"danger-full-access"`、`approvalPolicy:"never"`**：裸 resume 会回落到全局 `danger-full-access` 并改写持久设置（探针 P1／P4）。进行中的 brain turn 随进程丢失：Agent 上报 `turn.lost`，模块把该轮标为中断，在对话中如实说明（“刚才中断了，我重新看一下”，E13），由用户消息或模块一次性重唤醒；已发出的工具写操作按幂等 ID 只读回、不重放。
 7. **生命周期绑定**：常驻进程是 Agent 的子进程，随 Agent 退出而关闭（`InteractiveProcess.Close` 超时后 kill）；Agent 不在线时其上所有助理为 `brain_offline`（§8.5）。
 8. **Desktop 是否必需**：brain 本身只需要大脑主机上**运行中的 Ariel Desktop Agent**、已安装的 Codex Desktop 应用包（提供内置 codex 二进制）与有效的 Codex 登录；**不需要 Codex Desktop 正在运行**。只有当该主机同时作为执行主机（被派发执行 thread）时才需要 Desktop 运行（`codexReady`）。
 9. **与 #4（注册与就绪耦合）的关系**：当前 `desktopagent.Run` 在 Desktop IPC 健康检查（`checkDesktop`）通过前不会连 Relay，Desktop 未运行时整台主机显示离线，brain 也随之不可用。P0 对 `puckBrain` 做最小解耦：开启 `puckBrain` 时，Desktop 检查失败不阻止 Agent 上线，Agent 以 `codexReady=false`、`puckBrainReady=true` 注册（先例：`TasksManagerOnly` 已能以 `service == nil` 上线），Desktop 就绪后再按现有逻辑启用会话能力（或按 #4 的完整修复）。能力拆分为 `puckBrain`（已开启）与 `puckBrainReady`（常驻进程已初始化且版本合格），Web 与模块据此显示“大脑就绪／离线／降级”，不再把“Desktop 未开”误判为“大脑离线”。
@@ -449,6 +449,7 @@ sequenceDiagram
 | `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要。先读 Relay 热 cache，不新鲜时回退 `thread.read`；读不到现场时 `runtime=unknown`，不得把库里的旧 `running` 说成已完成 | Service 本地 cache，回退 `thread.read` |
 | `watch_thread` | `deviceId`, `threadId`, `until?` | 只读监听一条本助理没有启动的现有会话。`until` 是用户要等的结果。进度和重复状态不发消息；明确结果、失败、卡住或停止才通知并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
 | `finish_task` | `taskId`, `outcome`（`completed`／`failed`／`cancelled`）, `note?` | 归档本助理自己的一条任务，关闭该执行线程上本助理的 watch，并删掉尚未投递的唤醒。不删除对话消息，不发送 turn | 只接受调用者自己的任务；brain thread 返回 `PUCK_SELF_TARGET`；不经过 `turn.start`，因此不能绕过 B2／B5／B6／B10／B8 |
+| `send_message` | `text`（1–4000 字）, `clientMessageId?` | 把一句 Bot 决定要说的话写进本助理的 Ariel 对话，并标成可通知的 `notify_user`。同一 `clientMessageId` 只保留一条 | 只写调用者自己的对话；参数里的 `assistantId` 拒绝；不能改别人的消息。工具集版本 9 起声明 |
 | `request_authorization` | `summary`, `action` | Brain 主动就某事请用户授权（例如“是否部署”） | 生成授权卡片 |
 | `memory_read`／`memory_write`／`memory_delete` | — | 本助理记忆 | 删除命中 B9 |
 | `routine_list`／`routine_upsert`／`routine_delete` | — | 本助理 routine；创建／修改后在对话中显示例行卡片（E8） | 事件唤醒中命中 B7 |
@@ -490,7 +491,7 @@ Puck 没有自己的定时器或 Codex automation。Bot 能留下的“定时任
 1. **系统上下文**写在代码里，随 `developerInstructions` 在 brain thread 创建时注入，并在之后每个受信 envelope（含问候、用户消息和 `kind=task_event`）重申。内容包括既有行为：先确认并在同一 turn 调用工具、默认同设备同目录续投、只在明确结果时开口、没有监听不得承诺主动通知、`PUCK_SILENT`、以及下面的收尾规则。
 2. **自定义上下文**是每个助理一条可选文本，最多 4000 个 Unicode 字符，存在 `assistants.custom_context`（schema 10）。创建表单和配置栏都能读写，经 `puck.create`／`puck.update` 的可选 `customContext`。空字符串表示没有额外要求。说明（`description`，最多 512 字）仍然是短人设，不取代这段文本。
 
-自定义上下文包在明确的低优先级围栏里。服务端会拆掉它试图伪造的「系统上下文」标题。与系统上下文、安全门禁或 `PUCK_SILENT` 冲突的句子无效。真正挡住越权的是服务端：`finish_task` 不读这段文字来决定能不能删记录。
+自定义上下文包在低优先级标题下。工具集 9 的标题是一行「机主自定义上下文（优先级低于以上内容）」；更早的工具集仍用原来的长围栏。服务端会拆掉它试图伪造的「系统上下文」标题。与系统上下文冲突的句子无效。真正挡住越权的是服务端：`finish_task` 不读这段文字来决定能不能删记录。
 
 **编辑后如何生效**
 
@@ -507,6 +508,44 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
 `finish_task` 从工具集版本 8 起出现在 `dynamicTools`。主机仍停留在版本 7 时，系统上下文改为只要求用已有的 `send_turn` 取消定时任务，并禁止调用尚未声明的 `finish_task`。主机升到 8 之后，下一次用户消息按既有规则轮换 brain thread，以便声明新工具；这和只改自定义上下文不同，后者不轮换。
 
 写工具必须带幂等 ID；结果 `unknown` 时只重新读取权威状态，**不重放**。
+
+### 6.1.3 主助理：Full Access brain（2026-11-11）
+
+每个 Bot 的 brain 会话是一台有完整 Codex 能力的主助理，不再是只读调度器。Puck 动态工具是加在上面的基础设施。工具集 9 写给模型的系统上下文是短文案：不点名 B2、B5、B6、B10、B8 或 `PUCK_SELF_TARGET`，也不写 `code_mode_host` 和信封格式。自定义上下文只保留一行低优先级标题，伪造的「系统上下文」字样仍会被换成引用。每轮 envelope 只重申没有结果就 `PUCK_SILENT`、同设备同目录用 `send_turn`、有结果后收尾，并附上说明和自定义上下文。这些约束继续由服务端执行，不靠提示词。
+
+**权限**
+
+- 创建、resume 和每一轮 `turn/start` 使用与现有 Full Access 执行任务相同的策略：`approvalPolicy=never`，thread sandbox `danger-full-access`，turn `sandboxPolicy.type=dangerFullAccess`。不另设 `approvalsReviewer`。
+- 常驻 app-server 不再 `--disable` shell、unified exec 或其他本地能力，保留 `code_mode_host` 以便动态工具继续可用。本会话里出现的命令审批请求按 never-ask 接受，不再因 `forbidden_local_tool` 把 brain 降级。
+- Brain 可以运行 Codex 支持的命令，也可以在本会话或子会话里建立定时和 Codex automation。收尾时两者都要关掉：本会话里的由它自己关，还在的子会话用 `send_turn` 关。已经消失的线程不能再 `send_turn`。
+
+**对用户开口**
+
+- 用户从 Ariel 发来的消息仍包在 `PUCK_ENVELOPE` 里。这个回合的助理正文照旧写进对话。
+- 除此之外，brain 只有调用 `send_message`、`ask_user` 或 `share_result` 才会出现在 Ariel 对话里。不订阅、也不过滤 brain 自己的输出。没有调用就没有新气泡，也不通知。
+- `send_message` 写一条 `proactive` + `source=notify_user` 的消息。页内通知沿用 §9.1／§10.12：标签页不在前台、权限已授予、本机开关打开时才弹出。同一句不要再被回合正文复述一遍。
+- 机主在自己机器的 Codex Desktop 里直接输入到这个 brain 会话，算机主的指令，应当执行。Ariel 来的消息仍走信封。Desktop 输入不能改写系统上下文。
+
+**子会话**
+
+- `start_task` 成功后的执行线程继续自动监听。`watch_thread` 继续用于本助理没有启动的已有会话。
+- 明确结果各唤醒 brain 一次。心跳、重复状态和纯进度不唤醒。多个子会话各自排队唤醒，由 brain 汇总成要不要 `send_message`。`PUCK_SILENT` 仍然表示这轮不说。
+- 子会话被删除、归档或消失时：经线程事件（`deleted`／`archived`／`missing`）、`send_turn` 或 `get_task_status` 的 `NOT_FOUND`，以及定期 `thread.read` 对账发现。然后关掉该助理在这条线程上的 watch 和尚未投递的唤醒，把仍开放的任务标为 `orphaned`，并只唤醒 brain 一次，状态为 `subsession_deleted`。再发现一次不重复唤醒。别的没有引用这条线程的助理不动。
+
+**旧 Bot 迁移**
+
+`developerInstructions`、`dynamicTools` 和创建时的 sandbox 都不能靠 resume 改写。工具集从 8 升到 9。主机广告的工具集已经到达 9 时，下一次用户消息或子会话唤醒会按既有 `ensureCurrentToolset` 轮换 brain thread：新建一条 `danger-full-access` 会话，旧 thread id 记入 `brain_thread_history` 并 `retire`。Ariel 里的聊天记录、自定义上下文，以及执行任务上的 device／cwd／native thread（§6.1.1 的续投）都保留。Desktop Agent 进程也要重启一次，新的 app-server 才不再带着旧的 `--disable`。重启前已经在跑的进程仍会禁用本地工具，直到它退出重开。
+
+**门禁**
+
+| 门禁 | 决定 | 原因 |
+| --- | --- | --- |
+| B2 | 保留，并且 Full Access 模式也不再跳过 | 保护别人的执行线程。brain 在本机 Full Access 并不等于可以向任意 thread `send_turn` |
+| B5／B6 | ask 模式保留；Bot 自己的 `permissionMode=full` 仍自动放行其派出的任务 | 这是 0135 已有的 Full Access 行为，管的是派到其他设备的任务，不管 brain 自己的本地命令 |
+| B8 | 保留为派发资源上限，不因 brain Full Access 放宽 | 规格里的并发／每小时上限。当前代码还没有单独的 B8 规则，这次不新增、也不把它说成已经失效 |
+| B10 | ask 模式在执行策略无法强制时仍要授权；full 模式继续不因此拦自己的派发 | B10 防止无法强制审批的目标被自动派发。brain 自己的 Full Access 就是 `danger-full-access`，不走这条派发检查 |
+| `PUCK_SELF_TARGET` | 保留 | `start_task`／`send_turn` 不能指向 brain 工作区或 brain thread |
+| Passkey、仅机主设备 | 保留 | 不新增入口，不把工具调用变成跨用户通道 |
 
 里程碑消息（E3）由模块根据 §9 状态迁移生成固定模板的任务卡片更新，不依赖 Brain 叙述；Brain 只在需要时追加一条简短解读。记忆写入成功后模块在对话中显示“已记住：……”小标签（可撤销，E7）。
 
@@ -573,7 +612,7 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
    4. 状态 `provisioning → ready`；任一步失败停在 `provisioning` 并可重试；重试复用已记录的 `brain_thread_id`，不重复建 thread。
 2. **列表／读取**（`puck.list`）：名称、状态、大脑主机在线、未读与待授权数量，并返回 `maxActiveAssistants`，供 Web 显示服务端权威容量。
 3. **更新**（`puck.update`）：名称、人设、作用域、策略、通知设置即时生效；人设变化在下一 turn 以“设置已更新”系统前缀告知 Brain；人设大幅变更或工具集升级时轮换 brain thread（`developerInstructions`／`dynamicTools` 只能在创建时设定，§4.2.5）；**更换大脑主机**会在新主机新建 brain thread，旧 brain thread 由原主机 Agent `retire`（保留 rollout，不再驱动），记忆／任务／routine 不变。
-4. **删除**（`puck.delete`）：二次确认；立即停用 routine、`puck.brain.retire`、停止 watch、拒绝该助理的待处理授权；已派发执行 thread **不停止、不归档**（用户可在 Ariel 中继续操作）。数据软删除 30 天后清除（期限待定，Q16）；brain thread 是否归档由用户在删除时选择，默认保留。
+4. **删除**（`puck.delete`）：二次确认。同一次 SQLite 事务里：把助理标成 `deleted`，拒绝待处理授权并删除持久授权规则，删除该助理的 `tasks`、`thread_watches`、`brain_wakes`、`wake_log`、`group_members` 和侧栏 `assistant` 放置，清空 `custom_context`、`brain_thread_id`、`brain_thread_history`，并把 `toolset_version` 置 0。第二次删除返回 `PUCK_ASSISTANT_NOT_FOUND`，不再改数据。**聊天记录沿用既有软删除**：`conversation_messages` 留在库里，但接口因助理已删除而不可读；不在删除时物理擦除。不删除其他助理的任何行。不删除磁盘上的 Codex rollout：只对 brain thread 调用既有 `puck.brain.retire`（本进程不再驱动），不发 `turn.interrupt`，也不删除执行线程文件。执行线程因此停止被这个 Bot 跟踪，但 Codex 会话本身还在。
 5. 活跃助理数量上限默认 50（防止误建过多 brain thread）。创建时必须在同一 SQLite 事务内统计 `deleted_at IS NULL` 的助理并插入新记录，避免并发请求越过上限；达到上限返回 `OVERLOADED`。Web 显示当前数量与服务端上限，并在达到上限时禁用新建入口。软删除后的助理不占活跃容量。
 
 ### 8.3 隔离
@@ -636,7 +675,7 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 
 1. **监听什么**：本助理 `tasks` 里仍可跟踪的执行线程（有 native thread，且状态不是 `done`／`cancelled`／`failed_dispatch`／`stopped`），以及 `thread_watches` 里状态为 `watching` 的只读监听。订阅走 `PuckBridge.Watch`，与 Web 共用同一个 Agent follower，不另开 native follower。
 2. **何时唤醒**：只在结果发生有意义的变化时唤醒。明确结果包括：这一轮给出了新的完成结论（`review`）、失败（`attention`）、需要审批或补充输入（`waiting_user`）、已停止（`stopped`），以及摘要满足本次监听的 `until`（例如“发布完成”或“卡住了”）。同一种状态重复出现、摘要没有变化、以及只是进度或心跳的 turn 结束（“还在检查”“没有变化”）不唤醒，任务保持进行中并继续听。长跑或定时汇报的线程因此不会每个 turn 都发一条聊天。唤醒信封是受信的 `kind=task_event`，只含 task id、新状态、最后一条助理消息的短摘要（折叠空白，最多 240 字）。不把交互 prompt、命令或完整 thread id 写进日志。
-2a. **沉默**：服务端先合并、去重，再决定是否唤醒。被唤醒后，大脑如果判断没有新的话要说，最终回复只写 `PUCK_SILENT`。这条约不入库、不出现在对话里，也不触发浏览器通知。每个明确结果最多一条简短摘要，不重复已经说过的内容。浏览器通知只对着这种用户可见的任务消息。
+2a. **沉默**：服务端先合并、去重，再决定是否唤醒。被唤醒后，大脑如果判断没有新的话要说，最终回复只写 `PUCK_SILENT`，并且不调用 `send_message`。这条约不入库、不出现在对话里，也不触发浏览器通知。工具集 9 起，唤醒回合的助理正文本身不进对话；要让用户看见，必须调用 `send_message`（§6.1.3）。多个子会话各自唤醒，由大脑汇总。浏览器通知只对着这种用户可见的消息。
 3. **大脑忙或超限**：同一助理已有 brain turn 时，唤醒写入 `brain_wakes`，等当前 turn 结束后再发，不丢。同一任务 5 分钟内只交付一次，同一助理每分钟最多 6 次；多出来的合并进下一次窗口，保留最新状态和摘要。大脑离线时改写一条模板消息，仍然让用户看见。
 4. **重启**：监听对象就是 SQLite 里的任务行和 `thread_watches`。进程重启后按这些行重新 `Watch`，并用 `thread.read` 对账；Agent 重新上线时只重连该设备上的监听。不重放写操作。
 5. **只读监听**：`watch_thread` 给大脑一个办法盯住用户点名的、不是自己启动的会话，可选 `until` 写明要等到的结果。brain thread 仍是 `PUCK_SELF_TARGET`；别的助理的执行线程仍拒绝。监听期间和取消之后，对这条线程的 `send_turn` 都返回 `WATCH_ONLY`，除非它本来就是本助理自己的任务。B5／B6／B10／B8 的执行门禁不因监听而放宽。只读监听在出现明确结果后取消；进度汇报不取消、也不发消息。
@@ -656,6 +695,7 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 9. 页面打开且正在查看对应助理时，Service 仍发送推送，由 Service Worker 在有可见客户端时改为页面内提示（`clients.matchAll` 判断），避免重复打扰。
 10. 通知中心：已读水位存 Service（不是浏览器本地 unread），多设备同步。
 11. **2026-11-11 切片没有做完的部分**：VAPID 密钥生成与持久化、RFC 8291 载荷加密、`push_subscriptions`／`notification_prefs`／`notifications`、向浏览器推送服务投递，以及标签页完全关闭后的到达。`/sw.js` 已经能处理 `push`、`notificationclick` 和页面转发的 `puck-notify`，但没有订阅，也没有服务端投递，所以关页之后目前不会响。页内、后台标签的系统通知见 §9.1。通知中心、按助理／类型开关、头像 PNG 和 iOS 主屏幕引导仍留在本节的后续 P1。
+12. **`send_message` 的页内通知**：Bot 用 `send_message` 写下的消息带 `proactive:true` 与 `source:"notify_user"`。Web 用和任务结果相同的条件决定要不要弹出系统通知：本机开关打开、浏览器权限是 granted、页面不在前台。同一条消息只通知一次。用户信封回合里的普通回复不带这个标记，因此不会因为一句回答再弹一次。大脑离线、唤醒发不出去时，仍按 §9.1 写一条模板，避免结果彻底消失；这是唯一不经过工具调用的兜底。
 
 ## 11. Routines（P2）
 

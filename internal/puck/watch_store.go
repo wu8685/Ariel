@@ -202,6 +202,82 @@ func (s *Store) ArchiveOwnedTask(ctx context.Context, assistantID, taskID, note 
 	return result, nil
 }
 
+type OrphanResult struct {
+	Changed   bool
+	TaskIDs   []string
+	WatchOnly bool
+}
+
+// OrphanSubsession closes this assistant's watches and pending wakes for one
+// Codex thread and marks its still-open tasks orphaned. A second call is a no-op.
+func (s *Store) OrphanSubsession(ctx context.Context, assistantID, deviceID, threadID string) (OrphanResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return OrphanResult{}, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT task_id, status FROM tasks WHERE assistant_id=? AND device_id=? AND native_thread_id=?`, assistantID, deviceID, threadID)
+	if err != nil {
+		return OrphanResult{}, err
+	}
+	type row struct{ id, status string }
+	var tasks []row
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.id, &item.status); err != nil {
+			rows.Close()
+			return OrphanResult{}, err
+		}
+		tasks = append(tasks, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return OrphanResult{}, err
+	}
+	rows.Close()
+	now := nowText(time.Time{})
+	result := OrphanResult{}
+	for _, task := range tasks {
+		switch task.status {
+		case "archived", "cancelled", "orphaned", "failed_dispatch":
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status='orphaned', last_summary='子会话已删除或归档', updated_at=? WHERE assistant_id=? AND task_id=?`, now, assistantID, task.id); err != nil {
+			return OrphanResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM brain_wakes WHERE assistant_id=? AND task_key=?`, assistantID, task.id); err != nil {
+			return OrphanResult{}, err
+		}
+		result.Changed = true
+		result.TaskIDs = append(result.TaskIDs, task.id)
+	}
+	var watchID, watchStatus string
+	watchErr := tx.QueryRowContext(ctx, `SELECT id, status FROM thread_watches WHERE assistant_id=? AND device_id=? AND thread_id=?`, assistantID, deviceID, threadID).Scan(&watchID, &watchStatus)
+	if watchErr != nil && !errors.Is(watchErr, sql.ErrNoRows) {
+		return OrphanResult{}, watchErr
+	}
+	if watchErr == nil && watchStatus != "closed" {
+		if _, err := tx.ExecContext(ctx, `UPDATE thread_watches SET status='closed', updated_at=? WHERE assistant_id=? AND device_id=? AND thread_id=?`, now, assistantID, deviceID, threadID); err != nil {
+			return OrphanResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM brain_wakes WHERE assistant_id=? AND task_key=?`, assistantID, watchID); err != nil {
+			return OrphanResult{}, err
+		}
+		result.Changed = true
+		if len(result.TaskIDs) == 0 {
+			result.WatchOnly = true
+		}
+	}
+	if !result.Changed {
+		return OrphanResult{}, tx.Commit()
+	}
+	if err := tx.Commit(); err != nil {
+		return OrphanResult{}, err
+	}
+	s.markChanged()
+	return result, nil
+}
+
 func (s *Store) UpsertBrainWake(ctx context.Context, wake BrainWake) error {
 	watchOnly := 0
 	if wake.WatchOnly {

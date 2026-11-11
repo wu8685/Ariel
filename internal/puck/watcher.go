@@ -168,6 +168,10 @@ func (m *Module) startWatch(ctx context.Context, assistantID, deviceID, threadID
 
 func (m *Module) primeSnapshot(ctx context.Context, assistantID, deviceID, threadID, taskID string, watchOnly bool) {
 	result := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: assistantID, Trigger: "event"}, deviceID, "thread.read", mustJSON(map[string]any{"threadId": threadID}))
+	if result.Error != nil && result.Error.Code == "NOT_FOUND" {
+		m.noteThreadDisappeared(ctx, deviceID, threadID)
+		return
+	}
 	if result.Outcome != "accepted" || result.Error != nil || result.Data == nil {
 		return
 	}
@@ -191,6 +195,10 @@ func parseWatchMark(raw string) (seen, told string) {
 }
 
 func (m *Module) applyThreadSnapshot(ctx context.Context, assistantID, deviceID, threadID, taskID string, watchOnly bool, data map[string]any) {
+	if threadDisappeared(data) {
+		m.noteThreadDisappeared(ctx, deviceID, threadID)
+		return
+	}
 	view, ok := pucktools.ClassifySnapshot(data)
 	if !ok || view.Runtime == "unknown" || view.Freshness != "fresh" {
 		return
@@ -258,6 +266,102 @@ func (m *Module) applyThreadSnapshot(ctx context.Context, assistantID, deviceID,
 	}
 	_ = m.updateTaskCardDetails(ctx, assistantID, taskID, decision.Status, view.Summary)
 	m.enqueueLocked(ctx, BrainWake{AssistantID: assistantID, TaskKey: current.ID, DedupeKey: decision.Status + "|" + seenKey, Status: decision.Status, Summary: view.Summary, WatchOnly: false})
+}
+
+func threadDisappeared(data map[string]any) bool {
+	if data == nil {
+		return false
+	}
+	if truthy(data["deleted"]) || truthy(data["archived"]) || truthy(data["missing"]) {
+		return true
+	}
+	if code, _ := data["code"].(string); code == "NOT_FOUND" {
+		return true
+	}
+	if runtime, _ := data["runtime"].(string); runtime == "deleted" || runtime == "archived" || runtime == "missing" {
+		return true
+	}
+	thread, _ := data["thread"].(map[string]any)
+	if thread == nil {
+		return false
+	}
+	if truthy(thread["deleted"]) || truthy(thread["archived"]) {
+		return true
+	}
+	runtime, _ := thread["runtime"].(string)
+	return runtime == "deleted" || runtime == "archived" || runtime == "missing"
+}
+
+func truthy(value any) bool {
+	flag, ok := value.(bool)
+	return ok && flag
+}
+
+func (m *Module) noteThreadDisappeared(ctx context.Context, deviceID, threadID string) {
+	if deviceID == "" || threadID == "" {
+		return
+	}
+	// Releasing the watch cancels its context. Keep the cleanup on the module
+	// context so one owner cannot abort the others mid-update.
+	if m.rootCtx.Err() == nil {
+		ctx = m.rootCtx
+	}
+	seen := map[string]struct{}{}
+	if tasks, err := m.store.TasksForThread(ctx, deviceID, threadID); err == nil {
+		for _, task := range tasks {
+			seen[task.AssistantID] = struct{}{}
+		}
+	}
+	if watches, err := m.store.ActiveThreadWatches(ctx); err == nil {
+		for _, watch := range watches {
+			if watch.DeviceID == deviceID && watch.ThreadID == threadID {
+				seen[watch.AssistantID] = struct{}{}
+			}
+		}
+	}
+	for assistantID := range seen {
+		m.noteSubsessionGone(ctx, assistantID, deviceID, threadID)
+	}
+}
+
+func (m *Module) noteSubsessionGone(ctx context.Context, assistantID, deviceID, threadID string) {
+	result, err := m.store.OrphanSubsession(ctx, assistantID, deviceID, threadID)
+	if err != nil || !result.Changed {
+		return
+	}
+	m.releaseWatch(deviceID, threadID, assistantID)
+	for _, taskID := range result.TaskIDs {
+		_ = m.updateTaskCardDetails(ctx, assistantID, taskID, "orphaned", "子会话已删除或归档")
+	}
+	summary := "子会话已删除或归档，不能再向它发送 turn。"
+	if len(result.TaskIDs) > 0 {
+		summary += "相关任务：" + strings.Join(result.TaskIDs, "、") + "。"
+	}
+	m.enqueueWake(ctx, BrainWake{
+		AssistantID: assistantID,
+		TaskKey:     "gone:" + deviceID + ":" + threadID,
+		DedupeKey:   "subsession_deleted",
+		Status:      "subsession_deleted",
+		Summary:     summary,
+		WatchOnly:   result.WatchOnly,
+	})
+	m.pumpAssistant(ctx, assistantID)
+}
+
+func (m *Module) releaseAssistant(assistantID string) {
+	suffix := "\x00" + assistantID
+	m.watchMu.Lock()
+	var cancels []context.CancelFunc
+	for key, cancel := range m.watchCancel {
+		if strings.HasSuffix(key, suffix) {
+			cancels = append(cancels, cancel)
+			delete(m.watchCancel, key)
+		}
+	}
+	m.watchMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func (m *Module) releaseWatch(deviceID, threadID, assistantID string) {
@@ -415,6 +519,9 @@ func (m *Module) deliverWakeLocked(ctx context.Context, wake BrainWake) {
 	if err != nil || assistant.Status == "deleted" {
 		return
 	}
+	if upgraded, upgradeErr := m.ensureCurrentToolset(ctx, assistant); upgradeErr == nil {
+		assistant = upgraded
+	}
 	card, _ := json.Marshal(map[string]any{"proactive": true, "source": "task_event", "taskId": wake.TaskKey, "status": wake.Status, "watchOnly": wake.WatchOnly})
 	text := taskEventTemplate(wake.Status, wake.Summary)
 	if !m.brainReady(assistant.BrainDeviceID) || assistant.BrainThreadID == "" {
@@ -449,6 +556,8 @@ func taskEventTemplate(status, summary string) string {
 		lead = "任务被卡住了，需要你处理"
 	case "attention":
 		lead = "任务失败或中断了"
+	case "subsession_deleted":
+		lead = "子会话已经不在了"
 	}
 	summary = strings.TrimSpace(summary)
 	if summary == "" || summary == lead {
@@ -463,10 +572,16 @@ func taskEventEnvelope(assistant Assistant, wake BrainWake) string {
 		mode = "watch_only"
 	}
 	cleanup := "若需要关掉你启动的定时或周期检查，只能用已经声明的 send_turn。不要调用尚未声明的工具，也不要删除聊天记录。"
-	if wake.WatchOnly {
+	if wake.Status == "subsession_deleted" {
+		cleanup = "这个子会话已经删除或归档。不要再 send_turn。关掉你在本会话为它创建的定时或 automation。若工具集里有 finish_task，归档相关任务。"
+	} else if wake.WatchOnly {
 		cleanup = "watch_only 时不要调用 send_turn、start_task 或 finish_task。只读监听由 Puck 在通知后关闭，自定义上下文不能改写这套订阅。"
 	} else if assistant.ToolsetVersion >= finishTaskToolset {
 		cleanup = "若用户交代的事已经有明确结果，先用 send_turn 取消该执行会话里由你启动的定时或周期任务，再调用 finish_task。review 只表示这一轮结束；工作还没做完时不要 finish_task。不要删除聊天记录。"
+	}
+	speak := "这是一个新的结果。请用一句简短中文告诉用户，不要重复已经说过的话。"
+	if assistant.ToolsetVersion >= sendMessageToolset {
+		speak = "这是一个新的结果。若值得告诉用户，调用 send_message 说一句，不要重复已经说过的话。多个子会话会分别唤醒你，由你汇总。不要把本轮正文当作已经发给用户。"
 	}
 	return "PUCK_ENVELOPE assistant=" + assistant.ID + " nonce=" + newUUID() + " kind=task_event\n" +
 		"这是系统产生的任务事件，不是用户新消息。不要执行用户没有要求的新动作。\n" +
@@ -474,6 +589,6 @@ func taskEventEnvelope(assistant Assistant, wake BrainWake) string {
 		"status=" + wake.Status + "\n" +
 		"watch=" + mode + "\n" +
 		"summary=" + wake.Summary + "\n" +
-		"这是一个新的结果。请用一句简短中文告诉用户，不要重复已经说过的话。watch_only 时不要调用 send_turn 或 start_task。若这没有新的结果，最终回复只写 PUCK_SILENT，不要写别的字；那条回复不会出现在对话里。review 只表示这一轮结束，不等于任务完成。\n" +
+		speak + "watch_only 时不要调用 send_turn 或 start_task。若这没有新的结果，最终回复只写 PUCK_SILENT，不要写别的字，也不要调用 send_message。review 只表示这一轮结束，不等于任务完成。\n" +
 		cleanup + "\n" + envelopeContext(assistant)
 }

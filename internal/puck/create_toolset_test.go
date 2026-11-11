@@ -155,7 +155,7 @@ func createAgainstAdvertisedToolset(t *testing.T, advertised int) (string, int, 
 	assistant, _ := data["assistant"].(map[string]any)
 	assistantID, _ := assistant["assistantId"].(string)
 	if assistantID == "" {
-		t.Fatal("puck.create accepted without an assistant id")
+		t.Fatalf("puck.create accepted without an assistant id: %#v", response)
 	}
 	if err := wsjson.Write(ctx, web, map[string]any{
 		"type": "request", "v": 1, "requestId": "00000000-0000-4000-8000-000000000002",

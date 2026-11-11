@@ -198,6 +198,10 @@ func (f *fakeBackend) SaveWatch(_ context.Context, _, deviceID, threadID, _ stri
 func (f *fakeBackend) ReadOnlyThread(context.Context, string, string, string) (bool, error) {
 	return f.readOnly, nil
 }
+func (f *fakeBackend) PostNotice(context.Context, string, string, string) (string, error) {
+	return "notice-1", nil
+}
+func (f *fakeBackend) NoteThreadGone(context.Context, string, string, string) error { return nil }
 func (f *fakeBackend) FinishTask(_ context.Context, assistantID, taskID string, finish TaskFinish) (TaskFinishResult, error) {
 	task, ok := f.tasks[taskID]
 	if !ok || task.AssistantID != assistantID {

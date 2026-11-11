@@ -91,6 +91,8 @@ type Backend interface {
 	SaveWatch(context.Context, string, string, string, string) (string, error)
 	ReadOnlyThread(context.Context, string, string, string) (bool, error)
 	FinishTask(context.Context, string, string, TaskFinish) (TaskFinishResult, error)
+	PostNotice(context.Context, string, string, string) (string, error)
+	NoteThreadGone(context.Context, string, string, string) error
 }
 
 type TaskFinish struct {
@@ -193,6 +195,8 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		}
 	case "finish_task":
 		result = h.finishTask(ctx, call)
+	case "send_message":
+		result = h.sendMessage(ctx, call)
 	default:
 		result = toolError("INVALID_ARGUMENT", "unknown Puck tool")
 	}
@@ -503,7 +507,7 @@ func taskReusable(task Task) bool {
 		return false
 	}
 	switch task.Status {
-	case "failed_dispatch", "cancelled", "archived":
+	case "failed_dispatch", "cancelled", "archived", "orphaned":
 		return false
 	default:
 		return true
@@ -652,7 +656,11 @@ func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) Tool
 	}
 	requestOrigin.PermissionMode = h.backend.PermissionMode(ctx, call.AssistantID)
 	params := mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientMessageID, "text": input.Text})
-	return fromResult(h.orchestrator.Forward(ctx, requestOrigin, deviceID, "turn.start", params))
+	result := fromResult(h.orchestrator.Forward(ctx, requestOrigin, deviceID, "turn.start", params))
+	if result.Code == "NOT_FOUND" && deviceID != "" && threadID != "" {
+		_ = h.backend.NoteThreadGone(ctx, call.AssistantID, deviceID, threadID)
+	}
+	return result
 }
 
 func (h *Handler) deviceCapability(deviceID, capability string) (bool, bool) {
@@ -700,6 +708,11 @@ func (h *Handler) taskStatus(ctx context.Context, call Call) ToolResult {
 	}
 	data := taskData(task)
 	view, fresh := h.liveTask(ctx, call.AssistantID, task)
+	if view.Status == "orphaned" {
+		data["status"] = "orphaned"
+		data["runtime"] = "missing"
+		return ToolResult{Success: true, Data: data}
+	}
 	if !fresh {
 		data["runtime"] = "unknown"
 		return ToolResult{Success: true, Data: data}
@@ -744,6 +757,10 @@ func (h *Handler) liveTask(ctx context.Context, assistantID string, task Task) (
 		}
 	}
 	result := h.orchestrator.Forward(ctx, origin(assistantID), task.DeviceID, "thread.read", mustJSON(map[string]any{"threadId": task.NativeThreadID}))
+	if result.Code == "NOT_FOUND" {
+		_ = h.backend.NoteThreadGone(ctx, assistantID, task.DeviceID, task.NativeThreadID)
+		return ThreadView{Status: "orphaned", Runtime: "missing"}, false
+	}
 	if result.Outcome != "accepted" {
 		return ThreadView{}, false
 	}
@@ -792,6 +809,24 @@ func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return ToolResult{Success: true, Data: map[string]any{"watchId": watchID, "deviceId": input.DeviceID, "threadId": input.ThreadID, "watching": true, "watchOnly": true}}
+}
+
+func (h *Handler) sendMessage(ctx context.Context, call Call) ToolResult {
+	input, details := toolcontract.DecodeSendMessage(call.Arguments)
+	if len(details) != 0 {
+		return invalidArguments("invalid send_message arguments", details)
+	}
+	id, err := h.backend.PostNotice(ctx, call.AssistantID, input.Text, input.ClientMessageID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return toolError("PUCK_ASSISTANT_NOT_FOUND", "assistant not found")
+		}
+		if errors.Is(err, ErrAuthorizationRequired) {
+			return toolError("UNAUTHORIZED", "message belongs to another assistant")
+		}
+		return toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	return ToolResult{Success: true, Data: map[string]any{"messageId": id, "posted": true}}
 }
 
 func (h *Handler) finishTask(ctx context.Context, call Call) ToolResult {

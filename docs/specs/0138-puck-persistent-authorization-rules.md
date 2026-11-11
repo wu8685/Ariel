@@ -13,8 +13,7 @@ Turn 49 的真实 Brain ask smoke 多次得到 `0 task / 0 authorization`，持�
 
 1. `bbe8581`、`82df9b8` 与当前分支都在 Brain thread 上声明同一组 `dynamicTools`；ask 不会隐藏
    `start_task`。
-2. BrainHost 固定使用 `approvalPolicy=never`、read-only sandbox；Bot 的 `permissionMode` 不进入
-   Brain thread 或 turn 参数，只在 Brain 已调用工具后由 Relay policy 和 Desktop execution policy 使用。
+2. 2026-11-08 调查时 BrainHost 使用 `approvalPolicy=never`、read-only sandbox。2026-11-11 起 brain 改为与 Full Access 执行任务相同的 `never` + `danger-full-access`（0130 §6.1.3）。Bot 的 `permissionMode` 仍不进入 brain 的 turn 参数，只在 Brain 已调用工具后由 Relay policy 和 Desktop execution policy 使用。
 3. `82df9b8` 之后的 Brain instruction 一面要求直接调用 Puck dynamic tools，一面禁止“通过 code
    mode 间接调用工具”；但 BrainHost 明确启用 `features.code_mode_host=true`，Puck dynamic tools
    正由该 transport 承载。`bbe8581` 没有这条冲突指令。真实 Full E2E 同样得到 `0 task / 0

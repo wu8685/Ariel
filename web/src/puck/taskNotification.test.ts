@@ -4,6 +4,7 @@ import { isProactiveTaskMessage, shouldSurfaceNotification } from "./taskNotific
 describe("task notifications", () => {
   it("only treats finished task-event messages as proactive", () => {
     expect(isProactiveTaskMessage({ kind: "text", cardJSON: JSON.stringify({ proactive: true, source: "task_event" }) })).toBe(true);
+    expect(isProactiveTaskMessage({ kind: "text", cardJSON: JSON.stringify({ proactive: true, source: "notify_user" }) })).toBe(true);
     expect(isProactiveTaskMessage({ kind: "processing", cardJSON: JSON.stringify({ proactive: true, source: "task_event" }) })).toBe(false);
     expect(isProactiveTaskMessage({ kind: "text", cardJSON: JSON.stringify({ proactive: true, source: "user" }) })).toBe(false);
     expect(isProactiveTaskMessage({ kind: "text", cardJSON: "not-json" })).toBe(false);

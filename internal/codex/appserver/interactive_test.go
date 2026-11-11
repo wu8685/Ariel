@@ -9,27 +9,22 @@ import (
 	"time"
 )
 
-func TestBrainAppServerArgsKeepDynamicToolHostAndDisableLocalSurfaces(t *testing.T) {
-	args, err := brainAppServerArgs([]byte("shell_tool stable true\nunified_exec stable true\nimage_generation stable true\ngoals stable true\nbrowser_use stable true\nbrowser_use_external stable true\ncomputer_use stable true\nin_app_browser stable true\nmulti_agent stable true\napps stable true\nplugins stable true\ntool_suggest stable true\nskill_search stable true\nview_image removed false\nsleep_tool removed false\ncode_mode_host stable true\n"))
+func TestBrainAppServerArgsKeepLocalToolsAndDynamicHost(t *testing.T) {
+	args, err := brainAppServerArgs([]byte("shell_tool stable true\nunified_exec stable true\ncode_mode_host stable true\nview_image removed false\nsleep_tool removed false\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, feature := range []string{"shell_tool", "unified_exec", "browser_use_external", "multi_agent", "plugins"} {
-		if !slices.Contains(args, feature) {
-			t.Errorf("missing disabled feature %q in %v", feature, args)
-		}
+	if slices.Contains(args, "--disable") || slices.Contains(args, "shell_tool") || slices.Contains(args, "code_mode_host") || slices.Contains(args, "view_image") {
+		t.Fatalf("brain process must keep Codex tools enabled: %v", args)
 	}
-	if slices.Contains(args, "code_mode_host") {
-		t.Fatalf("code_mode_host must remain enabled for dynamicTools: %v", args)
-	}
-	if slices.Contains(args, "view_image") || slices.Contains(args, "sleep_tool") {
-		t.Fatalf("removed feature must not be passed to Codex: %v", args)
+	if !slices.Contains(args, "app-server") {
+		t.Fatalf("args=%v", args)
 	}
 }
 
-func TestBrainAppServerArgsFailClosedWithoutRequiredFeatureInventory(t *testing.T) {
+func TestBrainAppServerArgsFailClosedWithoutCodeModeHost(t *testing.T) {
 	if _, err := brainAppServerArgs([]byte("shell_tool stable true\n")); err == nil {
-		t.Fatal("brainAppServerArgs() accepted incomplete feature inventory")
+		t.Fatal("brainAppServerArgs() accepted a build without code_mode_host")
 	}
 }
 

@@ -104,18 +104,8 @@ func TestTaskCompletionWakesBrainAndPostsUserMessage(t *testing.T) {
 		t.Fatalf("envelope=%s", text)
 	}
 	finishBrain(module, assistantID, "发布已经完成。")
-	messages, err := module.store.Messages(context.Background(), assistantID, 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var visible Message
-	for _, message := range messages {
-		if strings.Contains(message.Text, "发布已经完成。") && message.Kind == "text" {
-			visible = message
-		}
-	}
-	if visible.ID == "" || !strings.Contains(visible.CardJSON, `"proactive":true`) || !strings.Contains(visible.CardJSON, `"source":"task_event"`) {
-		t.Fatalf("visible=%+v", visible)
+	if got := taskEventMessages(t, module, assistantID); len(got) != 0 {
+		t.Fatalf("wake text was posted without send_message: %+v", got)
 	}
 	stored, err := module.store.Task(context.Background(), assistantID, task.ID)
 	if err != nil || stored.Status != "review" {
@@ -359,7 +349,7 @@ func TestRepeatedSameStatusDoesNotPostAgain(t *testing.T) {
 	if len(taskEventTurns(bridge)) != 1 {
 		t.Fatalf("same blocked state woke again: %d", len(taskEventTurns(bridge)))
 	}
-	if got := taskEventMessages(t, module, assistantID); len(got) != 1 {
+	if got := taskEventMessages(t, module, assistantID); len(got) != 0 {
 		t.Fatalf("messages=%+v", got)
 	}
 }
@@ -423,8 +413,7 @@ func TestFinalCompletionPostsOneSummary(t *testing.T) {
 	if len(taskEventTurns(bridge)) != 1 {
 		t.Fatalf("completion was repeated: %d", len(taskEventTurns(bridge)))
 	}
-	got := taskEventMessages(t, module, assistantID)
-	if len(got) != 1 || got[0].Text != "发布已经完成。" {
+	if got := taskEventMessages(t, module, assistantID); len(got) != 0 {
 		t.Fatalf("messages=%+v", got)
 	}
 }
@@ -457,7 +446,7 @@ func TestFailurePostsOneMessage(t *testing.T) {
 	if len(taskEventTurns(bridge)) != 1 {
 		t.Fatalf("failure woke again: %d", len(taskEventTurns(bridge)))
 	}
-	if got := taskEventMessages(t, module, assistantID); len(got) != 1 {
+	if got := taskEventMessages(t, module, assistantID); len(got) != 0 {
 		t.Fatalf("messages=%+v", got)
 	}
 }

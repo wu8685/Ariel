@@ -8,7 +8,7 @@ export function isProactiveTaskMessage(message: { kind?: string; cardJSON?: stri
   if (!message.cardJSON || message.kind === "processing" || message.kind === "greeting_processing" || message.kind === "acknowledged") return false;
   try {
     const card = JSON.parse(message.cardJSON) as { proactive?: unknown; source?: unknown };
-    return card.proactive === true && card.source === "task_event";
+    return card.proactive === true && (card.source === "task_event" || card.source === "notify_user");
   } catch {
     return false;
   }

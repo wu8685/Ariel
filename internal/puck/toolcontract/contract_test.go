@@ -238,6 +238,23 @@ func TestFinishTaskArrivesWithToolsetEight(t *testing.T) {
 	if !found {
 		t.Fatal("toolset 8 missing finish_task")
 	}
+	for _, tool := range DynamicTools(8) {
+		if tool["name"] == "send_message" {
+			t.Fatal("toolset 8 advertised send_message")
+		}
+	}
+	found = false
+	for _, tool := range DynamicTools(9) {
+		if tool["name"] == "send_message" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("toolset 9 missing send_message")
+	}
+	if _, details := DecodeSendMessage(json.RawMessage(`{"text":"好了","assistantId":"other"}`)); len(details) != 1 || details[0].Field != "assistantId" {
+		t.Fatalf("details=%+v", details)
+	}
 	if _, details := DecodeFinishTask(json.RawMessage(`{"taskId":"task-a","outcome":"completed","extra":true}`)); len(details) != 1 || details[0].Field != "extra" {
 		t.Fatalf("details=%+v", details)
 	}
