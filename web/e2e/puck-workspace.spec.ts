@@ -79,6 +79,20 @@ async function openPuck(page: Page, history: typeof initialMessages = initialMes
   await expect(page.locator(".puck-transcript").getByText("晚上好。测试已经开始，我会在有结果时告诉你。")).toBeVisible();
 }
 
+async function openCurrentBotConfig(page: Page) {
+  const width = page.viewportSize()?.width ?? 1280;
+  if (width < 700) {
+    await page.getByRole("button", { name: "查看助理信息" }).click();
+    await expect(page.locator(".puck-info")).toHaveClass(/mobile-open/);
+    return;
+  }
+  const name = (await page.locator(".puck-conversation-title strong").innerText()).trim();
+  await page.locator(".puck-assistant-row").filter({ hasText: name }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "编辑" }).click();
+  await expect(page.locator(".puck-workspace")).toHaveClass(/info-open/);
+  await expect(page.locator(".puck-info")).toBeVisible();
+}
+
 async function openAvatarSheet(page: Page) {
   await page.getByRole("button", { name: "编辑头像" }).click();
   const sheet = page.locator(".puck-avatar-sheet");
@@ -269,6 +283,7 @@ for (const width of [320, 390, 1280]) {
       const listRowBox = await page.locator(".puck-assistant-row").first().boundingBox();
       expect(listRowBox!.height).toBe(64);
       if (width >= 700) {
+        await openCurrentBotConfig(page);
         await page.getByRole("button", { name: "编辑头像" }).click();
         await expect(page.locator(".puck-shape-option .puck-avatar").first()).toHaveCSS("width", "34px");
         await page.getByRole("button", { name: "完成" }).click();
@@ -298,6 +313,7 @@ for (const width of [320, 390, 1280]) {
       const transcript = page.locator(".puck-transcript");
       const header = page.locator(".puck-conversation > header");
       const menu = page.getByRole("button", { name: "打开助理列表" });
+      if (width >= 700) await openCurrentBotConfig(page);
       const before = width >= 700 ? await Promise.all([
         page.locator(".puck-assistants").boundingBox(),
         page.locator(".puck-info").boundingBox(),
@@ -518,6 +534,8 @@ for (const width of [320, 390, 1280]) for (const colorScheme of ["light", "dark"
 				await page.mouse.click(10, 400);
 				await expect(page.locator(".puck-info")).not.toHaveClass(/mobile-open/);
       } else {
+        await expect(page.locator(".puck-info")).toBeHidden();
+        await openCurrentBotConfig(page);
         await expect(page.locator(".puck-assistants")).toBeVisible();
         await expect(page.locator(".puck-info")).toBeVisible();
 				await expect(page.getByRole("button", { name: "编辑头像" })).toBeVisible();
@@ -738,6 +756,7 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 
 	test("selects every avatar property directly and persists mouse and keyboard changes", async ({ page }) => {
 		await openPuck(page);
+		await openCurrentBotConfig(page);
 		await page.getByRole("button", { name: "编辑头像" }).click();
 		const shapeGroup = page.getByRole("radiogroup", { name: "头像形状" });
 		const colorGroup = page.getByRole("radiogroup", { name: "头像颜色" });
@@ -768,11 +787,14 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 		await page.getByRole("button", { name: /罗宾/ }).click();
 		await expect(page.getByLabel("罗宾有 2 条未读消息")).toHaveCount(0);
 		await expect.poll(() => puckIcon.getAttribute("href")).not.toBe(firstIcon);
+		await openCurrentBotConfig(page);
 		await page.getByRole("button", { name: "编辑说明" }).click();
 		await page.getByLabel("助理说明").fill("先整理来源，再给结论");
 		await page.getByRole("button", { name: "保存说明" }).click();
 		await expect(page.getByText("先整理来源，再给结论")).toBeVisible();
 		await page.getByRole("button", { name: /小帕/ }).click();
+		await expect(page.locator(".puck-info")).toBeHidden();
+		await openCurrentBotConfig(page);
 		await expect(page.getByText("工作了 13 秒 · 执行 3 步")).toBeVisible();
 		await page.getByRole("button", { name: "给消息添加回应" }).first().click();
 		await page.getByRole("button", { name: "回应 🎉" }).click();
@@ -785,6 +807,7 @@ test.describe("Puck forest-sprite avatar interaction", () => {
 
 	test("shows full access by default and persists switching back to ask", async ({ page }) => {
 		await openPuck(page);
+		await openCurrentBotConfig(page);
 		const permission = page.getByLabel("运行权限");
 		await expect(permission).toHaveValue("full");
 		await expect(page.getByText("可执行任意命令并访问主机文件，不再询问")).toBeVisible();

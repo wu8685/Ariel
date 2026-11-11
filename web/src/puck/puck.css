@@ -86,11 +86,14 @@
 .puck-workspace {
   height: 100dvh;
   display: grid;
-  grid-template-columns: var(--puck-sidebar-width) minmax(0, 1fr) var(--puck-info-width);
+  grid-template-columns: var(--puck-sidebar-width) minmax(0, 1fr);
   overflow: hidden;
   isolation: isolate;
   background: var(--color-page);
   color: var(--color-text);
+}
+.puck-workspace.info-open {
+  grid-template-columns: var(--puck-sidebar-width) minmax(0, 1fr) var(--puck-info-width);
 }
 
 .puck-workspace button,
@@ -1009,7 +1012,18 @@
   border-left: var(--puck-border) solid var(--color-border);
   background: var(--color-surface);
 }
-.puck-workspace .puck-info > header { padding: 0 var(--puck-space-4); }
+.puck-workspace .puck-info > header { justify-content: space-between; gap: var(--puck-space-2); padding: 0 var(--puck-space-3) 0 var(--puck-space-4); }
+@media (min-width: 701px) {
+  .puck-workspace:not(.info-open) .puck-info {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--puck-info-width);
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
 .puck-workspace .puck-info-content {
   min-width: 0;
   padding: 0 var(--puck-space-4) var(--puck-space-6);
@@ -1397,7 +1411,8 @@
 .puck-workspace .puck-panel-backdrop { display: none; }
 
 @media(max-width:700px) {
-  .puck-workspace { grid-template-columns: 1fr; }
+  .puck-workspace,
+  .puck-workspace.info-open { grid-template-columns: 1fr; }
   .puck-workspace .puck-conversation > header {
     height: calc(var(--puck-header-height) + env(safe-area-inset-top));
     min-height: calc(var(--puck-header-height) + env(safe-area-inset-top));
