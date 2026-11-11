@@ -1628,3 +1628,18 @@
     box-shadow: 0 24px 80px #000a;
   }
 }
+.puck-system-notice {
+  position: sticky;
+  top: 8px;
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  margin: 8px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 14px;
+  background: #1c1c1e;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.puck-system-notice strong { font-size: 13px; }
+.puck-system-notice span { color: rgba(255,255,255,.72); font-size: 13px; }

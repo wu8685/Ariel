@@ -136,6 +136,16 @@ func (s *Server) PuckBridge() *PuckBridge { return s.puckBridge }
 
 func (b *PuckBridge) BrainEvents() <-chan BrainEvent { return b.events }
 
+func (b *PuckBridge) CacheSnapshot(deviceID, threadID string) map[string]any {
+	b.server.mu.Lock()
+	defer b.server.mu.Unlock()
+	data := b.server.cacheDataLocked(b.server.cache.entries[cacheKey{deviceID: deviceID, threadID: threadID}], b.server.agents[deviceID])
+	if raw, ok := data["thread"].(json.RawMessage); ok {
+		data["thread"] = append(json.RawMessage(nil), raw...)
+	}
+	return data
+}
+
 func (b *PuckBridge) BrainFailures() <-chan BrainDeliveryFailure { return b.failures }
 
 func (b *PuckBridge) DeviceStatus() <-chan map[string]any { return b.device }

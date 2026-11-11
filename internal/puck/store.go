@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 7
+const storeSchemaVersion = 8
 
 type Store struct {
 	db       *sql.DB
@@ -222,6 +222,23 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE INDEX IF NOT EXISTS sidebar_placements_section ON sidebar_placements(section_id, position)`,
 			`CREATE TABLE IF NOT EXISTS sidebar_state (
             id TEXT PRIMARY KEY, collapsed INTEGER NOT NULL DEFAULT 0)`,
+		)
+	}
+	if version < 8 {
+		statements = append(statements,
+			`CREATE TABLE IF NOT EXISTS thread_watches (
+            id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, device_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+            status TEXT NOT NULL, last_turn_id TEXT NOT NULL DEFAULT '', last_summary TEXT NOT NULL DEFAULT '',
+            notified_key TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            UNIQUE(assistant_id, device_id, thread_id))`,
+			`CREATE INDEX IF NOT EXISTS thread_watches_status ON thread_watches(status, device_id)`,
+			`CREATE TABLE IF NOT EXISTS brain_wakes (
+            id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, task_key TEXT NOT NULL, dedupe_key TEXT NOT NULL,
+            status TEXT NOT NULL, summary TEXT NOT NULL, watch_only INTEGER NOT NULL DEFAULT 0,
+            not_before TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(assistant_id, task_key))`,
+			`CREATE TABLE IF NOT EXISTS wake_log (
+            id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, task_key TEXT NOT NULL, at TEXT NOT NULL)`,
+			`CREATE INDEX IF NOT EXISTS wake_log_assistant_at ON wake_log(assistant_id, at)`,
 		)
 	}
 	for _, statement := range statements {
@@ -527,7 +544,7 @@ func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Mes
 func (s *Store) UpsertTask(ctx context.Context, task Task) error {
 	now := nowText(time.Time{})
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=excluded.last_turn_id,source_message_id=excluded.source_message_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=CASE WHEN excluded.last_turn_id='' THEN tasks.last_turn_id ELSE excluded.last_turn_id END,source_message_id=excluded.source_message_id,last_seen_revision=CASE WHEN excluded.last_seen_revision='' THEN tasks.last_seen_revision ELSE excluded.last_seen_revision END,last_summary=CASE WHEN excluded.last_summary='' THEN tasks.last_summary ELSE excluded.last_summary END,updated_at=excluded.updated_at
         WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
 	return s.changed(err)
 }
