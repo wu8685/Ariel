@@ -64,6 +64,22 @@ func TestFullPermissionModeSkipsOptionalAuthorizationButNotSelfTarget(t *testing
 	}
 }
 
+func TestFullPermissionModeStillRequiresOwnershipForOtherThreads(t *testing.T) {
+	input := PolicyInput{PermissionMode: "full", Tool: "send_turn", DeviceID: "exec-a", CWD: "/work", OwnedThread: false, ExecutionPolicyEnforceable: true}
+	decision := EvaluatePolicy(input)
+	if !decision.RequiresAuthorization || !contains(decision.Rules, "B2") {
+		t.Fatalf("unowned send_turn=%+v", decision)
+	}
+	input.OwnedThread = true
+	input.RiskTags = []string{"deploy"}
+	input.Prompt = "git push origin main"
+	input.ExecutionPolicyEnforceable = false
+	owned := EvaluatePolicy(input)
+	if owned.RequiresAuthorization || len(owned.Rules) != 0 {
+		t.Fatalf("owned full-access send_turn=%+v", owned)
+	}
+}
+
 func TestNativeInteractionsAlwaysRequireUserDecision(t *testing.T) {
 	for _, kind := range []string{"command_approval", "file_approval", "permission_request", "user_input", "unsupported"} {
 		if !NativeInteractionRequiresUser(kind) {

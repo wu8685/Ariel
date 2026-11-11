@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 8
+const Version = 9
 const canonicalMutationToolVersion = 2
 
 const (
@@ -127,6 +127,11 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 			return Definition{}, false
 		}
 		return Definition{Name: name, Description: "任务有明确结果后归档本助理自己的任务，并关闭这条执行线程上本助理的 watch 与尚未投递的唤醒。不删除对话历史，不发送 turn，不取消别人的任务。调用前如果曾在该执行会话里创建定时或周期任务，先用 send_turn 让那个会话关掉它。", InputSchema: finishTaskSchema()}, true
+	case "send_message":
+		if version < 9 {
+			return Definition{}, false
+		}
+		return Definition{Name: name, Description: "把一句你决定要告诉用户的话写进这个 Bot 的 Ariel 对话，并触发页内通知。只用于被唤醒、定时、automation 或你自己发起的工作。回答带 PUCK_ENVELOPE 的用户消息时直接写回复，不要为同一句话再调用本工具。不能指定别的助理。", InputSchema: sendMessageSchema()}, true
 	default:
 		return Definition{}, false
 	}
@@ -136,6 +141,9 @@ func DynamicTools(version int) []map[string]any {
 	names := []string{"list_devices", "list_threads", "read_thread", "start_task", "send_turn", "interrupt", "respond_interaction", "get_task_status", "watch_thread", "request_authorization", "ask_user", "share_result", "react"}
 	if version >= 8 {
 		names = append(names, "finish_task")
+	}
+	if version >= 9 {
+		names = append(names, "send_message")
 	}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -168,6 +176,9 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 		return value, details
 	case "finish_task":
 		value, details := DecodeFinishTask(raw)
+		return value, details
+	case "send_message":
+		value, details := DecodeSendMessage(raw)
 		return value, details
 	default:
 		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "documented Puck tool"}}
@@ -799,6 +810,45 @@ func DecodeFinishTask(raw json.RawMessage) (FinishTaskRequest, []FieldError) {
 		}
 	}
 	return result, nil
+}
+
+type SendMessageRequest struct {
+	Text            string `json:"text"`
+	ClientMessageID string `json:"clientMessageId,omitempty"`
+}
+
+func DecodeSendMessage(raw json.RawMessage) (SendMessageRequest, []FieldError) {
+	var result SendMessageRequest
+	fields, detail := decodeObject(raw)
+	if detail != nil {
+		return result, []FieldError{*detail}
+	}
+	if details := rejectUnknown(fields, "text", "clientMessageId"); len(details) != 0 {
+		return result, details
+	}
+	if detail := requiredString(fields, "text", &result.Text, "1 to 4000 characters"); detail != nil {
+		return result, []FieldError{*detail}
+	}
+	result.Text = strings.TrimSpace(result.Text)
+	if result.Text == "" || utf8.RuneCountInString(result.Text) > 4000 {
+		return result, fieldError("text", "value has invalid length", "1 to 4000 characters")
+	}
+	if rawID, ok := fields["clientMessageId"]; ok {
+		if json.Unmarshal(rawID, &result.ClientMessageID) != nil || !uuidPattern.MatchString(result.ClientMessageID) {
+			return result, fieldError("clientMessageId", "value is not a UUID", "UUID")
+		}
+	}
+	return result, nil
+}
+
+func sendMessageSchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"text"},
+		"properties": map[string]any{
+			"text":            stringProperty(1, 4000),
+			"clientMessageId": map[string]any{"type": "string", "minLength": 36, "maxLength": 36},
+		},
+	}
 }
 
 func finishTaskSchema() map[string]any {

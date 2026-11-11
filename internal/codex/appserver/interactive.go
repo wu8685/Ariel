@@ -284,22 +284,12 @@ func brainAppServerArgs(featureOutput []byte) ([]string, error) {
 			features[fields[0]] = fields[1] != "removed"
 		}
 	}
-	required := []string{"shell_tool", "unified_exec", "image_generation", "goals", "browser_use", "browser_use_external", "computer_use", "in_app_browser", "multi_agent", "apps", "plugins", "tool_suggest", "skill_search"}
-	for _, feature := range required {
-		if enabled, known := features[feature]; !known || !enabled {
-			return nil, errors.New("configured Codex is missing a required Brain feature control")
-		}
+	// Dynamic Puck tools are exposed through code_mode_host. Local Codex tools
+	// stay available so the brain can run commands, files, and automations.
+	if enabled, known := features["code_mode_host"]; !known || !enabled {
+		return nil, errors.New("configured Codex is missing code_mode_host")
 	}
-	// These controls existed in older Codex builds. Disable them when the
-	// inventory advertises them, but do not pass removed/unknown feature names.
-	disable := append(required, "view_image", "sleep_tool")
-	args := make([]string, 0, len(disable)*2+3)
-	for _, feature := range disable {
-		if features[feature] {
-			args = append(args, "--disable", feature)
-		}
-	}
-	return append(args, "app-server", "--listen", "stdio://"), nil
+	return []string{"app-server", "--listen", "stdio://"}, nil
 }
 
 func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*InteractiveProcess, error) {

@@ -59,6 +59,7 @@ type Module struct {
 type pendingBrainTurn struct {
 	threadID, turnID, messageID, responseID, groupID string
 	taskEvent                                        string
+	spoken                                           map[string]struct{}
 	startedAt                                        time.Time
 	steps                                            int
 	toolFailures                                     map[string]int
@@ -382,7 +383,8 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if text == "" || params.Item.Type != "" && params.Item.Type != "agentMessage" {
 		return
 	}
-	if pending := m.pendingTurn(event.AssistantID); pending.taskEvent != "" && brainSilent(text) {
+	pending := m.pendingTurn(event.AssistantID)
+	if pending.taskEvent != "" || brainSilent(text) || turnAlreadySpoke(pending, text) {
 		return
 	}
 	if friendly, ok := friendlyBrainError(text); ok {
@@ -392,7 +394,6 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	// A confirmation message is not the end of the turn. Codex still emits
 	// start_task after that text; clearing busy here lets the next message.send
 	// interrupt the turn and leave the tool call without contentItems.
-	pending := m.pendingTurn(event.AssistantID)
 	if pending.responseID != "" && (pending.turnID == "" || pending.turnID == params.TurnID) {
 		if pending.groupID != "" {
 			_ = m.store.UpsertGroupMessage(ctx, GroupMessage{ID: pending.responseID, GroupID: pending.groupID, Role: "assistant", AuthorAssistantID: event.AssistantID, Kind: "processing", Text: text, CreatedAt: pending.startedAt})
@@ -404,9 +405,7 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 		}
 		summary, _ := json.Marshal(map[string]any{"startedAt": pending.startedAt.UTC(), "state": "running", "steps": pending.steps})
 		_ = m.store.UpsertMessage(ctx, Message{ID: pending.responseID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, WorkSummary: string(summary), BrainTurnID: params.TurnID})
-		return
 	}
-	_ = m.store.AppendMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "text", Text: text, BrainTurnID: params.TurnID})
 }
 
 func (m *Module) pendingTurn(assistantID string) pendingBrainTurn {
@@ -427,7 +426,8 @@ func (m *Module) finishBrainTurn(ctx context.Context, assistantID, turnID string
 			text = current.Text
 		}
 	}
-	if pending.taskEvent != "" && (text == "" || brainSilent(text) || text == "正在根据任务状态写一条说明…") {
+	placeholder := text == "" || text == "正在处理…" || text == "收到，我正在处理。" || text == "正在根据任务状态写一条说明…"
+	if pending.taskEvent != "" || brainSilent(text) || text == "正在根据任务状态写一条说明…" || turnAlreadySpoke(pending, text) || (len(pending.spoken) > 0 && placeholder) {
 		m.finishBrainTurnMessage(ctx, assistantID, turnID, "PUCK_SILENT", "text")
 		return
 	}
@@ -440,6 +440,32 @@ func (m *Module) finishBrainTurn(ctx context.Context, assistantID, turnID string
 func brainSilent(text string) bool {
 	trimmed := strings.Trim(strings.TrimSpace(text), "`\"'")
 	return trimmed == "PUCK_SILENT"
+}
+
+func turnAlreadySpoke(pending pendingBrainTurn, text string) bool {
+	if len(pending.spoken) == 0 {
+		return false
+	}
+	_, ok := pending.spoken[strings.TrimSpace(text)]
+	return ok
+}
+
+func (m *Module) rememberSpoken(assistantID, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	pending, ok := m.pending[assistantID]
+	if !ok {
+		return
+	}
+	if pending.spoken == nil {
+		pending.spoken = map[string]struct{}{}
+	}
+	pending.spoken[text] = struct{}{}
+	m.pending[assistantID] = pending
 }
 
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
@@ -693,6 +719,36 @@ func (b toolBackend) SaveWatch(ctx context.Context, assistantID, deviceID, threa
 	b.module.startWatch(b.module.rootCtx, assistantID, deviceID, threadID, id, true)
 	b.module.primeSnapshot(b.module.rootCtx, assistantID, deviceID, threadID, id, true)
 	return id, nil
+}
+
+func (b toolBackend) PostNotice(ctx context.Context, assistantID, text, clientMessageID string) (string, error) {
+	if _, err := b.module.store.Assistant(ctx, assistantID); err != nil {
+		return "", err
+	}
+	id := clientMessageID
+	if id == "" {
+		id = newUUID()
+	} else {
+		var owner string
+		err := b.module.store.db.QueryRowContext(ctx, `SELECT assistant_id FROM conversation_messages WHERE id=?`, id).Scan(&owner)
+		if err == nil && owner != assistantID {
+			return "", pucktools.ErrAuthorizationRequired
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+	}
+	card, _ := json.Marshal(map[string]any{"proactive": true, "source": "notify_user"})
+	if err := b.module.store.UpsertMessage(ctx, Message{ID: id, AssistantID: assistantID, Role: "assistant", Kind: "text", Text: text, CardJSON: string(card)}); err != nil {
+		return "", err
+	}
+	b.module.rememberSpoken(assistantID, text)
+	return id, nil
+}
+
+func (b toolBackend) NoteThreadGone(ctx context.Context, _, deviceID, threadID string) error {
+	b.module.noteThreadDisappeared(ctx, deviceID, threadID)
+	return nil
 }
 
 func (b toolBackend) FinishTask(ctx context.Context, assistantID, taskID string, finish pucktools.TaskFinish) (pucktools.TaskFinishResult, error) {
@@ -1216,6 +1272,7 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResp
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	m.clearPending(a.ID)
+	m.releaseAssistant(a.ID)
 	m.syncBrainThreads(ctx)
 	if a.BrainThreadID != "" {
 		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.retire", mustJSON(map[string]any{"threadId": a.BrainThreadID}))

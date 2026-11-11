@@ -423,7 +423,25 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 	if _, err := tx.ExecContext(ctx, `DELETE FROM authorization_rules WHERE assistant_id=?`, assistantID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM thread_watches WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM brain_wakes WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM wake_log WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sidebar_placements WHERE kind='assistant' AND entry_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assistants SET custom_context='', brain_thread_id='', brain_thread_history='[]', toolset_version=0, last_message_preview='', unread_count=0 WHERE id=?`, assistantID); err != nil {
 		return err
 	}
 	return s.changed(tx.Commit())

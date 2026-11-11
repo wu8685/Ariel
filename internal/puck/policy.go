@@ -33,10 +33,15 @@ func EvaluatePolicy(input PolicyInput) PolicyDecision {
 	if input.AssistantWorkspaceRoot != "" && pathWithin(input.AssistantWorkspaceRoot, input.CWD) {
 		return PolicyDecision{DeniedCode: "PUCK_SELF_TARGET"}
 	}
-	if input.PermissionMode == "full" {
-		return PolicyDecision{}
-	}
 	decision := PolicyDecision{}
+	// B2 protects other people's threads. Full Access on the brain does not waive it.
+	if (input.Tool == "send_turn" || input.Tool == "interrupt") && !input.OwnedThread {
+		decision.Rules = append(decision.Rules, "B2")
+	}
+	if input.PermissionMode == "full" {
+		decision.RequiresAuthorization = len(decision.Rules) > 0
+		return decision
+	}
 	roots, deviceAllowed := input.AllowedScope[input.DeviceID]
 	pathAllowed := false
 	for _, root := range roots {
@@ -44,9 +49,6 @@ func EvaluatePolicy(input PolicyInput) PolicyDecision {
 	}
 	if !deviceAllowed || input.CWD != "" && !pathAllowed {
 		decision.Rules = append(decision.Rules, "B1")
-	}
-	if (input.Tool == "send_turn" || input.Tool == "interrupt") && !input.OwnedThread {
-		decision.Rules = append(decision.Rules, "B2")
 	}
 	if input.Tool == "interrupt" && input.TurnOrigin != "" && input.TurnOrigin != "puck" {
 		decision.Rules = append(decision.Rules, "B3")

@@ -120,6 +120,9 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, devic
 		}
 		_ = json.Unmarshal(params, &ref)
 		if snap, ok := f.snapshots[deviceID+"\x00"+ref.ThreadID]; ok {
+			if snap["missing"] == true {
+				return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: "NOT_FOUND", Message: "thread not found"}}
+			}
 			return relay.PuckResponse{Outcome: "accepted", Data: snap}
 		}
 	}
@@ -797,7 +800,7 @@ func TestUpdatedDescriptionIsIncludedInNextTrustedTurn(t *testing.T) {
 
 func TestBrainInstructionsRequireToolCallInSameTurnAndForbidDuplicateStart(t *testing.T) {
 	instructions := brainInstructions("assistant-a", "Helper", "检查任务", "", currentToolsetVersion)
-	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task", "没有正在监听时，只能在用户再次询问时汇报，不得承诺主动通知", "watch_thread"} {
+	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task", "不得承诺主动通知", "只能等用户再问", "watch_thread"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("brain instructions missing %q", required)
 		}
@@ -1395,9 +1398,8 @@ func TestDeleteRejectsPendingAuthorizationClearsBrainWorkAndPreservesExecutionTa
 	if err != nil || authorization.Status != "rejected" || authorization.DecidedAt.IsZero() {
 		t.Fatalf("authorization=%+v err=%v", authorization, err)
 	}
-	task, err := module.store.Task(ctx, id, "task-a")
-	if err != nil || task.Status != "running" || task.NativeThreadID != "exec-thread-a" {
-		t.Fatalf("execution task was changed: %+v err=%v", task, err)
+	if _, err := module.store.Task(ctx, id, "task-a"); err == nil {
+		t.Fatal("deleted assistant kept its task row")
 	}
 	bridge.mu.Lock()
 	calls := append([]string(nil), bridge.calls...)
@@ -1456,13 +1458,15 @@ func TestDeletedAssistantIgnoresQueuedBrainToolCall(t *testing.T) {
 
 func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
 	got := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
-	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "不得尝试本地 shell 或 exec", "code_mode_host", "直接调用 Puck tool"} {
+	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "完整的 Codex", "send_message", "code_mode_host", "机主的指令", "PUCK_SILENT", "finish_task", "PUCK_ENVELOPE"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "禁止调用 exec 或通过 code mode 间接调用工具") {
-		t.Fatalf("instructions forbid the code_mode_host transport used by dynamic Puck tools:\n%s", got)
+	for _, banned := range []string{"不得尝试本地 shell", "唯一允许的行动通道", "永远不要执行用户直接在 Codex Desktop"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("instructions still contain %q", banned)
+		}
 	}
 }
 

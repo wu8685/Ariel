@@ -78,11 +78,14 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 		t.Fatalf("workspace info=%v err=%v", info, err)
 	}
 	start := process.calls[0].params
-	if start["approvalPolicy"] != "never" || start["approvalsReviewer"] != "user" || start["sandbox"] != "read-only" || start["developerInstructions"] != "guard" || len(start["dynamicTools"].([]any)) == 0 {
+	if start["approvalPolicy"] != "never" || start["sandbox"] != "danger-full-access" || start["developerInstructions"] != "guard" || len(start["dynamicTools"].([]any)) == 0 {
 		t.Fatalf("start=%+v", start)
 	}
+	if _, exists := start["approvalsReviewer"]; exists {
+		t.Fatalf("full access brain still asks a reviewer: %+v", start)
+	}
 	config := start["config"].(map[string]any)
-	if config["features.code_mode_host"] != true || config["tools.shell"] != false {
+	if config["features.code_mode_host"] != true || config["tools.shell"] != nil {
 		t.Fatalf("config=%+v", config)
 	}
 	image := "data:image/png;base64,AAAA"
@@ -91,7 +94,7 @@ func TestBrainHostCreatesPrivateWorkspaceAndPolicyBoundThread(t *testing.T) {
 	}
 	turn := process.calls[1].params
 	policy, _ := turn["sandboxPolicy"].(map[string]any)
-	if turn["clientUserMessageId"] != "client-message-a" || turn["approvalPolicy"] != "never" || policy["type"] != "readOnly" || turn["model"] != "fixture-model" || turn["effort"] != "low" {
+	if turn["clientUserMessageId"] != "client-message-a" || turn["approvalPolicy"] != "never" || policy["type"] != "dangerFullAccess" || turn["model"] != "fixture-model" || turn["effort"] != "low" {
 		t.Fatalf("turn=%+v", turn)
 	}
 	input := turn["input"].([]any)
@@ -407,5 +410,40 @@ func TestBrainHostRelaysToolCallAndBoundsInFlight(t *testing.T) {
 	}
 	if process.replyCount() != 2 {
 		t.Fatalf("reply count=%d", process.replyCount())
+	}
+}
+
+func TestBrainHostAllowsLocalCodexCommands(t *testing.T) {
+	process := newFakeBrainProcess()
+	events := make(chan BrainHostEvent, 4)
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) {
+		return process, nil
+	}, Emit: func(event BrainHostEvent) { events <- event }})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	process.incoming <- brainFrame{Method: "item/commandExecution/completed", Params: json.RawMessage(`{"threadId":"brain-thread","item":{"type":"commandExecution"}}`)}
+	event := <-events
+	if event.Kind != "puck.brain.event" || event.Payload["method"] != "item/commandExecution/completed" {
+		t.Fatalf("command event=%+v", event)
+	}
+	process.incoming <- brainFrame{ID: json.RawMessage(`9`), Method: "item/commandExecution/requestApproval", Params: json.RawMessage(`{"threadId":"brain-thread","command":"/usr/bin/true"}`)}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && process.replyCount() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	process.mu.Lock()
+	replies := append([]string(nil), process.replies...)
+	process.mu.Unlock()
+	if len(replies) != 1 || !strings.Contains(replies[0], "accept") {
+		t.Fatalf("approval replies=%v", replies)
+	}
+	select {
+	case event := <-events:
+		if event.Payload["reason"] == "forbidden_local_tool" {
+			t.Fatalf("local command degraded the brain: %+v", event)
+		}
+	default:
 	}
 }

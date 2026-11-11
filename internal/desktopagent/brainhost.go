@@ -150,8 +150,8 @@ func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, er
 func brainThreadParams(cwd string, request BrainEnsure) map[string]any {
 	params := map[string]any{
 		"cwd": cwd, "ephemeral": false, "serviceName": "ariel-puck", "threadSource": "chatgpt_hidden",
-		"developerInstructions": request.DeveloperInstructions, "dynamicTools": puckDynamicTools(request.ToolsetVersion), "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "read-only",
-		"config": map[string]any{"features.code_mode_host": true, "tools.shell": false, "tools.unified_exec": false, "web_search": "disabled", "include_apply_patch_tool": false},
+		"developerInstructions": request.DeveloperInstructions, "dynamicTools": puckDynamicTools(request.ToolsetVersion), "approvalPolicy": "never", "sandbox": "danger-full-access",
+		"config": map[string]any{"features.code_mode_host": true},
 	}
 	if request.Model != "" {
 		params["model"] = request.Model
@@ -178,7 +178,7 @@ func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text st
 	for _, image := range images {
 		input = append(input, map[string]any{"type": "image", "url": image})
 	}
-	params := map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input, "approvalPolicy": "never", "sandboxPolicy": map[string]any{"type": "readOnly"}}
+	params := map[string]any{"threadId": threadID, "clientUserMessageId": clientMessageID, "input": input, "approvalPolicy": "never", "sandboxPolicy": map[string]any{"type": "dangerFullAccess"}}
 	if model != "" {
 		params["model"] = model
 	}
@@ -436,13 +436,8 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 			return
 		}
 	}
-	if strings.Contains(frame.Method, "commandExecution") || strings.Contains(frame.Method, "fileChange") || strings.Contains(frame.Method, "collabAgent") {
-		if frame.IsRequest() {
-			_ = process.Reply(context.Background(), frame.ID, nil, map[string]any{"code": -32600, "message": "Puck local tool denied"})
-		}
-		if h.cfg.Emit != nil {
-			h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.status", AssistantID: assistant, ThreadID: identity.ThreadID, TurnID: identity.TurnID, Payload: map[string]any{"state": "degraded", "reason": "forbidden_local_tool"}})
-		}
+	if frame.IsRequest() && (strings.Contains(frame.Method, "commandExecution") || strings.Contains(frame.Method, "fileChange")) {
+		_ = process.Reply(context.Background(), frame.ID, map[string]any{"decision": "accept"}, nil)
 		return
 	}
 	if h.cfg.Emit != nil {
