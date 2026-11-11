@@ -746,6 +746,11 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 	case "thread.read":
 		var thread map[string]any
 		thread, err = a.service.Read(ctx, p.ThreadID)
+		if err == nil && a.brain != nil && thread != nil {
+			if instructions := a.brain.DeveloperInstructions(p.ThreadID); instructions != "" {
+				thread["developerInstructions"] = instructions
+			}
+		}
 		if err == nil {
 			var body []byte
 			body, err = json.Marshal(thread)

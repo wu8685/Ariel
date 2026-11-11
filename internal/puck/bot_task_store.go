@@ -147,6 +147,66 @@ func (s *Store) BotTask(ctx context.Context, assistantID, id string) (BotTask, e
 	return task, err
 }
 
+func (s *Store) InboxAssignment(ctx context.Context, assistantID, messageID string) (inInbox, attached bool, err error) {
+	var inbox int
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bot_inbox WHERE assistant_id=? AND message_id=?`, assistantID, messageID).Scan(&inbox); err != nil {
+		return false, false, err
+	}
+	var links int
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bot_task_messages WHERE assistant_id=? AND message_id=?`, assistantID, messageID).Scan(&links); err != nil {
+		return false, false, err
+	}
+	return inbox > 0, links > 0, nil
+}
+
+func (s *Store) AssistantsForBotSession(ctx context.Context, deviceID, threadID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT assistant_id FROM bot_task_sessions WHERE device_id=? AND thread_id=? AND device_id<>'' AND thread_id<>''`, deviceID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *Store) RecentOpenBotTasks(ctx context.Context, assistantID string, limit int) ([]BotTask, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM bot_tasks WHERE assistant_id=? AND status IN ('accepted','in_progress','waiting_user') ORDER BY updated_at DESC, id LIMIT ?`, assistantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	tasks := make([]BotTask, 0, len(ids))
+	for _, id := range ids {
+		task, err := s.BotTask(ctx, assistantID, id)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
 func (s *Store) ListBotTasks(ctx context.Context, assistantID, query, status string, offset, limit int) (BotTaskPage, error) {
 	limit = pageLimit(limit)
 	args := []any{assistantID}

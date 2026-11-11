@@ -111,6 +111,58 @@ func TestBotTaskMergeKeepsHistoryAndSearchReturnsFullText(t *testing.T) {
 	}
 }
 
+func TestUnassignedInboxWakesOnceThenRetries(t *testing.T) {
+	module, id := newQueueModule(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	module.now = func() time.Time { return now }
+	if err := module.store.AppendMessage(ctx, Message{ID: "inbox-1", AssistantID: id, Role: "user", Kind: "text", Text: "还没归属"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.AddInbox(ctx, id, "inbox-1", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "open-x", AssistantID: id, Title: "FIXTURE_X", Goal: "整理", Status: "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	module.scheduleBotQueue(ctx, id, "")
+	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 1 })
+	text := botQueueTurns(moduleBridge(module))[0]
+	if !strings.Contains(text, "尚未归属") || !strings.Contains(text, "inbox-1") || !strings.Contains(text, "id=open-x") || !strings.Contains(text, "title=FIXTURE_X") {
+		t.Fatalf("wake=%s", text)
+	}
+	module.handleBrainEvent(ctx, brainEvent(id, "turn/completed", `{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}`))
+	if len(botQueueTurns(moduleBridge(module))) != 1 {
+		t.Fatal("unassigned inbox was woken again immediately")
+	}
+	wake, err := module.store.BrainWakeByTask(ctx, id, "queue:inbox:inbox-1")
+	if err != nil || wake.NotBefore.After(now.Add(queueRetryBackoff)) {
+		t.Fatalf("retry=%+v err=%v", wake, err)
+	}
+	now = now.Add(queueRetryBackoff)
+	module.pumpAssistant(ctx, id)
+	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 2 })
+}
+
+func TestEnvelopeListsOpenBotTasks(t *testing.T) {
+	module, id := newQueueModule(t)
+	ctx := context.Background()
+	assistant, err := module.store.Assistant(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "task-x", AssistantID: id, Title: "FIXTURE_X", Status: "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	text := module.trustedEnvelope(ctx, assistant, "请处理", nil)
+	if !strings.Contains(text, "id=task-x") || !strings.Contains(text, "title=FIXTURE_X") || strings.Contains(text, "goal=") {
+		t.Fatalf("envelope=%s", text)
+	}
+	if strings.Count(text, "接住的事用 save_bot_task 记成任务。") != 0 {
+		t.Fatal("envelope repeated the system-context task line")
+	}
+}
+
 func TestIdleWakePicksNextTaskWithoutLooping(t *testing.T) {
 	module, id := newQueueModule(t)
 	ctx := context.Background()
@@ -153,7 +205,13 @@ func TestDeleteBotAndSubsessionCleanBotTasks(t *testing.T) {
 	if err := module.store.UpsertTask(ctx, Task{ID: "sub-task", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-sub", Goal: "子会话", Status: "running", CreatedBy: "puck"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := module.store.AttachBotTask(ctx, id, "gone-task", nil, []BotTaskSession{{Kind: "task", RefID: "sub-task"}}); err != nil {
+	if _, err := module.store.AttachBotTask(ctx, id, "gone-task", []string{"keep-msg"}, []BotTaskSession{{Kind: "task", RefID: "sub-task"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.SaveThreadWatch(ctx, ThreadWatch{ID: "watch-a", AssistantID: id, DeviceID: "exec-a", ThreadID: "thread-sub"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.UpsertBrainWake(ctx, BrainWake{ID: "wake-a", AssistantID: id, TaskKey: "wake-task", DedupeKey: "once", Status: "review", NotBefore: time.Now(), CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	module.noteThreadDisappeared(ctx, "exec-a", "thread-sub")
@@ -167,8 +225,11 @@ func TestDeleteBotAndSubsessionCleanBotTasks(t *testing.T) {
 	}
 	for _, query := range []string{
 		`SELECT COUNT(*) FROM bot_tasks WHERE assistant_id=?`,
+		`SELECT COUNT(*) FROM bot_task_messages WHERE assistant_id=?`,
 		`SELECT COUNT(*) FROM bot_inbox WHERE assistant_id=?`,
 		`SELECT COUNT(*) FROM bot_task_sessions WHERE assistant_id=?`,
+		`SELECT COUNT(*) FROM thread_watches WHERE assistant_id=?`,
+		`SELECT COUNT(*) FROM brain_wakes WHERE assistant_id=?`,
 	} {
 		var count int
 		if err := module.store.db.QueryRow(query, id).Scan(&count); err != nil || count != 0 {

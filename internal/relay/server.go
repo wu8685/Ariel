@@ -1192,6 +1192,10 @@ func (s *Server) finishRoute(relayID string, agent *peer, response map[string]an
 		delete(s.byWeb[entry.web], entry.webID)
 	}
 	entry.timer.Stop()
+	var goneDevice, goneThread string
+	if response["outcome"] == "accepted" && entry.method == "thread.archive.update" && entry.threadID != "" {
+		goneDevice, goneThread = entry.deviceID, entry.threadID
+	}
 	if response["outcome"] == "accepted" {
 		if entry.method == "thread.subscribe" || entry.method == "thread.settings.watch" {
 			data, _ := response["data"].(map[string]any)
@@ -1210,7 +1214,15 @@ func (s *Server) finishRoute(relayID string, agent *peer, response map[string]an
 			delete(s.subs[agent], entry.subID)
 		}
 	}
+	handler := s.puckHandler
 	s.mu.Unlock()
+	if goneThread != "" {
+		if cleaner, ok := handler.(interface {
+			NoteThreadDisappeared(context.Context, string, string)
+		}); ok {
+			cleaner.NoteThreadDisappeared(context.Background(), goneDevice, goneThread)
+		}
+	}
 	if entry.internal != nil {
 		select {
 		case entry.internal <- response:

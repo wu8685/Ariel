@@ -64,6 +64,7 @@ type pendingBrainTurn struct {
 	steps                                            int
 	toolFailures                                     map[string]int
 	ack                                              bool
+	queueKey                                         string
 	timer                                            *time.Timer
 }
 
@@ -471,6 +472,7 @@ func (m *Module) rememberSpoken(assistantID, text string) {
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
 	pending := m.clearPendingForTurn(assistantID, turnID)
 	defer m.pumpAssistant(ctx, assistantID)
+	defer m.rearmUnassignedInbox(ctx, assistantID, pending.queueKey)
 	defer m.scheduleBotQueue(ctx, assistantID, pending.messageID)
 	if brainSilent(text) {
 		if pending.responseID != "" {
@@ -1917,7 +1919,7 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
 func brainEnvelope(a Assistant, text string) string {
-	return brainEnvelopeWithReply(a, text, nil, nil)
+	return brainEnvelopeWithReply(a, text, nil, nil, nil)
 }
 
 func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, reply *Message) string {
@@ -1925,10 +1927,14 @@ func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, 
 	if err != nil {
 		tasks = nil
 	}
-	return brainEnvelopeWithReply(a, text, reply, tasks)
+	openTasks, err := m.store.RecentOpenBotTasks(ctx, a.ID, 10)
+	if err != nil {
+		openTasks = nil
+	}
+	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks)
 }
 
-func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task) string {
+func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask) string {
 	context := ""
 	if reply != nil {
 		author := "用户"
@@ -1950,7 +1956,20 @@ func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Ta
 		}
 	}
 	context += reusableTaskContext(tasks)
+	context += openBotTaskContext(openTasks)
 	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n%s%s\n\n用户请求：%s", a.ID, newUUID(), envelopeContext(a), context, text)
+}
+
+func openBotTaskContext(tasks []BotTask) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		title := strings.ReplaceAll(strings.TrimSpace(task.Title), "\n", " ")
+		lines = append(lines, fmt.Sprintf("- id=%s title=%s", task.ID, title))
+	}
+	return "\n\n未完成的 Bot 任务（最近 " + strconv.Itoa(len(lines)) + " 条，只有 id 和 title）：\n" + strings.Join(lines, "\n")
 }
 
 func reusableTaskContext(tasks []Task) string {
