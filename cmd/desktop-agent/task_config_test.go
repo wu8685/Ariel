@@ -31,8 +31,17 @@ func TestPuckBrainAllowsOnlyVerifiedOrIsolatedProbeProfile(t *testing.T) {
 	if !puckBrainAllowed(probe.IPCProfileVerified, "26.930.31730", "0.160.0") {
 		t.Fatal("verified native profile disabled Puck brain")
 	}
-	if !puckBrainAllowed(probe.IPCProfileUnverified, "26.930.51102", "0.160.0") {
-		t.Fatal("isolated Puck write-probe profile was not admitted")
+	for _, tc := range []struct {
+		desktop, cli string
+	}{
+		{"26.930.51102", "0.160.0"},
+		{"v26.930.51102", "v0.160.0"},
+		{"26.1103.60933", "0.167.0-alpha.3.2"},
+		{"v26.1103.60933", "v0.167.0-alpha.3.2"},
+	} {
+		if !puckBrainAllowed(probe.IPCProfileUnverified, tc.desktop, tc.cli) {
+			t.Fatalf("isolated Puck write-probe profile was not admitted: %s / %s", tc.desktop, tc.cli)
+		}
 	}
 	for _, tc := range []struct {
 		profile      probe.IPCProfileStatus
@@ -41,6 +50,10 @@ func TestPuckBrainAllowsOnlyVerifiedOrIsolatedProbeProfile(t *testing.T) {
 		{probe.IPCProfileUnverified, "26.931.1", "0.160.0"},
 		{probe.IPCProfileUnverified, "26.930.51102", "0.161.0"},
 		{probe.IPCProfileUnsupported, "26.930.51102", "0.160.0"},
+		{probe.IPCProfileUnverified, "26.1103.60933", "0.167.0-alpha.3.1"},
+		{probe.IPCProfileUnverified, "26.1103.60934", "0.167.0-alpha.3.2"},
+		{probe.IPCProfileUnsupported, "26.1103.60933", "0.167.0-alpha.3.2"},
+		{"", "26.1103.60933", "0.167.0-alpha.3.2"},
 	} {
 		if puckBrainAllowed(tc.profile, tc.desktop, tc.cli) {
 			t.Fatalf("unprobed profile admitted: %+v", tc)

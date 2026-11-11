@@ -127,16 +127,36 @@ func taskExecutionCheckForProfile(enabled, managerOnly bool, profile probe.IPCPr
 	}
 }
 
+// puckBrainVersionPair is one Desktop build and Codex CLI version. Membership
+// is exact string equality after a single leading "v" is removed; it is not a
+// version range.
+type puckBrainVersionPair struct {
+	desktop string
+	cli     string
+}
+
+// probedPuckBrainPairs are the only unverified IPC profiles allowed to host
+// Puck brain threads. Each pair passed an isolated write probe on the public
+// app-server path (not the Desktop follower path covered by the broader IPC
+// profile). Evidence is in docs/testing/0130-probe-results.md. Neighbouring
+// builds and CLIs stay closed until they have their own probe.
+var probedPuckBrainPairs = map[puckBrainVersionPair]struct{}{
+	{desktop: "26.930.51102", cli: "0.160.0"}:            {},
+	{desktop: "26.1103.60933", cli: "0.167.0-alpha.3.2"}: {},
+}
+
 func puckBrainAllowed(profile probe.IPCProfileStatus, desktopVersion, cliVersion string) bool {
 	if profile == probe.IPCProfileVerified {
 		return true
 	}
-	// The Puck brain uses the public app-server path, not the Desktop follower
-	// path covered by the broader IPC profile. This exact pair passed the
-	// isolated write probes recorded in docs/testing/0130-probe-results.md.
-	return profile == probe.IPCProfileUnverified &&
-		strings.TrimPrefix(desktopVersion, "v") == "26.930.51102" &&
-		strings.TrimPrefix(cliVersion, "v") == "0.160.0"
+	if profile != probe.IPCProfileUnverified {
+		return false
+	}
+	_, ok := probedPuckBrainPairs[puckBrainVersionPair{
+		desktop: strings.TrimPrefix(desktopVersion, "v"),
+		cli:     strings.TrimPrefix(cliVersion, "v"),
+	}]
+	return ok
 }
 
 func main() {
