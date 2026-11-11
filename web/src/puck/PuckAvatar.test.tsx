@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { avatarColors, avatarShapes, canonicalShape, deriveAvatar, expressionForState, nearestAvatarColor, PuckAvatar } from "./PuckAvatar";
+import { avatarColors, avatarShapes, canonicalShape, deriveAvatar, expressionForState, eyeCentersForShape, nearestAvatarColor, PuckAvatar } from "./PuckAvatar";
 import { tracedAvatarMetrics, tracedCloudOnSmallCell } from "./tracedAvatars";
 import { resetAvatarMotionSchedulerForTests } from "./PuckAvatarScheduler";
 import avatarSource from "./PuckAvatar.tsx?raw";
@@ -134,18 +134,47 @@ describe("PuckAvatar", () => {
 	});
 
 	it("makes the eye nearest the gaze direction smaller during pointer turns", () => {
-		const { container } = render(<PuckAvatar assistantId="assistant-perspective" name="透视测试" animated={false}/>);
+		const { container } = render(<PuckAvatar assistantId="assistant-perspective" name="透视测试" design={{ shape: "flower", color: "green", colorHex: "#5ac67a" }} animated={false}/>);
 		const avatar = container.querySelector<HTMLElement>(".puck-avatar")!;
 		vi.spyOn(avatar, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON: () => ({}) });
+		const eyes = eyeCentersForShape("flower");
+		const expectNearerNarrower = (gazeX: number, gazeY: number) => {
+			const rotation = Number.parseFloat(avatar.style.getPropertyValue("--puck-head-rotate")) + Number.parseFloat(avatar.style.getPropertyValue("--puck-face-rotate"));
+			const radians = rotation * Math.PI / 180;
+			const dx = eyes[1].x - eyes[0].x;
+			const dy = eyes[1].y - eyes[0].y;
+			const score = (dx * Math.cos(radians) - dy * Math.sin(radians)) * gazeX + (dx * Math.sin(radians) + dy * Math.cos(radians)) * gazeY;
+			const rightNearer = score > 0;
+			const leftX = Number(avatar.style.getPropertyValue("--puck-left-eye-xscale"));
+			const rightX = Number(avatar.style.getPropertyValue("--puck-right-eye-xscale"));
+			const leftY = Number(avatar.style.getPropertyValue("--puck-left-eye-yscale"));
+			const rightY = Number(avatar.style.getPropertyValue("--puck-right-eye-yscale"));
+			expect(leftX).toBe(rightNearer ? 1 : 0.55);
+			expect(rightX).toBe(rightNearer ? 0.55 : 1);
+			expect(leftY).toBe(rightNearer ? 1 : 0.78);
+			expect(rightY).toBe(rightNearer ? 0.78 : 1);
+		};
 
 		fireEvent.pointerMove(avatar, { clientX: 0, clientY: 50, pointerType: "mouse" });
-		expect(Number(avatar.style.getPropertyValue("--puck-left-eye-xscale"))).toBeLessThan(Number(avatar.style.getPropertyValue("--puck-right-eye-xscale")));
+		expectNearerNarrower(-1, 0);
 		fireEvent.pointerMove(avatar, { clientX: 100, clientY: 50, pointerType: "mouse" });
-		expect(Number(avatar.style.getPropertyValue("--puck-right-eye-xscale"))).toBeLessThan(Number(avatar.style.getPropertyValue("--puck-left-eye-xscale")));
+		expectNearerNarrower(1, 0);
 		fireEvent.pointerMove(avatar, { clientX: 50, clientY: 0, pointerType: "mouse" });
-		expect(avatar.style.getPropertyValue("--puck-left-eye-xscale")).toBe(avatar.style.getPropertyValue("--puck-right-eye-xscale"));
+		expectNearerNarrower(0, -1);
 		expect(Math.abs(Number.parseFloat(avatar.style.getPropertyValue("--puck-head-y")))).toBeGreaterThanOrEqual(6);
 		expect(Math.abs(Number.parseFloat(avatar.style.getPropertyValue("--puck-face-y")))).toBeGreaterThanOrEqual(9);
+		fireEvent.pointerMove(avatar, { clientX: 50, clientY: 100, pointerType: "mouse" });
+		expectNearerNarrower(0, 1);
+		fireEvent.pointerMove(avatar, { clientX: 0, clientY: 0, pointerType: "mouse" });
+		expect(Number(avatar.style.getPropertyValue("--puck-right-eye-xscale"))).toBe(0.55);
+		expect(Number(avatar.style.getPropertyValue("--puck-left-eye-xscale"))).toBe(1);
+		expectNearerNarrower(-1, -1);
+		fireEvent.pointerMove(avatar, { clientX: 100, clientY: 0, pointerType: "mouse" });
+		expectNearerNarrower(1, -1);
+		fireEvent.pointerMove(avatar, { clientX: 0, clientY: 100, pointerType: "mouse" });
+		expectNearerNarrower(-1, 1);
+		fireEvent.pointerMove(avatar, { clientX: 100, clientY: 100, pointerType: "mouse" });
+		expectNearerNarrower(1, 1);
 	});
 
 	it("does not re-render while the shared scheduler changes gaze and blink phases", async () => {
