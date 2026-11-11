@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeOrchestrator struct {
@@ -117,11 +118,14 @@ func TestReadToolRetriesOneRejectedResyncButMutationDoesNot(t *testing.T) {
 }
 
 type fakeBackend struct {
-	tasks  map[string]Task
-	events []Event
+	tasks      map[string]Task
+	events     []Event
+	sourceText map[string]string
+	authorized []Action
 }
 
 func (f *fakeBackend) Authorize(_ context.Context, _ string, action Action) (string, error) {
+	f.authorized = append(f.authorized, action)
 	if strings.Contains(string(action.Arguments), `"riskTags":["deploy"]`) {
 		return "authorization-a", ErrAuthorizationRequired
 	}
@@ -150,6 +154,21 @@ func (f *fakeBackend) TaskBySourceMessage(_ context.Context, assistantID, source
 func (f *fakeBackend) Emit(_ context.Context, event Event) error {
 	f.events = append(f.events, event)
 	return nil
+}
+func (f *fakeBackend) Tasks(_ context.Context, assistantID string) ([]Task, error) {
+	var tasks []Task
+	for _, task := range f.tasks {
+		if task.AssistantID == assistantID {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
+}
+func (f *fakeBackend) SourceText(_ context.Context, _, messageID string) (string, error) {
+	if f.sourceText == nil {
+		return "", nil
+	}
+	return f.sourceText[messageID], nil
 }
 
 func TestStartTaskIsIdempotentAndUnknownIsNeverReplayed(t *testing.T) {
@@ -474,5 +493,275 @@ func TestMutationFlowCreatesTaskSendsFollowUpAndPreservesReadTools(t *testing.T)
 	read := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "list_threads", Arguments: json.RawMessage(`{"deviceId":"exec-a","limit":1}`)})
 	if !read.Success {
 		t.Fatalf("read=%+v", read)
+	}
+}
+
+func reusableTask(id, assistant, device, cwd, thread, status string, at time.Time) Task {
+	return Task{ID: id, AssistantID: assistant, SourceMessageID: "user-old-" + id, DeviceID: device, CWD: cwd, NativeThreadID: thread, Goal: "检查测试", Status: status, UpdatedAt: at}
+}
+
+func startFollowUp(source, device, cwd, prompt string, tags []string) Call {
+	if tags == nil {
+		tags = []string{}
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"deviceId": device, "cwd": cwd, "goal": "跟进", "prompt": prompt, "riskTags": tags,
+		"clientTaskId": "00000000-0000-4000-8000-0000000000aa",
+	})
+	return Call{AssistantID: "assistant-a", SourceMessageID: source, Tool: "start_task", Arguments: raw}
+}
+
+func TestStartTaskReusesSameDeviceAndCwd(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method == "thread.bootstrap" {
+			t.Fatalf("follow-up created a thread: %s", params)
+		}
+		if method != "turn.start" || !strings.Contains(string(params), `"threadId":"thread-old"`) || !strings.Contains(string(params), `"text":"继续修失败测试"`) {
+			t.Fatalf("method=%s params=%s", method, params)
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-follow"}}
+	}}
+	backend := &fakeBackend{tasks: map[string]Task{
+		"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work/", "thread-old", "running", time.Now().Add(-time.Hour)),
+	}}
+	handler := New(orchestrator, backend)
+	first := handler.Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "继续修失败测试", nil))
+	second := handler.Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "继续修失败测试", nil))
+	if !first.Success || first.Data["taskId"] != "task-old" || first.Data["threadId"] != "thread-old" || first.Data["reused"] != true {
+		t.Fatalf("first=%+v", first)
+	}
+	if !second.Success || second.Data["taskId"] != "task-old" || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "turn.start" {
+		t.Fatalf("second=%+v calls=%v", second, orchestrator.calls)
+	}
+	stored := backend.tasks["task-old"]
+	if stored.NativeThreadID != "thread-old" || stored.SourceMessageID != "user-new" || stored.CWD != "/work/" {
+		t.Fatalf("stored=%+v", stored)
+	}
+	if len(backend.tasks) != 1 {
+		t.Fatalf("tasks=%d", len(backend.tasks))
+	}
+}
+
+func TestStartTaskCreatesThreadWhenTargetDiffers(t *testing.T) {
+	t.Run("cwd", func(t *testing.T) {
+		orchestrator := &fakeOrchestrator{}
+		backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "running", time.Now())}}
+		result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/other", "在另一个目录做", nil))
+		if !result.Success || result.Data["threadId"] != "thread-a" || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" {
+			t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+		}
+		if backend.tasks["task-old"].NativeThreadID != "thread-old" || backend.tasks["task-old"].CWD != "/work" || len(backend.tasks) != 2 {
+			t.Fatalf("tasks=%+v", backend.tasks)
+		}
+	})
+	t.Run("device", func(t *testing.T) {
+		base := &fakeOrchestrator{}
+		orchestrator := extraDeviceOrchestrator{fakeOrchestrator: base}
+		backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "running", time.Now())}}
+		result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-b", "/work", "换一台机器", nil))
+		if !result.Success || len(base.calls) != 1 || base.calls[0] != "thread.bootstrap" || len(backend.tasks) != 2 {
+			t.Fatalf("result=%+v calls=%v tasks=%+v", result, base.calls, backend.tasks)
+		}
+		if backend.tasks["task-old"].DeviceID != "exec-a" {
+			t.Fatalf("old task retargeted: %+v", backend.tasks["task-old"])
+		}
+	})
+	t.Run("other assistant", func(t *testing.T) {
+		orchestrator := &fakeOrchestrator{}
+		backend := &fakeBackend{tasks: map[string]Task{"task-theirs": reusableTask("task-theirs", "assistant-b", "exec-a", "/work", "thread-theirs", "running", time.Now())}}
+		result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "这是我的请求", nil))
+		if !result.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" {
+			t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+		}
+		if backend.tasks["task-theirs"].NativeThreadID != "thread-theirs" {
+			t.Fatalf("other assistant task changed: %+v", backend.tasks["task-theirs"])
+		}
+	})
+	for _, status := range []string{"cancelled", "failed_dispatch"} {
+		t.Run(status, func(t *testing.T) {
+			orchestrator := &fakeOrchestrator{}
+			task := reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", status, time.Now())
+			if status == "failed_dispatch" {
+				task.NativeThreadID = ""
+			}
+			backend := &fakeBackend{tasks: map[string]Task{"task-old": task}}
+			result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "重新做", nil))
+			if !result.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" || len(backend.tasks) != 2 {
+				t.Fatalf("status=%s result=%+v calls=%v tasks=%d", status, result, orchestrator.calls, len(backend.tasks))
+			}
+		})
+	}
+}
+
+func TestStartTaskExplicitNewSessionCreatesThread(t *testing.T) {
+	for _, test := range []struct {
+		name, prompt, userText string
+		reuse                  bool
+	}{
+		{name: "prompt asks for new session", prompt: "请新开一个会话继续做", reuse: false},
+		{name: "trusted user text asks for new session", prompt: "继续做测试", userText: "请单独开一个新会话", reuse: false},
+		{name: "english new session", prompt: "please start a new session", reuse: false},
+		{name: "negated chinese still reuses", prompt: "不要新开会话，继续修", reuse: true},
+		{name: "negated english still reuses", prompt: "don't start a new session", reuse: true},
+		{name: "negated longer phrase still reuses", prompt: "不要开一个新会话", reuse: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+				if method == "thread.bootstrap" {
+					return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-new", "turnId": "turn-new"}}
+				}
+				if method == "turn.start" {
+					return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-follow"}}
+				}
+				return Result{Outcome: "accepted"}
+			}}
+			backend := &fakeBackend{
+				tasks:      map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "done", time.Now())},
+				sourceText: map[string]string{"user-new": test.userText},
+			}
+			result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", test.prompt, nil))
+			if !result.Success {
+				t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+			}
+			if test.reuse {
+				if result.Data["taskId"] != "task-old" || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "turn.start" {
+					t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+				}
+				return
+			}
+			if result.Data["threadId"] != "thread-new" || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" || backend.tasks["task-old"].NativeThreadID != "thread-old" {
+				t.Fatalf("result=%+v calls=%v old=%+v", result, orchestrator.calls, backend.tasks["task-old"])
+			}
+		})
+	}
+}
+
+func TestStartTaskReuseDoesNotClobberBusyOrBlockedTask(t *testing.T) {
+	t.Run("host turn busy", func(t *testing.T) {
+		orchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
+			if method == "thread.bootstrap" {
+				t.Fatal("busy follow-up created a thread")
+			}
+			if method != "turn.start" {
+				t.Fatalf("method=%s", method)
+			}
+			return Result{Outcome: "rejected", Code: "TURN_BUSY", Message: "当前会话仍在执行"}
+		}}
+		backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "running", time.Now())}}
+		result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "再看一眼", nil))
+		if result.Success || result.Code != "TURN_BUSY" || result.Data["taskId"] != "task-old" || len(backend.tasks) != 1 {
+			t.Fatalf("result=%+v tasks=%d", result, len(backend.tasks))
+		}
+		if backend.tasks["task-old"].SourceMessageID == "user-new" {
+			t.Fatalf("busy turn was recorded as delivered: %+v", backend.tasks["task-old"])
+		}
+	})
+	for _, status := range []string{"awaiting_authorization", "waiting_user", "dispatching", "reconciling", "stopping"} {
+		t.Run(status, func(t *testing.T) {
+			orchestrator := &fakeOrchestrator{}
+			backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", status, time.Now())}}
+			result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "继续", nil))
+			if result.Success || result.Code != "TURN_BUSY" || result.Data["taskId"] != "task-old" || result.Data["status"] != status || len(orchestrator.calls) != 0 {
+				t.Fatalf("status=%s result=%+v calls=%v", status, result, orchestrator.calls)
+			}
+		})
+	}
+	for _, status := range []string{"attention", "review", "done", "stopped"} {
+		t.Run(status, func(t *testing.T) {
+			orchestrator := &fakeOrchestrator{}
+			backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", status, time.Now())}}
+			result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "按你的判断继续", nil))
+			if !result.Success || result.Data["taskId"] != "task-old" || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "turn.start" {
+				t.Fatalf("status=%s result=%+v calls=%v", status, result, orchestrator.calls)
+			}
+		})
+	}
+}
+
+func TestStartTaskGoneThreadCreatesReplacement(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, _ json.RawMessage) Result {
+		if method == "turn.start" {
+			return Result{Outcome: "rejected", Code: "NOT_FOUND", Message: "thread gone"}
+		}
+		if method == "thread.bootstrap" {
+			return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-new", "turnId": "turn-new"}}
+		}
+		return Result{Outcome: "accepted"}
+	}}
+	backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "running", time.Now())}}
+	result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "线程没了就重做", nil))
+	if !result.Success || result.Data["threadId"] != "thread-new" || result.Data["taskId"] == "task-old" {
+		t.Fatalf("result=%+v", result)
+	}
+	if orchestrator.calls[0] != "turn.start" || orchestrator.calls[1] != "thread.bootstrap" {
+		t.Fatalf("calls=%v", orchestrator.calls)
+	}
+	old := backend.tasks["task-old"]
+	if old.Status != "cancelled" || old.NativeThreadID != "thread-old" {
+		t.Fatalf("old task=%+v", old)
+	}
+}
+
+func TestStartTaskReuseKeepsRiskAuthorization(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "running", time.Now())}}
+	result := New(orchestrator, backend).Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "deploy", []string{"deploy"}))
+	if result.Code != "AUTHORIZATION_REQUIRED" || result.AuthorizationID != "authorization-a" || len(orchestrator.calls) != 0 || len(backend.tasks) != 1 {
+		t.Fatalf("result=%+v calls=%v", result, orchestrator.calls)
+	}
+	if len(backend.authorized) != 1 || backend.authorized[0].Tool != "send_turn" {
+		t.Fatalf("authorized=%+v", backend.authorized)
+	}
+}
+
+func TestAuthorizedFrozenStartTaskDoesNotSteer(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	backend := &fakeBackend{tasks: map[string]Task{"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "running", time.Now())}}
+	result := New(orchestrator, backend).ExecuteAuthorized(context.Background(), Call{
+		AssistantID: "assistant-a", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-0000000000bb"}`),
+	})
+	if !result.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" || backend.tasks["task-old"].NativeThreadID != "thread-old" {
+		t.Fatalf("result=%+v calls=%v old=%+v", result, orchestrator.calls, backend.tasks["task-old"])
+	}
+}
+
+func TestNewerReusableTaskWinsAndDifferentCwdOnSameMessageKeepsIt(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method == "turn.start" {
+			if !strings.Contains(string(params), `"threadId":"thread-new"`) {
+				t.Fatalf("params=%s", params)
+			}
+			return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-follow"}}
+		}
+		if method == "thread.bootstrap" {
+			return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-created", "turnId": "turn-created"}}
+		}
+		return Result{Outcome: "accepted"}
+	}}
+	backend := &fakeBackend{tasks: map[string]Task{
+		"task-old": reusableTask("task-old", "assistant-a", "exec-a", "/work", "thread-old", "done", time.Now().Add(-2*time.Hour)),
+		"task-new": reusableTask("task-new", "assistant-a", "exec-a", "/work", "thread-new", "review", time.Now()),
+	}}
+	handler := New(orchestrator, backend)
+	continued := handler.Execute(context.Background(), startFollowUp("user-new", "exec-a", "/work", "接着最新的做", nil))
+	if !continued.Success || continued.Data["taskId"] != "task-new" {
+		t.Fatalf("continued=%+v", continued)
+	}
+	retarget := handler.Execute(context.Background(), startFollowUp("user-new", "exec-a", "/elsewhere", "换目录", nil))
+	if !retarget.Success || retarget.Data["threadId"] != "thread-created" {
+		t.Fatalf("retarget=%+v calls=%v", retarget, orchestrator.calls)
+	}
+	if backend.tasks["task-new"].NativeThreadID != "thread-new" || backend.tasks["task-new"].CWD != "/work" {
+		t.Fatalf("reused task was overwritten: %+v", backend.tasks["task-new"])
+	}
+}
+
+type extraDeviceOrchestrator struct{ *fakeOrchestrator }
+
+func (o extraDeviceOrchestrator) Devices() []map[string]any {
+	return []map[string]any{
+		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}},
+		{"deviceId": "exec-b", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}},
 	}
 }

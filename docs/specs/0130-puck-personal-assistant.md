@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -441,8 +441,8 @@ sequenceDiagram
 | `list_devices` | — | 本助理允许范围内的设备、在线、`codexReady`、能力 | `device.list` + 作用域过滤 |
 | `list_threads` | `deviceId`, `search?`, `limit≤50` | 会话元数据；brain thread 不出现 | `thread.list` |
 | `read_thread` | `deviceId`, `threadId`, `turns≤4` | 最近 turn 有界摘要、runtime、pendingInteractions | `thread.cache.read` 优先，回退 `thread.read`；越界读取需授权（B1） |
-| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId` | 新建执行 thread 并发首个 turn，写任务记录 | 策略引擎；放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射） |
-| `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId` | 续投同一执行 thread | 策略引擎（B2／B5／B6）→ `turn.start` |
+| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId` | 新建执行 thread 并发首个 turn，写任务记录。若本助理已有同一设备与目录的可复用线程，且用户没有明确要求新会话，则改为续投（§6.1.1） | 策略引擎；新建时放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射）；续投走 `send_turn` 的同一门禁 |
+| `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId` | 续投同一执行 thread；同一设备与目录的后续请求默认走这条路径 | 策略引擎（B2／B5／B6／B10）→ `turn.start` |
 | `interrupt` | `taskId`／`threadId`, `turnId`, `reason` | 精确停止 | 策略引擎（B2／B3）→ `turn.interrupt` |
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
 | `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要 | Service 本地 + cache |
@@ -452,6 +452,31 @@ sequenceDiagram
 | `ask_user` | `question`, `options[]`（`label`, `style: primary/danger/default`）, `multiSelect?`, `allowFreeText` | 在对话中发问题卡片（E6）；回答作为下一条用户消息唤醒 Brain | 一次只允许一个未答问题卡片 |
 | `share_result` | `items[]`（`kind: diff/file/pr/thread/url`, `title`, `deviceId?`, `threadId?`, `path?`, `url?`） | 在对话中发附件卡片（E11）；文件与 diff 只存引用，点开时经 Relay 现场读取 | 越界引用拒绝（B1） |
 | `react` | `messageId`, `emoji`（白名单） | 对用户消息加表情回应（UI2.3） | 仅限本助理对话中的用户消息 |
+
+### 6.1.1 执行线程复用（2026-11-11）
+
+同一 Bot 的执行线程持有工作上下文。默认不要为每一条后续请求再开一条 Codex 线程，否则 Desktop 侧边栏会被占满，上下文也会丢掉。
+
+**规则**：用户向同一个 Bot 发出的后续请求，如果目标设备与目录和该 Bot 自己的某条已有执行线程相同，就续投那条线程（`send_turn`）。只有下面三种情况才 `start_task` 新建：
+
+1. 没有可复用的已有任务：设备不同、目录不同，或旧线程已经不存在／不可用；
+2. 用户明确要求单独的新会话（例如「新会话」「独立任务」「new session」「separate thread」；紧挨着的否定，如「不要新会话」「don't start a new session」，不算要求新建）；
+3. 同一条用户消息上的既有幂等与改目录纠偏（0137）优先于跨消息复用。这条消息如果已经为它新建过任务，重复 `start_task` 仍返回该任务；同消息把目录改到别处时，仍按 0137 把这条消息绑定的任务改到新目录。跨消息续投上去的旧线程不会被这次纠偏覆盖：目录一旦不同，旧线程保持原绑定，新目录另建任务。
+
+**Brain 可见上下文**：每次可信 envelope 附上该 Bot 最近的可复用任务，最多 8 条，含 `taskId`、`deviceId`、`cwd`、`goal`、`status`、最近活动时间，并写明优先 `send_turn`。引用任务卡时，原有「优先 `send_turn(taskId)`」说明仍然有效。envelope 是提示；服务端在 `start_task` 上再做一次导流，避免旧 brain 指令仍习惯性新建。
+
+**服务端导流**：
+
+- 只在本助理自己的任务表里按 `deviceId` + 规范化 `cwd` 选择最近一条可复用任务。别的助理的线程不会被选中（B2，v1 直接拒绝，不借授权跳过）。
+- 可续投：`running`、`review`、`done`、`attention`、`stopped`，以及仍带 native thread、且不属于下面阻塞或不可用集合的状态。`attention` 上的用户跟进视为「用户指示」，可以续投，但 B10 等既有门禁照常执行。
+- 正忙或正等用户，不打断、不排队、不另开线程：`dispatching`、`waiting_user`、`awaiting_authorization`、`reconciling`、`stopping` 直接返回已有 `TURN_BUSY` 和 `taskId`。`running` 仍尝试 `turn.start`；执行主机若返回 `TURN_BUSY`，原样交回 Brain，同样不另开线程。Q9 未决，服务端不新增队列。
+- 不可用：`failed_dispatch`、`cancelled`、没有 native thread id，或续投得到 `NOT_FOUND`。`NOT_FOUND` 把旧任务标为 `cancelled` 后再新建。其他失败原样返回，不改成第二条线程。
+- 续投成功后仍用原来的 `taskId`，并把这条用户消息记到该任务上，使同消息重试不再次 `turn.start`。
+- 已冻结并获批准的 `start_task` 按冻结动作执行，不在批准后改判成续投。需要授权的续投冻结为 `send_turn`。
+
+**仍然生效的门禁**：B2（只续投本助理任务表中的线程）、B5／B6、B10（执行策略无法强制时仍要授权，不自动派发）、B8（续投不新建执行线程，因此不占用新的并发线程名额；每小时派发上限只计实际新建）、`PUCK_SELF_TARGET`（不得把 brain 工作区或 brain thread 当成执行目标）。导流发生在这些检查之前或之中，不能绕过它们。
+
+**兼容**：不新增 `start_task`／`send_turn` 必填字段，不改变旧 Agent／旧 Web 的既有帧（0109）。结果里多出的 `reused` 等字段可被旧客户端忽略。显式新会话由用户原文和本次 `goal`／`prompt` 识别，不依赖新的工具参数，因此尚未轮换的 brain thread 也能被服务端纠正。
 
 写工具必须带幂等 ID；结果 `unknown` 时只重新读取权威状态，**不重放**。
 
@@ -568,7 +593,7 @@ attention ─(Brain 自主恢复或用户指示)→ running ｜ cancelled
 dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 ```
 
-1. 一个任务绑定唯一 `(deviceId, nativeThreadId)`，续投永远发同一 thread（0096）。
+1. 一个任务绑定唯一 `(deviceId, nativeThreadId)`，续投永远发同一 thread（0096）。同一 Bot 对同一设备与目录的后续请求默认续投已有任务，而不是再绑定一条新线程（§6.1.1）。
 2. 删除了强制的 `proposed` 确认态（Q1）；只有命中关键动作才进入 `awaiting_authorization`。
 3. `review → done` 默认由 Brain 判定、可被用户重新打开（Q8 仍开放，见 §13）。
 4. 设备离线时任务保持原状态并标注离线，不自动换机。

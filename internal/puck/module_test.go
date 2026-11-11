@@ -25,6 +25,8 @@ type fakeModuleBridge struct {
 	emptyTurn         bool
 	bootstrapCode     string
 	bootstrapMessage  string
+	turnStartCode     string
+	executionPolicy   *bool
 	ensureThreads     []string
 	events            chan relay.BrainEvent
 	failures          chan relay.BrainDeliveryFailure
@@ -33,9 +35,13 @@ type fakeModuleBridge struct {
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
+	executionPolicy := true
+	if f.executionPolicy != nil {
+		executionPolicy = *f.executionPolicy
+	}
 	return []map[string]any{
 		{"deviceId": "brain-a", "agentOnline": true, "capabilities": map[string]bool{"puckBrainReady": true}},
-		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}},
+		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": executionPolicy}},
 	}
 }
 func (f *fakeModuleBridge) BrainThreads(v map[relay.BrainThread]string) { f.brains = v }
@@ -77,7 +83,10 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"threadId": "exec-thread-a", "turnId": "exec-turn-a"}}
 	}
 	if method == "turn.start" {
-		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-a"}}
+		if f.turnStartCode != "" {
+			return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: f.turnStartCode, Message: f.turnStartCode}}
+		}
+		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-follow"}}
 	}
 	if method == "puck.brain.toolResult" && f.toolResultFailure {
 		return relay.PuckResponse{Outcome: "unknown", Error: &relay.PuckError{Code: "OUTCOME_UNKNOWN", Message: "fixture receipt lost"}}
@@ -1771,4 +1780,252 @@ func TestGroupConversationFansOutToMembersWithoutWritingDirectHistory(t *testing
 			t.Fatalf("reply leaked into direct history: %+v", direct)
 		}
 	}
+}
+
+func TestBrainEnvelopeListsReusableTasks(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-existing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-existing", Goal: "检查测试", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	bridge.mu.Lock()
+	bridge.calls, bridge.params = nil, nil
+	bridge.mu.Unlock()
+	result := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "follow-up", "text": "继续把失败测试补上"}))
+	if result.Error != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	var turnText string
+	for index, method := range bridge.calls {
+		if method == "puck.brain.turn.start" {
+			var params struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(bridge.params[index], &params)
+			turnText = params.Text
+		}
+	}
+	for _, want := range []string{"task-existing", "exec-a", "/work", "running", "send_turn", "新会话"} {
+		if !strings.Contains(turnText, want) {
+			t.Fatalf("envelope missing %q: %s", want, turnText)
+		}
+	}
+}
+
+func TestFollowUpStartTaskReusesSameDeviceAndCwd(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	assistant := created.Data["assistant"].(map[string]any)
+	id := assistant["assistantId"].(string)
+	threadID := assistant["brainThreadId"].(string)
+	module.clearPending(id)
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-existing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-existing", Goal: "检查测试", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.AppendMessage(ctx, Message{ID: "user-follow", AssistantID: id, Role: "user", Kind: "text", Text: "继续修测试"}); err != nil {
+		t.Fatal(err)
+	}
+	bridge.mu.Lock()
+	bridge.calls, bridge.params = nil, nil
+	bridge.mu.Unlock()
+	call := func() {
+		module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: threadID, Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-reuse","tool":"start_task","arguments":{"deviceId":"exec-a","cwd":"/work","goal":"继续","prompt":"继续修测试","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000311"}}`)})
+	}
+	call()
+	call()
+	tasks, _ := module.store.Tasks(ctx, id)
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	starts := 0
+	for _, method := range bridge.calls {
+		if method == "thread.bootstrap" {
+			t.Fatalf("follow-up bootstrapped: %v", bridge.calls)
+		}
+		if method == "turn.start" {
+			starts++
+		}
+	}
+	if len(tasks) != 1 || tasks[0].ID != "task-existing" || tasks[0].NativeThreadID != "exec-thread-existing" || starts != 1 {
+		t.Fatalf("tasks=%+v starts=%d calls=%v", tasks, starts, bridge.calls)
+	}
+}
+
+func TestExplicitFollowUpReusesSameDirectory(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	bridge.mu.Lock()
+	bridge.calls = nil
+	bridge.mu.Unlock()
+	first := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "explicit-1", "text": "请在 exec-a 的 /work/project 运行测试"}))
+	second := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "explicit-2", "text": "请在 exec-a 的 /work/project 再运行测试"}))
+	third := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "explicit-3", "text": "请在 exec-a 的 /work/project 新开一个会话运行测试"}))
+	tasks, _ := module.store.Tasks(ctx, id)
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	bootstraps := 0
+	for _, method := range bridge.calls {
+		if method == "thread.bootstrap" {
+			bootstraps++
+		}
+	}
+	if first.Error != nil || second.Error != nil || third.Error != nil || len(tasks) != 2 || bootstraps != 2 {
+		t.Fatalf("first=%+v second=%+v third=%+v tasks=%d bootstraps=%d calls=%v", first, second, third, len(tasks), bootstraps, bridge.calls)
+	}
+}
+
+func TestReuseReportsBusyAndKeepsPolicyGates(t *testing.T) {
+	t.Run("host busy", func(t *testing.T) {
+		bridge := &fakeModuleBridge{turnStartCode: "TURN_BUSY"}
+		module, err := NewModule(t.TempDir(), bridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer module.Close()
+		ctx := context.Background()
+		created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+		assistant := created.Data["assistant"].(map[string]any)
+		id := assistant["assistantId"].(string)
+		module.clearPending(id)
+		if err := module.store.UpsertTask(ctx, Task{ID: "task-existing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-existing", Goal: "检查测试", Status: "running"}); err != nil {
+			t.Fatal(err)
+		}
+		bridge.mu.Lock()
+		bridge.calls, bridge.params = nil, nil
+		bridge.mu.Unlock()
+		module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: assistant["brainThreadId"].(string), Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-busy","tool":"start_task","arguments":{"deviceId":"exec-a","cwd":"/work","goal":"继续","prompt":"继续","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000312"}}`)})
+		tasks, _ := module.store.Tasks(ctx, id)
+		text := lastToolResult(t, bridge)
+		if len(tasks) != 1 || !strings.Contains(text, `"code":"TURN_BUSY"`) || !strings.Contains(text, "task-existing") || slices.Contains(bridge.calls, "thread.bootstrap") {
+			t.Fatalf("text=%s tasks=%+v calls=%v", text, tasks, bridge.calls)
+		}
+	})
+	t.Run("awaiting authorization", func(t *testing.T) {
+		bridge := &fakeModuleBridge{}
+		module, err := NewModule(t.TempDir(), bridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer module.Close()
+		ctx := context.Background()
+		created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+		assistant := created.Data["assistant"].(map[string]any)
+		id := assistant["assistantId"].(string)
+		module.clearPending(id)
+		if err := module.store.UpsertTask(ctx, Task{ID: "task-existing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-existing", Goal: "检查测试", Status: "awaiting_authorization"}); err != nil {
+			t.Fatal(err)
+		}
+		bridge.mu.Lock()
+		bridge.calls, bridge.params = nil, nil
+		bridge.mu.Unlock()
+		module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: assistant["brainThreadId"].(string), Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-wait","tool":"start_task","arguments":{"deviceId":"exec-a","cwd":"/work","goal":"继续","prompt":"继续","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000313"}}`)})
+		text := lastToolResult(t, bridge)
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		if slices.Contains(bridge.calls, "turn.start") || slices.Contains(bridge.calls, "thread.bootstrap") || !strings.Contains(text, "TURN_BUSY") || !strings.Contains(text, "awaiting_authorization") {
+			t.Fatalf("text=%s calls=%v", text, bridge.calls)
+		}
+	})
+	t.Run("ask mode still enforces execution policy", func(t *testing.T) {
+		policy := false
+		bridge := &fakeModuleBridge{executionPolicy: &policy}
+		module, err := NewModule(t.TempDir(), bridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer module.Close()
+		ctx := context.Background()
+		created := module.Handle(ctx, "puck.create", mustJSON(map[string]any{"name": "Helper", "brainDeviceId": "brain-a", "permissionMode": "ask", "allowedScope": map[string]any{"exec-a": []string{"/work"}}}))
+		assistant := created.Data["assistant"].(map[string]any)
+		id := assistant["assistantId"].(string)
+		module.clearPending(id)
+		if err := module.store.UpsertTask(ctx, Task{ID: "task-existing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-existing", Goal: "检查测试", Status: "attention"}); err != nil {
+			t.Fatal(err)
+		}
+		bridge.mu.Lock()
+		bridge.calls = nil
+		bridge.mu.Unlock()
+		module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: assistant["brainThreadId"].(string), Name: "puck.brain.toolCall", Payload: json.RawMessage(`{"callId":"call-b10","tool":"start_task","arguments":{"deviceId":"exec-a","cwd":"/work","goal":"继续","prompt":"继续检查","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000314"}}`)})
+		var rules string
+		if err := module.store.db.QueryRow(`SELECT rules_hit FROM authorizations WHERE assistant_id=?`, id).Scan(&rules); err != nil {
+			t.Fatal(err)
+		}
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		if !strings.Contains(rules, "B10") || slices.Contains(bridge.calls, "turn.start") || slices.Contains(bridge.calls, "thread.bootstrap") {
+			t.Fatalf("rules=%s calls=%v", rules, bridge.calls)
+		}
+	})
+	t.Run("self target stays denied", func(t *testing.T) {
+		bridge := &fakeModuleBridge{}
+		module, err := NewModule(t.TempDir(), bridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer module.Close()
+		ctx := context.Background()
+		created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+		assistant := created.Data["assistant"].(map[string]any)
+		id := assistant["assistantId"].(string)
+		module.clearPending(id)
+		cwd := "/agent-managed/puck/" + id + "/job"
+		if err := module.store.UpsertTask(ctx, Task{ID: "task-self", AssistantID: id, DeviceID: "exec-a", CWD: cwd, NativeThreadID: "exec-thread-self", Goal: "不要打到 brain", Status: "running"}); err != nil {
+			t.Fatal(err)
+		}
+		bridge.mu.Lock()
+		bridge.calls, bridge.params = nil, nil
+		bridge.mu.Unlock()
+		module.handleBrainEvent(ctx, relay.BrainEvent{AssistantID: id, DeviceID: "brain-a", ThreadID: assistant["brainThreadId"].(string), Name: "puck.brain.toolCall", Payload: mustJSON(map[string]any{"callId": "call-self", "tool": "start_task", "arguments": map[string]any{"deviceId": "exec-a", "cwd": cwd, "goal": "继续", "prompt": "继续", "riskTags": []string{}, "clientTaskId": "00000000-0000-4000-8000-000000000315"}})})
+		text := lastToolResult(t, bridge)
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		if !strings.Contains(text, "PUCK_SELF_TARGET") || slices.Contains(bridge.calls, "turn.start") || slices.Contains(bridge.calls, "thread.bootstrap") {
+			t.Fatalf("text=%s calls=%v", text, bridge.calls)
+		}
+	})
+}
+
+func lastToolResult(t *testing.T, bridge *fakeModuleBridge) string {
+	t.Helper()
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	for i := len(bridge.calls) - 1; i >= 0; i-- {
+		if bridge.calls[i] != "puck.brain.toolResult" {
+			continue
+		}
+		var params struct {
+			ContentItems []struct {
+				Text string `json:"text"`
+			} `json:"contentItems"`
+		}
+		if json.Unmarshal(bridge.params[i], &params) != nil || len(params.ContentItems) == 0 {
+			t.Fatalf("tool result=%s", bridge.params[i])
+		}
+		return params.ContentItems[0].Text
+	}
+	t.Fatal("missing tool result")
+	return ""
 }

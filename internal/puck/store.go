@@ -54,6 +54,7 @@ type Message struct {
 
 type Task struct {
 	ID, AssistantID, SourceMessageID, DeviceID, CWD, NativeThreadID, Goal, Status, RiskTags, CreatedBy, LastTurnID, LastSeenRevision, LastSummary string
+	UpdatedAt                                                                                                                                     time.Time `json:"-"`
 }
 
 type Authorization struct {
@@ -526,7 +527,7 @@ func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Mes
 func (s *Store) UpsertTask(ctx context.Context, task Task) error {
 	now := nowText(time.Time{})
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=excluded.last_turn_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=excluded.last_turn_id,source_message_id=excluded.source_message_id,last_seen_revision=excluded.last_seen_revision,last_summary=excluded.last_summary,updated_at=excluded.updated_at
         WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
 	return s.changed(err)
 }
@@ -541,6 +542,25 @@ func (s *Store) TaskBySourceMessage(ctx context.Context, assistantID, sourceMess
 	var task Task
 	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND source_message_id=?`, assistantID, sourceMessageID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
 	return task, err
+}
+
+func (s *Store) TasksByActivity(ctx context.Context, assistantID string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary,updated_at FROM tasks WHERE assistant_id=? ORDER BY updated_at DESC, task_id DESC`, assistantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tasks []Task
+	for rows.Next() {
+		var task Task
+		var updated string
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary, &updated); err != nil {
+			return nil, err
+		}
+		task.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
 }
 
 func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
