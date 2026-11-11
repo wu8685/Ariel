@@ -126,6 +126,7 @@ type fakeBackend struct {
 	foreign    bool
 	readOnly   bool
 	watches    []string
+	finished   []string
 }
 
 func (f *fakeBackend) Authorize(_ context.Context, _ string, action Action) (string, error) {
@@ -196,6 +197,22 @@ func (f *fakeBackend) SaveWatch(_ context.Context, _, deviceID, threadID, _ stri
 }
 func (f *fakeBackend) ReadOnlyThread(context.Context, string, string, string) (bool, error) {
 	return f.readOnly, nil
+}
+func (f *fakeBackend) FinishTask(_ context.Context, assistantID, taskID string, finish TaskFinish) (TaskFinishResult, error) {
+	task, ok := f.tasks[taskID]
+	if !ok || task.AssistantID != assistantID {
+		return TaskFinishResult{}, ErrNotFound
+	}
+	if f.access == "PUCK_SELF_TARGET" {
+		return TaskFinishResult{}, FinishError{Code: "PUCK_SELF_TARGET"}
+	}
+	if task.Status == "archived" {
+		return TaskFinishResult{Task: task, AlreadyArchived: true}, nil
+	}
+	task.Status = "archived"
+	f.tasks[taskID] = task
+	f.finished = append(f.finished, taskID+":"+finish.Outcome)
+	return TaskFinishResult{Task: task, ClosedWatches: len(f.watches), ClosedWakes: 1}, nil
 }
 
 func TestStartTaskIsIdempotentAndUnknownIsNeverReplayed(t *testing.T) {
@@ -818,5 +835,42 @@ func TestGetTaskStatusUsesLiveThreadInsteadOfStaleRow(t *testing.T) {
 		if method == "turn.start" || method == "thread.bootstrap" {
 			t.Fatalf("status read executed a turn: %v", orchestrator.calls)
 		}
+	}
+}
+
+func TestFinishTaskArchivesWithoutExecutionOrAuthorization(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	backend := &fakeBackend{tasks: map[string]Task{
+		"task-a": {ID: "task-a", AssistantID: "assistant-a", DeviceID: "exec-a", NativeThreadID: "thread-a", Status: "review"},
+	}, watches: []string{"exec-a/thread-a"}}
+	handler := New(orchestrator, backend)
+	result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "finish_task", Arguments: json.RawMessage(`{"taskId":"task-a","outcome":"completed","note":"git push origin main"}`)})
+	if !result.Success || result.Data["status"] != "archived" || result.Data["alreadyArchived"] != false || len(orchestrator.calls) != 0 || len(backend.authorized) != 0 {
+		t.Fatalf("result=%+v calls=%v authorized=%v", result, orchestrator.calls, backend.authorized)
+	}
+	if backend.tasks["task-a"].Status != "archived" || !strings.Contains(backend.finished[0], "completed") {
+		t.Fatalf("stored=%+v finished=%v", backend.tasks["task-a"], backend.finished)
+	}
+	again := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "finish_task", Arguments: json.RawMessage(`{"taskId":"task-a","outcome":"completed"}`)})
+	if !again.Success || again.Data["alreadyArchived"] != true || len(orchestrator.calls) != 0 {
+		t.Fatalf("again=%+v calls=%v", again, orchestrator.calls)
+	}
+	missing := handler.Execute(context.Background(), Call{AssistantID: "assistant-b", Tool: "finish_task", Arguments: json.RawMessage(`{"taskId":"task-a","outcome":"cancelled"}`)})
+	if missing.Success || missing.Code != "PUCK_ASSISTANT_NOT_FOUND" {
+		t.Fatalf("missing=%+v", missing)
+	}
+	self := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{
+		"task-brain": {ID: "task-brain", AssistantID: "assistant-a", NativeThreadID: "brain-thread", Status: "running"},
+	}, access: "PUCK_SELF_TARGET"})
+	refused := self.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "finish_task", Arguments: json.RawMessage(`{"taskId":"task-brain","outcome":"failed"}`)})
+	if refused.Success || refused.Code != "PUCK_SELF_TARGET" || len(self.orchestrator.(*fakeOrchestrator).calls) != 0 {
+		t.Fatalf("refused=%+v", refused)
+	}
+	invalid := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "finish_task", Arguments: json.RawMessage(`{"taskId":"task-a","outcome":"delete-history"}`)})
+	if invalid.Success || invalid.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("invalid=%+v", invalid)
+	}
+	if taskReusable(Task{ID: "task-a", NativeThreadID: "thread-a", Status: "archived"}) {
+		t.Fatal("archived task stayed reusable")
 	}
 }

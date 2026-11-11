@@ -90,7 +90,24 @@ type Backend interface {
 	ForeignThread(context.Context, string, string, string) (bool, error)
 	SaveWatch(context.Context, string, string, string, string) (string, error)
 	ReadOnlyThread(context.Context, string, string, string) (bool, error)
+	FinishTask(context.Context, string, string, TaskFinish) (TaskFinishResult, error)
 }
+
+type TaskFinish struct {
+	Outcome, Note string
+}
+
+type TaskFinishResult struct {
+	Task                       Task
+	ClosedWatches, ClosedWakes int
+	AlreadyArchived            bool
+}
+
+type FinishError struct {
+	Code string
+}
+
+func (e FinishError) Error() string { return e.Code }
 
 type Handler struct {
 	orchestrator Orchestrator
@@ -174,6 +191,8 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		} else {
 			result = ToolResult{Success: true}
 		}
+	case "finish_task":
+		result = h.finishTask(ctx, call)
 	default:
 		result = toolError("INVALID_ARGUMENT", "unknown Puck tool")
 	}
@@ -484,7 +503,7 @@ func taskReusable(task Task) bool {
 		return false
 	}
 	switch task.Status {
-	case "failed_dispatch", "cancelled":
+	case "failed_dispatch", "cancelled", "archived":
 		return false
 	default:
 		return true
@@ -773,6 +792,28 @@ func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
 	return ToolResult{Success: true, Data: map[string]any{"watchId": watchID, "deviceId": input.DeviceID, "threadId": input.ThreadID, "watching": true, "watchOnly": true}}
+}
+
+func (h *Handler) finishTask(ctx context.Context, call Call) ToolResult {
+	input, details := toolcontract.DecodeFinishTask(call.Arguments)
+	if len(details) != 0 {
+		return invalidArguments("invalid finish_task arguments", details)
+	}
+	finished, err := h.backend.FinishTask(ctx, call.AssistantID, input.TaskID, TaskFinish{Outcome: input.Outcome, Note: input.Note})
+	if err != nil {
+		var coded FinishError
+		if errors.As(err, &coded) {
+			return toolError(coded.Code, "finish_task was refused")
+		}
+		if errors.Is(err, ErrNotFound) {
+			return toolError("PUCK_ASSISTANT_NOT_FOUND", "task not found")
+		}
+		return toolError("PUCK_UNAVAILABLE", "finish_task failed")
+	}
+	return ToolResult{Success: true, Data: map[string]any{
+		"taskId": finished.Task.ID, "status": finished.Task.Status, "outcome": input.Outcome,
+		"closedWatches": finished.ClosedWatches, "closedWakes": finished.ClosedWakes, "alreadyArchived": finished.AlreadyArchived,
+	}}
 }
 
 func (h *Handler) requestAuthorization(ctx context.Context, call Call) ToolResult {

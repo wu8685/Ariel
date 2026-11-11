@@ -796,7 +796,7 @@ func TestUpdatedDescriptionIsIncludedInNextTrustedTurn(t *testing.T) {
 }
 
 func TestBrainInstructionsRequireToolCallInSameTurnAndForbidDuplicateStart(t *testing.T) {
-	instructions := brainInstructions("assistant-a", "Helper", "检查任务")
+	instructions := brainInstructions("assistant-a", "Helper", "检查任务", "", currentToolsetVersion)
 	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task", "没有正在监听时，只能在用户再次询问时汇报，不得承诺主动通知", "watch_thread"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("brain instructions missing %q", required)
@@ -1455,7 +1455,7 @@ func TestDeletedAssistantIgnoresQueuedBrainToolCall(t *testing.T) {
 }
 
 func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
-	got := brainInstructions("assistant-a", "小帕", "开发助理")
+	got := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
 	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "不得尝试本地 shell 或 exec", "code_mode_host", "直接调用 Puck tool"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions missing %q:\n%s", want, got)

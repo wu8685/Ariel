@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPuckProtocolExtensionsAreOptionalAndBounded(t *testing.T) {
 	valid := []string{
@@ -31,6 +34,8 @@ func TestPuckProtocolExtensionsAreOptionalAndBounded(t *testing.T) {
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"pumpkin","color":"#ff2f92"}}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"star","color":"blue","image":"https://cdn.example.test/bot.png"}}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.create","params":{"name":"Helper","brainDeviceId":"device-a","permissionMode":"full"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.create","params":{"name":"Helper","brainDeviceId":"device-a","customContext":"先给结论"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","customContext":"周末只处理紧急事项"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000002","deviceId":"relay","method":"puck.authorization.decide","params":{"assistantId":"assistant-a","authorizationId":"auth-a","decision":"approve_always"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000003","deviceId":"relay","method":"puck.authorization.rule.list","params":{"assistantId":"assistant-a"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000004","deviceId":"relay","method":"puck.authorization.rule.revoke","params":{"assistantId":"assistant-a","ruleId":"rule-a"}}`,
@@ -72,6 +77,7 @@ func TestPuckProtocolRejectsIdentityAndShapeConfusion(t *testing.T) {
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"octagon","color":"#ff2f92"}}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","avatar":{"shape":"star","color":"pink"}}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","permissionMode":"root"}}`,
+		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.update","params":{"assistantId":"assistant-a","customContext":"` + strings.Repeat("字", 4001) + `"}}`,
 		`{"type":"request","v":1,"requestId":"00000000-0000-4000-8000-000000000001","deviceId":"relay","method":"puck.message.react","params":{"assistantId":"assistant-a","messageId":"message-a","emoji":"🔥"}}`,
 		`{"type":"event","v":1,"event":"puck.brain.toolCall","deviceId":"device-a","assistantId":"spoofed","threadId":"thread-a","callId":"call-a","tool":"start_task","arguments":{}}`,
 		`{"type":"event","v":1,"event":"puck.brain.toolCall","deviceId":"device-a","threadId":"thread-a","callId":"call-a","tool":"start_task","arguments":"not-object"}`,

@@ -12,7 +12,7 @@ import (
 )
 
 func TestMutationSchemasAreStrictAndMachineReadable(t *testing.T) {
-	for _, name := range []string{"start_task", "send_turn", "ask_user", "share_result", "request_authorization"} {
+	for _, name := range []string{"start_task", "send_turn", "ask_user", "share_result", "request_authorization", "finish_task"} {
 		definition, ok := DefinitionFor(Version, name)
 		if !ok {
 			t.Fatalf("missing definition for %s", name)
@@ -216,6 +216,30 @@ func TestRejectionDiagnosticBoundsMalformedAndDeepArguments(t *testing.T) {
 	encoded, _ = json.Marshal(RejectionDiagnostic("ask_user", marshal(wide), nil))
 	if len(encoded) > 8192 || strings.Contains(string(encoded), "privateprivate") {
 		t.Fatalf("wide diagnostic is unsafe or unbounded: %d", len(encoded))
+	}
+}
+
+func TestFinishTaskArrivesWithToolsetEight(t *testing.T) {
+	for _, tool := range DynamicTools(7) {
+		if tool["name"] == "finish_task" {
+			t.Fatal("toolset 7 advertised finish_task")
+		}
+	}
+	found := false
+	for _, tool := range DynamicTools(8) {
+		if tool["name"] == "finish_task" {
+			found = true
+			schema := tool["inputSchema"].(map[string]any)
+			if schema["additionalProperties"] != false {
+				t.Fatalf("schema=%+v", schema)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("toolset 8 missing finish_task")
+	}
+	if _, details := DecodeFinishTask(json.RawMessage(`{"taskId":"task-a","outcome":"completed","extra":true}`)); len(details) != 1 || details[0].Field != "extra" {
+		t.Fatalf("details=%+v", details)
 	}
 }
 

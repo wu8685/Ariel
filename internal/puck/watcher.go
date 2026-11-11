@@ -462,11 +462,18 @@ func taskEventEnvelope(assistant Assistant, wake BrainWake) string {
 	if wake.WatchOnly {
 		mode = "watch_only"
 	}
+	cleanup := "若需要关掉你启动的定时或周期检查，只能用已经声明的 send_turn。不要调用尚未声明的工具，也不要删除聊天记录。"
+	if wake.WatchOnly {
+		cleanup = "watch_only 时不要调用 send_turn、start_task 或 finish_task。只读监听由 Puck 在通知后关闭，自定义上下文不能改写这套订阅。"
+	} else if assistant.ToolsetVersion >= finishTaskToolset {
+		cleanup = "若用户交代的事已经有明确结果，先用 send_turn 取消该执行会话里由你启动的定时或周期任务，再调用 finish_task。review 只表示这一轮结束；工作还没做完时不要 finish_task。不要删除聊天记录。"
+	}
 	return "PUCK_ENVELOPE assistant=" + assistant.ID + " nonce=" + newUUID() + " kind=task_event\n" +
 		"这是系统产生的任务事件，不是用户新消息。不要执行用户没有要求的新动作。\n" +
 		"taskId=" + wake.TaskKey + "\n" +
 		"status=" + wake.Status + "\n" +
 		"watch=" + mode + "\n" +
 		"summary=" + wake.Summary + "\n" +
-		"这是一个新的结果。请用一句简短中文告诉用户，不要重复已经说过的话。watch_only 时不要调用 send_turn 或 start_task。若这没有新的结果，最终回复只写 PUCK_SILENT，不要写别的字；那条回复不会出现在对话里。review 只表示这一轮结束，不等于任务完成。"
+		"这是一个新的结果。请用一句简短中文告诉用户，不要重复已经说过的话。watch_only 时不要调用 send_turn 或 start_task。若这没有新的结果，最终回复只写 PUCK_SILENT，不要写别的字；那条回复不会出现在对话里。review 只表示这一轮结束，不等于任务完成。\n" +
+		cleanup + "\n" + envelopeContext(assistant)
 }

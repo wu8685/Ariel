@@ -395,6 +395,38 @@ describe("PuckWorkspace", () => {
     expect(processing!.querySelector(".puck-avatar")).toBeTruthy();
   });
 
+  it("sets custom context when creating a bot and again from the config panel", async () => {
+    let assistants: Record<string, unknown>[] = [];
+    const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+      if (method === "puck.list") return accepted({ assistants });
+      if (method === "puck.history" || method === "puck.read" || method === "puck.authorization.rule.list") return accepted({ messages: [], rules: [], unreadCount: 0 });
+      if (method === "puck.create") {
+        const assistant = { assistantId: "a-1", name: params.name, customContext: params.customContext, brainDeviceId: "brain-a", status: "ready" };
+        assistants = [assistant];
+        return accepted({ assistant });
+      }
+      if (method === "puck.update") {
+        assistants = assistants.map(item => item.assistantId === params.assistantId ? { ...item, ...params } : item);
+        return accepted({ assistant: assistants.find(item => item.assistantId === params.assistantId) });
+      }
+      return accepted({});
+    });
+    render(<PuckWorkspace request={request} state="ready" devices={[{ deviceId: "brain-a", name: "Mac mini", capabilities: { puckBrainReady: true } }]} />);
+    await screen.findByText("创建你的第一个助理");
+    fireEvent.click(screen.getAllByRole("button", { name: "新建助理" }).at(-1)!);
+    fireEvent.change(screen.getByLabelText("助理名称"), { target: { value: "小帕" } });
+    fireEvent.change(screen.getByLabelText("自定义上下文"), { target: { value: "先给结论" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await screen.findByText("先给结论");
+    expect(request).toHaveBeenCalledWith("puck.create", "relay", expect.objectContaining({ name: "小帕", customContext: "先给结论", brainDeviceId: "brain-a" }));
+    openBotConfig(/小帕/);
+    fireEvent.click(screen.getByRole("button", { name: "编辑自定义上下文" }));
+    fireEvent.change(screen.getByLabelText("自定义上下文"), { target: { value: "周末只处理紧急事项" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存自定义上下文" }));
+    await screen.findByText("周末只处理紧急事项");
+    expect(request).toHaveBeenCalledWith("puck.update", "relay", { assistantId: "a-1", customContext: "周末只处理紧急事项" });
+  });
+
   it("creates an assistant and shows an immediate processing bubble when sending", async () => {
     let assistants: Record<string, unknown>[] = [];
     let resolveHistory: (() => void) | undefined;

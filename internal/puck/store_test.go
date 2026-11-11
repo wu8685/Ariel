@@ -220,7 +220,7 @@ func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 		}
 		columns[name] = true
 	}
-	if !columns["unread_count"] || !columns["last_message_preview"] {
+	if !columns["unread_count"] || !columns["last_message_preview"] || !columns["custom_context"] {
 		t.Fatalf("columns=%v", columns)
 	}
 	for table, column := range map[string]string{"tasks": "source_message_id", "authorizations": "source_message_id"} {
@@ -232,6 +232,35 @@ func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 	var replyToCount int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name='reply_to'`).Scan(&replyToCount); err != nil || replyToCount != 1 {
 		t.Fatalf("conversation_messages.reply_to count=%d err=%v", replyToCount, err)
+	}
+}
+
+func TestStoreMigratesCustomContextFromV9(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "puck-v9.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TABLE assistants (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+		INSERT INTO assistants(id, name) VALUES ('assistant-a', 'Puck');
+		PRAGMA user_version = 9`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('assistants') WHERE name='custom_context'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("custom_context count=%d err=%v", count, err)
+	}
+	var custom string
+	if err := store.db.QueryRow(`SELECT custom_context FROM assistants WHERE id='assistant-a'`).Scan(&custom); err != nil || custom != "" {
+		t.Fatalf("custom=%q err=%v", custom, err)
 	}
 }
 
@@ -257,6 +286,7 @@ func TestStoreMigratesV2TaskIdempotencyColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`
+		CREATE TABLE assistants (id TEXT PRIMARY KEY);
 		CREATE TABLE conversation_messages (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, role TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', card_json TEXT NOT NULL DEFAULT '', reaction TEXT NOT NULL DEFAULT '', work_summary TEXT NOT NULL DEFAULT '', brain_turn_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL);
 		CREATE TABLE authorizations (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, status TEXT NOT NULL);
