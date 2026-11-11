@@ -98,6 +98,23 @@ func (s *Store) ThreadWatch(ctx context.Context, assistantID, deviceID, threadID
 	return watch, err
 }
 
+func (s *Store) ThreadWatches(ctx context.Context, assistantID string) ([]ThreadWatch, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,device_id,thread_id,status,last_turn_id,last_summary,notified_key,until_text FROM thread_watches WHERE assistant_id=? ORDER BY updated_at DESC, id`, assistantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var watches []ThreadWatch
+	for rows.Next() {
+		var watch ThreadWatch
+		if err := rows.Scan(&watch.ID, &watch.AssistantID, &watch.DeviceID, &watch.ThreadID, &watch.Status, &watch.LastTurnID, &watch.LastSummary, &watch.NotifiedKey, &watch.Until); err != nil {
+			return nil, err
+		}
+		watches = append(watches, watch)
+	}
+	return watches, rows.Err()
+}
+
 func (s *Store) ActiveThreadWatches(ctx context.Context) ([]ThreadWatch, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT thread_watches.id,thread_watches.assistant_id,thread_watches.device_id,thread_watches.thread_id,thread_watches.status,thread_watches.last_turn_id,thread_watches.last_summary,thread_watches.notified_key,thread_watches.until_text
 		FROM thread_watches JOIN assistants ON assistants.id=thread_watches.assistant_id

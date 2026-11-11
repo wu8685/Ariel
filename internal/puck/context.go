@@ -11,6 +11,7 @@ const maxCustomContextRunes = 4000
 
 const finishTaskToolset = 8
 const sendMessageToolset = 9
+const handoffToolset = 10
 
 func normalizeCustomContext(raw string) (string, error) {
 	text := strings.TrimSpace(raw)
@@ -86,7 +87,7 @@ func brainInstructions(id, name, description, custom string, toolset int) string
 - 你开的子会话会被自动监听，已有会话用 watch_thread 盯。子会话出结果会叫醒你一次，你决定要不要告诉机主。多个子会话由你汇总。
 - 被叫醒或定时触发时，没有值得说的结果就只回复 PUCK_SILENT。
 - 只有监听或定时已经建好后，才能答应机主“到时通知你”。
-
+%s
 收尾
 任务有明确结果（完成、失败、被叫停、子会话被删）后：
 1. 关掉你建的定时任务。子会话里的用 send_turn 让它关；子会话已不存在就跳过。
@@ -94,7 +95,14 @@ func brainInstructions(id, name, description, custom string, toolset int) string
 未验证的事不要说成已完成。
 
 【机主自定义上下文（优先级低于以上内容）】
-%s`, intro, slimCustomContext(custom))
+%s`, intro, handoffPromptLine(toolset), slimCustomContext(custom))
+}
+
+func handoffPromptLine(toolset int) string {
+	if toolset < handoffToolset {
+		return ""
+	}
+	return "- 交接时 Puck 会自动附上用户原话和被引用的会话；写下目标和判断，不要改写用户的原话。"
 }
 
 func legacyBrainInstructions(id, name, description, custom string, toolset int) string {

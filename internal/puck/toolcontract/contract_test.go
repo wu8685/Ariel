@@ -383,6 +383,35 @@ func TestSendTurnValidationMatrix(t *testing.T) {
 	}
 }
 
+func TestHandoffReferencesAreOptionalOnTheCurrentToolset(t *testing.T) {
+	current, ok := DefinitionFor(Version, "start_task")
+	if !ok {
+		t.Fatal("missing start_task")
+	}
+	properties, _ := current.InputSchema["properties"].(map[string]any)
+	if _, found := properties["includeMessages"]; !found {
+		t.Fatal("current start_task schema missing includeMessages")
+	}
+	if _, found := properties["referenceThreads"]; !found {
+		t.Fatal("current start_task schema missing referenceThreads")
+	}
+	previous, ok := DefinitionFor(Version-1, "send_turn")
+	if !ok {
+		t.Fatal("missing previous send_turn")
+	}
+	oldProperties, _ := previous.InputSchema["properties"].(map[string]any)
+	if _, found := oldProperties["referenceThreads"]; found {
+		t.Fatal("previous toolset advertised referenceThreads")
+	}
+	start, details := DecodeStartTask(json.RawMessage(`{"deviceId":"exec-a","cwd":"/fixture","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001","referenceThreads":["11111111-1111-4111-8111-111111111111"],"includeMessages":["message-a"]}`))
+	if len(details) != 0 || len(start.ReferenceThreads) != 1 || start.IncludeMessages[0] != "message-a" {
+		t.Fatalf("start=%+v details=%+v", start, details)
+	}
+	if _, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002","referenceThreads":null}`)); len(details) == 0 {
+		t.Fatal("null referenceThreads was accepted")
+	}
+}
+
 func TestStartTaskDescriptionDelegatesAuthorizationToRelay(t *testing.T) {
 	definition, ok := DefinitionFor(Version, "start_task")
 	if !ok || !strings.Contains(definition.Description, "授权由 Relay") || !strings.Contains(definition.Description, "无论") {

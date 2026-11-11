@@ -110,6 +110,18 @@ func TestCustomContextStaysBelowSystemSafetyRules(t *testing.T) {
 	}
 }
 
+func TestHandoffPromptAddsOneLineOnlyOnTheCurrentToolset(t *testing.T) {
+	line := "交接时 Puck 会自动附上用户原话和被引用的会话；写下目标和判断，不要改写用户的原话。"
+	current := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
+	previous := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion-1)
+	if strings.Count(current, line) != 1 {
+		t.Fatalf("current toolset prompt lines=%d", strings.Count(current, line))
+	}
+	if strings.Contains(previous, line) || strings.Contains(envelopeContext(Assistant{Name: "小帕", ToolsetVersion: currentToolsetVersion}), line) {
+		t.Fatal("handoff prompt leaked into the previous toolset or the per-turn envelope")
+	}
+}
+
 func TestCustomContextRejectsTextPastTheLimit(t *testing.T) {
 	module, err := NewModule(t.TempDir(), &fakeModuleBridge{})
 	if err != nil {

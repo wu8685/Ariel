@@ -11,6 +11,7 @@ import (
 type fakeOrchestrator struct {
 	calls   []string
 	origins []Origin
+	params  []json.RawMessage
 	fn      func(string, json.RawMessage) Result
 }
 
@@ -20,6 +21,7 @@ func (f *fakeOrchestrator) Devices() []map[string]any {
 func (f *fakeOrchestrator) Forward(_ context.Context, origin Origin, _ string, method string, params json.RawMessage) Result {
 	f.calls = append(f.calls, method)
 	f.origins = append(f.origins, origin)
+	f.params = append(f.params, append(json.RawMessage(nil), params...))
 	if f.fn != nil {
 		return f.fn(method, params)
 	}
@@ -127,6 +129,8 @@ type fakeBackend struct {
 	readOnly   bool
 	watches    []string
 	finished   []string
+	handoff    Handoff
+	handoffErr error
 }
 
 func (f *fakeBackend) Authorize(_ context.Context, _ string, action Action) (string, error) {
@@ -202,6 +206,9 @@ func (f *fakeBackend) PostNotice(context.Context, string, string, string) (strin
 	return "notice-1", nil
 }
 func (f *fakeBackend) NoteThreadGone(context.Context, string, string, string) error { return nil }
+func (f *fakeBackend) HandoffContext(context.Context, HandoffQuery) (Handoff, error) {
+	return f.handoff, f.handoffErr
+}
 func (f *fakeBackend) FinishTask(_ context.Context, assistantID, taskID string, finish TaskFinish) (TaskFinishResult, error) {
 	task, ok := f.tasks[taskID]
 	if !ok || task.AssistantID != assistantID {
@@ -428,7 +435,7 @@ func TestStartTaskUsesAtomicBootstrapAdapter(t *testing.T) {
 			t.Fatalf("method=%s", method)
 		}
 		var input struct{ CWD, ClientMessageID, Text string }
-		if json.Unmarshal(params, &input) != nil || input.CWD != "/work" || input.Text != "do it" || input.ClientMessageID != "00000000-0000-4000-8000-000000000001" {
+		if json.Unmarshal(params, &input) != nil || input.CWD != "/work" || !strings.Contains(input.Text, "【Bot 对任务的理解】\ndo it\n") || !strings.Contains(input.Text, HandoffSentinel) || input.ClientMessageID != "00000000-0000-4000-8000-000000000001" {
 			t.Fatalf("params=%s", params)
 		}
 		return Result{Outcome: "accepted", Data: map[string]any{"threadId": "thread-a", "turnId": "turn-a"}}
@@ -564,7 +571,7 @@ func TestStartTaskReusesSameDeviceAndCwd(t *testing.T) {
 		if method == "thread.bootstrap" {
 			t.Fatalf("follow-up created a thread: %s", params)
 		}
-		if method != "turn.start" || !strings.Contains(string(params), `"threadId":"thread-old"`) || !strings.Contains(string(params), `"text":"继续修失败测试"`) {
+		if method != "turn.start" || !strings.Contains(string(params), `"threadId":"thread-old"`) || !strings.Contains(string(params), "继续修失败测试") || !strings.Contains(string(params), HandoffSentinel) {
 			t.Fatalf("method=%s params=%s", method, params)
 		}
 		return Result{Outcome: "accepted", Data: map[string]any{"turnId": "turn-follow"}}
@@ -878,3 +885,52 @@ func TestFinishTaskArchivesWithoutExecutionOrAuthorization(t *testing.T) {
 		t.Fatal("archived task stayed reusable")
 	}
 }
+
+func TestStartTaskHandoffIsVerbatimOnceAndMarksTruncation(t *testing.T) {
+	threadID := "11111111-1111-4111-8111-111111111111"
+	user := "原话一字不差。" + strings.Repeat("长", MaxHandoffUserRunes) + "USER_TAIL_OMITTED"
+	conclusion := "最终结论：可以按方案 B 发布。" + strings.Repeat("结", MaxHandoffConclusionRunes) + "CONCLUSION_TAIL_OMITTED"
+	orchestrator := &fakeOrchestrator{}
+	backend := &fakeBackend{tasks: map[string]Task{}, handoff: Handoff{
+		UserText: user,
+		Sessions: []HandoffSession{{
+			Title: "方案讨论", DeviceName: "执行机", DeviceID: "exec-a", CWD: "/work/watched",
+			ThreadID: threadID, Status: "closed", Outcome: "review", Conclusion: conclusion,
+		}},
+	}}
+	handler := New(orchestrator, backend)
+	call := Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work/new","goal":"落地","prompt":"我理解为要在新目录实现发布步骤。","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000201"}`)}
+	first := handler.Execute(context.Background(), call)
+	second := handler.Execute(context.Background(), call)
+	if !first.Success || !second.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" {
+		t.Fatalf("first=%+v second=%+v calls=%v", first, second, orchestrator.calls)
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(orchestrator.params[0], &payload) != nil {
+		t.Fatal("bootstrap payload")
+	}
+	pack := payload.Text
+	if strings.Count(pack, HandoffSentinel) != 1 || !strings.HasPrefix(pack, "【Bot 对任务的理解】\n我理解为要在新目录实现发布步骤。") {
+		t.Fatalf("pack did not keep the brain instruction first: %s", pack)
+	}
+	for _, want := range []string{"原话一字不差。", "最终结论：可以按方案 B 发布。", "方案讨论", "/work/watched", "执行机", "codex://threads/" + threadID, "deviceId=exec-a threadId=" + threadID, "【Referenced sessions】"} {
+		if !strings.Contains(pack, want) {
+			t.Fatalf("missing %q in %s", want, pack)
+		}
+	}
+	if strings.Contains(pack, "USER_TAIL_OMITTED") || strings.Contains(pack, "CONCLUSION_TAIL_OMITTED") || strings.Count(pack, "已省略") < 2 {
+		t.Fatalf("truncation was not marked: %s", pack)
+	}
+	suffix := pack[strings.Index(pack, HandoffSentinel):]
+	if runeCount(suffix) > MaxHandoffRunes {
+		t.Fatalf("pack rune count=%d", runeCount(suffix))
+	}
+	again := AppendHandoff(pack, backend.handoff)
+	if again != pack || strings.Count(again, HandoffSentinel) != 1 {
+		t.Fatal("retry duplicated the handoff pack")
+	}
+}
+
+func runeCount(text string) int { return len([]rune(text)) }

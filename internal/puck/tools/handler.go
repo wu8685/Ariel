@@ -93,6 +93,7 @@ type Backend interface {
 	FinishTask(context.Context, string, string, TaskFinish) (TaskFinishResult, error)
 	PostNotice(context.Context, string, string, string) (string, error)
 	NoteThreadGone(context.Context, string, string, string) error
+	HandoffContext(context.Context, HandoffQuery) (Handoff, error)
 }
 
 type TaskFinish struct {
@@ -352,7 +353,23 @@ func (h *Handler) requestOrigin(ctx context.Context, call Call, authorized bool)
 }
 
 func (h *Handler) bootstrapStart(ctx context.Context, call Call, input toolcontract.StartTaskRequest, authorized bool) Result {
-	return h.orchestrator.Forward(ctx, h.requestOrigin(ctx, call, authorized), input.DeviceID, "thread.bootstrap", mustJSON(map[string]any{"cwd": input.CWD, "clientMessageId": input.ClientTaskID, "text": input.Prompt}))
+	text, failed := h.handoffText(ctx, call, input.Prompt, input.DeviceID, "", input.IncludeMessages, input.ReferenceThreads)
+	if failed.Code != "" {
+		return Result{Outcome: "rejected", Code: failed.Code, Message: failed.Message}
+	}
+	return h.orchestrator.Forward(ctx, h.requestOrigin(ctx, call, authorized), input.DeviceID, "thread.bootstrap", mustJSON(map[string]any{"cwd": input.CWD, "clientMessageId": input.ClientTaskID, "text": text}))
+}
+
+func (h *Handler) handoffText(ctx context.Context, call Call, instruction, deviceID, threadID string, includeMessages, referenceThreads []string) (string, ToolResult) {
+	handoff, err := h.backend.HandoffContext(ctx, HandoffQuery{
+		AssistantID: call.AssistantID, SourceMessageID: call.SourceMessageID,
+		TargetDeviceID: deviceID, TargetThreadID: threadID,
+		IncludeMessages: includeMessages, ReferenceThreads: referenceThreads,
+	})
+	if err != nil {
+		return "", toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	return AppendHandoff(instruction, handoff), ToolResult{}
 }
 
 func withTrustedStartTaskID(raw json.RawMessage, taskID string) json.RawMessage {
@@ -453,12 +470,19 @@ func (h *Handler) continueReusableTask(ctx context.Context, call Call, task Task
 	if tags == nil {
 		tags = []string{}
 	}
-	raw, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"taskId":          task.ID,
 		"text":            input.Prompt,
 		"riskTags":        tags,
 		"clientMessageId": reuseClientMessageID(call.AssistantID, call.SourceMessageID, task.ID, input.Prompt),
-	})
+	}
+	if len(input.IncludeMessages) > 0 {
+		payload["includeMessages"] = input.IncludeMessages
+	}
+	if len(input.ReferenceThreads) > 0 {
+		payload["referenceThreads"] = input.ReferenceThreads
+	}
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return toolError("PUCK_UNAVAILABLE", err.Error())
 	}
@@ -655,7 +679,11 @@ func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) Tool
 		requestOrigin.Trigger = "user_decision"
 	}
 	requestOrigin.PermissionMode = h.backend.PermissionMode(ctx, call.AssistantID)
-	params := mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientMessageID, "text": input.Text})
+	text, failed := h.handoffText(ctx, call, input.Text, deviceID, threadID, input.IncludeMessages, input.ReferenceThreads)
+	if failed.Code != "" {
+		return failed
+	}
+	params := mustJSON(map[string]any{"threadId": threadID, "clientMessageId": input.ClientMessageID, "text": text})
 	result := fromResult(h.orchestrator.Forward(ctx, requestOrigin, deviceID, "turn.start", params))
 	if result.Code == "NOT_FOUND" && deviceID != "" && threadID != "" {
 		_ = h.backend.NoteThreadGone(ctx, call.AssistantID, deviceID, threadID)

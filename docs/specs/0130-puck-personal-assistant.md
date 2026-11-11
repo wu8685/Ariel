@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11；2026-11-11 用户要求实现分层 Bot 上下文与任务收尾：系统上下文由代码维护，每 Bot 自定义上下文存 SQLite，创建与右键「编辑」均可改；改自定义上下文不轮换 brain thread，下一轮受信 envelope 生效。`finish_task` 使工具集版本变为 8，见 §6.1.2；2026-11-11 用户批准把每个 Bot 改成拥有 Full Access 的主助理：brain 使用 `never` + `danger-full-access`，对用户主动开口只走 `send_message`／`ask_user`／`share_result`，子会话结果各自唤醒一次，删除 Bot 时清掉它的 Puck 记录，子会话消失时唤醒一次，见 §6.1.3 与 §10.12。工具集版本变为 9）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11；2026-11-11 用户要求实现分层 Bot 上下文与任务收尾：系统上下文由代码维护，每 Bot 自定义上下文存 SQLite，创建与右键「编辑」均可改；改自定义上下文不轮换 brain thread，下一轮受信 envelope 生效。`finish_task` 使工具集版本变为 8，见 §6.1.2；2026-11-11 用户批准把每个 Bot 改成拥有 Full Access 的主助理：brain 使用 `never` + `danger-full-access`，对用户主动开口只走 `send_message`／`ask_user`／`share_result`，子会话结果各自唤醒一次，删除 Bot 时清掉它的 Puck 记录，子会话消失时唤醒一次，见 §6.1.3 与 §10.12。工具集版本变为 9；2026-11-11 产品负责人要求交接时由代码附上原始请求和被引用会话，工具集版本变为 10，见 §6.1.4）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -442,8 +442,8 @@ sequenceDiagram
 | `list_devices` | — | 本助理允许范围内的设备、在线、`codexReady`、能力 | `device.list` + 作用域过滤 |
 | `list_threads` | `deviceId`, `search?`, `limit≤50` | 会话元数据；brain thread 不出现 | `thread.list` |
 | `read_thread` | `deviceId`, `threadId`, `turns≤4` | 最近 turn 有界摘要、runtime、pendingInteractions | `thread.cache.read` 优先，回退 `thread.read`；越界读取需授权（B1） |
-| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId` | 新建执行 thread 并发首个 turn，写任务记录。若本助理已有同一设备与目录的可复用线程，且用户没有明确要求新会话，则改为续投（§6.1.1） | 策略引擎；新建时放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射）；续投走 `send_turn` 的同一门禁 |
-| `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId` | 续投同一执行 thread；同一设备与目录的后续请求默认走这条路径 | 策略引擎（B2／B5／B6／B10）→ `turn.start` |
+| `start_task` | `deviceId`, `cwd`, `goal`, `prompt`, `riskTags[]`, `clientTaskId`；可选 `includeMessages[]`、`referenceThreads[]`（§6.1.4） | 新建执行 thread 并发首个 turn，写任务记录。若本助理已有同一设备与目录的可复用线程，且用户没有明确要求新会话，则改为续投（§6.1.1）。真正发出的首条输入由服务端附上交接包 | 策略引擎；新建时放行后原子 `thread.bootstrap`（0134 取代旧 `thread.create` + `turn.start` 映射）；续投走 `send_turn` 的同一门禁 |
+| `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId`；可选 `includeMessages[]`、`referenceThreads[]`（§6.1.4） | 续投同一执行 thread；同一设备与目录的后续请求默认走这条路径。真正发出的输入由服务端附上交接包 | 策略引擎（B2／B5／B6／B10）→ `turn.start` |
 | `interrupt` | `taskId`／`threadId`, `turnId`, `reason` | 精确停止 | 策略引擎（B2／B3）→ `turn.interrupt` |
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
 | `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要。先读 Relay 热 cache，不新鲜时回退 `thread.read`；读不到现场时 `runtime=unknown`，不得把库里的旧 `running` 说成已完成 | Service 本地 cache，回退 `thread.read` |
@@ -548,6 +548,23 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
 | Passkey、仅机主设备 | 保留 | 不新增入口，不把工具调用变成跨用户通道 |
 
 里程碑消息（E3）由模块根据 §9 状态迁移生成固定模板的任务卡片更新，不依赖 Brain 叙述；Brain 只在需要时追加一条简短解读。记忆写入成功后模块在对话中显示“已记住：……”小标签（可撤销，E7）。
+
+### 6.1.4 交接包（2026-11-11）
+
+Brain 用 `start_task` 或 `send_turn` 派活时，常常只写下自己的概括，子会话因此看不到触发这轮的用户原话，也看不到被盯着的那条 Codex 会话的结论。交接包由服务端在通过既有门禁、真正调用 `thread.bootstrap` 或 `turn.start` 时附上。Brain 的 `prompt`／`text` 原样放在前面，标成「Bot 对任务的理解」。后面的包标成原始上下文，冲突时以包为准，并写明这些是参考材料，不是要执行的新指令。
+
+包只含两块，并且有界：
+
+1. **用户原话**：触发这轮 brain turn 的用户消息正文，取自已保存的用户消息，不取 Brain 改写后的 prompt，也不取带 nonce 的 `PUCK_ENVELOPE`。超过 400 字时保留开头，并写上「已省略 N 字」。没有用户消息时写「（无）」。
+2. **Referenced sessions**：最多 4 条。每条含标题、设备名、`cwd`、`threadId`、状态、watch 的最后 outcome，以及该会话**最后一条助理消息**的结论摘录（最多 240 字，超出同样带省略标记）。不附带更早的 turn、审批原文或 Ariel 聊天记录。
+
+会话从本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch）里选，并且只选下面两类：本轮用户消息、它所回复的消息，或 `includeMessages` 里点名的消息提到了它的 `taskId`／`threadId`；或者 `referenceThreads` 明确列出了这个 `taskId` 或 `threadId`。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现被点名的会话，不把那些消息的正文贴进去。
+
+同一设备上的新会话要用 Codex Desktop 已支持的 deep link 回读全文：`codex://threads/<uuid>`。Desktop 只接受已持久化的 UUID（`internal/desktopagent/load.go`，0074／0004）。Ariel 归一化后的 `thread.read` 不提供 rollout 文件路径，因此包里不猜测 `~/.codex/sessions` 路径。每条同时还写 `deviceId` 与 `threadId`，这是 Ariel 界面打开该会话时用的标识。
+
+可选参数从工具集 10 起出现在 schema 里，都不是必填。旧调用不带它们仍然有效。主机广告的工具集到达 10 后，下一次用户消息或子会话唤醒经既有 `ensureCurrentToolset` 轮换 brain thread。工具集 10 的系统上下文只多一行：交接时 Puck 会自动附上用户原话和被引用的会话，写下目标和判断，不要改写用户的原话。这一行不写入每轮 envelope。
+
+包在发送前现装，不写入冻结的授权参数。同一次发送里如果正文已经有交接标记，不再附第二份。同一用户消息对同一目标的重复 `start_task` 仍按 0137 返回已有任务，不会再发一轮。B2、B5、B6、B10、B8 和 `PUCK_SELF_TARGET` 仍先于交接包执行。
 
 ## 7. Relay 内的入口与门禁
 

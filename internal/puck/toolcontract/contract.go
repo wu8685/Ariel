@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 9
+const Version = 10
 const canonicalMutationToolVersion = 2
 
 const (
@@ -42,21 +42,25 @@ type FieldError struct {
 }
 
 type StartTaskRequest struct {
-	DeviceID     string   `json:"deviceId"`
-	CWD          string   `json:"cwd"`
-	Goal         string   `json:"goal"`
-	Prompt       string   `json:"prompt"`
-	RiskTags     []string `json:"riskTags"`
-	ClientTaskID string   `json:"clientTaskId"`
+	DeviceID         string   `json:"deviceId"`
+	CWD              string   `json:"cwd"`
+	Goal             string   `json:"goal"`
+	Prompt           string   `json:"prompt"`
+	RiskTags         []string `json:"riskTags"`
+	ClientTaskID     string   `json:"clientTaskId"`
+	IncludeMessages  []string `json:"includeMessages,omitempty"`
+	ReferenceThreads []string `json:"referenceThreads,omitempty"`
 }
 
 type SendTurnRequest struct {
-	TaskID          string   `json:"taskId,omitempty"`
-	DeviceID        string   `json:"deviceId,omitempty"`
-	ThreadID        string   `json:"threadId,omitempty"`
-	Text            string   `json:"text"`
-	RiskTags        []string `json:"riskTags"`
-	ClientMessageID string   `json:"clientMessageId"`
+	TaskID           string   `json:"taskId,omitempty"`
+	DeviceID         string   `json:"deviceId,omitempty"`
+	ThreadID         string   `json:"threadId,omitempty"`
+	Text             string   `json:"text"`
+	RiskTags         []string `json:"riskTags"`
+	ClientMessageID  string   `json:"clientMessageId"`
+	IncludeMessages  []string `json:"includeMessages,omitempty"`
+	ReferenceThreads []string `json:"referenceThreads,omitempty"`
 }
 
 type QuestionOption struct {
@@ -111,9 +115,9 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 	}
 	switch name {
 	case "start_task":
-		return Definition{Name: name, Description: "在指定设备和已存在的绝对 workspace 中创建执行任务，并原子发送首条输入。如果可信上下文里已有同一 deviceId 与 cwd 的可复用执行线程，应改调用 send_turn；即使用户没说新会话，Relay 也会把 start_task 续投到该线程。只有设备或目录不同、旧线程不可用，或用户明确要求新会话／独立任务时才新建。cwd 必须直接使用 list_threads/read_thread 返回的值或用户确认的路径，不得猜测 /workspace 等路径。taskId 由 Relay 分配，不要生成 clientTaskId。无论 Bot 是 Full Access 还是每次询问模式，只要需要目标 workspace 实际执行就调用；授权由 Relay 处理，调用本工具不代表绕过授权。", InputSchema: startTaskSchema()}, true
+		return Definition{Name: name, Description: "在指定设备和已存在的绝对 workspace 中创建执行任务，并原子发送首条输入。如果可信上下文里已有同一 deviceId 与 cwd 的可复用执行线程，应改调用 send_turn；即使用户没说新会话，Relay 也会把 start_task 续投到该线程。只有设备或目录不同、旧线程不可用，或用户明确要求新会话／独立任务时才新建。cwd 必须直接使用 list_threads/read_thread 返回的值或用户确认的路径，不得猜测 /workspace 等路径。taskId 由 Relay 分配，不要生成 clientTaskId。无论 Bot 是 Full Access 还是每次询问模式，只要需要目标 workspace 实际执行就调用；授权由 Relay 处理，调用本工具不代表绕过授权。", InputSchema: startTaskSchema(version)}, true
 	case "send_turn":
-		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。", InputSchema: sendTurnSchema()}, true
+		return Definition{Name: name, Description: "通过 Puck task 或显式设备与 thread 定位，发送一个幂等 follow-up turn。", InputSchema: sendTurnSchema(version)}, true
 	case "ask_user":
 		return Definition{Name: name, Description: "向用户展示结构化问题卡。通常只传 question 与 options；确需同时决定多个相关事项时才传 questions。必须使用本工具，不要调用 Codex request_user_input。", InputSchema: askUserSchema()}, true
 	case "share_result":
@@ -464,7 +468,7 @@ func DecodeStartTask(raw json.RawMessage) (StartTaskRequest, []FieldError) {
 	if detail != nil {
 		return value, []FieldError{*detail}
 	}
-	if details := rejectUnknown(fields, "deviceId", "cwd", "goal", "prompt", "riskTags", "clientTaskId"); len(details) != 0 {
+	if details := rejectUnknown(fields, "deviceId", "cwd", "goal", "prompt", "riskTags", "clientTaskId", "includeMessages", "referenceThreads"); len(details) != 0 {
 		return value, details
 	}
 	checks := []struct {
@@ -499,8 +503,17 @@ func DecodeStartTask(raw json.RawMessage) (StartTaskRequest, []FieldError) {
 		return value, fieldError("clientTaskId", "value has invalid format", checks[4].expected)
 	}
 	tags, details := decodeRiskTags(fields)
+	if len(details) != 0 {
+		return value, details
+	}
 	value.RiskTags = tags
-	return value, details
+	if details = decodeOptionalIDs(fields, "includeMessages", &value.IncludeMessages); len(details) != 0 {
+		return value, details
+	}
+	if details = decodeOptionalIDs(fields, "referenceThreads", &value.ReferenceThreads); len(details) != 0 {
+		return value, details
+	}
+	return value, nil
 }
 
 func DecodeSendTurn(raw json.RawMessage) (SendTurnRequest, []FieldError) {
@@ -509,7 +522,7 @@ func DecodeSendTurn(raw json.RawMessage) (SendTurnRequest, []FieldError) {
 	if detail != nil {
 		return value, []FieldError{*detail}
 	}
-	if details := rejectUnknown(fields, "taskId", "deviceId", "threadId", "text", "riskTags", "clientMessageId"); len(details) != 0 {
+	if details := rejectUnknown(fields, "taskId", "deviceId", "threadId", "text", "riskTags", "clientMessageId", "includeMessages", "referenceThreads"); len(details) != 0 {
 		return value, details
 	}
 	if detail := requiredString(fields, "text", &value.Text, "non-empty string with at most 65536 characters"); detail != nil {
@@ -547,6 +560,12 @@ func DecodeSendTurn(raw json.RawMessage) (SendTurnRequest, []FieldError) {
 	}
 	if value.TaskID == "" && value.ThreadID == "" {
 		return value, fieldError("threadId", "field is required with deviceId", "non-empty string with at most 128 characters")
+	}
+	if details = decodeOptionalIDs(fields, "includeMessages", &value.IncludeMessages); len(details) != 0 {
+		return value, details
+	}
+	if details = decodeOptionalIDs(fields, "referenceThreads", &value.ReferenceThreads); len(details) != 0 {
+		return value, details
 	}
 	return value, nil
 }
@@ -675,36 +694,74 @@ func riskTagsProperty() map[string]any {
 	return map[string]any{"type": "array", "maxItems": 8, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": values}}
 }
 
-func startTaskSchema() map[string]any {
+func decodeOptionalIDs(fields map[string]json.RawMessage, name string, target *[]string) []FieldError {
+	raw, ok := fields[name]
+	if !ok {
+		return nil
+	}
+	var values []string
+	if json.Unmarshal(raw, &values) != nil || values == nil {
+		return fieldError(name, "value has invalid type", "array of at most 8 strings")
+	}
+	if len(values) > 8 {
+		return fieldError(name, "too many values", "at most 8 strings")
+	}
+	for index, value := range values {
+		if strings.TrimSpace(value) == "" || utf8.RuneCountInString(value) > maxIDLength {
+			return fieldError(fmt.Sprintf("%s[%d]", name, index), "value has invalid type or length", "non-empty string with at most 128 characters")
+		}
+	}
+	*target = values
+	return nil
+}
+
+func idListSchema(description string) map[string]any {
+	return map[string]any{
+		"type": "array", "maxItems": 8, "description": description,
+		"items": map[string]any{"type": "string", "minLength": 1, "maxLength": maxIDLength},
+	}
+}
+
+func startTaskSchema(version int) map[string]any {
+	properties := map[string]any{
+		"deviceId":     stringProperty(1, maxIDLength),
+		"cwd":          map[string]any{"type": "string", "minLength": 1, "maxLength": maxCWDLength, "pattern": "^/"},
+		"goal":         stringProperty(1, maxGoalLength),
+		"prompt":       stringProperty(1, maxTextLength),
+		"riskTags":     riskTagsProperty(),
+		"clientTaskId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "Legacy compatibility only; Relay ignores this value for trusted Brain calls and assigns the task id."},
+	}
+	if version >= 10 {
+		properties["includeMessages"] = idListSchema("可选。这些 Ariel 消息里点名的、本助理拥有或监听过的会话会作为参考附上，不会把消息正文贴进子会话。")
+		properties["referenceThreads"] = idListSchema("可选。本助理自己的 taskId 或监听过的 threadId，作为参考会话附上。")
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required":             []string{"deviceId", "cwd", "goal", "prompt", "riskTags"},
-		"properties": map[string]any{
-			"deviceId":     stringProperty(1, maxIDLength),
-			"cwd":          map[string]any{"type": "string", "minLength": 1, "maxLength": maxCWDLength, "pattern": "^/"},
-			"goal":         stringProperty(1, maxGoalLength),
-			"prompt":       stringProperty(1, maxTextLength),
-			"riskTags":     riskTagsProperty(),
-			"clientTaskId": map[string]any{"type": "string", "maxLength": maxIDLength, "description": "Legacy compatibility only; Relay ignores this value for trusted Brain calls and assigns the task id."},
-		},
-		"examples": []any{map[string]any{"deviceId": "desktop-local", "cwd": "/workspace/fixture", "goal": "验证测试", "prompt": "运行无敏感内容的测试并总结结果", "riskTags": []any{}}},
+		"properties":           properties,
+		"examples":             []any{map[string]any{"deviceId": "desktop-local", "cwd": "/workspace/fixture", "goal": "验证测试", "prompt": "运行无敏感内容的测试并总结结果", "riskTags": []any{}}},
 	}
 }
 
-func sendTurnSchema() map[string]any {
+func sendTurnSchema(version int) map[string]any {
+	properties := map[string]any{
+		"taskId":          stringProperty(1, maxIDLength),
+		"deviceId":        stringProperty(1, maxIDLength),
+		"threadId":        stringProperty(1, maxIDLength),
+		"text":            stringProperty(1, maxTextLength),
+		"riskTags":        riskTagsProperty(),
+		"clientMessageId": map[string]any{"type": "string", "format": "uuid", "pattern": uuidPattern.String()},
+	}
+	if version >= 10 {
+		properties["includeMessages"] = idListSchema("可选。这些 Ariel 消息里点名的、本助理拥有或监听过的会话会作为参考附上，不会把消息正文贴进子会话。")
+		properties["referenceThreads"] = idListSchema("可选。本助理自己的 taskId 或监听过的 threadId，作为参考会话附上。")
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required":             []string{"text", "riskTags", "clientMessageId"},
-		"properties": map[string]any{
-			"taskId":          stringProperty(1, maxIDLength),
-			"deviceId":        stringProperty(1, maxIDLength),
-			"threadId":        stringProperty(1, maxIDLength),
-			"text":            stringProperty(1, maxTextLength),
-			"riskTags":        riskTagsProperty(),
-			"clientMessageId": map[string]any{"type": "string", "format": "uuid", "pattern": uuidPattern.String()},
-		},
+		"properties":           properties,
 		"oneOf": []any{
 			map[string]any{"required": []string{"taskId"}, "not": map[string]any{"anyOf": []any{map[string]any{"required": []string{"deviceId"}}, map[string]any{"required": []string{"threadId"}}}}},
 			map[string]any{"required": []string{"deviceId", "threadId"}, "not": map[string]any{"required": []string{"taskId"}}},
