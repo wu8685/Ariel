@@ -471,6 +471,7 @@ func (m *Module) rememberSpoken(assistantID, text string) {
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
 	pending := m.clearPendingForTurn(assistantID, turnID)
 	defer m.pumpAssistant(ctx, assistantID)
+	defer m.scheduleBotQueue(ctx, assistantID, pending.messageID)
 	if brainSilent(text) {
 		if pending.responseID != "" {
 			_ = m.store.DeleteMessage(ctx, assistantID, pending.responseID)
@@ -1320,6 +1321,9 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 		cardJSON = string(encoded)
 	}
 	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text, CardJSON: cardJSON, ReplyTo: input.ReplyTo}); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if err := m.store.AddInbox(ctx, a.ID, input.ClientMessageID, m.now()); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	if len(input.Images) == 0 && input.ReplyTo == "" {

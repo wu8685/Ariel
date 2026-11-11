@@ -285,6 +285,13 @@ func (s *Store) OrphanSubsession(ctx context.Context, assistantID, deviceID, thr
 			result.WatchOnly = true
 		}
 	}
+	unlinked, err := tx.ExecContext(ctx, `DELETE FROM bot_task_sessions WHERE assistant_id=? AND device_id=? AND thread_id=?`, assistantID, deviceID, threadID)
+	if err != nil {
+		return OrphanResult{}, err
+	}
+	if n, _ := unlinked.RowsAffected(); n > 0 {
+		result.Changed = true
+	}
 	if !result.Changed {
 		return OrphanResult{}, tx.Commit()
 	}

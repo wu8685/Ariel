@@ -567,6 +567,13 @@ func taskEventTemplate(status, summary string) string {
 }
 
 func taskEventEnvelope(assistant Assistant, wake BrainWake) string {
+	if wake.Status == "bot_queue" {
+		return "PUCK_ENVELOPE assistant=" + assistant.ID + " nonce=" + newUUID() + " kind=bot_queue\n" +
+			"这是还没做完的工作或尚未归入任务的用户消息，不是新的执行结果。需要时自己读全文。\n" +
+			wake.Summary + "\n" +
+			"若这是用户消息，用 save_bot_task 记下并 attach_bot_task 挂上 messageId。若这是已有任务，继续做或标成 done/cancelled。可能是旧任务的延续时先 list_bot_tasks，再决定要不要 merge_bot_tasks。没有新的话要说就只回复 PUCK_SILENT。\n" +
+			envelopeContext(assistant)
+	}
 	mode := "execution"
 	if wake.WatchOnly {
 		mode = "watch_only"

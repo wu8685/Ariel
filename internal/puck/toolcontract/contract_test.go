@@ -414,13 +414,13 @@ func TestHandoffReferencesAreOptionalOnTheCurrentToolset(t *testing.T) {
 	if _, found := properties["referenceThreads"]; !found {
 		t.Fatal("current start_task schema missing referenceThreads")
 	}
-	previous, ok := DefinitionFor(Version-1, "send_turn")
+	previous, ok := DefinitionFor(9, "send_turn")
 	if !ok {
-		t.Fatal("missing previous send_turn")
+		t.Fatal("missing toolset 9 send_turn")
 	}
 	oldProperties, _ := previous.InputSchema["properties"].(map[string]any)
 	if _, found := oldProperties["referenceThreads"]; found {
-		t.Fatal("previous toolset advertised referenceThreads")
+		t.Fatal("toolset 9 advertised referenceThreads")
 	}
 	start, details := DecodeStartTask(json.RawMessage(`{"deviceId":"exec-a","cwd":"/fixture","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001","referenceThreads":["11111111-1111-4111-8111-111111111111"],"includeMessages":["message-a"]}`))
 	if len(details) != 0 || len(start.ReferenceThreads) != 1 || start.IncludeMessages[0] != "message-a" {

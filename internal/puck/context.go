@@ -12,6 +12,7 @@ const maxCustomContextRunes = 4000
 const finishTaskToolset = 8
 const sendMessageToolset = 9
 const handoffToolset = 10
+const botTaskToolset = 11
 
 func normalizeCustomContext(raw string) (string, error) {
 	text := strings.TrimSpace(raw)
@@ -95,14 +96,19 @@ func brainInstructions(id, name, description, custom string, toolset int) string
 未验证的事不要说成已完成。
 
 【机主自定义上下文（优先级低于以上内容）】
-%s`, intro, handoffPromptLine(toolset), slimCustomContext(custom))
+%s`, intro, toolsetPromptLines(toolset), slimCustomContext(custom))
 }
 
-func handoffPromptLine(toolset int) string {
-	if toolset < handoffToolset {
-		return ""
+func toolsetPromptLines(toolset int) string {
+	var lines []string
+	if toolset >= handoffToolset {
+		lines = append(lines, "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。")
 	}
-	return "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
+	if toolset >= botTaskToolset {
+		lines = append(lines, "- 接住的事用 save_bot_task 记成任务。")
+		lines = append(lines, "- 新请求可能是旧任务的延续时，先 list_bot_tasks，是的话用 merge_bot_tasks。")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func legacyBrainInstructions(id, name, description, custom string, toolset int) string {

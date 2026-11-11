@@ -198,6 +198,16 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		result = h.finishTask(ctx, call)
 	case "send_message":
 		result = h.sendMessage(ctx, call)
+	case "list_bot_tasks":
+		result = h.listBotTasks(ctx, call)
+	case "search_messages":
+		result = h.searchMessages(ctx, call)
+	case "save_bot_task":
+		result = h.saveBotTask(ctx, call)
+	case "attach_bot_task":
+		result = h.attachBotTask(ctx, call)
+	case "merge_bot_tasks":
+		result = h.mergeBotTasks(ctx, call)
 	default:
 		result = toolError("INVALID_ARGUMENT", "unknown Puck tool")
 	}

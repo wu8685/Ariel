@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 10
+const Version = 11
 const canonicalMutationToolVersion = 2
 
 const (
@@ -137,6 +137,11 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 			return Definition{}, false
 		}
 		return Definition{Name: name, Description: "把一句你决定要告诉用户的话写进这个 Bot 的 Ariel 对话，并触发页内通知。只用于被唤醒、定时、automation 或你自己发起的工作。回答带 PUCK_ENVELOPE 的用户消息时直接写回复，不要为同一句话再调用本工具。不能指定别的助理。", InputSchema: sendMessageSchema()}, true
+	case "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks":
+		if version < 11 {
+			return Definition{}, false
+		}
+		return botTaskDefinition(name)
 	default:
 		return Definition{}, false
 	}
@@ -149,6 +154,9 @@ func DynamicTools(version int) []map[string]any {
 	}
 	if version >= 9 {
 		names = append(names, "send_message")
+	}
+	if version >= 11 {
+		names = append(names, "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks")
 	}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -184,6 +192,21 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 		return value, details
 	case "send_message":
 		value, details := DecodeSendMessage(raw)
+		return value, details
+	case "list_bot_tasks":
+		value, details := DecodeListBotTasks(raw)
+		return value, details
+	case "search_messages":
+		value, details := DecodeSearchMessages(raw)
+		return value, details
+	case "save_bot_task":
+		value, details := DecodeSaveBotTask(raw)
+		return value, details
+	case "attach_bot_task":
+		value, details := DecodeAttachBotTask(raw)
+		return value, details
+	case "merge_bot_tasks":
+		value, details := DecodeMergeBotTasks(raw)
 		return value, details
 	default:
 		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "documented Puck tool"}}
