@@ -63,3 +63,23 @@
 - 新建 `ariel-probe-hidden`（`01a1a1bb-9196-7452-b54f-30b0d728565e`，`threadSource:chatgpt_hidden`）与对照 `ariel-probe-visible`（`01a1a1bb-b88f-7f42-9d9c-7d20b4f39c3a`），read-only + never，各跑一轮 "ok"。
 - 用户在 Codex Desktop 中确认：**两个都出现在侧边栏** → 0.160 下 `chatgpt_hidden` 不能隐藏。用户接受为 v1 已知外观行为。
 - 清理：两者 `thread/delete` 成功，`thread/read` 报 not loaded，state DB 0 行，无 rollout；`~/ariel-probe-0130` 已删，无探针进程。
+
+## 生产 brain 路径隔离写探针（2026-11-11，工作 Mac，Desktop 26.1103.60933／codex-cli 0.167.0-alpha.3.2）
+
+环境：用户工作 Mac（Walk）。Codex Desktop `26.1103.60933`，内置 Codex CLI `0.167.0-alpha.3.2`（IPC profile：`unverified`，高于最低版本）。二进制是 ChatGPT.app 内置 `codex-cli/CodexCLI.app` 的 `codex`。探针期间 Desktop 与其他 app-server 保持运行。
+
+方法：将 `main@1ec9daa` 归档到临时目录，用 Go 1.26.11 编译一次性 `cmd/puckprobe`，驱动生产路径 `desktopagent.NewBrainHost` → `appserver.StartBrainInteractive`。进程 flag、brain thread 参数、turn/start 参数与工具调用处理因此与真实 Desktop Agent 一致。只创建一条探针 thread，不记录 thread id 或对话正文。
+
+本进程 flag 覆盖 `codex features list` 列出的全部 15 项（`shell_tool`、`unified_exec`、`image_generation`、`goals`、`browser_use`、`browser_use_external`、`computer_use`、`in_app_browser`、`multi_agent`、`apps`、`plugins`、`tool_suggest`、`skill_search`、`view_image`、`sleep_tool`），均未被拒绝，stderr 为空。thread：`ephemeral=false`，`serviceName=ariel-puck`，`threadSource=chatgpt_hidden`，带 developer instructions，dynamicTools 为 toolcontract v5（12 个工具），`approvalPolicy=never`，`approvalsReviewer=user`，`sandbox=read-only`；config 为 `features.code_mode_host=true`、`tools.shell=false`、`tools.unified_exec=false`、`web_search=disabled`、`include_apply_patch_tool=false`。turn：`approvalPolicy=never`，`sandboxPolicy` 为 read-only。
+
+| 检查 | 结果 |
+|---|---|
+| app-server 以 brain flag 启动 | PASS |
+| `thread/start` 与动态工具往返（`ask_user`，`success=true`，turn 约 19 s 完成） | PASS |
+| 杀掉进程后新进程 `thread/resume`（约 0.5 s），再次动态工具往返（约 14 s） | PASS |
+| 内置 shell 不可用（resume 前后要求执行 `pwd`；无 `commandExecution`／`fileChange`；回复 NO_SHELL） | PASS（限制：未导出工具列表） |
+| Desktop 运行期间无锁冲突（stderr 为空；`logs_2.sqlite` 中 `database is locked`／`SQLITE_BUSY`／`unknown feature` 均为 0） | PASS |
+
+清理：`thread/delete` 成功，之后 `thread/read` 报错；无残留 rollout；无探针或 app-server 进程；临时目录已删除；空诊断日志已删除。
+
+门禁：该精确组合与上文 Desktop `26.930.51102`／CLI `0.160.0` 一样，允许在 IPC profile 为 `unverified` 时承载 Puck brain。比较是完整版本字符串相等，不外推到相邻版本（例如 CLI `0.167.0-alpha.3.1`，或另一个 Desktop build）或 `unsupported` profile。本探针不放宽 execution settings 或任务写门禁；Q23 Desktop follower 路径仍为 unverified。

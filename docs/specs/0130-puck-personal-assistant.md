@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -307,6 +307,8 @@ flowchart LR
 4. 内置能力可关闭至只剩动态工具（§4.2 第 3 条 D 组合，shell 请求得到 NO_SHELL、无 `commandExecution`）；关 `code_mode_host` 会令动态工具失效；残余面：code mode `exec`、`request_user_input`、模型自报的 `collaboration.*`（未实测能否 spawn）。
 5. 执行 thread：`thread/start` 的 on-request + workspace-write 生效（cwd 内写成功、cwd 外被沙箱拒绝，模型未请求提权）；Desktop 26.930.51102／Codex 0.160.0 的 follower 显式 policy fixture 创建与 seed 通过，但 follower probe 返回 `IPC protocol incompatible`，未取得 `latestThreadSettings` 兼容读回，结论为 **unverified**。P0 按 §4.4 第 4 条／B10 fail closed，不自动派发。
 6. 时延（热进程，trivial turn）：首个 delta 2543／2352／1545 ms，完成 2674／2928／1750 ms；含一次动态工具调用的 turn 约 12 s。
+
+2026-11-11 在工作 Mac 上对 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2`（IPC profile `unverified`）补做生产 brain 路径隔离写探针，详见 `docs/testing/0130-probe-results.md` 同日条目。该精确组合与 Desktop `26.930.51102`／CLI `0.160.0` 一样允许承载 Puck brain；比较是完整版本字符串相等。相邻 Desktop build、相邻 CLI（例如 `0.167.0-alpha.3.1`）与 `unsupported` profile 仍关闭 brain。该探针不放宽 execution settings 或任务写门禁，Q23 follower 路径仍为 unverified。
 
 #### 4.2.1 一条对话消息的时序
 
