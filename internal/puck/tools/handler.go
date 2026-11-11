@@ -72,6 +72,10 @@ type Orchestrator interface {
 	Forward(context.Context, Origin, string, string, json.RawMessage) Result
 }
 
+type RuntimeUpdate struct {
+	TaskID, Status, TurnID, Summary string
+}
+
 type Backend interface {
 	Authorize(context.Context, string, Action) (string, error)
 	PermissionMode(context.Context, string) string
@@ -81,6 +85,11 @@ type Backend interface {
 	Tasks(context.Context, string) ([]Task, error)
 	SourceText(context.Context, string, string) (string, error)
 	Emit(context.Context, Event) error
+	ApplyRuntime(context.Context, string, RuntimeUpdate) error
+	ThreadAccess(context.Context, string, string, string) (string, error)
+	ForeignThread(context.Context, string, string, string) (bool, error)
+	SaveWatch(context.Context, string, string, string) (string, error)
+	ReadOnlyThread(context.Context, string, string, string) (bool, error)
 }
 
 type Handler struct {
@@ -127,6 +136,8 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		result = h.forward(ctx, call, "interaction.respond")
 	case "get_task_status":
 		result = h.taskStatus(ctx, call)
+	case "watch_thread":
+		result = h.watchThread(ctx, call)
 	case "request_authorization":
 		if value, details := toolcontract.DecodeAuthorization(call.Arguments); len(details) != 0 {
 			result = invalidStructuredArguments(call.Tool, call.Arguments, details)
@@ -588,6 +599,14 @@ func (h *Handler) sendTurn(ctx context.Context, call Call, authorized bool) Tool
 			return toolError("PUCK_ASSISTANT_NOT_FOUND", "task not found")
 		}
 		deviceID, threadID = task.DeviceID, task.NativeThreadID
+	} else if deviceID != "" && threadID != "" {
+		readOnly, err := h.backend.ReadOnlyThread(ctx, call.AssistantID, deviceID, threadID)
+		if err != nil {
+			return toolError("PUCK_UNAVAILABLE", err.Error())
+		}
+		if readOnly {
+			return toolError("WATCH_ONLY", "this thread is watched read-only and cannot receive turns")
+		}
 	}
 	online, supported := h.deviceCapability(deviceID, "send")
 	if !online {
@@ -660,7 +679,89 @@ func (h *Handler) taskStatus(ctx context.Context, call Call) ToolResult {
 	if err != nil {
 		return toolError("PUCK_ASSISTANT_NOT_FOUND", "task not found")
 	}
-	return ToolResult{Success: true, Data: taskData(task)}
+	data := taskData(task)
+	view, fresh := h.liveTask(ctx, call.AssistantID, task)
+	if !fresh {
+		data["runtime"] = "unknown"
+		return ToolResult{Success: true, Data: data}
+	}
+	data["runtime"] = view.Runtime
+	if view.TurnStatus != "" {
+		data["turnStatus"] = view.TurnStatus
+	}
+	if view.Summary != "" {
+		data["summary"] = view.Summary
+	}
+	if view.Status != "" {
+		data["status"] = view.Status
+		if view.Status != task.Status {
+			_ = h.backend.ApplyRuntime(ctx, call.AssistantID, RuntimeUpdate{TaskID: task.ID, Status: view.Status, TurnID: view.TurnID, Summary: view.Summary})
+		}
+	}
+	return ToolResult{Success: true, Data: data}
+}
+
+func (h *Handler) liveTask(ctx context.Context, assistantID string, task Task) (ThreadView, bool) {
+	if task.DeviceID == "" || task.NativeThreadID == "" {
+		return ThreadView{}, false
+	}
+	if source, ok := h.orchestrator.(interface {
+		CacheSnapshot(string, string) map[string]any
+	}); ok {
+		if snap := source.CacheSnapshot(task.DeviceID, task.NativeThreadID); snap != nil {
+			if view, ok := ClassifySnapshot(snap); ok && view.Freshness == "fresh" && view.Runtime != "" && view.Runtime != "unknown" {
+				return view, true
+			}
+		}
+	}
+	result := h.orchestrator.Forward(ctx, origin(assistantID), task.DeviceID, "thread.read", mustJSON(map[string]any{"threadId": task.NativeThreadID}))
+	if result.Outcome != "accepted" {
+		return ThreadView{}, false
+	}
+	view, ok := ClassifySnapshot(result.Data)
+	if !ok || view.Runtime == "" || view.Runtime == "unknown" {
+		return ThreadView{}, false
+	}
+	return view, true
+}
+
+func (h *Handler) watchThread(ctx context.Context, call Call) ToolResult {
+	var input struct {
+		DeviceID string `json:"deviceId"`
+		ThreadID string `json:"threadId"`
+	}
+	if json.Unmarshal(call.Arguments, &input) != nil || strings.TrimSpace(input.DeviceID) == "" || strings.TrimSpace(input.ThreadID) == "" || len(input.DeviceID) > 128 || len(input.ThreadID) > 128 {
+		return toolError("INVALID_ARGUMENT", "deviceId and threadId are required")
+	}
+	code, err := h.backend.ThreadAccess(ctx, call.AssistantID, input.DeviceID, input.ThreadID)
+	if err != nil {
+		return toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if code == "PUCK_SELF_TARGET" {
+		return toolError("PUCK_SELF_TARGET", "brain thread cannot be watched")
+	}
+	foreign, err := h.backend.ForeignThread(ctx, call.AssistantID, input.DeviceID, input.ThreadID)
+	if err != nil {
+		return toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if foreign {
+		return toolError("UNAUTHORIZED", "another assistant owns this thread")
+	}
+	known := false
+	for _, device := range h.orchestrator.Devices() {
+		if device["deviceId"] == input.DeviceID {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return toolError("DEVICE_OFFLINE", "target device is offline")
+	}
+	watchID, err := h.backend.SaveWatch(ctx, call.AssistantID, input.DeviceID, input.ThreadID)
+	if err != nil {
+		return toolError("PUCK_UNAVAILABLE", err.Error())
+	}
+	return ToolResult{Success: true, Data: map[string]any{"watchId": watchID, "deviceId": input.DeviceID, "threadId": input.ThreadID, "watching": true, "watchOnly": true}}
 }
 
 func (h *Handler) requestAuthorization(ctx context.Context, call Call) ToolResult {

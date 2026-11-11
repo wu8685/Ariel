@@ -32,6 +32,9 @@ type fakeModuleBridge struct {
 	failures          chan relay.BrainDeliveryFailure
 	params            []json.RawMessage
 	origins           []relay.Origin
+	watches           map[string]chan map[string]any
+	snapshots         map[string]map[string]any
+	turnSeq           int
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
@@ -45,7 +48,29 @@ func (f *fakeModuleBridge) Devices() []map[string]any {
 	}
 }
 func (f *fakeModuleBridge) BrainThreads(v map[relay.BrainThread]string) { f.brains = v }
-func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ string, method string, params json.RawMessage) relay.PuckResponse {
+func (f *fakeModuleBridge) Watch(_ context.Context, _ relay.Origin, deviceID, threadID string) (<-chan map[string]any, func(), *relay.PuckError) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.watches == nil {
+		f.watches = map[string]chan map[string]any{}
+	}
+	events := make(chan map[string]any, 4)
+	f.watches[deviceID+"\x00"+threadID] = events
+	var once sync.Once
+	cancel := func() { once.Do(func() { close(events) }) }
+	return events, cancel, nil
+}
+func (f *fakeModuleBridge) emitThread(deviceID, threadID string, snapshot map[string]any) bool {
+	f.mu.Lock()
+	events := f.watches[deviceID+"\x00"+threadID]
+	f.mu.Unlock()
+	if events == nil {
+		return false
+	}
+	events <- snapshot
+	return true
+}
+func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, deviceID string, method string, params json.RawMessage) relay.PuckResponse {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, method)
@@ -74,6 +99,7 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 		if f.emptyTurn {
 			return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
 		}
+		f.turnSeq++
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
 	if method == "thread.bootstrap" {
@@ -87,6 +113,15 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, _ str
 			return relay.PuckResponse{Outcome: "rejected", Error: &relay.PuckError{Code: f.turnStartCode, Message: f.turnStartCode}}
 		}
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "exec-turn-follow"}}
+	}
+	if method == "thread.read" || method == "thread.cache.read" {
+		var ref struct {
+			ThreadID string `json:"threadId"`
+		}
+		_ = json.Unmarshal(params, &ref)
+		if snap, ok := f.snapshots[deviceID+"\x00"+ref.ThreadID]; ok {
+			return relay.PuckResponse{Outcome: "accepted", Data: snap}
+		}
 	}
 	if method == "puck.brain.toolResult" && f.toolResultFailure {
 		return relay.PuckResponse{Outcome: "unknown", Error: &relay.PuckError{Code: "OUTCOME_UNKNOWN", Message: "fixture receipt lost"}}
@@ -762,7 +797,7 @@ func TestUpdatedDescriptionIsIncludedInNextTrustedTurn(t *testing.T) {
 
 func TestBrainInstructionsRequireToolCallInSameTurnAndForbidDuplicateStart(t *testing.T) {
 	instructions := brainInstructions("assistant-a", "Helper", "检查任务")
-	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task"} {
+	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task", "没有正在监听时，只能在用户再次询问时汇报，不得承诺主动通知", "watch_thread"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("brain instructions missing %q", required)
 		}

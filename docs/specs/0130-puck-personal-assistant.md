@@ -1,6 +1,6 @@
 # 0130：Puck 个人助理编排层与跨主机 Codex 任务管理
 
-- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程）。
+- 状态：Approved（P0 范围；2026-11-03 起草；同日用户已就 Q1／Q2／Q4／Q10／Q20／Q21／Q22 做出决定并纳入本稿；同日依据 Mac mini 只读探针与代码核对补充 §4.2–§4.4（Q3、Q14 已决），同日用户决定 Q24（brain thread 由大脑主机 Agent 自持的常驻 app-server 长期持有），据此 Q13 定为动态工具经 Agent 中转、Q15 已决，并按用户要求新增体验原则（§1.1）与界面规范（§1.2），其中 Q2 的部署形态已被“同一进程、第二入口”的决定修订；同日完成 P0 第 0 步写探针（Q27／Q28 已有结论、Q25 实测；Q23 Desktop follower 显式 policy 无法取得兼容读回，结论 unverified，按 §4.4／B10 拒绝自动派发，见 §4.2.2）；22:21 用户确认 Q27：brain thread 在 Desktop 可见，作为 v1 已知外观行为接受；据此本规格批准进入 P0 实施（§16），P1 及以后各阶段开工前仍需逐阶段确认；2026-11-09 用户批准将活跃 Bot 上限从 10 调整为 50，并要求发布；2026-11-11 隔离写探针通过后，将 Desktop `26.1103.60933`／Codex CLI `0.167.0-alpha.3.2` 作为精确组合加入 brain 版本门禁，不外推相邻版本，见 §4.2.2；2026-11-11 按产品负责人要求补充 §6.1.1：同一 Bot 对同一设备与目录默认续投已有执行线程；同日用户要求实现 P1 切片：执行任务监听、只读 `watch_thread`、任务事件唤醒与限速排队、`get_task_status` 读现场 runtime，以及页内系统通知。完整 VAPID Web Push 仍未实现，见 §9.1 与 §10.11）。
 - 日期：2026-11-03。
 - Issue：尚未创建。关联：0091（后台 task gateway 与跨主机路由）、0095／0096（领取 → WIP → 续投同一 thread）、0097（Web 看板撤回）、0059／0084／0112（Passkey 与会话认证）、0100（Relay 双 turn hot cache）、0107（Agent transport 恢复）、0109（Web wire 向后兼容）、0098（补充问题卡片）、0069（确认发送）、0002（审批拒绝语义）；依赖风险 #4、#64、#63。
 - 术语：**助理** 指用户创建的一个助理实例（有独立 id、名称、人设、大脑、记忆、例行、任务与通知设置）；**Puck 模块**（下文亦简称 **Service**）指编译进 Relay 二进制、由配置开启的 `internal/puck` 模块，承载全部助理；它是 Relay 进程的第二个入口，**不是独立进程**；**Brain** 指某个助理在其大脑主机上的 Codex 会话（brain thread）；**Desktop Agent** 指 Ariel Desktop Agent（`role=agent`）；**执行 thread** 指被派发任务的目标主机上的 native Codex thread；**关键动作** 指 §5 定义的、必须由用户授权的动作。各术语不得混用，延续 AGENTS.md 的术语约束。
@@ -445,7 +445,8 @@ sequenceDiagram
 | `send_turn` | `taskId` 或 (`deviceId`,`threadId`), `text`, `riskTags[]`, `clientMessageId` | 续投同一执行 thread；同一设备与目录的后续请求默认走这条路径 | 策略引擎（B2／B5／B6／B10）→ `turn.start` |
 | `interrupt` | `taskId`／`threadId`, `turnId`, `reason` | 精确停止 | 策略引擎（B2／B3）→ `turn.interrupt` |
 | `respond_interaction` | `interactionId`, `userDecisionId` | 只转交用户已作出且未消费的决定 | 无 `userDecisionId` 必拒 |
-| `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要 | Service 本地 + cache |
+| `get_task_status` | `taskId?` | 本助理的任务记录 + 最新 runtime／交互摘要。先读 Relay 热 cache，不新鲜时回退 `thread.read`；读不到现场时 `runtime=unknown`，不得把库里的旧 `running` 说成已完成 | Service 本地 cache，回退 `thread.read` |
+| `watch_thread` | `deviceId`, `threadId` | 只读监听一条本助理没有启动的现有会话，直到这一轮结束、被阻塞或失败，然后唤醒并取消监听。不调用 `turn.start`。成功返回 `watching:true` 之后才能向用户承诺主动通知 | 既有 B2／`PUCK_SELF_TARGET` 仍拒绝；不授予执行权 |
 | `request_authorization` | `summary`, `action` | Brain 主动就某事请用户授权（例如“是否部署”） | 生成授权卡片 |
 | `memory_read`／`memory_write`／`memory_delete` | — | 本助理记忆 | 删除命中 B9 |
 | `routine_list`／`routine_upsert`／`routine_delete` | — | 本助理 routine；创建／修改后在对话中显示例行卡片（E8） | 事件唤醒中命中 B7 |
@@ -600,6 +601,20 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 5. Brain 的自主追加有上限：同一任务连续自动追加默认 3 次后转 `attention`，防止无限“继续”。
 6. **里程碑映射（E3、E4、E13）**：`running`（首次）→“已在 <主机> 开始”；`waiting_user`／`awaiting_authorization`／`attention`／设备离线 →“被阻塞：<原因>”+ 卡片 + Push；`review`／`done`／`failed_dispatch`／`cancelled` → 结果消息 + Push。其余迁移只更新任务卡片，不发新消息。任务卡片的状态标签只取自本状态机；`reconciling` 显示“状态待确认”；只有 `done` 显示“已完成”。
 
+### 9.1 任务监听与主动唤醒（2026-11-11 批准的 P1 切片）
+
+2026-11-11 的一次真实使用里，Bot 答应“做完告诉你”，执行线程其实已经结束，Puck 却要等用户再问才知道。核对代码后的原因是：Desktop Agent 只把常驻 app-server 上的 brain thread 事件上送为 `puck.brain.event`；执行线程的状态在 Relay 的 thread cache 里，Puck 没有订阅。`get_task_status` 只读 SQLite，而状态几乎只在创建时写成 `running`。大脑指令又写了“用 get_task_status 跟进”，没有禁止在没有监听时承诺主动通知。
+
+本切片按上面的原因补上，不把整份 P1（审批卡、通知中心、按类型开关、头像 PNG、B7–B9、brain 轮换）一次做完。
+
+1. **监听什么**：本助理 `tasks` 里仍可跟踪的执行线程（有 native thread，且状态不是 `done`／`cancelled`／`failed_dispatch`／`stopped`），以及 `thread_watches` 里状态为 `watching` 的只读监听。订阅走 `PuckBridge.Watch`，与 Web 共用同一个 Agent follower，不另开 native follower。
+2. **何时唤醒**：cache 或 `thread.read` 的新鲜快照显示这一轮 `completed`（任务进入 `review`，native turn 成功仍不等于任务完成）、出现待审批／待输入（`waiting_user`），或 turn `failed`／`interrupted`（`attention`）。唤醒信封是受信的 `kind=task_event`，只含 task id、新状态、最后一条助理消息的短摘要（折叠空白，最多 240 字）。不把交互 prompt、命令或完整 thread id 写进日志。
+3. **大脑忙或超限**：同一助理已有 brain turn 时，唤醒写入 `brain_wakes`，等当前 turn 结束后再发，不丢。同一任务 5 分钟内只交付一次，同一助理每分钟最多 6 次；多出来的合并进下一次窗口，保留最新状态和摘要。大脑离线时改写一条模板消息，仍然让用户看见。
+4. **重启**：监听对象就是 SQLite 里的任务行和 `thread_watches`。进程重启后按这些行重新 `Watch`，并用 `thread.read` 对账；Agent 重新上线时只重连该设备上的监听。不重放写操作。
+5. **只读监听**：`watch_thread` 给大脑一个办法盯住用户点名的、不是自己启动的会话。brain thread 仍是 `PUCK_SELF_TARGET`；别的助理的执行线程仍拒绝。监听期间和取消之后，对这条线程的 `send_turn` 都返回 `WATCH_ONLY`，除非它本来就是本助理自己的任务。B5／B6／B10／B8 的执行门禁不因监听而放宽。
+6. **对用户说话**：只有 `start_task` 成功或 `watch_thread` 返回 `watching:true` 之后，大脑才能答应“做完告诉你”。否则必须说明只能在用户再问时汇报。这句话写在 `developerInstructions` 里，也写进之后的每个受信 envelope，这样还没轮换的旧 brain thread 下一轮就能看到。`watch_thread` 使工具集版本变为 6；主机跟上之后，下一次用户消息会按既有规则轮换 brain thread。
+7. **页内通知**：任务事件落成用户可见消息后，如果本机已经在信息栏打开通知、浏览器权限是 granted、并且页面不在前台，Web 调用 Notification API；Service Worker 已注册时改由它 `showNotification`。`/sw.js` 不拦截 fetch。信息栏的开关在用户点击后才申请权限。
+
 ## 10. Web Push 通知（Q4 已决）
 
 1. **VAPID**：Service 首次启动生成 P-256 VAPID 密钥对；私钥存 `/data/puck/vapid_private.pem`（0600，不入日志），公钥通过 `puck.push.config` 提供；`subject` 为部署配置的 `mailto:` 或站点 URL。轮换会使所有订阅失效，需在 Web 提示重新订阅。
@@ -612,6 +627,7 @@ dispatching ─(执行策略无法强制，B10)→ awaiting_authorization
 8. **HTTPS**：Web Push 与 Service Worker 只在 HTTPS 可用；v1 Puck 本身只在 Passkey + HTTPS 部署中开启（§4.1.4），因此不存在“Puck 可用但不能推送”的部署形态。
 9. 页面打开且正在查看对应助理时，Service 仍发送推送，由 Service Worker 在有可见客户端时改为页面内提示（`clients.matchAll` 判断），避免重复打扰。
 10. 通知中心：已读水位存 Service（不是浏览器本地 unread），多设备同步。
+11. **2026-11-11 切片没有做完的部分**：VAPID 密钥生成与持久化、RFC 8291 载荷加密、`push_subscriptions`／`notification_prefs`／`notifications`、向浏览器推送服务投递，以及标签页完全关闭后的到达。`/sw.js` 已经能处理 `push`、`notificationclick` 和页面转发的 `puck-notify`，但没有订阅，也没有服务端投递，所以关页之后目前不会响。页内、后台标签的系统通知见 §9.1。通知中心、按助理／类型开关、头像 PNG 和 iOS 主屏幕引导仍留在本节的后续 P1。
 
 ## 11. Routines（P2）
 

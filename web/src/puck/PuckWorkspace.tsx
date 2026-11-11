@@ -6,6 +6,7 @@ import { useImeEnterGuard } from "../ime-enter";
 import { readAvatarImageFile } from "./avatarImageFile";
 import { avatarColorHex, avatarImage, canonicalShape, deriveAvatar, nearestAvatarColor, PuckAvatar, type AvatarColor, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
 import { PuckAvatarSheet } from "./PuckAvatarSheet";
+import { enableTaskNotifications, isProactiveTaskMessage, notificationPermission, pageFocused, registerTaskWorker, showTaskNotification, taskNotificationsEnabled, type NotificationPermissionState } from "./taskNotification";
 import "./puck.css";
 
 type PuckResponse = { outcome: string; data?: Record<string, unknown>; error?: { code?: string; message?: string } };
@@ -213,7 +214,7 @@ class PuckConversationErrorBoundary extends Component<{ children: ReactNode }, {
     return this.props.children;
   }
 }
-const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"等待回复", awaiting_authorization:"等待授权", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败" };
+const taskLabels: Record<string, string> = { running:"进行中", dispatching:"派发中", waiting_user:"需要你处理", awaiting_authorization:"等待授权", review:"这一轮已结束", attention:"需要关注", stopped:"已停止", reconciling:"正在核对", done:"已完成", failed:"失败" };
 function QuestionCard({ message, submitting, onAction }: { message: Message; submitting: boolean; onAction: (kind:string,data:Record<string,unknown>,value:unknown)=>void }) {
   const customAnswerIme = useImeEnterGuard();
   const data = normalizeQuestionData(message);
@@ -385,6 +386,10 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	const [watchHealthy, setWatchHealthy] = useState(false);
 	const [mobilePanel, setMobilePanel] = useState<"" | "assistants" | "info">("");
 	const [infoOpen, setInfoOpen] = useState(false);
+	const [noticePref, setNoticePref] = useState<NotificationPermissionState>(() => taskNotificationsEnabled() ? "granted" : notificationPermission());
+	const [systemNotice, setSystemNotice] = useState<{ title: string; body: string } | undefined>();
+	const notifiedTaskMessages = useRef<Set<string>>(new Set());
+	const primedAssistant = useRef("");
 	const avatarUpdateSequence = useRef(0);
   const listSequence = useRef(0);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
@@ -573,6 +578,31 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 			if (watchID) void request("puck.unwatch", "relay", { watchId: watchID });
 		};
 	}, [selectedID, subscribeEvents]);
+	useEffect(() => { if (taskNotificationsEnabled()) registerTaskWorker(); }, []);
+	useEffect(() => {
+		if (!systemNotice) return;
+		const timer = window.setTimeout(() => setSystemNotice(undefined), 8000);
+		return () => window.clearTimeout(timer);
+	}, [systemNotice]);
+	useEffect(() => {
+		if (!selectedID) return;
+		if (primedAssistant.current !== selectedID) {
+			if (messages.length === 0) return;
+			primedAssistant.current = selectedID;
+			for (const message of messages) if (isProactiveTaskMessage(message)) notifiedTaskMessages.current.add(message.id);
+			return;
+		}
+		const title = selected?.name || "Puck";
+		for (const message of messages) {
+			if (!isProactiveTaskMessage(message) || notifiedTaskMessages.current.has(message.id)) continue;
+			notifiedTaskMessages.current.add(message.id);
+			const permission = notificationPermission();
+			const enabled = taskNotificationsEnabled();
+			if (pageFocused() || permission !== "granted" || !enabled) continue;
+			void showTaskNotification(title, message.text, message.id);
+			setSystemNotice({ title, body: message.text });
+		}
+	}, [messages, selectedID, selected?.name]);
 	useEffect(() => {
 		if (!selectedID) return;
 		let active = true;
@@ -1073,7 +1103,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </button>
         {(selected || activeGroup) && <div className="puck-header-actions puck-glass-chip">{busy ? <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button> : <button className="puck-icon-btn" type="button" aria-label="更多助理操作" onClick={openInfo}><span className="puck-more" aria-hidden="true">•••</span></button>}</div>}
       </header>
-	      <div className="puck-transcript" ref={transcriptRef} aria-live="polite" onScroll={trackTranscriptScroll}>{assistants.length === 0 && groups.length === 0 ? <div className="puck-empty">
+	      <div className="puck-transcript" ref={transcriptRef} aria-live="polite" onScroll={trackTranscriptScroll}>{systemNotice && <div className="puck-system-notice" role="status" aria-label="任务通知"><strong>{systemNotice.title}</strong><span>{systemNotice.body}</span></div>}{assistants.length === 0 && groups.length === 0 ? <div className="puck-empty">
         <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)} disabled={assistantCreateDisabled}>新建助理</button>
 	      </div> : <PuckConversationErrorBoundary key={activeGroup?.groupId || selectedID}>{(activeGroup ? groupMessages : messages).map((message,index,transcriptMessages) => {
         const now = clock || Date.now();
@@ -1117,7 +1147,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
       <header><h3>助理信息</h3><button className="puck-icon-btn" type="button" aria-label="关闭助理信息" onClick={closeInfo}>×</button></header>
       {activeGroup ? <div className="puck-info-content"><section className="puck-info-details"><h4>小组成员</h4><ul className="puck-group-members">{activeGroup.members.map(member => <li key={member.assistantId}><PuckAvatar assistantId={member.assistantId} name={member.name} design={avatarDesign(assistants.find(item => item.assistantId === member.assistantId) || { assistantId: member.assistantId, name: member.name, brainDeviceId: "", status: "ready" })} size="small"/><span>{member.name}</span></li>)}</ul><p>每位成员会用自己的大脑简短回复。这会打断该成员正在进行的一对一回合。</p></section></div> : selected ? <div className="puck-info-content">
         <div className="puck-avatar-editor"><button className="puck-avatar-edit" type="button" aria-label="编辑头像" onClick={() => setAvatarSheetOpen(true)}><PuckAvatar assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} state={puckState} size="large"/></button><strong>{selected.name}</strong>{editingDescription ? <div className="puck-description-editor"><textarea aria-label="助理说明" maxLength={512} value={descriptionDraft} onChange={event=>setDescriptionDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={()=>{setEditingDescription(false);setDescriptionDraft(selected.description || "");}}>取消</button><button className="puck-btn primary" type="button" aria-label="保存说明" onClick={()=>void saveDescription()}>保存</button></div></div> : <><p>{selected.description || "尚未添加说明"}</p><button className="puck-description-edit" type="button" aria-label="编辑说明" onClick={()=>{setDescriptionDraft(selected.description || "");setEditingDescription(true);}}>编辑说明</button></>}</div>
-		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd></dl></section>
+		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd><dt>任务通知</dt><dd><button className="puck-btn" type="button" aria-label="任务通知" aria-pressed={noticePref === "granted"} onClick={() => void enableTaskNotifications().then(setNoticePref)}>{noticePref === "granted" ? "已开启" : noticePref === "denied" ? "已被浏览器拒绝" : noticePref === "unsupported" ? "当前环境不可用" : "开启通知"}</button><small>离开这个页面时，任务完成、卡住或失败会弹出系统通知。关闭标签页后的推送还没接上。</small></dd></dl></section>
 		<section className="puck-authorization-rules"><h4>以后都允许</h4>{authorizationRules.length === 0 ? <p>尚未保存规则</p> : <ul>{authorizationRules.map(rule=><li key={rule.id}><div><strong>{rule.actionType}</strong><span>{rule.deviceId}</span><code>{rule.cwd}</code><time dateTime={rule.createdAt}>{new Date(rule.createdAt).toLocaleString("zh-CN")}</time></div><button className="puck-btn" type="button" aria-label={`撤销规则 ${rule.actionType} ${rule.cwd}`} onClick={()=>void revokeAuthorizationRule(rule.id)}>撤销</button></li>)}</ul>}</section>
 		<section className="puck-danger-zone"><h4>危险操作</h4><p>删除后，这个 Bot 及其历史将不再显示。</p><button className="puck-btn danger" type="button" onClick={()=>setDeleteTarget(selected)}>删除 Bot</button></section>
       </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}

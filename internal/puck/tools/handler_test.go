@@ -122,6 +122,10 @@ type fakeBackend struct {
 	events     []Event
 	sourceText map[string]string
 	authorized []Action
+	access     string
+	foreign    bool
+	readOnly   bool
+	watches    []string
 }
 
 func (f *fakeBackend) Authorize(_ context.Context, _ string, action Action) (string, error) {
@@ -169,6 +173,29 @@ func (f *fakeBackend) SourceText(_ context.Context, _, messageID string) (string
 		return "", nil
 	}
 	return f.sourceText[messageID], nil
+}
+func (f *fakeBackend) ApplyRuntime(_ context.Context, assistantID string, update RuntimeUpdate) error {
+	task, ok := f.tasks[update.TaskID]
+	if !ok || task.AssistantID != assistantID {
+		return ErrNotFound
+	}
+	task.Status = update.Status
+	task.LastTurnID = update.TurnID
+	f.tasks[update.TaskID] = task
+	return nil
+}
+func (f *fakeBackend) ThreadAccess(context.Context, string, string, string) (string, error) {
+	return f.access, nil
+}
+func (f *fakeBackend) ForeignThread(context.Context, string, string, string) (bool, error) {
+	return f.foreign, nil
+}
+func (f *fakeBackend) SaveWatch(_ context.Context, _, deviceID, threadID string) (string, error) {
+	f.watches = append(f.watches, deviceID+"/"+threadID)
+	return "watch-1", nil
+}
+func (f *fakeBackend) ReadOnlyThread(context.Context, string, string, string) (bool, error) {
+	return f.readOnly, nil
 }
 
 func TestStartTaskIsIdempotentAndUnknownIsNeverReplayed(t *testing.T) {
@@ -763,5 +790,33 @@ func (o extraDeviceOrchestrator) Devices() []map[string]any {
 	return []map[string]any{
 		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}},
 		{"deviceId": "exec-b", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": true}},
+	}
+}
+
+func TestGetTaskStatusUsesLiveThreadInsteadOfStaleRow(t *testing.T) {
+	orchestrator := &fakeOrchestrator{fn: func(method string, params json.RawMessage) Result {
+		if method != "thread.read" {
+			return Result{Outcome: "rejected", Code: "INVALID_ARGUMENT"}
+		}
+		return Result{Outcome: "accepted", Data: map[string]any{"thread": map[string]any{
+			"runtime": "idle", "pendingInteractions": []any{},
+			"turns": []any{map[string]any{"turnId": "turn-live", "status": "completed", "items": []any{map[string]any{"role": "assistant", "text": "现场已经结束"}}}},
+		}}}
+	}}
+	backend := &fakeBackend{tasks: map[string]Task{
+		"task-live": {ID: "task-live", AssistantID: "assistant-a", DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-live", Status: "running"},
+	}}
+	handler := New(orchestrator, backend)
+	status := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "get_task_status", Arguments: json.RawMessage(`{"taskId":"task-live"}`)})
+	if !status.Success || status.Data["status"] != "review" || status.Data["runtime"] != "idle" || status.Data["summary"] != "现场已经结束" {
+		t.Fatalf("status=%+v", status)
+	}
+	if backend.tasks["task-live"].Status != "review" {
+		t.Fatalf("stale row was kept: %+v", backend.tasks["task-live"])
+	}
+	for _, method := range orchestrator.calls {
+		if method == "turn.start" || method == "thread.bootstrap" {
+			t.Fatalf("status read executed a turn: %v", orchestrator.calls)
+		}
 	}
 }

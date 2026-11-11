@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 5
+const Version = 6
 const canonicalMutationToolVersion = 2
 
 const (
@@ -120,13 +120,15 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 		return Definition{Name: name, Description: "以结构化结果卡分享已经验证的文件、Diff、PR、thread 或 URL，不要在正文倾倒原始 JSON。", InputSchema: shareResultSchema()}, true
 	case "request_authorization":
 		return Definition{Name: name, Description: "请求用户授权敏感动作；说明 action、reason，并尽量提供 deviceId、绝对 cwd 与摘要供卡片展示。", InputSchema: authorizationSchema()}, true
+	case "watch_thread":
+		return Definition{Name: name, Description: "只读监听一条本助理没有启动的现有 Codex 会话，直到这一轮结束、被阻塞或失败，然后通知用户并取消监听。不会发送 turn，也不授予执行权。只有返回 watching 为 true 之后，才能向用户承诺会主动通知；否则只能在用户再次询问时汇报。", InputSchema: watchThreadSchema()}, true
 	default:
 		return Definition{}, false
 	}
 }
 
 func DynamicTools(version int) []map[string]any {
-	names := []string{"list_devices", "list_threads", "read_thread", "start_task", "send_turn", "interrupt", "respond_interaction", "get_task_status", "request_authorization", "ask_user", "share_result", "react"}
+	names := []string{"list_devices", "list_threads", "read_thread", "start_task", "send_turn", "interrupt", "respond_interaction", "get_task_status", "watch_thread", "request_authorization", "ask_user", "share_result", "react"}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		description := "Ariel Puck tool: " + name
@@ -745,4 +747,10 @@ func authorizationSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action", "reason"}, "properties": map[string]any{
 		"action": stringProperty(1, 512), "reason": stringProperty(1, 2048), "deviceId": stringProperty(1, maxIDLength), "cwd": map[string]any{"type": "string", "minLength": 1, "maxLength": maxCWDLength, "pattern": "^/"}, "summary": stringProperty(1, 2048),
 	}, "examples": []any{map[string]any{"action": "deploy", "reason": "需要发布已验证版本", "deviceId": "desktop-local", "cwd": "/workspace", "summary": "部署测试环境"}}}
+}
+
+func watchThreadSchema() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"deviceId", "threadId"}, "properties": map[string]any{
+		"deviceId": stringProperty(1, maxIDLength), "threadId": stringProperty(1, maxIDLength),
+	}}
 }
