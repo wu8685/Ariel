@@ -1,6 +1,6 @@
 # 0150：Puck Bot 配置栏默认收起
 
-- 状态：Implemented（2026-11-10；PuckWorkspace 单测与 tsc -b 已过；Chromium 隔离 fixture 截图已看。未合并、未部署。视觉待 Walk 复验。若与未合并的 PR #82 同时打开，合并前需要再对一次。）
+- 状态：Implemented（2026-11-10；PuckWorkspace 单测与 tsc -b 已过；Chromium 隔离 fixture 截图已看。已进入 main。视觉待 Walk 复验。）
 - 日期：2026-11-10
 - 关联：[0130 Puck 个人助理](0130-puck-personal-assistant.md)、[0148 Puck 侧边栏分组](0148-puck-sidebar-sections.md)、[0149 Puck 头像页](0149-puck-avatar-sheet.md)
 
