@@ -491,7 +491,7 @@ Puck 没有自己的定时器或 Codex automation。Bot 能留下的“定时任
 1. **系统上下文**写在代码里，随 `developerInstructions` 在 brain thread 创建时注入，并在之后每个受信 envelope（含问候、用户消息和 `kind=task_event`）重申。内容包括既有行为：先确认并在同一 turn 调用工具、默认同设备同目录续投、只在明确结果时开口、没有监听不得承诺主动通知、`PUCK_SILENT`、以及下面的收尾规则。
 2. **自定义上下文**是每个助理一条可选文本，最多 4000 个 Unicode 字符，存在 `assistants.custom_context`（schema 10）。创建表单和配置栏都能读写，经 `puck.create`／`puck.update` 的可选 `customContext`。空字符串表示没有额外要求。说明（`description`，最多 512 字）仍然是短人设，不取代这段文本。
 
-自定义上下文包在明确的低优先级围栏里。服务端会拆掉它试图伪造的「系统上下文」标题。与系统上下文、安全门禁或 `PUCK_SILENT` 冲突的句子无效。真正挡住越权的是服务端：`finish_task` 不读这段文字来决定能不能删记录。
+自定义上下文包在低优先级标题下。工具集 9 的标题是一行「机主自定义上下文（优先级低于以上内容）」；更早的工具集仍用原来的长围栏。服务端会拆掉它试图伪造的「系统上下文」标题。与系统上下文冲突的句子无效。真正挡住越权的是服务端：`finish_task` 不读这段文字来决定能不能删记录。
 
 **编辑后如何生效**
 
@@ -511,7 +511,7 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
 
 ### 6.1.3 主助理：Full Access brain（2026-11-11）
 
-每个 Bot 的 brain 会话是一台有完整 Codex 能力的主助理，不再是只读调度器。Puck 动态工具是加在上面的基础设施。
+每个 Bot 的 brain 会话是一台有完整 Codex 能力的主助理，不再是只读调度器。Puck 动态工具是加在上面的基础设施。工具集 9 写给模型的系统上下文是短文案：不点名 B2、B5、B6、B10、B8 或 `PUCK_SELF_TARGET`，也不写 `code_mode_host` 和信封格式。自定义上下文只保留一行低优先级标题，伪造的「系统上下文」字样仍会被换成引用。每轮 envelope 只重申没有结果就 `PUCK_SILENT`、同设备同目录用 `send_turn`、有结果后收尾，并附上说明和自定义上下文。这些约束继续由服务端执行，不靠提示词。
 
 **权限**
 

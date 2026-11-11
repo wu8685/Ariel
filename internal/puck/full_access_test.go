@@ -161,7 +161,7 @@ func TestExistingBotMigratesToFullAccessBrain(t *testing.T) {
 			instructions = string(bridge.params[i])
 		}
 	}
-	if !strings.Contains(instructions, "send_message") || !strings.Contains(instructions, "完整的 Codex") || strings.Contains(instructions, "不得尝试本地 shell") || !strings.Contains(instructions, "先说结论") {
+	if !strings.Contains(instructions, "send_message") || !strings.Contains(instructions, "完整 Codex 能力") || strings.Contains(instructions, "不得尝试本地 shell") || strings.Contains(instructions, "B2") || !strings.Contains(instructions, "先说结论") {
 		t.Fatalf("rotated instructions=%s", instructions)
 	}
 }

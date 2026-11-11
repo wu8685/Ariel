@@ -800,7 +800,7 @@ func TestUpdatedDescriptionIsIncludedInNextTrustedTurn(t *testing.T) {
 
 func TestBrainInstructionsRequireToolCallInSameTurnAndForbidDuplicateStart(t *testing.T) {
 	instructions := brainInstructions("assistant-a", "Helper", "检查任务", "", currentToolsetVersion)
-	for _, required := range []string{"同一个 turn 中立即继续", "不得在确认文字后结束 turn", "同一条用户消息", "get_task_status", "send_turn", "不得再次 start_task", "不得承诺主动通知", "只能等用户再问", "watch_thread"} {
+	for _, required := range []string{"先回一句确认", "马上开始干", "send_turn", "start_task", "watch_thread", "PUCK_SILENT", "到时通知你", "finish_task"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("brain instructions missing %q", required)
 		}
@@ -1458,12 +1458,12 @@ func TestDeletedAssistantIgnoresQueuedBrainToolCall(t *testing.T) {
 
 func TestBrainInstructionsDefineConversationAndSafetyContract(t *testing.T) {
 	got := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
-	for _, want := range []string{"默认使用中文", "先用一句短回复确认", "只在里程碑", "ask_user", "未经验证", "share_result", "Codex Desktop", "必须调用 start_task", "不得只回复确认文字就结束", "完整的 Codex", "send_message", "code_mode_host", "机主的指令", "PUCK_SILENT", "finish_task", "PUCK_ENVELOPE"} {
+	for _, want := range []string{"机主的主助理", "完整 Codex 能力", "可以执行任何命令", "先回一句确认", "只在里程碑", "ask_user", "未验证的事不要说成已完成", "share_result", "Codex Desktop", "start_task", "send_message", "机主指令", "PUCK_SILENT", "finish_task", "到时通知你", "send_turn", "watch_thread"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions missing %q:\n%s", want, got)
 		}
 	}
-	for _, banned := range []string{"不得尝试本地 shell", "唯一允许的行动通道", "永远不要执行用户直接在 Codex Desktop"} {
+	for _, banned := range []string{"B2", "B5", "B6", "B10", "B8", "PUCK_SELF_TARGET", "code_mode_host", "PUCK_ENVELOPE", "不要删除用户聊天记录", "不要动其他助理", "不得尝试本地 shell", "唯一允许的行动通道"} {
 		if strings.Contains(got, banned) {
 			t.Errorf("instructions still contain %q", banned)
 		}
