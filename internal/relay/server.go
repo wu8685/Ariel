@@ -956,7 +956,10 @@ func (s *Server) startPuckConversationWatch(ctx context.Context, web *peer, requ
 					return
 				}
 				seq++
-				if err := web.send(watchCtx, map[string]any{"type": "event", "v": 1, "event": "puck.event", "assistantId": params.AssistantID, "seq": seq, "kind": "history", "payload": event.Data}); err != nil {
+				// coder/websocket closes the socket if the write context is
+				// canceled. The watch context ends on unwatch, so an in-flight
+				// event must be written with the connection context instead.
+				if err := web.send(ctx, map[string]any{"type": "event", "v": 1, "event": "puck.event", "assistantId": params.AssistantID, "seq": seq, "kind": "history", "payload": event.Data}); err != nil {
 					return
 				}
 			}
