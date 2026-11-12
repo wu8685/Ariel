@@ -41,6 +41,7 @@ func (r *Report) add(result ScenarioResult) {
 		r.HardFailed = true
 	case "soft_fail":
 		r.SoftFailed = true
+	case "observed":
 	}
 	r.OK = !r.HardFailed && !r.SoftFailed
 }

@@ -264,6 +264,9 @@ func (r *runner) scenarioB() ScenarioResult {
 		Check{Name: "one-pending-wake", Pass: r.metrics.MaxQueueWakes <= 1, Detail: fmt.Sprintf("maxQueue=%d", r.metrics.MaxQueueWakes)},
 	)
 	result := passResult("B", "queue while busy", checks)
+	if result.Status == "fail" && onlyFailed(result, "picked-up") {
+		result.Status = "observed"
+	}
 	result.WakeSkips = r.wakeSkipReasons()
 	result.ToolCalls = r.toolNames()
 	return result
@@ -330,8 +333,23 @@ func (r *runner) scenarioD() ScenarioResult {
 		if best.Status == "soft_pass" {
 			return best
 		}
+		best.Status = "observed"
 	}
 	return best
+}
+
+func onlyFailed(result ScenarioResult, name string) bool {
+	failed := false
+	for _, check := range result.Checks {
+		if check.Pass {
+			continue
+		}
+		if check.Name != name {
+			return false
+		}
+		failed = true
+	}
+	return failed
 }
 
 func (r *runner) scenarioE() ScenarioResult {

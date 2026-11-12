@@ -164,6 +164,15 @@ func TestIsolatedRelayBootsOwnerWithoutPasskey(t *testing.T) {
 	}
 }
 
+func TestObservedScenariosDoNotFailTheRun(t *testing.T) {
+	var report Report
+	report.add(ScenarioResult{ID: "B", Status: "observed", Checks: []Check{{Name: "picked-up", Pass: false, Detail: "attached=0"}}})
+	report.add(ScenarioResult{ID: "D", Status: "observed", Checks: []Check{{Name: "continuation-joined-x", Pass: false}}})
+	if report.HardFailed || report.SoftFailed || report.exitCode() != 0 || !report.OK {
+		t.Fatalf("observed checks failed the run: %+v", report)
+	}
+}
+
 func TestRedactKeepsErrorText(t *testing.T) {
 	raw := "request-failed: context deadline exceeded\n[puck-handoff]\nthread 11111111-1111-4111-8111-111111111111\n\nnext line\ngoroutine 1 [running]\nat main.boom"
 	got := redact(raw)

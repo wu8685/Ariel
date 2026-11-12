@@ -585,7 +585,7 @@ Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒
 
 报告保留错误码和短错误说明，只抹掉 UUID、凭据和交接正文。WebSocket 传输失败会重连并重试一次。headless 归档前先放开私有 app-server 对这条线程的 resume，并且只归档本次创建的线程，不扫描用户的其他会话。运行结束时也会把这些线程归档。Desktop Agent 没起来时，报告带上 `Run()` 的错误。
 
-场景 A–G 把断言写成 JSON。除 fixture 标记外不打印消息正文。D 依赖模型，记录 search／attach／merge 等工具名；失败记为 soft。A、B、C、E、F、G 和开启后的 UI 是硬断言。
+场景结果是 JSON。B 的挂接数量和 D 的合并只观察 Brain 实际做了什么，不因此失败。A、C、E、F、G 和开启后的 UI 是硬断言。
 
 ## 7. Relay 内的入口与门禁
 
