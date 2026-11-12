@@ -253,6 +253,7 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 		code = ""
 	}
 	m.noteToolCall(event.AssistantID, input.Tool, result.Success, code)
+	m.recordBookkeeping(ctx, event.AssistantID, input.Tool, input.Arguments, result)
 	if result.Diagnostic != nil {
 		diagnostic, _ := json.Marshal(result.Diagnostic)
 		log.Printf("puck structured tool rejected: diagnostic=%s", diagnostic)
@@ -490,11 +491,12 @@ func (m *Module) rememberSpoken(assistantID, text string) {
 
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
 	pending := m.clearPendingForTurn(assistantID, turnID)
+	created := m.ensureSourceAssigned(ctx, assistantID, sourceFromPending(ctx, m, assistantID, pending), text)
 	defer m.pumpAssistant(ctx, assistantID)
 	defer m.rearmUnassignedInbox(ctx, assistantID, pending.queueKey)
 	// The message that just finished is still unassigned until a tool attaches
 	// it. Skipping it here left the newest inbox row without a wake.
-	defer m.scheduleBotQueue(ctx, assistantID, "")
+	defer m.scheduleBotQueue(ctx, assistantID, "", created)
 	if brainSilent(text) {
 		if pending.responseID != "" {
 			_ = m.store.DeleteMessage(ctx, assistantID, pending.responseID)
@@ -868,10 +870,11 @@ func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
 		card, text, err := normalizeQuestionCard(event.Payload)
 		if err != nil {
 			log.Printf("puck structured card normalization failed: assistant=%s kind=question reason=invalid_payload", event.AssistantID)
-			return b.module.store.UpsertMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: unrecognizedQuestionText, CardJSON: `{"cardState":"invalid"}`})
+			return b.module.store.UpsertMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: unrecognizedQuestionText, CardJSON: `{"cardState":"invalid","source":"ask_user"}`})
 		}
 		card.QuestionID = randomID("question")
 		encoded, _ := json.Marshal(card)
+		encoded = withCardSource(encoded, "ask_user")
 		return b.module.store.UpsertMessage(ctx, Message{ID: "question-card:" + card.QuestionID, AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: text, CardJSON: string(encoded)})
 	}
 	kind := strings.TrimPrefix(event.Kind, "post_")
@@ -891,7 +894,32 @@ func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
 		log.Printf("puck structured card text missing: assistant=%s kind=%s reason=missing_text", event.AssistantID, kind)
 	}
 	messageID := newUUID()
-	return b.module.store.UpsertMessage(ctx, Message{ID: messageID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(event.Payload)})
+	if kind == "share_result" || kind == "question" {
+		source := kind
+		if kind == "question" {
+			source = "ask_user"
+		}
+		if _, ok := payload["source"]; !ok {
+			payload["source"] = source
+		}
+	}
+	encoded, _ := json.Marshal(payload)
+	return b.module.store.UpsertMessage(ctx, Message{ID: messageID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(encoded)})
+}
+
+func withCardSource(raw json.RawMessage, source string) json.RawMessage {
+	object := map[string]any{}
+	if json.Unmarshal(raw, &object) != nil {
+		object = map[string]any{}
+	}
+	if _, ok := object["source"]; !ok {
+		object["source"] = source
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 func (m *Module) Handle(ctx context.Context, method string, params json.RawMessage) relay.PuckResponse {
@@ -1946,7 +1974,7 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
 func brainEnvelope(a Assistant, text string) string {
-	return brainEnvelopeWithReply(a, text, nil, nil, nil)
+	return brainEnvelopeWithReply(a, text, nil, nil, nil, nil)
 }
 
 func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, reply *Message) string {
@@ -1958,10 +1986,10 @@ func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, 
 	if err != nil {
 		openTasks = nil
 	}
-	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks)
+	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks, m.taskSnippets(ctx, a.ID, openTasks))
 }
 
-func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask) string {
+func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask, snippets map[string]string) string {
 	context := ""
 	if reply != nil {
 		author := "用户"
@@ -1983,20 +2011,47 @@ func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Ta
 		}
 	}
 	context += reusableTaskContext(tasks)
-	context += openBotTaskContext(openTasks)
+	context += openBotTaskContext(openTasks, snippets)
 	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n%s%s\n\n用户请求：%s", a.ID, newUUID(), envelopeContext(a), context, text)
 }
 
-func openBotTaskContext(tasks []BotTask) string {
+func (m *Module) taskSnippets(ctx context.Context, assistantID string, tasks []BotTask) map[string]string {
+	snippets := map[string]string{}
+	for _, task := range tasks {
+		if len(task.MessageIDs) == 0 {
+			continue
+		}
+		for index := len(task.MessageIDs) - 1; index >= 0; index-- {
+			message, err := m.store.Message(ctx, assistantID, task.MessageIDs[index])
+			if err != nil || message.Role != "user" {
+				continue
+			}
+			snippets[task.ID] = message.Text
+			break
+		}
+	}
+	return snippets
+}
+
+func openBotTaskContext(tasks []BotTask, snippets map[string]string) string {
 	if len(tasks) == 0 {
 		return ""
 	}
 	lines := make([]string, 0, len(tasks))
 	for _, task := range tasks {
 		title := strings.ReplaceAll(strings.TrimSpace(task.Title), "\n", " ")
-		lines = append(lines, fmt.Sprintf("- id=%s title=%s", task.ID, title))
+		when := ""
+		if !task.UpdatedAt.IsZero() {
+			when = " updatedAt=" + task.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		snippet := storedSnippet(snippets[task.ID])
+		line := fmt.Sprintf("- id=%s title=%s%s", task.ID, title, when)
+		if snippet != "" {
+			line += " lastUserMessage=" + snippet
+		}
+		lines = append(lines, line)
 	}
-	return "\n\n未完成的 Bot 任务（最近 " + strconv.Itoa(len(lines)) + " 条，只有 id 和 title）：\n" + strings.Join(lines, "\n")
+	return "\n\n未完成的 Bot 任务（最近 " + strconv.Itoa(len(lines)) + " 条）：\n" + strings.Join(lines, "\n") + "\n如果这条是上面某个未完成任务的延续，把那个 taskId 传给 save_bot_task。"
 }
 
 func reusableTaskContext(tasks []Task) string {

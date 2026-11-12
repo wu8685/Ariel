@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 11
+const Version = 12
 const canonicalMutationToolVersion = 2
 
 const (
@@ -137,7 +137,12 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 			return Definition{}, false
 		}
 		return Definition{Name: name, Description: "把一句你决定要告诉用户的话写进这个 Bot 的 Ariel 对话，并触发页内通知。只用于被唤醒、定时、automation 或你自己发起的工作。回答带 PUCK_ENVELOPE 的用户消息时直接写回复，不要为同一句话再调用本工具。不能指定别的助理。", InputSchema: sendMessageSchema()}, true
-	case "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks":
+	case "search_messages", "attach_bot_task":
+		if version < 11 || version >= 12 {
+			return Definition{}, false
+		}
+		return botTaskDefinition(name)
+	case "list_bot_tasks", "save_bot_task", "merge_bot_tasks":
 		if version < 11 {
 			return Definition{}, false
 		}
@@ -155,7 +160,9 @@ func DynamicTools(version int) []map[string]any {
 	if version >= 9 {
 		names = append(names, "send_message")
 	}
-	if version >= 11 {
+	if version >= 12 {
+		names = append(names, "list_bot_tasks", "save_bot_task", "merge_bot_tasks")
+	} else if version >= 11 {
 		names = append(names, "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks")
 	}
 	tools := make([]map[string]any, 0, len(names))

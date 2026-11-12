@@ -2,6 +2,8 @@ package puck
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -128,10 +130,12 @@ func TestIdleTurnWakesTheMessageItJustFinished(t *testing.T) {
 	}
 	module.setPending(assistant, "brain-turn-a", "user-1", "user-1-processing", now, false, "")
 	module.handleBrainEvent(ctx, brainEvent(id, "turn/completed", `{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}`))
-	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 1 })
-	text := botQueueTurns(moduleBridge(module))[0]
-	if !strings.Contains(text, "user-1") || !strings.Contains(text, "尚未归属") {
-		t.Fatalf("wake=%s", text)
+	_, attached, err := module.store.InboxAssignment(ctx, id, "user-1")
+	if err != nil || !attached {
+		t.Fatalf("attached=%v err=%v", attached, err)
+	}
+	if len(botQueueTurns(moduleBridge(module))) != 0 {
+		t.Fatal("an assigned message was woken")
 	}
 }
 
@@ -190,23 +194,20 @@ func TestUnassignedInboxWakesOnceThenRetries(t *testing.T) {
 	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "open-x", AssistantID: id, Title: "FIXTURE_X", Goal: "整理", Status: "accepted"}); err != nil {
 		t.Fatal(err)
 	}
-	module.scheduleBotQueue(ctx, id, "")
+	module.scheduleBotQueue(ctx, id, "", "")
 	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 1 })
 	text := botQueueTurns(moduleBridge(module))[0]
 	if !strings.Contains(text, "尚未归属") || !strings.Contains(text, "inbox-1") || !strings.Contains(text, "id=open-x") || !strings.Contains(text, "title=FIXTURE_X") {
 		t.Fatalf("wake=%s", text)
 	}
 	module.handleBrainEvent(ctx, brainEvent(id, "turn/completed", `{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}`))
-	if len(botQueueTurns(moduleBridge(module))) != 1 {
-		t.Fatal("unassigned inbox was woken again immediately")
+	_, attached, err := module.store.InboxAssignment(ctx, id, "inbox-1")
+	if err != nil || !attached {
+		t.Fatalf("message stayed unassigned: attached=%v err=%v", attached, err)
 	}
-	wake, err := module.store.BrainWakeByTask(ctx, id, "queue:inbox:inbox-1")
-	if err != nil || wake.NotBefore.After(now.Add(queueRetryBackoff)) {
-		t.Fatalf("retry=%+v err=%v", wake, err)
+	if _, err := module.store.BrainWakeByTask(ctx, id, "queue:inbox:inbox-1"); !errors.Is(err, sql.ErrNoRows) && err != nil {
+		t.Fatal(err)
 	}
-	now = now.Add(queueRetryBackoff)
-	module.pumpAssistant(ctx, id)
-	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 2 })
 }
 
 func TestEnvelopeListsOpenBotTasks(t *testing.T) {
@@ -236,13 +237,13 @@ func TestIdleWakePicksNextTaskWithoutLooping(t *testing.T) {
 	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "open-task", AssistantID: id, Title: "未做完", Goal: "接着做", Status: "accepted"}); err != nil {
 		t.Fatal(err)
 	}
-	module.scheduleBotQueue(ctx, id, "")
+	module.scheduleBotQueue(ctx, id, "", "")
 	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 1 })
 	text := botQueueTurns(moduleBridge(module))[0]
 	if !strings.Contains(text, "kind=bot_queue") || !strings.Contains(text, "open-task") || !strings.Contains(text, "接着做") {
 		t.Fatalf("wake=%s", text)
 	}
-	module.scheduleBotQueue(ctx, id, "")
+	module.scheduleBotQueue(ctx, id, "", "")
 	if len(botQueueTurns(moduleBridge(module))) != 1 {
 		t.Fatal("idle wake ran while the brain was busy")
 	}

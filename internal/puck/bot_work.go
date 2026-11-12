@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
@@ -17,9 +18,10 @@ func (b toolBackend) ListBotTasks(ctx context.Context, assistantID string, reque
 	if err != nil {
 		return nil, err
 	}
+	snippets := b.module.taskSnippets(ctx, assistantID, page.Tasks)
 	tasks := make([]map[string]any, 0, len(page.Tasks))
 	for _, task := range page.Tasks {
-		tasks = append(tasks, botTaskJSON(task))
+		tasks = append(tasks, botTaskJSON(task, snippets[task.ID]))
 	}
 	data := map[string]any{"tasks": tasks}
 	if page.NextCursor != "" {
@@ -53,7 +55,7 @@ func (b toolBackend) SaveBotTask(ctx context.Context, assistantID string, reques
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"task": botTaskJSON(task)}, nil
+	return map[string]any{"task": botTaskJSON(task, "")}, nil
 }
 
 func (b toolBackend) AttachBotTask(ctx context.Context, assistantID string, request toolcontract.AttachBotTaskRequest) (map[string]any, error) {
@@ -68,7 +70,7 @@ func (b toolBackend) AttachBotTask(ctx context.Context, assistantID string, requ
 		}
 		return nil, err
 	}
-	return map[string]any{"task": botTaskJSON(task)}, nil
+	return map[string]any{"task": botTaskJSON(task, "")}, nil
 }
 
 func (b toolBackend) MergeBotTasks(ctx context.Context, assistantID string, request toolcontract.MergeBotTasksRequest) (map[string]any, error) {
@@ -76,10 +78,10 @@ func (b toolBackend) MergeBotTasks(ctx context.Context, assistantID string, requ
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"task": botTaskJSON(task)}, nil
+	return map[string]any{"task": botTaskJSON(task, "")}, nil
 }
 
-func botTaskJSON(task BotTask) map[string]any {
+func botTaskJSON(task BotTask, snippet string) map[string]any {
 	messages := task.MessageIDs
 	if messages == nil {
 		messages = []string{}
@@ -88,8 +90,12 @@ func botTaskJSON(task BotTask) map[string]any {
 	for _, session := range task.Sessions {
 		sessions = append(sessions, map[string]any{"kind": session.Kind, "id": session.RefID, "deviceId": session.DeviceID, "threadId": session.ThreadID})
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"id": task.ID, "title": task.Title, "goal": task.Goal, "status": task.Status, "mergedInto": task.MergedInto,
 		"messageIds": messages, "sessions": sessions, "createdAt": task.CreatedAt, "updatedAt": task.UpdatedAt,
 	}
+	if strings.TrimSpace(snippet) != "" {
+		payload["lastUserMessage"] = storedSnippet(snippet)
+	}
+	return payload
 }

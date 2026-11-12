@@ -561,7 +561,7 @@ func (m *Module) deliverWakeLocked(ctx context.Context, wake BrainWake) {
 	openTasks, _ := m.store.RecentOpenBotTasks(ctx, assistant.ID, 10)
 	request := mustJSON(map[string]any{
 		"assistantId": assistant.ID, "threadId": assistant.BrainThreadID, "clientMessageId": responseID,
-		"text": taskEventEnvelope(assistant, wake, openTasks), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
+		"text": taskEventEnvelope(assistant, wake, openTasks, m.taskSnippets(ctx, assistant.ID, openTasks)), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
 	})
 	result := m.startBrainTurnTriggered(ctx, assistant, request, "event")
 	if result.Error != nil || result.Outcome != "accepted" {
@@ -607,13 +607,13 @@ func taskEventTemplate(status, summary string) string {
 	return lead + "。" + summary
 }
 
-func taskEventEnvelope(assistant Assistant, wake BrainWake, openTasks []BotTask) string {
+func taskEventEnvelope(assistant Assistant, wake BrainWake, openTasks []BotTask, snippets map[string]string) string {
 	if wake.Status == "bot_queue" {
 		return "PUCK_ENVELOPE assistant=" + assistant.ID + " nonce=" + newUUID() + " kind=bot_queue\n" +
 			"这是还没做完的工作或尚未归入任务的用户消息，不是新的执行结果。需要时自己读全文。\n" +
 			wake.Summary + "\n" +
-			openBotTaskContext(openTasks) + "\n" +
-			"若这是尚未归属的用户消息，必须 attach_bot_task 到已有任务、merge_bot_tasks，或 save_bot_task 新建后再 attach，不能只回复 PUCK_SILENT。若这是已有任务，继续做或标成 done/cancelled。没有新的话要说就只回复 PUCK_SILENT。\n" +
+			openBotTaskContext(openTasks, snippets) + "\n" +
+			"若这是尚未归属的用户消息，它会在这轮结束时记成任务。如果它延续上面的未完成任务，把那个 taskId 传给 save_bot_task。两条任务要合并才用 merge_bot_tasks。没有新的话要说就只回复 PUCK_SILENT。\n" +
 			envelopeContext(assistant)
 	}
 	mode := "execution"

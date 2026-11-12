@@ -91,11 +91,24 @@ func (s *Store) OldestOpenBotTaskID(ctx context.Context, assistantID string) (st
 }
 
 func (s *Store) SaveBotTask(ctx context.Context, task BotTask) (BotTask, error) {
-	if task.AssistantID == "" || !validBotTaskStatus(task.Status) {
+	if task.AssistantID == "" {
 		return BotTask{}, errors.New("invalid bot task")
 	}
 	if strings.TrimSpace(task.Title) == "" && strings.TrimSpace(task.Goal) == "" {
-		return BotTask{}, errors.New("title or goal is required")
+		if task.ID == "" {
+			return BotTask{}, errors.New("title or goal is required")
+		}
+		existing, err := s.BotTask(ctx, task.AssistantID, task.ID)
+		if err != nil {
+			return BotTask{}, err
+		}
+		task.Title, task.Goal = existing.Title, existing.Goal
+		if task.Status == "" {
+			task.Status = existing.Status
+		}
+	}
+	if !validBotTaskStatus(task.Status) {
+		return BotTask{}, errors.New("invalid bot task")
 	}
 	now := nowText(time.Time{})
 	if task.ID == "" {

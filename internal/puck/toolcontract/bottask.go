@@ -47,11 +47,11 @@ type MergeBotTasksRequest struct {
 func botTaskDefinition(name string) (Definition, bool) {
 	switch name {
 	case "list_bot_tasks":
-		return Definition{Name: name, Description: "列出或按关键词搜索这个 Bot 自己的任务。返回原文，不摘要。可用 status 过滤，用 cursor 翻页。", InputSchema: listBotTasksSchema()}, true
+		return Definition{Name: name, Description: "列出或按关键词搜索这个 Bot 自己的任务。每条含 title、最近更新时间，以及最后一条用户消息的原文片段，不另写摘要。可用 status 过滤，用 cursor 翻页。", InputSchema: listBotTasksSchema()}, true
 	case "search_messages":
 		return Definition{Name: name, Description: "按关键词搜索这个 Bot 的 Ariel 对话。返回消息原文，不摘要。用 cursor 翻页。", InputSchema: searchMessagesSchema()}, true
 	case "save_bot_task":
-		return Definition{Name: name, Description: "创建或更新这个 Bot 的任务。title 或 goal 由你来写。status 可以是 accepted、in_progress、waiting_user、done、cancelled。合并请用 merge_bot_tasks。", InputSchema: saveBotTaskSchema()}, true
+		return Definition{Name: name, Description: "创建或更新这个 Bot 的任务，并把当前用户消息挂到结果上。传入已有未完成任务的 id 表示这条消息是它的延续。不传 id 则新建。合并两条任务用 merge_bot_tasks。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
 	case "attach_bot_task":
 		return Definition{Name: name, Description: "把用户消息或本助理的子会话挂到已有任务上。messageIds 是 Ariel 消息 id。sessions.kind 为 task 时传 id，为 watch 时传 deviceId 和 threadId。", InputSchema: attachBotTaskSchema()}, true
 	case "merge_bot_tasks":
@@ -134,13 +134,14 @@ func DecodeSaveBotTask(raw json.RawMessage) (SaveBotTaskRequest, []FieldError) {
 	if details := optionalBoundedString(fields, "status", &value.Status, 32); len(details) != 0 {
 		return value, details
 	}
-	if strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.Goal) == "" {
-		return value, fieldError("title", "title or goal is required", "non-empty title or goal")
+	if strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.Goal) == "" && value.ID == "" {
+		return value, fieldError("title", "title or goal is required", "non-empty title or goal, or an existing task id")
 	}
-	if value.Status == "" {
+	keepStatus := value.Status == "" && strings.TrimSpace(value.Title) == "" && strings.TrimSpace(value.Goal) == "" && value.ID != ""
+	if value.Status == "" && !keepStatus {
 		value.Status = "accepted"
 	}
-	if !knownBotTaskStatus(value.Status) {
+	if !keepStatus && !knownBotTaskStatus(value.Status) {
 		return value, fieldError("status", "unknown enum value", "accepted, in_progress, waiting_user, done, or cancelled")
 	}
 	return value, nil
