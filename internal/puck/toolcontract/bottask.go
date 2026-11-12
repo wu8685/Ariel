@@ -51,7 +51,7 @@ func botTaskDefinition(name string) (Definition, bool) {
 	case "search_messages":
 		return Definition{Name: name, Description: "按关键词搜索这个 Bot 的 Ariel 对话。返回消息原文，不摘要。用 cursor 翻页。", InputSchema: searchMessagesSchema()}, true
 	case "save_bot_task":
-		return Definition{Name: name, Description: "创建或更新这个 Bot 的任务，并把当前用户消息挂到结果上。传入已有未完成任务的 id 表示这条消息是它的延续。不传 id 则新建。合并两条任务用 merge_bot_tasks。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
+		return Definition{Name: name, Description: "新建或更新这个 Bot 的任务。传入已有任务的 id 会更新那一条，不会自动挂上当前消息。要挂消息请再调用 attach_bot_task。不传 id 则新建。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
 	case "attach_bot_task":
 		return Definition{Name: name, Description: "把用户消息或本助理的子会话挂到已有任务上。messageIds 是 Ariel 消息 id。sessions.kind 为 task 时传 id，为 watch 时传 deviceId 和 threadId。", InputSchema: attachBotTaskSchema()}, true
 	case "merge_bot_tasks":

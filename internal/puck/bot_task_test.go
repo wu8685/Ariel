@@ -2,8 +2,6 @@ package puck
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -130,12 +128,14 @@ func TestIdleTurnWakesTheMessageItJustFinished(t *testing.T) {
 	}
 	module.setPending(assistant, "brain-turn-a", "user-1", "user-1-processing", now, false, "")
 	module.handleBrainEvent(ctx, brainEvent(id, "turn/completed", `{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}`))
-	_, attached, err := module.store.InboxAssignment(ctx, id, "user-1")
-	if err != nil || !attached {
-		t.Fatalf("attached=%v err=%v", attached, err)
+	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 1 })
+	text := botQueueTurns(moduleBridge(module))[0]
+	if !strings.Contains(text, "user-1") || !strings.Contains(text, "尚未归属") {
+		t.Fatalf("wake=%s", text)
 	}
-	if len(botQueueTurns(moduleBridge(module))) != 0 {
-		t.Fatal("an assigned message was woken")
+	_, attached, err := module.store.InboxAssignment(ctx, id, "user-1")
+	if err != nil || attached {
+		t.Fatalf("code attached the message: attached=%v err=%v", attached, err)
 	}
 }
 
@@ -202,11 +202,15 @@ func TestUnassignedInboxWakesOnceThenRetries(t *testing.T) {
 	}
 	module.handleBrainEvent(ctx, brainEvent(id, "turn/completed", `{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}`))
 	_, attached, err := module.store.InboxAssignment(ctx, id, "inbox-1")
-	if err != nil || !attached {
-		t.Fatalf("message stayed unassigned: attached=%v err=%v", attached, err)
+	if err != nil || attached {
+		t.Fatalf("code attached the message: attached=%v err=%v", attached, err)
 	}
-	if _, err := module.store.BrainWakeByTask(ctx, id, "queue:inbox:inbox-1"); !errors.Is(err, sql.ErrNoRows) && err != nil {
-		t.Fatal(err)
+	if len(botQueueTurns(moduleBridge(module))) != 1 {
+		t.Fatal("unassigned inbox was woken again immediately")
+	}
+	wake, err := module.store.BrainWakeByTask(ctx, id, "queue:inbox:inbox-1")
+	if err != nil || wake.NotBefore.After(now.Add(queueRetryBackoff)) {
+		t.Fatalf("retry=%+v err=%v", wake, err)
 	}
 }
 
@@ -339,7 +343,7 @@ func TestToolset11RotatesOnNextUserMessage(t *testing.T) {
 			instructions, _ = params["developerInstructions"].(string)
 		}
 	}
-	if !strings.Contains(instructions, "save_bot_task") || !strings.Contains(instructions, "merge_bot_tasks") || strings.Count(instructions, "接住的事用 save_bot_task 记成任务。") != 1 {
+	if strings.Count(instructions, "要记住的事用 save_bot_task 新建。") != 1 || !strings.Contains(instructions, "merge_bot_tasks") || !strings.Contains(instructions, "search_messages") || !strings.Contains(instructions, "attach_bot_task") {
 		t.Fatalf("instructions=%s", instructions)
 	}
 }

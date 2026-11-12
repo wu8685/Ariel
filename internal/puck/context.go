@@ -105,8 +105,7 @@ func toolsetPromptLines(toolset int) string {
 		lines = append(lines, "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。")
 	}
 	if toolset >= botTaskToolset {
-		lines = append(lines, "- 接住的事用 save_bot_task 记成任务。")
-		lines = append(lines, "- 新请求可能是旧任务的延续时，先 list_bot_tasks，是的话用 merge_bot_tasks。")
+		lines = append(lines, "- 要记住的事用 save_bot_task 新建。延续已有任务时把那个 id 传给 save_bot_task，再用 attach_bot_task 挂上当前消息。确认是不是旧事用 list_bot_tasks 或 search_messages。两条任务是同一件才用 merge_bot_tasks。")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -151,8 +150,8 @@ func systemContextDebug(a Assistant) map[string]any {
 		"lines":      lines,
 		"observed":   start >= 0 && lines > 0,
 		"hasHandoff": strings.Contains(body, "交接时 Puck 会附上被引用会话的链接"),
-		"hasSave":    strings.Contains(body, "接住的事用 save_bot_task 记成任务"),
-		"hasMerge":   strings.Contains(body, "先 list_bot_tasks"),
+		"hasSave":    strings.Contains(body, "save_bot_task"),
+		"hasMerge":   strings.Contains(body, "merge_bot_tasks"),
 	}
 }
 

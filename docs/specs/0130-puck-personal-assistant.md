@@ -565,11 +565,13 @@ Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原�
 
 用户向 Bot 发出的每条聊天消息都写入 `bot_inbox`，直到 Brain 用 `attach_bot_task` 把它挂到某个 Bot 任务上。Bot 任务存在 `bot_tasks`（schema 11），含 id、assistant、title、goal、status（`accepted`／`in_progress`／`waiting_user`／`done`／`cancelled`／`merged`）、`merged_into`、时间戳，以及消息和子会话链接。代码不自动创建任务，也不自动合并或摘要。
 
-一轮用户消息或 inbox 唤醒开始时，这条用户消息就是该 turn 的当前来源。本轮里 `save_bot_task`、`start_task`、`send_turn`、`finish_task` 成功后，基础设施把这条消息和产生的子会话挂到结果任务上，Brain 不必再调用单独的挂接工具。回合结束时如果消息仍未归属，基础设施用 Brain 的第一句回复（否则用「未命名任务」）自动建一条任务并挂上，避免丢事。Brain 只决定延续还是合并。
+代码不代替 Brain 记账。Brain 没调用工具，消息就留在 inbox，这是可接受的。
+
+系统上下文里只有一句任务工具说明，短信封和唤醒不再重复：要记住的事用 `save_bot_task` 新建；延续已有任务时把那个 id 传给 `save_bot_task`，再用 `attach_bot_task` 挂上当前消息；确认是不是旧事用 `list_bot_tasks` 或 `search_messages`；两条任务是同一件才用 `merge_bot_tasks`。`save_bot_task` 可以只传已有任务 id 来更新它，不会因此自动挂上消息。`list_bot_tasks` 返回 title、最近更新时间，以及最后一条用户消息的原文片段，不另写摘要。短信封只列出这些事实，不写操作规则。
 
 Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒在排队，就立刻唤醒一次：先取最旧的未归属消息，否则取最旧的未完成任务。同一条未归属消息被叫醒后如果还没挂上，下一次才按短退避推迟。跳过唤醒时记下原因（`turn_busy`、`queue_wake_pending`、`backoff`、`rate_limit`），随 `puck.history` 的 `wakeSkips` 返回，不写消息正文。`turn.start` 遇到 `RESYNC_REQUIRED` 时服务端丢掉过期 follower 并重试一次，交接包仍附在同一次输入上，Brain 看不到这次重试。
 
-工具集 11 曾同时提供 `search_messages` 和 `attach_bot_task`。工具集 12 起对 Brain 只声明 `list_bot_tasks`、`save_bot_task`、`merge_bot_tasks`。`list_bot_tasks` 返回 title、最近更新时间，以及最后一条用户消息的原文片段，不另写摘要。`save_bot_task` 传入已有任务 id 表示延续并挂上当前消息；不传 id 则新建并挂上。`merge_bot_tasks` 把来源标成 `merged` 并保留其消息和子会话，同时把这些链接复制到目标。短信封里的未完成任务写明：如果这条是上面某个任务的延续，把那个 taskId 传给 `save_bot_task`。`send_message`、`ask_user`、`share_result` 写入 `puck.history` 时带 `source`（`notify_user`／`ask_user`／`share_result`）。`puck.history` 返回最近 200 条消息，并附上当前注入的系统上下文行数和是否包含交接、记任务、合并这三句，以及最近工具调用的名字、成败和错误码。不附参数，不附正文。Brain 会话本身仍不对 Web 开放 `thread.read`。删除 Bot 时同时清掉它的 Bot 任务、消息链接、子会话链接、inbox、watch 和 wake。归档子会话时解开对应的 `bot_task_sessions`。
+`send_message`、`ask_user`、`share_result` 写入 `puck.history` 时带 `source`（`notify_user`／`ask_user`／`share_result`）。`puck.history` 返回最近 200 条消息，并附上当前注入的系统上下文行数和是否包含交接、记任务、合并这三句，以及最近工具调用的名字、成败和错误码。不附参数，不附正文。Brain 会话本身仍不对 Web 开放 `thread.read`。删除 Bot 时同时清掉它的 Bot 任务、消息链接、子会话链接、inbox、watch 和 wake。归档子会话时解开对应的 `bot_task_sessions`。
 
 删除 Bot 时删掉它的任务、链接和 inbox。子会话消失时只解开 `bot_task_sessions` 里对应的链接，不删任务。主机广告到 11 后，下一次用户消息经 `ensureCurrentToolset` 轮换 brain thread。
 

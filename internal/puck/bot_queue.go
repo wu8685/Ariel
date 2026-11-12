@@ -63,7 +63,7 @@ func (m *Module) recentWakeSkips(assistantID string) []map[string]any {
 }
 
 func unassignedInboxSummary(messageID, text string) string {
-	return "unassigned inbox messageId=" + messageID + "\n这条用户消息尚未归属。如果它延续某个未完成任务，把那个 taskId 传给 save_bot_task。否则这轮结束时会自动建一条任务。合并两条任务才用 merge_bot_tasks。\n" + text
+	return "unassigned inbox messageId=" + messageID + "\n这条用户消息尚未归属。\n" + text
 }
 
 func (m *Module) scheduleBotQueue(ctx context.Context, assistantID, skipMessageID, skipTaskID string) {

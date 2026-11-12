@@ -253,7 +253,6 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 		code = ""
 	}
 	m.noteToolCall(event.AssistantID, input.Tool, result.Success, code)
-	m.recordBookkeeping(ctx, event.AssistantID, input.Tool, input.Arguments, result)
 	if result.Diagnostic != nil {
 		diagnostic, _ := json.Marshal(result.Diagnostic)
 		log.Printf("puck structured tool rejected: diagnostic=%s", diagnostic)
@@ -491,12 +490,11 @@ func (m *Module) rememberSpoken(assistantID, text string) {
 
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
 	pending := m.clearPendingForTurn(assistantID, turnID)
-	created := m.ensureSourceAssigned(ctx, assistantID, sourceFromPending(ctx, m, assistantID, pending), text)
 	defer m.pumpAssistant(ctx, assistantID)
 	defer m.rearmUnassignedInbox(ctx, assistantID, pending.queueKey)
-	// The message that just finished is still unassigned until a tool attaches
-	// it. Skipping it here left the newest inbox row without a wake.
-	defer m.scheduleBotQueue(ctx, assistantID, "", created)
+	// The message that just finished stays unassigned until the brain attaches
+	// it. Do not skip it, and do not create a task on its behalf.
+	defer m.scheduleBotQueue(ctx, assistantID, "", "")
 	if brainSilent(text) {
 		if pending.responseID != "" {
 			_ = m.store.DeleteMessage(ctx, assistantID, pending.responseID)
@@ -2051,7 +2049,7 @@ func openBotTaskContext(tasks []BotTask, snippets map[string]string) string {
 		}
 		lines = append(lines, line)
 	}
-	return "\n\n未完成的 Bot 任务（最近 " + strconv.Itoa(len(lines)) + " 条）：\n" + strings.Join(lines, "\n") + "\n如果这条是上面某个未完成任务的延续，把那个 taskId 传给 save_bot_task。"
+	return "\n\n未完成的 Bot 任务（最近 " + strconv.Itoa(len(lines)) + " 条）：\n" + strings.Join(lines, "\n")
 }
 
 func reusableTaskContext(tasks []Task) string {

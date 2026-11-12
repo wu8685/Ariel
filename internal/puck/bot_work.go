@@ -81,6 +81,15 @@ func (b toolBackend) MergeBotTasks(ctx context.Context, assistantID string, requ
 	return map[string]any{"task": botTaskJSON(task, "")}, nil
 }
 
+func storedSnippet(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
+	runes := []rune(text)
+	if len(runes) > 160 {
+		return string(runes[:160])
+	}
+	return text
+}
+
 func botTaskJSON(task BotTask, snippet string) map[string]any {
 	messages := task.MessageIDs
 	if messages == nil {
