@@ -577,6 +577,16 @@ Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒
 
 删除 Bot 时删掉它的任务、链接和 inbox。子会话消失时只解开 `bot_task_sessions` 里对应的链接，不删任务。主机广告到 11 后，下一次用户消息经 `ensureCurrentToolset` 轮换 brain thread。
 
+### 6.1.6 无头验收（2026-11-11）
+
+`cmd/puck-e2e` 与 `scripts/e2e/puck-e2e.sh` 只用于开发机验收 #93 与 #94，不进入 Relay 或 Desktop Agent 的生产启动路径，也不注册到 `ariel.sh`。
+
+它在临时目录启动隔离的 Relay（随机本机端口、临时 SQLite、临时 PIN）和隔离的 Desktop Agent（独立 `cwd` 与 Puck root）。Agent 以 headless 模式自己拉起 `codex app-server`（stdio），不连接 Desktop IPC，不启动 GUI，也不打开 `codex://`。Codex 进程自行读取本机登录；验收程序不读、不复制、不打印凭据或 `~/.codex/config.toml`。若配置了 Desktop IPC，程序直接失败。场景按顺序跑，同一时间只有一个 brain turn。可选 `-ui` 用 headless Chromium 打开这次的 Relay。PIN 页面也会读取 `/api/auth/status` 里的 Puck 状态，Relay 报告 ready 时才显示「打开 Puck」。`-fake` 改用仓库里的确定性假 app-server，不启动真实 Codex。Owner 会话直接写进临时库，不走 Passkey。驱动方式与 Web 相同：WebSocket `hello` 之后调用 `puck.*` 与 `thread.*`。
+
+报告保留错误码和短错误说明，只抹掉 UUID、凭据和交接正文。WebSocket 传输失败会重连并重试一次。headless 归档前先放开私有 app-server 对这条线程的 resume，并且只归档本次创建的线程，不扫描用户的其他会话。运行结束时也会把这些线程归档。Desktop Agent 没起来时，报告带上 `Run()` 的错误。
+
+场景结果是 JSON。B 的挂接数量和 D 的合并只观察 Brain 实际做了什么，不因此失败。A、C、E、F、G 和开启后的 UI 是硬断言。A 会等到子会话里出现交接正文，并在 `send_turn` 重试之后再核对链接、deviceId、threadId 和 cwd；cwd 必须是非空的可信工作区。假 app-server 的用户消息按真实形状返回：时间线条目里的 `input_text`，`updatedAt` 为 RFC3339，工作区在 `session_meta.payload.cwd`。它还会先用互相排斥的 locator 调用 `send_turn`，确认错误点名 `taskId` 后再重试。UI 等到历史消息出现；失败时只打印各 `data-testid` 的个数，不打印正文。
+
 ## 7. Relay 内的入口与门禁
 
 ### 7.1 进程内编排接口（取代 `role=assistant` 连接）

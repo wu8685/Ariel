@@ -193,6 +193,7 @@ type Service struct {
 	idleGrace        time.Duration
 	archiveUndo      []archiveUndoRecord
 	agentStateDir    string
+	headless         bool
 }
 
 type archiveUndoRecord struct {
@@ -219,6 +220,13 @@ func (s *Service) QueueEnabled() bool { return s.queue != nil }
 // SetAgentStateDir records the working directory this agent was started with.
 // thread/read often reports that directory as thread.cwd; callers can reject
 // it instead of treating it as the session workspace.
+func (s *Service) SetHeadless(headless bool) {
+	if s == nil {
+		return
+	}
+	s.headless = headless
+}
+
 func (s *Service) SetAgentStateDir(dir string) {
 	if s == nil {
 		return
@@ -386,25 +394,38 @@ func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, e
 	s.mu.Lock()
 	controller := s.threads[threadID]
 	s.mu.Unlock()
-	if controller == nil {
+	if s.headless {
+		// A private app-server resume holds the thread. Release it before
+		// thread/archive so the write is not blocked on that process.
+		s.releaseHeadlessLive(controller)
+	} else if controller == nil || controller.live == nil {
 		return "", ErrArchiveStateUnknown
+	} else {
+		controller.mu.Lock()
+		if controller.live == nil {
+			controller.mu.Unlock()
+			if !s.headless {
+				return "", ErrArchiveStateUnknown
+			}
+		} else {
+			raw, err := controller.live.Current()
+			if err != nil {
+				controller.mu.Unlock()
+				return "", ErrArchiveStateUnknown
+			}
+			current, err := NormalizeLive(controller.id, controller.title, controller.cwd, raw)
+			controller.mu.Unlock()
+			if err != nil || current["runtime"] != "idle" {
+				return "", ErrArchiveStateUnknown
+			}
+		}
 	}
-	controller.mu.Lock()
-	if controller.live == nil {
-		controller.mu.Unlock()
-		return "", ErrArchiveStateUnknown
-	}
-	raw, err := controller.live.Current()
-	if err != nil {
-		controller.mu.Unlock()
-		return "", ErrArchiveStateUnknown
-	}
-	current, err := NormalizeLive(controller.id, controller.title, controller.cwd, raw)
-	controller.mu.Unlock()
-	if err != nil || current["runtime"] != "idle" {
-		return "", ErrArchiveStateUnknown
-	}
-	if err := s.archiver.Archive(ctx, threadID); err != nil {
+	archiveCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := s.archiver.Archive(archiveCtx, threadID); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(archiveCtx.Err(), context.DeadlineExceeded) {
+			return "", errors.New("TIMEOUT")
+		}
 		return "", err
 	}
 	now := time.Now()
@@ -421,6 +442,26 @@ func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, e
 	operationID := "archive-" + rand.Text()
 	s.archiveUndo = append(s.archiveUndo, archiveUndoRecord{operationID: operationID, threadID: threadID, expiresAt: now.Add(15 * time.Second)})
 	return operationID, nil
+}
+
+func (s *Service) releaseHeadlessLive(controller *threadController) {
+	if controller == nil {
+		return
+	}
+	controller.mu.Lock()
+	live := controller.live
+	controller.live = nil
+	controller.current = nil
+	controller.bootstrapHold = false
+	controller.migrating = false
+	if controller.retireTimer != nil {
+		controller.retireTimer.Stop()
+		controller.retireTimer = nil
+	}
+	controller.mu.Unlock()
+	if live != nil {
+		_ = live.Close()
+	}
 }
 
 func (s *Service) UndoArchive(ctx context.Context, threadID, operationID string) error {
