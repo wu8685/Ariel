@@ -98,6 +98,36 @@ func (b toolBackend) HandoffContext(ctx context.Context, query pucktools.Handoff
 			blobs = append(blobs, message.Text, message.CardJSON)
 		}
 	}
+	// A later send_turn, including the call after an INVALID_ARGUMENT retry,
+	// often does not repeat the thread id. The task's original user message
+	// is what named the referenced session. It is used only to match ids.
+	if query.TargetThreadID != "" {
+		tasks, taskErr := b.module.store.Tasks(ctx, query.AssistantID)
+		if taskErr != nil {
+			return pucktools.Handoff{}, taskErr
+		}
+		for _, task := range tasks {
+			if task.NativeThreadID != query.TargetThreadID {
+				continue
+			}
+			if query.TargetDeviceID != "" && task.DeviceID != query.TargetDeviceID {
+				continue
+			}
+			if strings.TrimSpace(task.Goal) != "" {
+				blobs = append(blobs, task.Goal)
+			}
+			if task.SourceMessageID == "" || task.SourceMessageID == query.SourceMessageID {
+				continue
+			}
+			message, messageErr := b.module.store.Message(ctx, query.AssistantID, task.SourceMessageID)
+			if messageErr != nil && !errors.Is(messageErr, sql.ErrNoRows) {
+				return pucktools.Handoff{}, messageErr
+			}
+			if messageErr == nil && message.Role == "user" {
+				blobs = append(blobs, message.Text)
+			}
+		}
+	}
 	candidates, err := b.handoffCandidates(ctx, assistant)
 	if err != nil {
 		return pucktools.Handoff{}, err

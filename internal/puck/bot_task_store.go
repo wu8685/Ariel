@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -318,10 +319,13 @@ func (s *Store) AttachBotTask(ctx context.Context, assistantID, taskID string, m
 	for _, messageID := range messageIDs {
 		var role string
 		if err := tx.QueryRowContext(ctx, `SELECT role FROM conversation_messages WHERE assistant_id=? AND id=?`, assistantID, messageID).Scan(&role); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return BotTask{}, fmt.Errorf("messageIds: %s is not a user message of this assistant", messageID)
+			}
 			return BotTask{}, err
 		}
 		if role != "user" {
-			return BotTask{}, errors.New("only user messages can be attached")
+			return BotTask{}, fmt.Errorf("messageIds: %s has role %s; only a user message id can be attached", messageID, role)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO bot_task_messages(bot_task_id, assistant_id, message_id, created_at) VALUES(?,?,?,?) ON CONFLICT(bot_task_id, message_id) DO NOTHING`, taskID, assistantID, messageID, now); err != nil {
 			return BotTask{}, err
@@ -335,17 +339,23 @@ func (s *Store) AttachBotTask(ctx context.Context, assistantID, taskID string, m
 		case "task":
 			var deviceID, threadID string
 			if err := tx.QueryRowContext(ctx, `SELECT device_id, native_thread_id FROM tasks WHERE assistant_id=? AND task_id=?`, assistantID, session.RefID).Scan(&deviceID, &threadID); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return BotTask{}, fmt.Errorf("sessions.id: task %s was not found for this assistant", session.RefID)
+				}
 				return BotTask{}, err
 			}
 			session.DeviceID, session.ThreadID = deviceID, threadID
 		case "watch":
 			var watchID string
 			if err := tx.QueryRowContext(ctx, `SELECT id FROM thread_watches WHERE assistant_id=? AND device_id=? AND thread_id=?`, assistantID, session.DeviceID, session.ThreadID).Scan(&watchID); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return BotTask{}, fmt.Errorf("sessions.deviceId: no watch for deviceId %s and threadId %s", session.DeviceID, session.ThreadID)
+				}
 				return BotTask{}, err
 			}
 			session.RefID = watchID
 		default:
-			return BotTask{}, errors.New("unknown session kind")
+			return BotTask{}, fmt.Errorf("sessions.kind: %s is not task or watch", session.Kind)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO bot_task_sessions(bot_task_id, assistant_id, kind, ref_id, device_id, thread_id, created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(bot_task_id, kind, ref_id) DO NOTHING`, taskID, assistantID, session.Kind, session.RefID, session.DeviceID, session.ThreadID, now); err != nil {
 			return BotTask{}, err
@@ -360,7 +370,7 @@ func (s *Store) AttachBotTask(ctx context.Context, assistantID, taskID string, m
 
 func (s *Store) MergeBotTasks(ctx context.Context, assistantID, fromID, intoID string) (BotTask, error) {
 	if fromID == "" || intoID == "" || fromID == intoID {
-		return BotTask{}, errors.New("merge needs two different tasks")
+		return BotTask{}, errors.New("intoId: merge needs two different task ids")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -369,13 +379,22 @@ func (s *Store) MergeBotTasks(ctx context.Context, assistantID, fromID, intoID s
 	defer tx.Rollback()
 	var fromStatus, intoStatus string
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM bot_tasks WHERE assistant_id=? AND id=?`, assistantID, fromID).Scan(&fromStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BotTask{}, fmt.Errorf("fromId: task %s was not found", fromID)
+		}
 		return BotTask{}, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM bot_tasks WHERE assistant_id=? AND id=?`, assistantID, intoID).Scan(&intoStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BotTask{}, fmt.Errorf("intoId: task %s was not found", intoID)
+		}
 		return BotTask{}, err
 	}
-	if fromStatus == botTaskMerged || intoStatus == botTaskMerged {
-		return BotTask{}, errors.New("merged task cannot be merged again")
+	if fromStatus == botTaskMerged {
+		return BotTask{}, fmt.Errorf("fromId: task %s is already merged and cannot be merged again", fromID)
+	}
+	if intoStatus == botTaskMerged {
+		return BotTask{}, fmt.Errorf("intoId: task %s is already merged and cannot accept another merge", intoID)
 	}
 	now := nowText(time.Time{})
 	if _, err := tx.ExecContext(ctx, `INSERT INTO bot_task_messages(bot_task_id, assistant_id, message_id, created_at)

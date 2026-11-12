@@ -251,6 +251,8 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	code := result.Code
 	if result.Success {
 		code = ""
+	} else if field := argumentField(result); field != "" && !strings.Contains(code, ":") {
+		code += ":" + field
 	}
 	m.noteToolCall(event.AssistantID, input.Tool, result.Success, code)
 	if result.Diagnostic != nil {
@@ -271,6 +273,21 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 		}
 		_ = m.store.Audit(ctx, AuditEntry{ID: randomID("audit"), AssistantID: event.AssistantID, Actor: "relay", Action: "brain_tool_result", Target: input.Tool, Result: code})
 	}
+}
+
+func argumentField(result pucktools.ToolResult) string {
+	if len(result.Details) > 0 {
+		field := strings.TrimSpace(result.Details[0].Field)
+		if field != "" && len(field) <= 48 {
+			return field
+		}
+	}
+	message := strings.TrimSpace(result.Message)
+	index := strings.Index(message, ":")
+	if index > 0 && index <= 48 && !strings.Contains(message[:index], " ") {
+		return message[:index]
+	}
+	return ""
 }
 
 func (m *Module) sourceMessageID(ctx context.Context, assistantID string) string {

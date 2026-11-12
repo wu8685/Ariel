@@ -131,7 +131,10 @@ func (r *RestartingRPC) Call(ctx context.Context, method string, params any, res
 		if err == nil {
 			return nil
 		}
-		if attemptTimedOut {
+		// thread/list is a read. A remote or protocol rejection is the same
+		// class as RESYNC_REQUIRED: drop this app-server and try once more.
+		listResync := method == "thread/list" && (errors.Is(err, ErrRemote) || errors.Is(err, ErrProtocol))
+		if attemptTimedOut || listResync {
 			r.invalidate(generation)
 			if retryable && attempt == 0 && ctx.Err() == nil {
 				continue

@@ -243,3 +243,74 @@ func bootstrapCalls(bridge *fakeModuleBridge) string {
 func jsonUnmarshal(raw []byte, target any) error {
 	return json.Unmarshal(raw, target)
 }
+
+func TestSendTurnRetryKeepsThePackWithoutRepeatingTheThread(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	assistantID := seedWatchAssistant(t, module)
+	const referenced = "77777777-7777-4777-8777-777777777777"
+	const target = "88888888-8888-4888-8888-888888888888"
+	if err := module.store.AppendMessage(ctx, Message{ID: "origin-msg", AssistantID: assistantID, Role: "user", Kind: "text", Text: "ORIGIN_SENTENCE threadId 是 " + referenced}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.SaveThreadWatch(ctx, ThreadWatch{ID: "watch-ref", AssistantID: assistantID, DeviceID: "exec-a", ThreadID: referenced}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, SourceMessageID: "origin-msg", DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: target, Goal: "续投", Status: "running", CreatedBy: "puck"}); err != nil {
+		t.Fatal(err)
+	}
+	rejected := module.tools.Execute(ctx, pucktools.Call{AssistantID: assistantID, Tool: "send_turn", Arguments: mustJSON(map[string]any{
+		"taskId": "task-live", "threadId": target, "text": "继续看引用", "riskTags": []string{},
+	})})
+	if rejected.Success || rejected.Code != "INVALID_ARGUMENT" || !strings.Contains(rejected.Message, "taskId:") || !strings.Contains(rejected.Message, "mutually exclusive") {
+		t.Fatalf("rejection=%+v", rejected)
+	}
+	sent := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": assistantID, "clientMessageId": "user-retry", "text": "请对刚才的执行任务调用一次 send_turn，text 只写继续看引用。"}))
+	if sent.Error != nil {
+		t.Fatal(sent.Error)
+	}
+	module.handleBrainEvent(ctx, relay.BrainEvent{
+		AssistantID: assistantID, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall",
+		Payload: mustJSON(map[string]any{"callId": "call-bad", "tool": "send_turn", "arguments": map[string]any{
+			"taskId": "task-live", "threadId": target, "text": "继续看引用", "riskTags": []string{},
+		}}),
+	})
+	module.handleBrainEvent(ctx, relay.BrainEvent{
+		AssistantID: assistantID, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.toolCall",
+		Payload: mustJSON(map[string]any{"callId": "call-good", "tool": "send_turn", "arguments": map[string]any{
+			"taskId": "task-live", "text": "继续看引用", "riskTags": []string{},
+		}}),
+	})
+	history := module.Handle(ctx, "puck.history", mustJSON(map[string]any{"assistantId": assistantID}))
+	calls, _ := history.Data["toolCalls"].([]map[string]any)
+	var sawField bool
+	for _, call := range calls {
+		if call["tool"] == "send_turn" && call["code"] == "INVALID_ARGUMENT:taskId" {
+			sawField = true
+		}
+	}
+	if !sawField {
+		t.Fatalf("tool calls=%v", calls)
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	var text string
+	for index, method := range bridge.calls {
+		if method != "turn.start" {
+			continue
+		}
+		var params map[string]any
+		if err := jsonUnmarshal(bridge.params[index], &params); err != nil {
+			t.Fatal(err)
+		}
+		text, _ = params["text"].(string)
+	}
+	if !strings.Contains(text, "codex://threads/"+referenced) || !strings.Contains(text, "deviceId: exec-a") || strings.Contains(text, "ORIGIN_SENTENCE") || strings.Contains(text, target) {
+		t.Fatalf("retry pack=%s", text)
+	}
+}

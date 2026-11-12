@@ -82,7 +82,11 @@ func (h *Handler) mergeBotTasks(ctx context.Context, call Call) ToolResult {
 		return result
 	}
 	data, err := work.MergeBotTasks(ctx, call.AssistantID, value)
-	return botWorkResult(data, err)
+	result = botWorkResult(data, err)
+	if result.Success {
+		result.Message = "已把来源任务并入目标，并复制了两边已经挂上的消息和子会话。这次调用不会把当前用户消息挂上去；要挂上请再调用 attach_bot_task。"
+	}
+	return result
 }
 
 func (h *Handler) botWork() (BotWork, ToolResult) {

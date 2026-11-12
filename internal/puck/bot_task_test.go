@@ -348,6 +348,36 @@ func TestToolset11RotatesOnNextUserMessage(t *testing.T) {
 	}
 }
 
+func TestAttachAndMergeNameTheField(t *testing.T) {
+	module, id := newQueueModule(t)
+	ctx := context.Background()
+	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "kept", AssistantID: id, Title: "甲", Goal: "甲", Status: "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "other", AssistantID: id, Title: "乙", Goal: "乙", Status: "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := module.store.AttachBotTask(ctx, id, "kept", []string{"missing-message"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "messageIds:") || !strings.Contains(err.Error(), "missing-message") {
+		t.Fatalf("attach=%v", err)
+	}
+	if err := module.store.AppendMessage(ctx, Message{ID: "assistant-msg", AssistantID: id, Role: "assistant", Kind: "text", Text: "不是用户"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = module.store.AttachBotTask(ctx, id, "kept", []string{"assistant-msg"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "messageIds:") || !strings.Contains(err.Error(), "role assistant") {
+		t.Fatalf("role=%v", err)
+	}
+	merged := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, Tool: "merge_bot_tasks", Arguments: mustJSON(map[string]any{"fromId": "other", "intoId": "kept"})})
+	if !merged.Success || !strings.Contains(merged.Message, "不会把当前用户消息挂上去") {
+		t.Fatalf("merge=%+v", merged)
+	}
+	_, err = module.store.MergeBotTasks(ctx, id, "missing-from", "kept")
+	if err == nil || !strings.Contains(err.Error(), "fromId:") {
+		t.Fatalf("missing from=%v", err)
+	}
+}
+
 func newQueueModule(t *testing.T) (*Module, string) {
 	t.Helper()
 	module, err := NewModule(t.TempDir(), &fakeModuleBridge{})

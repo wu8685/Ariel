@@ -1368,7 +1368,12 @@ func (s *Service) RefreshLive(ctx context.Context, id string) error {
 	c.mu.Unlock()
 	refreshable, ok := live.(refreshableLive)
 	if !ok {
-		return errors.New("RESYNC_REQUIRED")
+		// Headless app-server lives have no separate follower to refresh.
+		// Missing the interface is not a stale Desktop binding.
+		if live == nil {
+			return errors.New("RESYNC_REQUIRED")
+		}
+		return nil
 	}
 	_, err := refreshable.Refresh(ctx)
 	return err

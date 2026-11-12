@@ -553,7 +553,7 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
 
 Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原话，也不总结被引用会话。摘要是模型自己的事。交接包只附会话引用，由服务端在通过既有门禁、真正调用 `thread.bootstrap` 或 `turn.start` 时加在 Brain 指令后面。Brain 的 `prompt`／`text` 原样保留。没有引用时不附加包。
 
-引用来自本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch），并且只包括这一轮点了名的会话：Brain 指令、触发这轮的用户消息、它所回复的消息、`includeMessages` 里的消息提到了 `taskId`／`threadId`，或者 `referenceThreads` 明确列出了它们。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现会话，不把消息正文贴进去。最多 4 条，多出来的直接丢掉，不做文字截断，也不写省略标记。
+引用来自本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch），并且只包括这一轮点了名的会话：Brain 指令、触发这轮的用户消息、它所回复的消息、`includeMessages` 里的消息提到了 `taskId`／`threadId`，或者 `referenceThreads` 明确列出了它们。对已有任务的 `send_turn`（含参数被拒后的下一次调用）还会用该任务记录的来源用户消息来认出当时点名的会话，所以交接包仍会附上。来源消息只用来匹配 id，正文不写入包。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现会话，不把消息正文贴进去。最多 4 条，多出来的直接丢掉，不做文字截断，也不写省略标记。
 
 每条引用含 `deviceId`、`threadId`，以及 Codex Desktop 的 `codex://threads/<uuid>`（`internal/desktopagent/load.go`，0074／0004；非 UUID 不写链接）。标题和 cwd 只在已有元数据时附上，不从对话里摘结论。cwd 按 `session_meta.cwd`、任务或 watch 记录的 cwd、turn cwd、`thread.cwd` 的顺序选取。Agent 配置并传给 app-server 的状态／工作目录，以及它下面的路径，都不是工作区；没有可信 cwd 时省略该字段。`thread.read` 会从线程对象或 rollout 的 `session_meta` 取出工作区，并带上这个 Agent 目录供比较。不写路径黑名单，不写 watch 状态、turn 状态或结论摘录。
 
@@ -569,7 +569,9 @@ Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原�
 
 系统上下文里只有一句任务工具说明，短信封和唤醒不再重复：要记住的事用 `save_bot_task` 新建；延续已有任务时把那个 id 传给 `save_bot_task`，再用 `attach_bot_task` 挂上当前消息；确认是不是旧事用 `list_bot_tasks` 或 `search_messages`；两条任务是同一件才用 `merge_bot_tasks`。`save_bot_task` 可以只传已有任务 id 来更新它，不会因此自动挂上消息。`list_bot_tasks` 返回 title、最近更新时间，以及最后一条用户消息的原文片段，不另写摘要。短信封只列出这些事实，不写操作规则。
 
-Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒在排队，就立刻唤醒一次：先取最旧的未归属消息，否则取最旧的未完成任务。同一条未归属消息被叫醒后如果还没挂上，下一次才按短退避推迟。跳过唤醒时记下原因（`turn_busy`、`queue_wake_pending`、`backoff`、`rate_limit`），随 `puck.history` 的 `wakeSkips` 返回，不写消息正文。`turn.start` 遇到 `RESYNC_REQUIRED` 时服务端丢掉过期 follower 并重试一次，交接包仍附在同一次输入上，Brain 看不到这次重试。
+Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒在排队，就立刻唤醒一次：先取最旧的未归属消息，否则取最旧的未完成任务。同一条未归属消息被叫醒后如果还没挂上，下一次才按短退避推迟。跳过唤醒时记下原因（`turn_busy`、`queue_wake_pending`、`backoff`、`rate_limit`），随 `puck.history` 的 `wakeSkips` 返回，不写消息正文。`turn.start` 遇到 `RESYNC_REQUIRED` 时服务端丢掉过期 follower 并重试一次，交接包仍附在同一次输入上，Brain 看不到这次重试。`thread.list` 遇到会映射成 `RESYNC_REQUIRED` 的远端或协议错误时，丢掉当前只读 app-server 并重试一次。`thread/list` 的 `updatedAt` 可以是数字或 RFC3339 字符串，线程 id 可以在 `id` 或 `threadId`，rollout 路径可以在 `path`、`rolloutPath` 或 `rollout_path`。用户消息的 `input_text`／`inputText`，以及套在 `item` 里的时间线条目，按正文读取。没有 `Refresh` 的 follower（headless app-server）不把这一点报成 `RESYNC_REQUIRED`。
+
+`INVALID_ARGUMENT` 的 message 写明字段、原因和期望，工具记录里的错误码带上这个字段，Brain 可以据此改下一次调用。`attach_bot_task` 对不存在或非用户消息的 id 点名 `messageIds`，对找不到的子会话点名 `sessions.id` 或 `sessions.deviceId`。`merge_bot_tasks` 成功时说明已合并并复制了已有链接，且这次调用不会把当前用户消息挂上去。
 
 `send_message`、`ask_user`、`share_result` 写入 `puck.history` 时带 `source`（`notify_user`／`ask_user`／`share_result`）。`puck.history` 返回最近 200 条消息，并附上当前注入的系统上下文行数和是否包含交接、记任务、合并这三句，以及最近工具调用的名字、成败和错误码。不附参数，不附正文。Brain 会话本身仍不对 Web 开放 `thread.read`。删除 Bot 时同时清掉它的 Bot 任务、消息链接、子会话链接、inbox、watch 和 wake。归档子会话时解开对应的 `bot_task_sessions`。
 

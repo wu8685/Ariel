@@ -984,7 +984,22 @@ func fromResult(result Result) ToolResult {
 func toolError(code, message string) ToolResult { return ToolResult{Code: code, Message: message} }
 
 func invalidArguments(message string, details []toolcontract.FieldError) ToolResult {
+	if spoken := fieldErrorMessage(details); spoken != "" {
+		message = spoken
+	}
 	return ToolResult{Code: "INVALID_ARGUMENT", Message: message, Details: details}
+}
+
+func fieldErrorMessage(details []toolcontract.FieldError) string {
+	parts := make([]string, 0, len(details))
+	for _, detail := range details {
+		field := strings.TrimSpace(detail.Field)
+		if field == "" {
+			continue
+		}
+		parts = append(parts, field+": "+detail.Reason+"; expected "+detail.Expected)
+	}
+	return strings.Join(parts, " | ")
 }
 
 func invalidStructuredArguments(tool string, raw json.RawMessage, details []toolcontract.FieldError) ToolResult {

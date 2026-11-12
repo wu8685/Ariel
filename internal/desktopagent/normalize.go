@@ -471,6 +471,40 @@ func projectAutomaticApprovals(reviews []automaticApprovalSummary) map[string]an
 	return map[string]any{"itemId": reviews[0].id, "role": "system", "text": title + "\n" + strings.Join(details, "\n")}
 }
 
+func unwrapTimelineItem(raw json.RawMessage) json.RawMessage {
+	var entry struct {
+		Type    string          `json:"type"`
+		Item    json.RawMessage `json:"item"`
+		Content json.RawMessage `json:"content"`
+		Text    string          `json:"text"`
+	}
+	if json.Unmarshal(raw, &entry) != nil || len(bytes.TrimSpace(entry.Item)) == 0 || string(bytes.TrimSpace(entry.Item)) == "null" {
+		return raw
+	}
+	if len(bytes.TrimSpace(entry.Content)) > 0 && string(bytes.TrimSpace(entry.Content)) != "null" {
+		return raw
+	}
+	if strings.TrimSpace(entry.Text) != "" {
+		return raw
+	}
+	switch entry.Type {
+	case "", "entry", "timelineEntry", "item":
+		return entry.Item
+	default:
+		return raw
+	}
+}
+
+func userContentText(kind, text string) (string, bool) {
+	switch kind {
+	case "text", "input_text", "inputText":
+		value, _ := normalizeQuestionReplyText(text)
+		return value, true
+	default:
+		return "", false
+	}
+}
+
 func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]any, error) {
 	if id == "" {
 		return nil, ErrNativeShape
@@ -494,6 +528,7 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 		approvalReviews = approvalReviews[:0]
 	}
 	for _, raw := range rawItems {
+		raw = unwrapTimelineItem(raw)
 		var item struct {
 			ID                  string          `json:"id"`
 			Type                string          `json:"type"`
@@ -568,8 +603,7 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			role = "user"
 			parts := make([]string, 0, len(item.Content))
 			for _, c := range item.Content {
-				if c.Type == "text" {
-					value, _ := normalizeQuestionReplyText(c.Text)
+				if value, ok := userContentText(c.Type, c.Text); ok {
 					parts = append(parts, value)
 				} else if (c.Type == "image" && !strings.HasPrefix(c.URL, "data:image/")) || (c.Type == "localImage" && c.Path == "") {
 					parts = append(parts, "[图片暂不可用]")
@@ -578,6 +612,9 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 				}
 			}
 			text = strings.Join(parts, "\n")
+			if text == "" {
+				text = item.Text
+			}
 		case "steeringUserMessage":
 			if item.Status != "accepted" {
 				continue
@@ -585,8 +622,8 @@ func normalizeTurn(id, status string, rawItems []json.RawMessage) (map[string]an
 			role = "user"
 			parts := make([]string, 0, len(item.Input))
 			for _, input := range item.Input {
-				if input.Type == "text" {
-					parts = append(parts, input.Text)
+				if value, ok := userContentText(input.Type, input.Text); ok {
+					parts = append(parts, value)
 				} else if (input.Type == "image" && !strings.HasPrefix(input.URL, "data:image/")) || (input.Type == "localImage" && input.Path == "") {
 					parts = append(parts, "[图片暂不可用]")
 				} else if input.Type != "image" && input.Type != "localImage" {
