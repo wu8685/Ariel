@@ -90,3 +90,15 @@ func TestReadLoadsSessionMetaFromRolloutWhenThreadReadOmitsIt(t *testing.T) {
 		t.Fatalf("thread=%+v", thread)
 	}
 }
+
+func TestThreadAcceptsStringUpdatedAtWrappedIDAndObjectTurnStatus(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	raw := []byte(`{"thread":{"threadId":"` + id + `","cwd":"/work","updatedAt":"2026-11-12T00:00:00Z","rollout_path":"/tmp/rollout.jsonl","status":{"type":"idle"},"turns":[{"turnId":"turn-1","status":{"type":"completed"},"items":[]}]}}`)
+	var thread Thread
+	if err := json.Unmarshal(raw, &thread); err != nil {
+		t.Fatal(err)
+	}
+	if thread.ID != id || thread.Path != "/tmp/rollout.jsonl" || thread.UpdatedAt == 0 || len(thread.Turns) != 1 || thread.Turns[0].ID != "turn-1" || thread.Turns[0].Status != "completed" {
+		t.Fatalf("%+v", thread)
+	}
+}

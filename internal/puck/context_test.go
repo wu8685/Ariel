@@ -112,13 +112,15 @@ func TestCustomContextStaysBelowSystemSafetyRules(t *testing.T) {
 
 func TestHandoffPromptAddsOneLineOnlyOnTheCurrentToolset(t *testing.T) {
 	line := "交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
+	taskLine := "要记住的事用 save_bot_task 新建。"
 	current := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
-	previous := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion-1)
-	if strings.Count(current, line) != 1 {
-		t.Fatalf("current toolset prompt lines=%d", strings.Count(current, line))
+	previous := brainInstructions("assistant-a", "小帕", "开发助理", "", botTaskToolset-1)
+	older := brainInstructions("assistant-a", "小帕", "开发助理", "", handoffToolset-1)
+	if strings.Count(current, line) != 1 || strings.Count(current, taskLine) != 1 || strings.Count(previous, line) != 1 {
+		t.Fatalf("prompt lines drifted: current=%q previous=%q", current, previous)
 	}
-	if strings.Contains(previous, line) || strings.Contains(envelopeContext(Assistant{Name: "小帕", ToolsetVersion: currentToolsetVersion}), line) {
-		t.Fatal("handoff prompt leaked into the previous toolset or the per-turn envelope")
+	if strings.Contains(previous, taskLine) || strings.Contains(older, line) || strings.Contains(envelopeContext(Assistant{Name: "小帕", ToolsetVersion: currentToolsetVersion}), line) || strings.Contains(envelopeContext(Assistant{Name: "小帕", ToolsetVersion: currentToolsetVersion}), taskLine) {
+		t.Fatal("task prompt leaked into the previous toolset or the per-turn envelope")
 	}
 }
 

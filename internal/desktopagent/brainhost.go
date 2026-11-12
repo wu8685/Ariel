@@ -99,6 +99,15 @@ func (h *BrainHost) Ready() bool {
 	return h.circuitUntil.IsZero() || time.Now().After(h.circuitUntil)
 }
 
+func (h *BrainHost) DeveloperInstructions(threadID string) string {
+	if h == nil {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.ensures[threadID].DeveloperInstructions
+}
+
 func (h *BrainHost) Ensure(ctx context.Context, request BrainEnsure) (string, error) {
 	if !h.Ready() || request.AssistantID == "" || request.Name == "" || request.DeveloperInstructions == "" || request.ToolsetVersion < 1 || request.ToolsetVersion > toolcontract.Version || strings.ContainsAny(request.AssistantID, `/\\`) {
 		return "", errors.New("FEATURE_DISABLED")

@@ -198,6 +198,16 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		result = h.finishTask(ctx, call)
 	case "send_message":
 		result = h.sendMessage(ctx, call)
+	case "list_bot_tasks":
+		result = h.listBotTasks(ctx, call)
+	case "search_messages":
+		result = h.searchMessages(ctx, call)
+	case "save_bot_task":
+		result = h.saveBotTask(ctx, call)
+	case "attach_bot_task":
+		result = h.attachBotTask(ctx, call)
+	case "merge_bot_tasks":
+		result = h.mergeBotTasks(ctx, call)
 	default:
 		result = toolError("INVALID_ARGUMENT", "unknown Puck tool")
 	}
@@ -974,7 +984,22 @@ func fromResult(result Result) ToolResult {
 func toolError(code, message string) ToolResult { return ToolResult{Code: code, Message: message} }
 
 func invalidArguments(message string, details []toolcontract.FieldError) ToolResult {
+	if spoken := fieldErrorMessage(details); spoken != "" {
+		message = spoken
+	}
 	return ToolResult{Code: "INVALID_ARGUMENT", Message: message, Details: details}
+}
+
+func fieldErrorMessage(details []toolcontract.FieldError) string {
+	parts := make([]string, 0, len(details))
+	for _, detail := range details {
+		field := strings.TrimSpace(detail.Field)
+		if field == "" {
+			continue
+		}
+		parts = append(parts, field+": "+detail.Reason+"; expected "+detail.Expected)
+	}
+	return strings.Join(parts, " | ")
 }
 
 func invalidStructuredArguments(tool string, raw json.RawMessage, details []toolcontract.FieldError) ToolResult {

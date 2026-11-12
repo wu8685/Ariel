@@ -553,13 +553,29 @@ Codex 的 `developerInstructions` 和 `dynamicTools` 只能在 `thread/start` �
 
 Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原话，也不总结被引用会话。摘要是模型自己的事。交接包只附会话引用，由服务端在通过既有门禁、真正调用 `thread.bootstrap` 或 `turn.start` 时加在 Brain 指令后面。Brain 的 `prompt`／`text` 原样保留。没有引用时不附加包。
 
-引用来自本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch），并且只包括这一轮点了名的会话：Brain 指令、触发这轮的用户消息、它所回复的消息、`includeMessages` 里的消息提到了 `taskId`／`threadId`，或者 `referenceThreads` 明确列出了它们。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现会话，不把消息正文贴进去。最多 4 条，多出来的直接丢掉，不做文字截断，也不写省略标记。
+引用来自本助理自己的 `tasks` 和 `thread_watches`（含已结束的 watch），并且只包括这一轮点了名的会话：Brain 指令、触发这轮的用户消息、它所回复的消息、`includeMessages` 里的消息提到了 `taskId`／`threadId`，或者 `referenceThreads` 明确列出了它们。对已有任务的 `send_turn`（含参数被拒后的下一次调用）还会用该任务记录的来源用户消息来认出当时点名的会话，所以交接包仍会附上。来源消息只用来匹配 id，正文不写入包。别的助理的线程、brain thread（含历史 brain thread）和这次发送的目标线程都不进入包。`includeMessages` 只用来发现会话，不把消息正文贴进去。最多 4 条，多出来的直接丢掉，不做文字截断，也不写省略标记。
 
 每条引用含 `deviceId`、`threadId`，以及 Codex Desktop 的 `codex://threads/<uuid>`（`internal/desktopagent/load.go`，0074／0004；非 UUID 不写链接）。标题和 cwd 只在已有元数据时附上，不从对话里摘结论。cwd 按 `session_meta.cwd`、任务或 watch 记录的 cwd、turn cwd、`thread.cwd` 的顺序选取。Agent 配置并传给 app-server 的状态／工作目录，以及它下面的路径，都不是工作区；没有可信 cwd 时省略该字段。`thread.read` 会从线程对象或 rollout 的 `session_meta` 取出工作区，并带上这个 Agent 目录供比较。不写路径黑名单，不写 watch 状态、turn 状态或结论摘录。
 
 可选参数从工具集 10 起出现在 schema 里，都不是必填。旧调用不带它们仍然有效。主机广告的工具集到达 10 后，下一次用户消息或子会话唤醒经既有 `ensureCurrentToolset` 轮换 brain thread。工具集 10 的系统上下文只多一行：交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。这一行不写入每轮 envelope。
 
 包在发送前现装，不写入冻结的授权参数。同一次 `send_turn` 正文里如果已经有交接标记，不再附第二份。同一用户消息对同一目标的重复 `start_task` 仍按 0137 返回已有任务，不会再发一轮。B2、B5、B6、B10、B8 和 `PUCK_SELF_TARGET` 仍先于交接包执行。
+
+### 6.1.5 Bot 任务队列（2026-11-11）
+
+用户向 Bot 发出的每条聊天消息都写入 `bot_inbox`，直到 Brain 用 `attach_bot_task` 把它挂到某个 Bot 任务上。Bot 任务存在 `bot_tasks`（schema 11），含 id、assistant、title、goal、status（`accepted`／`in_progress`／`waiting_user`／`done`／`cancelled`／`merged`）、`merged_into`、时间戳，以及消息和子会话链接。代码不自动创建任务，也不自动合并或摘要。
+
+代码不代替 Brain 记账。Brain 没调用工具，消息就留在 inbox，这是可接受的。
+
+系统上下文里只有一句任务工具说明，短信封和唤醒不再重复：要记住的事用 `save_bot_task` 新建；延续已有任务时把那个 taskId 传给 `save_bot_task`，当前消息会挂上去；只想挂上当前消息时调用 `attach_bot_task`，可以只传 taskId；确认是不是旧事用 `list_bot_tasks` 或 `search_messages`；两条任务是同一件才用 `merge_bot_tasks`。不传 id 的新建不会挂上消息。`attach_bot_task` 的 `messageIds` 可省略，省略时挂上本回合正在处理的用户消息；Brain 显式调用才挂，代码不代替它决定。`list_bot_tasks` 返回 title、最近更新时间，以及最后一条用户消息的原文片段，不另写摘要。短信封只列出这些事实，不写操作规则。`start_task` 和 `send_turn` 的 `riskTags` 可省略，可以是字符串或数组；未知值忽略，已知值仍进入授权判断。
+
+Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒在排队，就立刻唤醒一次：先取最旧的未归属消息，否则取最旧的未完成任务。同一条未归属消息被叫醒后如果还没挂上，下一次才按短退避推迟。跳过唤醒时记下原因（`turn_busy`、`queue_wake_pending`、`backoff`、`rate_limit`），随 `puck.history` 的 `wakeSkips` 返回，不写消息正文。`turn.start` 遇到 `RESYNC_REQUIRED` 时服务端丢掉过期 follower 并重试一次，交接包仍附在同一次输入上，Brain 看不到这次重试。`thread.list` 遇到远端、协议或连接关闭时，丢掉当前只读 app-server，最多再换两个新进程重试，并在日志里写上错误类别。超时仍然只重建一次，以免撑破这次列表的请求预算。`thread/list` 的 `updatedAt` 可以是数字或 RFC3339 字符串，线程 id 可以在 `id` 或 `threadId`，rollout 路径可以在 `path`、`rolloutPath` 或 `rollout_path`。用户消息的 `input_text`／`inputText`，以及套在 `item` 里的时间线条目，按正文读取。没有 `Refresh` 的 follower（headless app-server）不把这一点报成 `RESYNC_REQUIRED`。
+
+`INVALID_ARGUMENT` 的 message 写明字段、原因和期望，工具记录里的错误码带上这个字段，Brain 可以据此改下一次调用。`attach_bot_task` 对不存在或非用户消息的 id 点名 `messageIds`，对找不到的子会话点名 `sessions.id` 或 `sessions.deviceId`。`merge_bot_tasks` 成功时说明已合并并复制了已有链接，当前用户消息没有挂上，要挂上再调用 `attach_bot_task` 并只传 taskId。
+
+`send_message`、`ask_user`、`share_result` 写入 `puck.history` 时带 `source`（`notify_user`／`ask_user`／`share_result`）。`puck.history` 返回最近 200 条消息，并附上当前注入的系统上下文行数和是否包含交接、记任务、合并这三句，以及最近工具调用的名字、成败和错误码。不附参数，不附正文。Brain 会话本身仍不对 Web 开放 `thread.read`。删除 Bot 时同时清掉它的 Bot 任务、消息链接、子会话链接、inbox、watch 和 wake。归档子会话时解开对应的 `bot_task_sessions`。
+
+删除 Bot 时删掉它的任务、链接和 inbox。子会话消失时只解开 `bot_task_sessions` 里对应的链接，不删任务。主机广告到 11 后，下一次用户消息经 `ensureCurrentToolset` 轮换 brain thread。
 
 ## 7. Relay 内的入口与门禁
 

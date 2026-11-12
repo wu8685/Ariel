@@ -496,3 +496,29 @@ func TestReadCarriesSessionMetaAndAgentStateDir(t *testing.T) {
 		t.Fatalf("normalized=%v read=%v", normalized, read)
 	}
 }
+
+func TestNormalizeInputTextInsideTimelineEntry(t *testing.T) {
+	inner, err := json.Marshal(map[string]any{
+		"id": "user-1", "type": "userMessage",
+		"content": []any{map[string]any{"type": "input_text", "text": "[puck-handoff]\n  threadId: fixture"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"id": "entry-1", "type": "entry", "item": json.RawMessage(inner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := normalizeTurn("turn-1", "completed", []json.RawMessage{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := turn["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("items=%v", items)
+	}
+	text, _ := items[0].(map[string]any)["text"].(string)
+	if items[0].(map[string]any)["role"] != "user" || !strings.Contains(text, "[puck-handoff]") || !strings.Contains(text, "threadId: fixture") {
+		t.Fatalf("item=%#v", items[0])
+	}
+}

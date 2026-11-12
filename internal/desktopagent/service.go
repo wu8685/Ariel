@@ -1368,7 +1368,12 @@ func (s *Service) RefreshLive(ctx context.Context, id string) error {
 	c.mu.Unlock()
 	refreshable, ok := live.(refreshableLive)
 	if !ok {
-		return errors.New("RESYNC_REQUIRED")
+		// Headless app-server lives have no separate follower to refresh.
+		// Missing the interface is not a stale Desktop binding.
+		if live == nil {
+			return errors.New("RESYNC_REQUIRED")
+		}
+		return nil
 	}
 	_, err := refreshable.Refresh(ctx)
 	return err
@@ -1754,11 +1759,48 @@ func (s *Service) Start(ctx context.Context, threadID, messageID, text string) (
 }
 
 func (s *Service) StartWithImages(ctx context.Context, threadID, messageID, text string, images []string) (string, error) {
-	return s.startWithImages(ctx, threadID, messageID, text, images, "")
+	return s.startWithImagesRetry(ctx, threadID, messageID, text, images, "")
 }
 
 func (s *Service) StartWithExecutionPolicy(ctx context.Context, threadID, messageID, text string, images []string, mode string) (string, error) {
-	return s.startWithImages(ctx, threadID, messageID, text, images, mode)
+	return s.startWithImagesRetry(ctx, threadID, messageID, text, images, mode)
+}
+
+func (s *Service) startWithImagesRetry(ctx context.Context, threadID, messageID, text string, images []string, puckMode string) (string, error) {
+	turnID, err := s.startWithImages(ctx, threadID, messageID, text, images, puckMode)
+	if err == nil || requestErrorCode("turn.start", err) != "RESYNC_REQUIRED" {
+		return turnID, err
+	}
+	s.dropThreadLive(threadID)
+	timer := time.NewTimer(400 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return "", ctx.Err()
+	case <-timer.C:
+	}
+	return s.startWithImages(ctx, threadID, messageID, text, images, puckMode)
+}
+
+func (s *Service) dropThreadLive(threadID string) {
+	s.mu.Lock()
+	controller := s.threads[threadID]
+	s.mu.Unlock()
+	if controller == nil {
+		return
+	}
+	controller.mu.Lock()
+	if controller.migrating {
+		controller.mu.Unlock()
+		return
+	}
+	live := controller.live
+	controller.live = nil
+	controller.current = nil
+	controller.mu.Unlock()
+	if live != nil {
+		_ = live.Close()
+	}
 }
 
 func (s *Service) startWithImages(ctx context.Context, threadID, messageID, text string, images []string, puckMode string) (string, error) {

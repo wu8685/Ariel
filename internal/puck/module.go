@@ -50,10 +50,24 @@ type Module struct {
 	wakeMu             sync.Mutex
 	pendingMu          sync.Mutex
 	pending            map[string]pendingBrainTurn
+	toolCalls          map[string][]observedToolCall
+	wakeSkips          map[string][]observedWakeSkip
 	lifecycle          sync.RWMutex
 	ackDelay           time.Duration
 	now                func() time.Time
 	watchSnapshotReads atomic.Uint64
+}
+
+type observedToolCall struct {
+	Tool    string
+	Success bool
+	Code    string
+}
+
+type observedWakeSkip struct {
+	TaskKey string
+	Reason  string
+	At      time.Time
 }
 
 type pendingBrainTurn struct {
@@ -64,6 +78,7 @@ type pendingBrainTurn struct {
 	steps                                            int
 	toolFailures                                     map[string]int
 	ack                                              bool
+	queueKey                                         string
 	timer                                            *time.Timer
 }
 
@@ -73,7 +88,7 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, ackDelay: 3 * time.Second, now: time.Now}
+	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
 	m.wg.Add(2)
@@ -233,6 +248,13 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	m.pendingMu.Unlock()
 	sourceMessageID := m.sourceMessageID(ctx, event.AssistantID)
 	result := m.tools.Execute(ctx, pucktools.Call{AssistantID: event.AssistantID, SourceMessageID: sourceMessageID, Tool: input.Tool, Arguments: input.Arguments})
+	code := result.Code
+	if result.Success {
+		code = ""
+	} else if field := argumentField(result); field != "" && !strings.Contains(code, ":") {
+		code += ":" + field
+	}
+	m.noteToolCall(event.AssistantID, input.Tool, result.Success, code)
 	if result.Diagnostic != nil {
 		diagnostic, _ := json.Marshal(result.Diagnostic)
 		log.Printf("puck structured tool rejected: diagnostic=%s", diagnostic)
@@ -251,6 +273,21 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 		}
 		_ = m.store.Audit(ctx, AuditEntry{ID: randomID("audit"), AssistantID: event.AssistantID, Actor: "relay", Action: "brain_tool_result", Target: input.Tool, Result: code})
 	}
+}
+
+func argumentField(result pucktools.ToolResult) string {
+	if len(result.Details) > 0 {
+		field := strings.TrimSpace(result.Details[0].Field)
+		if field != "" && len(field) <= 48 {
+			return field
+		}
+	}
+	message := strings.TrimSpace(result.Message)
+	index := strings.Index(message, ":")
+	if index > 0 && index <= 48 && !strings.Contains(message[:index], " ") {
+		return message[:index]
+	}
+	return ""
 }
 
 func (m *Module) sourceMessageID(ctx context.Context, assistantID string) string {
@@ -471,6 +508,10 @@ func (m *Module) rememberSpoken(assistantID, text string) {
 func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID, text, kind string) {
 	pending := m.clearPendingForTurn(assistantID, turnID)
 	defer m.pumpAssistant(ctx, assistantID)
+	defer m.rearmUnassignedInbox(ctx, assistantID, pending.queueKey)
+	// The message that just finished stays unassigned until the brain attaches
+	// it. Do not skip it, and do not create a task on its behalf.
+	defer m.scheduleBotQueue(ctx, assistantID, "", "")
 	if brainSilent(text) {
 		if pending.responseID != "" {
 			_ = m.store.DeleteMessage(ctx, assistantID, pending.responseID)
@@ -844,10 +885,11 @@ func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
 		card, text, err := normalizeQuestionCard(event.Payload)
 		if err != nil {
 			log.Printf("puck structured card normalization failed: assistant=%s kind=question reason=invalid_payload", event.AssistantID)
-			return b.module.store.UpsertMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: unrecognizedQuestionText, CardJSON: `{"cardState":"invalid"}`})
+			return b.module.store.UpsertMessage(ctx, Message{ID: newUUID(), AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: unrecognizedQuestionText, CardJSON: `{"cardState":"invalid","source":"ask_user"}`})
 		}
 		card.QuestionID = randomID("question")
 		encoded, _ := json.Marshal(card)
+		encoded = withCardSource(encoded, "ask_user")
 		return b.module.store.UpsertMessage(ctx, Message{ID: "question-card:" + card.QuestionID, AssistantID: event.AssistantID, Role: "assistant", Kind: "question", Text: text, CardJSON: string(encoded)})
 	}
 	kind := strings.TrimPrefix(event.Kind, "post_")
@@ -867,7 +909,32 @@ func (b toolBackend) Emit(ctx context.Context, event pucktools.Event) error {
 		log.Printf("puck structured card text missing: assistant=%s kind=%s reason=missing_text", event.AssistantID, kind)
 	}
 	messageID := newUUID()
-	return b.module.store.UpsertMessage(ctx, Message{ID: messageID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(event.Payload)})
+	if kind == "share_result" || kind == "question" {
+		source := kind
+		if kind == "question" {
+			source = "ask_user"
+		}
+		if _, ok := payload["source"]; !ok {
+			payload["source"] = source
+		}
+	}
+	encoded, _ := json.Marshal(payload)
+	return b.module.store.UpsertMessage(ctx, Message{ID: messageID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, CardJSON: string(encoded)})
+}
+
+func withCardSource(raw json.RawMessage, source string) json.RawMessage {
+	object := map[string]any{}
+	if json.Unmarshal(raw, &object) != nil {
+		object = map[string]any{}
+	}
+	if _, ok := object["source"]; !ok {
+		object["source"] = source
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 func (m *Module) Handle(ctx context.Context, method string, params json.RawMessage) relay.PuckResponse {
@@ -1322,6 +1389,9 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if err := m.store.AppendMessage(ctx, Message{ID: input.ClientMessageID, AssistantID: a.ID, Role: "user", Kind: "text", Text: input.Text, CardJSON: cardJSON, ReplyTo: input.ReplyTo}); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
+	if err := m.store.AddInbox(ctx, a.ID, input.ClientMessageID, m.now()); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
 	if len(input.Images) == 0 && input.ReplyTo == "" {
 		if deviceID, cwd := explicitExecutionTarget(input.Text, m.bridge.Devices()); deviceID != "" {
 			dispatched := m.dispatchExplicitExecution(ctx, a, input.ClientMessageID, input.Text, deviceID, cwd)
@@ -1481,14 +1551,20 @@ func (m *Module) history(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if json.Unmarshal(raw, &input) != nil {
 		return moduleError("INVALID_ARGUMENT", "invalid assistant")
 	}
-	if _, err := m.store.Assistant(ctx, input.AssistantID); err != nil {
-		return notFound()
-	}
 	messages, err := m.store.Messages(ctx, input.AssistantID, 200)
 	if err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	return accepted(map[string]any{"messages": messages})
+	assistant, err := m.store.Assistant(ctx, input.AssistantID)
+	if err != nil {
+		return notFound()
+	}
+	return accepted(map[string]any{
+		"messages":      messages,
+		"systemContext": systemContextDebug(assistant),
+		"toolCalls":     m.recentToolCalls(input.AssistantID),
+		"wakeSkips":     m.recentWakeSkips(input.AssistantID),
+	})
 }
 
 func (m *Module) read(ctx context.Context, raw json.RawMessage) relay.PuckResponse {
@@ -1913,7 +1989,7 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
 func brainEnvelope(a Assistant, text string) string {
-	return brainEnvelopeWithReply(a, text, nil, nil)
+	return brainEnvelopeWithReply(a, text, nil, nil, nil, nil)
 }
 
 func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, reply *Message) string {
@@ -1921,10 +1997,14 @@ func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, 
 	if err != nil {
 		tasks = nil
 	}
-	return brainEnvelopeWithReply(a, text, reply, tasks)
+	openTasks, err := m.store.RecentOpenBotTasks(ctx, a.ID, 10)
+	if err != nil {
+		openTasks = nil
+	}
+	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks, m.taskSnippets(ctx, a.ID, openTasks))
 }
 
-func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task) string {
+func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask, snippets map[string]string) string {
 	context := ""
 	if reply != nil {
 		author := "用户"
@@ -1946,7 +2026,47 @@ func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Ta
 		}
 	}
 	context += reusableTaskContext(tasks)
+	context += openBotTaskContext(openTasks, snippets)
 	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n%s%s\n\n用户请求：%s", a.ID, newUUID(), envelopeContext(a), context, text)
+}
+
+func (m *Module) taskSnippets(ctx context.Context, assistantID string, tasks []BotTask) map[string]string {
+	snippets := map[string]string{}
+	for _, task := range tasks {
+		if len(task.MessageIDs) == 0 {
+			continue
+		}
+		for index := len(task.MessageIDs) - 1; index >= 0; index-- {
+			message, err := m.store.Message(ctx, assistantID, task.MessageIDs[index])
+			if err != nil || message.Role != "user" {
+				continue
+			}
+			snippets[task.ID] = message.Text
+			break
+		}
+	}
+	return snippets
+}
+
+func openBotTaskContext(tasks []BotTask, snippets map[string]string) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		title := strings.ReplaceAll(strings.TrimSpace(task.Title), "\n", " ")
+		when := ""
+		if !task.UpdatedAt.IsZero() {
+			when = " updatedAt=" + task.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		snippet := storedSnippet(snippets[task.ID])
+		line := fmt.Sprintf("- id=%s title=%s%s", task.ID, title, when)
+		if snippet != "" {
+			line += " lastUserMessage=" + snippet
+		}
+		lines = append(lines, line)
+	}
+	return "\n\n未完成的 Bot 任务（最近 " + strconv.Itoa(len(lines)) + " 条）：\n" + strings.Join(lines, "\n")
 }
 
 func reusableTaskContext(tasks []Task) string {

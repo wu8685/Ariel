@@ -297,6 +297,10 @@ func truthy(value any) bool {
 	return ok && flag
 }
 
+func (m *Module) NoteThreadDisappeared(ctx context.Context, deviceID, threadID string) {
+	m.noteThreadDisappeared(ctx, deviceID, threadID)
+}
+
 func (m *Module) noteThreadDisappeared(ctx context.Context, deviceID, threadID string) {
 	if deviceID == "" || threadID == "" {
 		return
@@ -317,6 +321,11 @@ func (m *Module) noteThreadDisappeared(ctx context.Context, deviceID, threadID s
 			if watch.DeviceID == deviceID && watch.ThreadID == threadID {
 				seen[watch.AssistantID] = struct{}{}
 			}
+		}
+	}
+	if assistants, err := m.store.AssistantsForBotSession(ctx, deviceID, threadID); err == nil {
+		for _, assistantID := range assistants {
+			seen[assistantID] = struct{}{}
 		}
 	}
 	for assistantID := range seen {
@@ -432,7 +441,13 @@ func (m *Module) enqueueLocked(ctx context.Context, wake BrainWake) {
 	wake.ID = newUUID()
 	wake.CreatedAt = now
 	wake.NotBefore = m.nextWakeTimeLocked(ctx, wake.AssistantID, wake.TaskKey, now)
-	if m.pendingTurn(wake.AssistantID).turnID != "" || wake.NotBefore.After(now) {
+	if m.pendingTurn(wake.AssistantID).turnID != "" {
+		m.noteWakeSkip(wake.AssistantID, wake.TaskKey, "turn_busy")
+		_ = m.store.UpsertBrainWake(ctx, wake)
+		return
+	}
+	if wake.NotBefore.After(now) {
+		m.noteWakeSkip(wake.AssistantID, wake.TaskKey, "backoff")
 		_ = m.store.UpsertBrainWake(ctx, wake)
 		return
 	}
@@ -445,8 +460,15 @@ func (m *Module) nextWakeTimeLocked(ctx context.Context, assistantID, taskKey st
 	if err != nil {
 		return notBefore
 	}
+	interval := wakeTaskInterval
+	if messageID, ok := strings.CutPrefix(taskKey, "queue:inbox:"); ok {
+		inInbox, attached, assignErr := m.store.InboxAssignment(ctx, assistantID, messageID)
+		if assignErr == nil && inInbox && !attached {
+			interval = queueRetryBackoff
+		}
+	}
 	if !lastTask.IsZero() {
-		earliest := lastTask.Add(wakeTaskInterval)
+		earliest := lastTask.Add(interval)
 		if earliest.After(notBefore) {
 			notBefore = earliest
 		}
@@ -493,8 +515,11 @@ func (m *Module) pumpLocked(ctx context.Context, assistantID string) {
 			}
 			next := m.nextWakeTimeLocked(ctx, assistantID, wakes[i].TaskKey, now)
 			if next.After(now) {
-				wakes[i].NotBefore = next
-				_ = m.store.UpsertBrainWake(ctx, wakes[i])
+				if next.After(wakes[i].NotBefore) {
+					wakes[i].NotBefore = next
+					_ = m.store.UpsertBrainWake(ctx, wakes[i])
+					m.noteWakeSkip(assistantID, wakes[i].TaskKey, "rate_limit")
+				}
 				continue
 			}
 			index = i
@@ -533,9 +558,10 @@ func (m *Module) deliverWakeLocked(ctx context.Context, wake BrainWake) {
 		responseID = newUUID()
 	}
 	started := m.now()
+	openTasks, _ := m.store.RecentOpenBotTasks(ctx, assistant.ID, 10)
 	request := mustJSON(map[string]any{
 		"assistantId": assistant.ID, "threadId": assistant.BrainThreadID, "clientMessageId": responseID,
-		"text": taskEventEnvelope(assistant, wake), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
+		"text": taskEventEnvelope(assistant, wake, openTasks, m.taskSnippets(ctx, assistant.ID, openTasks)), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
 	})
 	result := m.startBrainTurnTriggered(ctx, assistant, request, "event")
 	if result.Error != nil || result.Outcome != "accepted" {
@@ -544,7 +570,22 @@ func (m *Module) deliverWakeLocked(ctx context.Context, wake BrainWake) {
 	}
 	turnID, _ := result.Data["turnId"].(string)
 	m.setPending(assistant, turnID, responseID, responseID, started, false, "")
+	m.noteQueueTarget(assistant.ID, wake.TaskKey)
 	m.markPendingTaskEvent(assistant.ID, string(card))
+}
+
+func (m *Module) noteQueueTarget(assistantID, taskKey string) {
+	if !strings.HasPrefix(taskKey, "queue:") {
+		return
+	}
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	pending, ok := m.pending[assistantID]
+	if !ok {
+		return
+	}
+	pending.queueKey = taskKey
+	m.pending[assistantID] = pending
 }
 
 func taskEventTemplate(status, summary string) string {
@@ -566,7 +607,15 @@ func taskEventTemplate(status, summary string) string {
 	return lead + "。" + summary
 }
 
-func taskEventEnvelope(assistant Assistant, wake BrainWake) string {
+func taskEventEnvelope(assistant Assistant, wake BrainWake, openTasks []BotTask, snippets map[string]string) string {
+	if wake.Status == "bot_queue" {
+		return "PUCK_ENVELOPE assistant=" + assistant.ID + " nonce=" + newUUID() + " kind=bot_queue\n" +
+			"这是还没做完的工作或尚未归入任务的用户消息，不是新的执行结果。需要时自己读全文。\n" +
+			wake.Summary + "\n" +
+			openBotTaskContext(openTasks, snippets) + "\n" +
+			"没有新的话要说就只回复 PUCK_SILENT。\n" +
+			envelopeContext(assistant)
+	}
 	mode := "execution"
 	if wake.WatchOnly {
 		mode = "watch_only"

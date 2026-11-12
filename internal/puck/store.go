@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 10
+const storeSchemaVersion = 11
 
 type Store struct {
 	db       *sql.DB
@@ -247,6 +247,26 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version < 10 {
 		statements = append(statements, `ALTER TABLE assistants ADD COLUMN custom_context TEXT NOT NULL DEFAULT ''`)
 	}
+	if version < 11 {
+		statements = append(statements,
+			`CREATE TABLE IF NOT EXISTS bot_tasks (
+            id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL, merged_into TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+			`CREATE INDEX IF NOT EXISTS bot_tasks_assistant_status ON bot_tasks(assistant_id, status, created_at)`,
+			`CREATE TABLE IF NOT EXISTS bot_task_messages (
+            bot_task_id TEXT NOT NULL, assistant_id TEXT NOT NULL, message_id TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (bot_task_id, message_id))`,
+			`CREATE INDEX IF NOT EXISTS bot_task_messages_assistant ON bot_task_messages(assistant_id, message_id)`,
+			`CREATE TABLE IF NOT EXISTS bot_task_sessions (
+            bot_task_id TEXT NOT NULL, assistant_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id TEXT NOT NULL,
+            device_id TEXT NOT NULL DEFAULT '', thread_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+            PRIMARY KEY (bot_task_id, kind, ref_id))`,
+			`CREATE INDEX IF NOT EXISTS bot_task_sessions_thread ON bot_task_sessions(assistant_id, device_id, thread_id)`,
+			`CREATE TABLE IF NOT EXISTS bot_inbox (
+            assistant_id TEXT NOT NULL, message_id TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (assistant_id, message_id))`,
+		)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
@@ -435,6 +455,18 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 	if _, err := tx.ExecContext(ctx, `DELETE FROM wake_log WHERE assistant_id=?`, assistantID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_task_messages WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_task_sessions WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_tasks WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_inbox WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE assistant_id=?`, assistantID); err != nil {
 		return err
 	}
@@ -535,7 +567,7 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at FROM conversation_messages WHERE assistant_id=? ORDER BY created_at,id LIMIT ?`, assistantID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at FROM conversation_messages WHERE assistant_id=? ORDER BY created_at DESC, id DESC LIMIT ?`, assistantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +582,14 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 		message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 		messages = append(messages, message)
 	}
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The query keeps the newest page. Callers still receive it oldest-first.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
 }
 
 func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Message, error) {

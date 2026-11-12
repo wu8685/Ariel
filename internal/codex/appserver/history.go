@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -196,14 +198,113 @@ func (h HistoryReader) read(ctx context.Context, threadID string, includeTurns b
 }
 
 func (t *Thread) UnmarshalJSON(raw []byte) error {
-	type alias Thread
-	var decoded alias
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	var body struct {
+		ID        string          `json:"id"`
+		ThreadID  string          `json:"threadId"`
+		Name      string          `json:"name"`
+		CWD       string          `json:"cwd"`
+		UpdatedAt json.RawMessage `json:"updatedAt"`
+		Status    json.RawMessage `json:"status"`
+		Turns     []Turn          `json:"turns"`
+		IsPinned  *bool           `json:"isPinned,omitempty"`
+		Section   *ThreadSection  `json:"section,omitempty"`
+		Path      string          `json:"path,omitempty"`
+		Rollout   string          `json:"rolloutPath,omitempty"`
+		Rollout2  string          `json:"rollout_path,omitempty"`
+		Thread    json.RawMessage `json:"thread,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
 		return err
 	}
-	*t = Thread(decoded)
+	if body.ID == "" && body.ThreadID == "" && len(bytes.TrimSpace(body.Thread)) > 0 && string(bytes.TrimSpace(body.Thread)) != "null" {
+		return t.UnmarshalJSON(body.Thread)
+	}
+	updated, err := parseUnixTime(body.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	path := body.Path
+	if path == "" {
+		path = body.Rollout
+	}
+	if path == "" {
+		path = body.Rollout2
+	}
+	id := body.ID
+	if id == "" {
+		id = body.ThreadID
+	}
+	*t = Thread{
+		ID: id, Name: body.Name, CWD: body.CWD, UpdatedAt: updated, Status: body.Status,
+		Turns: body.Turns, IsPinned: body.IsPinned, Section: body.Section, Path: path,
+	}
 	t.SessionCWD = SessionMetaCWD(raw)
 	return nil
+}
+
+func (t *Turn) UnmarshalJSON(raw []byte) error {
+	var body struct {
+		ID     string            `json:"id"`
+		TurnID string            `json:"turnId"`
+		Status json.RawMessage   `json:"status"`
+		CWD    string            `json:"cwd,omitempty"`
+		Items  []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return err
+	}
+	status, err := turnStatusText(body.Status)
+	if err != nil {
+		return err
+	}
+	id := body.ID
+	if id == "" {
+		id = body.TurnID
+	}
+	*t = Turn{ID: id, Status: status, CWD: body.CWD, Items: body.Items}
+	return nil
+}
+
+func turnStatusText(raw json.RawMessage) (string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return "", nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, nil
+	}
+	var typed struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &typed) == nil && typed.Type != "" {
+		return typed.Type, nil
+	}
+	return "", errors.New("turn status")
+}
+
+func parseUnixTime(raw json.RawMessage) (int64, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return 0, nil
+	}
+	var number int64
+	if json.Unmarshal(raw, &number) == nil {
+		return number, nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return 0, errors.New("updatedAt")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0, nil
+	}
+	if parsed, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
+		return parsed.Unix(), nil
+	}
+	return 0, errors.New("updatedAt")
 }
 
 var rolloutCWD = regexp.MustCompile(`"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"`)

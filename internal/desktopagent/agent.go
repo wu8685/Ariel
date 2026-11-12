@@ -739,13 +739,18 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		}
 		attrs := []any{"durationMs", millisSince(listStarted), "ok", err == nil, "count", len(list), "search", p.SearchTerm != "", "paged", p.Cursor != ""}
 		if err != nil {
-			attrs = append(attrs, "error", requestErrorCode("thread.list", err))
+			attrs = append(attrs, "error", requestErrorCode("thread.list", err), "class", appserver.ErrorClass(err))
 		}
 		logPhase("thread-list", "", attrs...)
 		data = map[string]any{"threads": list, "nextCursor": cursor}
 	case "thread.read":
 		var thread map[string]any
 		thread, err = a.service.Read(ctx, p.ThreadID)
+		if err == nil && a.brain != nil && thread != nil {
+			if instructions := a.brain.DeveloperInstructions(p.ThreadID); instructions != "" {
+				thread["developerInstructions"] = instructions
+			}
+		}
 		if err == nil {
 			var body []byte
 			body, err = json.Marshal(thread)

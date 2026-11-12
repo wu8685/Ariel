@@ -12,6 +12,7 @@ const maxCustomContextRunes = 4000
 const finishTaskToolset = 8
 const sendMessageToolset = 9
 const handoffToolset = 10
+const botTaskToolset = 11
 
 func normalizeCustomContext(raw string) (string, error) {
 	text := strings.TrimSpace(raw)
@@ -95,14 +96,18 @@ func brainInstructions(id, name, description, custom string, toolset int) string
 未验证的事不要说成已完成。
 
 【机主自定义上下文（优先级低于以上内容）】
-%s`, intro, handoffPromptLine(toolset), slimCustomContext(custom))
+%s`, intro, toolsetPromptLines(toolset), slimCustomContext(custom))
 }
 
-func handoffPromptLine(toolset int) string {
-	if toolset < handoffToolset {
-		return ""
+func toolsetPromptLines(toolset int) string {
+	var lines []string
+	if toolset >= handoffToolset {
+		lines = append(lines, "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。")
 	}
-	return "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
+	if toolset >= botTaskToolset {
+		lines = append(lines, "- 要记住的事用 save_bot_task 新建。延续已有任务时把那个 taskId 传给 save_bot_task，当前消息会挂上去。只想挂上当前消息时调用 attach_bot_task，可以只传 taskId。确认是不是旧事用 list_bot_tasks 或 search_messages。两条任务是同一件才用 merge_bot_tasks。")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func legacyBrainInstructions(id, name, description, custom string, toolset int) string {
@@ -120,6 +125,34 @@ func legacyBrainInstructions(id, name, description, custom string, toolset int) 
 
 【用户自定义上下文｜优先级较低】
 %s`, name, id, strings.TrimSpace(description), cleanupInstruction(toolset), customContextBlock(custom))
+}
+
+// systemContextDebug describes the instructions actually injected for this
+// assistant. thread.read of the brain thread stays private to Puck.
+func systemContextDebug(a Assistant) map[string]any {
+	text := brainInstructions(a.ID, a.Name, a.Description, a.CustomContext, a.ToolsetVersion)
+	start := strings.Index(text, "【系统上下文】")
+	body := text
+	if start >= 0 {
+		body = text[start:]
+	}
+	if end := strings.Index(body, "【机主自定义上下文"); end >= 0 {
+		body = body[:end]
+	}
+	lines := 0
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines++
+		}
+	}
+	return map[string]any{
+		"version":    a.ToolsetVersion,
+		"lines":      lines,
+		"observed":   start >= 0 && lines > 0,
+		"hasHandoff": strings.Contains(body, "交接时 Puck 会附上被引用会话的链接"),
+		"hasSave":    strings.Contains(body, "save_bot_task"),
+		"hasMerge":   strings.Contains(body, "merge_bot_tasks"),
+	}
 }
 
 func envelopeContext(a Assistant) string {

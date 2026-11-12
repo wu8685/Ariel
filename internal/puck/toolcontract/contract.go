@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 10
+const Version = 12
 const canonicalMutationToolVersion = 2
 
 const (
@@ -137,6 +137,11 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 			return Definition{}, false
 		}
 		return Definition{Name: name, Description: "把一句你决定要告诉用户的话写进这个 Bot 的 Ariel 对话，并触发页内通知。只用于被唤醒、定时、automation 或你自己发起的工作。回答带 PUCK_ENVELOPE 的用户消息时直接写回复，不要为同一句话再调用本工具。不能指定别的助理。", InputSchema: sendMessageSchema()}, true
+	case "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks":
+		if version < 11 {
+			return Definition{}, false
+		}
+		return botTaskDefinition(name)
 	default:
 		return Definition{}, false
 	}
@@ -149,6 +154,9 @@ func DynamicTools(version int) []map[string]any {
 	}
 	if version >= 9 {
 		names = append(names, "send_message")
+	}
+	if version >= 11 {
+		names = append(names, "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks")
 	}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -184,6 +192,21 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 		return value, details
 	case "send_message":
 		value, details := DecodeSendMessage(raw)
+		return value, details
+	case "list_bot_tasks":
+		value, details := DecodeListBotTasks(raw)
+		return value, details
+	case "search_messages":
+		value, details := DecodeSearchMessages(raw)
+		return value, details
+	case "save_bot_task":
+		value, details := DecodeSaveBotTask(raw)
+		return value, details
+	case "attach_bot_task":
+		value, details := DecodeAttachBotTask(raw)
+		return value, details
+	case "merge_bot_tasks":
+		value, details := DecodeMergeBotTasks(raw)
 		return value, details
 	default:
 		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "documented Puck tool"}}
@@ -648,27 +671,31 @@ func requiredString(fields map[string]json.RawMessage, name string, target *stri
 
 func decodeRiskTags(fields map[string]json.RawMessage) ([]string, []FieldError) {
 	raw, exists := fields["riskTags"]
-	if !exists {
-		return nil, fieldError("riskTags", "required field is missing", "array of known risk tag strings")
+	if !exists || len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return []string{}, nil
 	}
 	var tags []string
-	if json.Unmarshal(raw, &tags) != nil || tags == nil {
-		return nil, fieldError("riskTags", "value has invalid type", "array of known risk tag strings")
-	}
-	if len(tags) > len(riskTags) {
-		return nil, fieldError("riskTags", "too many values", "at most 8 unique known risk tags")
+	if json.Unmarshal(raw, &tags) != nil {
+		var one string
+		if json.Unmarshal(raw, &one) != nil {
+			return []string{}, nil
+		}
+		tags = []string{one}
 	}
 	seen := map[string]struct{}{}
-	for index, tag := range tags {
+	kept := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
 		if _, ok := riskTagSet[tag]; !ok {
-			return nil, fieldError(fmt.Sprintf("riskTags[%d]", index), "unknown enum value", "push, deploy, release, delete, destructive, credential, payment, or external_message")
+			continue
 		}
 		if _, duplicate := seen[tag]; duplicate {
-			return nil, fieldError(fmt.Sprintf("riskTags[%d]", index), "duplicate value", "unique risk tags")
+			continue
 		}
 		seen[tag] = struct{}{}
+		kept = append(kept, tag)
 	}
-	return tags, nil
+	return kept, nil
 }
 
 func fieldError(field, reason, expected string) []FieldError {
@@ -684,7 +711,7 @@ func riskTagsProperty() map[string]any {
 	for index, value := range riskTags {
 		values[index] = value
 	}
-	return map[string]any{"type": "array", "maxItems": 8, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": values}}
+	return map[string]any{"type": "array", "maxItems": 8, "uniqueItems": true, "description": "可选。字符串或数组都可以。未知值会忽略，已知值仍进入授权判断。", "items": map[string]any{"type": "string", "enum": values}}
 }
 
 func decodeOptionalIDs(fields map[string]json.RawMessage, name string, target *[]string) []FieldError {
@@ -731,7 +758,7 @@ func startTaskSchema(version int) map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"deviceId", "cwd", "goal", "prompt", "riskTags"},
+		"required":             []string{"deviceId", "cwd", "goal", "prompt"},
 		"properties":           properties,
 		"examples":             []any{map[string]any{"deviceId": "desktop-local", "cwd": "/workspace/fixture", "goal": "验证测试", "prompt": "运行无敏感内容的测试并总结结果", "riskTags": []any{}}},
 	}
@@ -753,7 +780,7 @@ func sendTurnSchema(version int) map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"text", "riskTags"},
+		"required":             []string{"text"},
 		"properties":           properties,
 		"oneOf": []any{
 			map[string]any{"required": []string{"taskId"}, "not": map[string]any{"anyOf": []any{map[string]any{"required": []string{"deviceId"}}, map[string]any{"required": []string{"threadId"}}}}},
