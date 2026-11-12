@@ -301,7 +301,6 @@ func TestCanonicalDecodersRejectDriftWithFieldDetails(t *testing.T) {
 	}{
 		{"start empty", "start_task", `{}`, "deviceId"},
 		{"start unknown", "start_task", `{"deviceId":"d","cwd":"/w","goal":"g","prompt":"p","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001","extra":true}`, "extra"},
-		{"start risk enum", "start_task", `{"deviceId":"d","cwd":"/w","goal":"g","prompt":"p","riskTags":["mystery"],"clientTaskId":"00000000-0000-4000-8000-000000000001"}`, "riskTags[0]"},
 		{"send locator", "send_turn", `{"text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002"}`, "taskId"},
 		{"send mixed locator", "send_turn", `{"taskId":"t","deviceId":"d","threadId":"th","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002"}`, "taskId"},
 	}
@@ -312,6 +311,25 @@ func TestCanonicalDecodersRejectDriftWithFieldDetails(t *testing.T) {
 				t.Fatalf("details=%+v", details)
 			}
 		})
+	}
+}
+
+func TestRiskTagsAcceptStringArrayMissingAndIgnoreUnknown(t *testing.T) {
+	missing, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue"}`))
+	if len(details) != 0 || len(missing.RiskTags) != 0 {
+		t.Fatalf("missing=%+v details=%+v", missing, details)
+	}
+	asString, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":"deploy"}`))
+	if len(details) != 0 || len(asString.RiskTags) != 1 || asString.RiskTags[0] != "deploy" {
+		t.Fatalf("string=%+v details=%+v", asString.RiskTags, details)
+	}
+	mixed, details := DecodeStartTask(json.RawMessage(`{"deviceId":"d","cwd":"/w","goal":"g","prompt":"p","riskTags":["mystery","deploy","deploy"]}`))
+	if len(details) != 0 || len(mixed.RiskTags) != 1 || mixed.RiskTags[0] != "deploy" {
+		t.Fatalf("mixed=%+v details=%+v", mixed.RiskTags, details)
+	}
+	ignored, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":"none"}`))
+	if len(details) != 0 || len(ignored.RiskTags) != 0 {
+		t.Fatalf("ignored=%+v details=%+v", ignored.RiskTags, details)
 	}
 }
 
@@ -331,7 +349,7 @@ func TestStartTaskValidationMatrix(t *testing.T) {
 		"deviceId": "exec-a", "cwd": "/fixture", "goal": "test", "prompt": "run",
 		"riskTags": []any{}, "clientTaskId": "00000000-0000-4000-8000-000000000001",
 	}
-	for _, field := range []string{"deviceId", "cwd", "goal", "prompt", "riskTags"} {
+	for _, field := range []string{"deviceId", "cwd", "goal", "prompt"} {
 		t.Run("missing "+field, func(t *testing.T) {
 			input := cloneMap(valid)
 			delete(input, field)
@@ -348,8 +366,6 @@ func TestStartTaskValidationMatrix(t *testing.T) {
 		{"relative cwd", "cwd", func(v map[string]any) { v["cwd"] = "relative" }},
 		{"wrong prompt type", "prompt", func(v map[string]any) { v["prompt"] = 7 }},
 		{"long prompt", "prompt", func(v map[string]any) { v["prompt"] = string(make([]byte, 65537)) }},
-		{"wrong risk type", "riskTags", func(v map[string]any) { v["riskTags"] = "deploy" }},
-		{"duplicate risk", "riskTags[1]", func(v map[string]any) { v["riskTags"] = []any{"deploy", "deploy"} }},
 		{"attachment unsupported", "attachments", func(v map[string]any) { v["attachments"] = []any{} }},
 	}
 	for _, test := range tests {
@@ -369,7 +385,7 @@ func TestSendTurnValidationMatrix(t *testing.T) {
 		"taskId": "task-a", "text": "continue", "riskTags": []any{},
 		"clientMessageId": "00000000-0000-4000-8000-000000000002",
 	}
-	for _, field := range []string{"text", "riskTags"} {
+	for _, field := range []string{"text"} {
 		t.Run("missing "+field, func(t *testing.T) {
 			input := cloneMap(valid)
 			delete(input, field)
@@ -387,7 +403,6 @@ func TestSendTurnValidationMatrix(t *testing.T) {
 		{"long text", "text", func(v map[string]any) { v["text"] = string(make([]byte, 65537)) }},
 		{"device without thread", "threadId", func(v map[string]any) { delete(v, "taskId"); v["deviceId"] = "exec-a" }},
 		{"thread without device", "deviceId", func(v map[string]any) { delete(v, "taskId"); v["threadId"] = "thread-a" }},
-		{"unknown risk", "riskTags[0]", func(v map[string]any) { v["riskTags"] = []any{"unknown"} }},
 		{"unknown field", "queue", func(v map[string]any) { v["queue"] = true }},
 	}
 	for _, test := range tests {

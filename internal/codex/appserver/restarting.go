@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 )
@@ -115,7 +116,14 @@ func (r *RestartingRPC) Call(ctx context.Context, method string, params any, res
 	default:
 		return ErrProtocol
 	}
-	for attempt := 0; attempt < 2; attempt++ {
+	attempts := 2
+	if method == "thread/list" {
+		// A fast remote/protocol/closed failure gets one extra fresh process
+		// after the first rebuild. A hung attempt still stops after one rebuild
+		// so two 15s tries fit in the list request budget.
+		attempts = 3
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		endpoint, generation, err := r.endpoint()
 		if err != nil {
 			return err
@@ -131,12 +139,20 @@ func (r *RestartingRPC) Call(ctx context.Context, method string, params any, res
 		if err == nil {
 			return nil
 		}
-		// thread/list is a read. A remote or protocol rejection is the same
-		// class as RESYNC_REQUIRED: drop this app-server and try once more.
-		listResync := method == "thread/list" && (errors.Is(err, ErrRemote) || errors.Is(err, ErrProtocol))
-		if attemptTimedOut || listResync {
+		listResync := method == "thread/list" && (errors.Is(err, ErrRemote) || errors.Is(err, ErrProtocol) || errors.Is(err, ErrClosed))
+		if listResync {
+			log.Printf("appserver thread/list resync: class=%s attempt=%d", ErrorClass(err), attempt+1)
+		}
+		if attemptTimedOut {
 			r.invalidate(generation)
 			if retryable && attempt == 0 && ctx.Err() == nil {
+				continue
+			}
+			return err
+		}
+		if listResync {
+			r.invalidate(generation)
+			if retryable && attempt+1 < attempts && ctx.Err() == nil {
 				continue
 			}
 			return err

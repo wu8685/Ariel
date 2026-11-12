@@ -51,11 +51,11 @@ func botTaskDefinition(name string) (Definition, bool) {
 	case "search_messages":
 		return Definition{Name: name, Description: "按关键词搜索这个 Bot 的 Ariel 对话。返回消息原文，不摘要。用 cursor 翻页。", InputSchema: searchMessagesSchema()}, true
 	case "save_bot_task":
-		return Definition{Name: name, Description: "新建或更新这个 Bot 的任务。传入已有任务的 id 会更新那一条，不会自动挂上当前消息。要挂消息请再调用 attach_bot_task。不传 id 则新建。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
+		return Definition{Name: name, Description: "新建或更新这个 Bot 的任务。传入已有任务的 id 或 taskId 会更新那一条，并挂上当前正在处理的用户消息。不传 id 则新建，不挂消息。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
 	case "attach_bot_task":
-		return Definition{Name: name, Description: "把用户消息或本助理的子会话挂到已有任务上。messageIds 是 Ariel 消息 id。sessions.kind 为 task 时传 id，为 watch 时传 deviceId 和 threadId。", InputSchema: attachBotTaskSchema()}, true
+		return Definition{Name: name, Description: "把用户消息或本助理的子会话挂到已有任务上。可以只传 taskId，这时挂上本回合正在处理的用户消息。messageIds 是可选的 Ariel 消息 id。sessions.kind 为 task 时传 id，为 watch 时传 deviceId 和 threadId。", InputSchema: attachBotTaskSchema()}, true
 	case "merge_bot_tasks":
-		return Definition{Name: name, Description: "把 fromId 合并进 intoId。fromId 标成 merged 并保留历史，消息和子会话链接同时挂到 intoId。是否合并由你决定。", InputSchema: mergeBotTasksSchema()}, true
+		return Definition{Name: name, Description: "把 fromId 合并进 intoId。fromId 标成 merged 并保留历史，已有的消息和子会话链接同时挂到 intoId。当前用户消息不会因此挂上；要挂上请再调用 attach_bot_task，只传 taskId。是否合并由你决定。", InputSchema: mergeBotTasksSchema()}, true
 	default:
 		return Definition{}, false
 	}
@@ -119,11 +119,20 @@ func DecodeSaveBotTask(raw json.RawMessage) (SaveBotTaskRequest, []FieldError) {
 	if detail != nil {
 		return value, []FieldError{*detail}
 	}
-	if details := rejectUnknown(fields, "id", "title", "goal", "status"); len(details) != 0 {
+	if details := rejectUnknown(fields, "id", "taskId", "title", "goal", "status"); len(details) != 0 {
 		return value, details
 	}
 	if details := optionalBoundedString(fields, "id", &value.ID, maxIDLength); len(details) != 0 {
 		return value, details
+	}
+	var taskID string
+	if details := optionalBoundedString(fields, "taskId", &taskID, maxIDLength); len(details) != 0 {
+		return value, details
+	}
+	if value.ID == "" {
+		value.ID = taskID
+	} else if taskID != "" && taskID != value.ID {
+		return value, fieldError("taskId", "does not match id", "the same task id")
 	}
 	if details := optionalBoundedString(fields, "title", &value.Title, maxGoalLength); len(details) != 0 {
 		return value, details
@@ -162,8 +171,8 @@ func DecodeAttachBotTask(raw json.RawMessage) (AttachBotTaskRequest, []FieldErro
 	if utf8.RuneCountInString(value.TaskID) > maxIDLength {
 		return value, fieldError("taskId", "value is too long", "at most 128 characters")
 	}
-	if rawIDs, ok := fields["messageIds"]; ok {
-		if details := decodeOptionalIDs(map[string]json.RawMessage{"messageIds": rawIDs}, "messageIds", &value.MessageIDs); len(details) != 0 {
+	if rawIDs, ok := fields["messageIds"]; ok && len(bytesTrim(rawIDs)) > 0 && string(bytesTrim(rawIDs)) != "null" {
+		if details := decodeMessageIDs(rawIDs, &value.MessageIDs); len(details) != 0 {
 			return value, details
 		}
 	}
@@ -199,10 +208,23 @@ func DecodeAttachBotTask(raw json.RawMessage) (AttachBotTaskRequest, []FieldErro
 			value.Sessions = append(value.Sessions, session)
 		}
 	}
-	if len(value.MessageIDs) == 0 && len(value.Sessions) == 0 {
-		return value, fieldError("messageIds", "nothing to attach", "messageIds or sessions")
-	}
 	return value, nil
+}
+
+func decodeMessageIDs(raw json.RawMessage, target *[]string) []FieldError {
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		if strings.TrimSpace(one) == "" || utf8.RuneCountInString(one) > maxIDLength {
+			return fieldError("messageIds", "value has invalid type or length", "a user message id, or omit it to attach the current user message")
+		}
+		*target = []string{one}
+		return nil
+	}
+	return decodeOptionalIDs(map[string]json.RawMessage{"messageIds": raw}, "messageIds", target)
+}
+
+func bytesTrim(raw json.RawMessage) []byte {
+	return []byte(strings.TrimSpace(string(raw)))
 }
 
 func DecodeMergeBotTasks(raw json.RawMessage) (MergeBotTasksRequest, []FieldError) {
@@ -293,14 +315,14 @@ func searchMessagesSchema() map[string]any {
 
 func saveBotTaskSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
-		"id": stringProperty(0, maxIDLength), "title": stringProperty(0, maxGoalLength), "goal": stringProperty(0, maxTextLength),
+		"id": stringProperty(0, maxIDLength), "taskId": stringProperty(0, maxIDLength), "title": stringProperty(0, maxGoalLength), "goal": stringProperty(0, maxTextLength),
 		"status": map[string]any{"type": "string", "enum": []any{"accepted", "in_progress", "waiting_user", "done", "cancelled"}},
 	}}
 }
 
 func attachBotTaskSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"taskId"}, "properties": map[string]any{
-		"taskId": stringProperty(1, maxIDLength), "messageIds": idListSchema("要挂上的用户消息 id"),
+		"taskId": stringProperty(1, maxIDLength), "messageIds": idListSchema("可选。省略时挂上本回合正在处理的用户消息。也可以传一个 id 字符串或 id 数组。"),
 		"sessions": map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string", "enum": []any{"task", "watch"}}, "id": stringProperty(0, maxIDLength), "deviceId": stringProperty(0, maxIDLength), "threadId": stringProperty(0, maxIDLength),
 		}}},

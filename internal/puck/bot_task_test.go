@@ -348,6 +348,44 @@ func TestToolset11RotatesOnNextUserMessage(t *testing.T) {
 	}
 }
 
+func TestChosenTaskAttachesTheCurrentUserMessage(t *testing.T) {
+	module, id := newQueueModule(t)
+	ctx := context.Background()
+	if err := module.store.AppendMessage(ctx, Message{ID: "user-now", AssistantID: id, Role: "user", Kind: "text", Text: "现在这件事"}); err != nil {
+		t.Fatal(err)
+	}
+	created := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, SourceMessageID: "user-now", Tool: "save_bot_task", Arguments: mustJSON(map[string]any{"title": "新的", "goal": "先记"})})
+	if !created.Success {
+		t.Fatal(created)
+	}
+	createdTask, _ := created.Data["task"].(map[string]any)
+	createdID, _ := createdTask["id"].(string)
+	if ids, _ := createdTask["messageIds"].([]string); createdID == "" || len(ids) != 0 {
+		t.Fatalf("new task attached without an id: %+v", createdTask)
+	}
+	updated := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, SourceMessageID: "user-now", Tool: "save_bot_task", Arguments: mustJSON(map[string]any{"taskId": createdID})})
+	if !updated.Success || !strings.Contains(updated.Message, "挂上了当前用户消息") {
+		t.Fatalf("update=%+v", updated)
+	}
+	updatedTask, _ := updated.Data["task"].(map[string]any)
+	ids, _ := updatedTask["messageIds"].([]string)
+	if len(ids) != 1 || ids[0] != "user-now" {
+		t.Fatalf("messages=%v", updatedTask["messageIds"])
+	}
+	other := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, Tool: "save_bot_task", Arguments: mustJSON(map[string]any{"title": "另一件", "goal": "不挂"})})
+	otherTask, _ := other.Data["task"].(map[string]any)
+	otherID, _ := otherTask["id"].(string)
+	attached := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, SourceMessageID: "user-now", Tool: "attach_bot_task", Arguments: mustJSON(map[string]any{"taskId": otherID})})
+	if !attached.Success {
+		t.Fatal(attached)
+	}
+	got, _ := attached.Data["task"].(map[string]any)
+	gotIDs, _ := got["messageIds"].([]string)
+	if len(gotIDs) != 1 || gotIDs[0] != "user-now" {
+		t.Fatalf("attach=%v", got["messageIds"])
+	}
+}
+
 func TestAttachAndMergeNameTheField(t *testing.T) {
 	module, id := newQueueModule(t)
 	ctx := context.Background()
@@ -369,7 +407,7 @@ func TestAttachAndMergeNameTheField(t *testing.T) {
 		t.Fatalf("role=%v", err)
 	}
 	merged := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, Tool: "merge_bot_tasks", Arguments: mustJSON(map[string]any{"fromId": "other", "intoId": "kept"})})
-	if !merged.Success || !strings.Contains(merged.Message, "不会把当前用户消息挂上去") {
+	if !merged.Success || !strings.Contains(merged.Message, "只传 taskId") || !strings.Contains(merged.Message, "没有挂上") {
 		t.Fatalf("merge=%+v", merged)
 	}
 	_, err = module.store.MergeBotTasks(ctx, id, "missing-from", "kept")

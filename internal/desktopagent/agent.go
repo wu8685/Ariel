@@ -739,7 +739,7 @@ func (a *agent) handle(ctx context.Context, id, method string, raw json.RawMessa
 		}
 		attrs := []any{"durationMs", millisSince(listStarted), "ok", err == nil, "count", len(list), "search", p.SearchTerm != "", "paged", p.Cursor != ""}
 		if err != nil {
-			attrs = append(attrs, "error", requestErrorCode("thread.list", err))
+			attrs = append(attrs, "error", requestErrorCode("thread.list", err), "class", appserver.ErrorClass(err))
 		}
 		logPhase("thread-list", "", attrs...)
 		data = map[string]any{"threads": list, "nextCursor": cursor}

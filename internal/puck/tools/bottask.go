@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
@@ -56,13 +57,29 @@ func (h *Handler) saveBotTask(ctx context.Context, call Call) ToolResult {
 		return result
 	}
 	data, err := work.SaveBotTask(ctx, call.AssistantID, value)
-	return botWorkResult(data, err)
+	result = botWorkResult(data, err)
+	if !result.Success || value.ID == "" || strings.TrimSpace(call.SourceMessageID) == "" {
+		return result
+	}
+	attached, attachErr := work.AttachBotTask(ctx, call.AssistantID, toolcontract.AttachBotTaskRequest{TaskID: value.ID, MessageIDs: []string{call.SourceMessageID}})
+	if attachErr != nil {
+		return botWorkResult(nil, attachErr)
+	}
+	result = botWorkResult(attached, nil)
+	result.Message = "已更新该任务，并挂上了当前用户消息。"
+	return result
 }
 
 func (h *Handler) attachBotTask(ctx context.Context, call Call) ToolResult {
 	value, details := toolcontract.DecodeAttachBotTask(call.Arguments)
 	if len(details) != 0 {
 		return invalidArguments("invalid attach_bot_task arguments", details)
+	}
+	if len(value.MessageIDs) == 0 && len(value.Sessions) == 0 {
+		if strings.TrimSpace(call.SourceMessageID) == "" {
+			return invalidArguments("", []toolcontract.FieldError{{Field: "messageIds", Reason: "no current user message is in this turn", Expected: "omit messageIds to attach the current user message, or pass messageIds"}})
+		}
+		value.MessageIDs = []string{call.SourceMessageID}
 	}
 	work, result := h.botWork()
 	if result.Code != "" {
@@ -84,7 +101,7 @@ func (h *Handler) mergeBotTasks(ctx context.Context, call Call) ToolResult {
 	data, err := work.MergeBotTasks(ctx, call.AssistantID, value)
 	result = botWorkResult(data, err)
 	if result.Success {
-		result.Message = "已把来源任务并入目标，并复制了两边已经挂上的消息和子会话。这次调用不会把当前用户消息挂上去；要挂上请再调用 attach_bot_task。"
+		result.Message = "已把来源任务并入目标，并复制了两边已经挂上的消息和子会话。当前这条用户消息没有挂上。要挂上，调用 attach_bot_task，只传 taskId。"
 	}
 	return result
 }

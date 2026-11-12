@@ -16,6 +16,31 @@ import (
 	"unicode/utf8"
 )
 
+func ErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrRemote):
+		return "remote"
+	case errors.Is(err, ErrProtocol):
+		return "protocol"
+	case errors.Is(err, ErrClosed):
+		return "closed"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, ErrInvalidArgument):
+		return "invalid_argument"
+	case errors.Is(err, ErrMethodUnavailable):
+		return "method_unavailable"
+	case errors.Is(err, ErrResponseTooLarge):
+		return "too_large"
+	case errors.Is(err, ErrOutcomeUnknown):
+		return "outcome_unknown"
+	default:
+		return "other"
+	}
+}
+
 var (
 	ErrClosed            = errors.New("App Server connection closed")
 	ErrProtocol          = errors.New("App Server protocol invalid or response too large")

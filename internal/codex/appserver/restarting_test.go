@@ -263,6 +263,34 @@ func TestRestartingRPCRetriesThreadListAfterRemoteRejection(t *testing.T) {
 	}
 }
 
+func TestRestartingRPCRetriesThreadListOnceMoreAfterTwoRemoteRejections(t *testing.T) {
+	first := &remoteListEndpoint{done: make(chan struct{}), err: ErrRemote}
+	second := &remoteListEndpoint{done: make(chan struct{}), err: ErrProtocol}
+	third := &remoteListEndpoint{done: make(chan struct{})}
+	var started atomic.Int32
+	rpc, err := NewRestartingRPC(context.Background(), func(context.Context) (ReadOnlyEndpoint, error) {
+		switch started.Add(1) {
+		case 1:
+			return first, nil
+		case 2:
+			return second, nil
+		default:
+			return third, nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rpc.Close()
+	var result struct{ OK bool }
+	if err := rpc.Call(context.Background(), "thread/list", nil, &result); err != nil || !result.OK || started.Load() != 3 || first.calls != 1 || second.calls != 1 || third.calls != 1 {
+		t.Fatalf("list did not take a second fresh process: result=%v err=%v starts=%d calls=%d/%d/%d", result.OK, err, started.Load(), first.calls, second.calls, third.calls)
+	}
+	if ErrorClass(ErrRemote) != "remote" || ErrorClass(ErrProtocol) != "protocol" {
+		t.Fatal("error class")
+	}
+}
+
 func TestRestartingRPCBoundsTwoHungThreadListAttempts(t *testing.T) {
 	var started atomic.Int32
 	rpc, err := NewRestartingRPCWithThreadListTimeout(context.Background(), 10*time.Millisecond, func(context.Context) (ReadOnlyEndpoint, error) {
