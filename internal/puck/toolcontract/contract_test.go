@@ -56,6 +56,26 @@ func TestStartTaskSchemaAssignsIdentityServerSide(t *testing.T) {
 	if _, ok := properties["clientTaskId"]; !ok {
 		t.Fatal("legacy clientTaskId compatibility property missing")
 	}
+	send, ok := DefinitionFor(Version, "send_turn")
+	if !ok {
+		t.Fatal("send_turn definition missing")
+	}
+	sendRequired, _ := send.InputSchema["required"].([]string)
+	if slices.Contains(sendRequired, "clientMessageId") {
+		t.Fatalf("Brain must not be required to generate clientMessageId: %v", sendRequired)
+	}
+	missing, details := DecodeStartTask(json.RawMessage(`{"deviceId":"exec-a","cwd":"/fixture","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"task-a"}`))
+	if len(details) != 0 || missing.ClientTaskID != "" {
+		t.Fatalf("non-uuid clientTaskId should be ignored: %+v %+v", missing, details)
+	}
+	kept, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002"}`))
+	if len(details) != 0 || kept.ClientMessageID != "00000000-0000-4000-8000-000000000002" {
+		t.Fatalf("valid clientMessageId was not kept: %+v %+v", kept, details)
+	}
+	loose, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"not-a-uuid"}`))
+	if len(details) != 0 || loose.ClientMessageID != "" {
+		t.Fatalf("invalid clientMessageId should be dropped: %+v %+v", loose, details)
+	}
 	if Version < 5 {
 		t.Fatalf("toolset version=%d must rotate existing Brain threads", Version)
 	}
@@ -311,7 +331,7 @@ func TestStartTaskValidationMatrix(t *testing.T) {
 		"deviceId": "exec-a", "cwd": "/fixture", "goal": "test", "prompt": "run",
 		"riskTags": []any{}, "clientTaskId": "00000000-0000-4000-8000-000000000001",
 	}
-	for _, field := range []string{"deviceId", "cwd", "goal", "prompt", "riskTags", "clientTaskId"} {
+	for _, field := range []string{"deviceId", "cwd", "goal", "prompt", "riskTags"} {
 		t.Run("missing "+field, func(t *testing.T) {
 			input := cloneMap(valid)
 			delete(input, field)
@@ -330,7 +350,6 @@ func TestStartTaskValidationMatrix(t *testing.T) {
 		{"long prompt", "prompt", func(v map[string]any) { v["prompt"] = string(make([]byte, 65537)) }},
 		{"wrong risk type", "riskTags", func(v map[string]any) { v["riskTags"] = "deploy" }},
 		{"duplicate risk", "riskTags[1]", func(v map[string]any) { v["riskTags"] = []any{"deploy", "deploy"} }},
-		{"bad uuid", "clientTaskId", func(v map[string]any) { v["clientTaskId"] = "task-a" }},
 		{"attachment unsupported", "attachments", func(v map[string]any) { v["attachments"] = []any{} }},
 	}
 	for _, test := range tests {
@@ -350,7 +369,7 @@ func TestSendTurnValidationMatrix(t *testing.T) {
 		"taskId": "task-a", "text": "continue", "riskTags": []any{},
 		"clientMessageId": "00000000-0000-4000-8000-000000000002",
 	}
-	for _, field := range []string{"text", "riskTags", "clientMessageId"} {
+	for _, field := range []string{"text", "riskTags"} {
 		t.Run("missing "+field, func(t *testing.T) {
 			input := cloneMap(valid)
 			delete(input, field)
@@ -380,6 +399,35 @@ func TestSendTurnValidationMatrix(t *testing.T) {
 				t.Fatalf("details=%+v", details)
 			}
 		})
+	}
+}
+
+func TestHandoffReferencesAreOptionalOnTheCurrentToolset(t *testing.T) {
+	current, ok := DefinitionFor(Version, "start_task")
+	if !ok {
+		t.Fatal("missing start_task")
+	}
+	properties, _ := current.InputSchema["properties"].(map[string]any)
+	if _, found := properties["includeMessages"]; !found {
+		t.Fatal("current start_task schema missing includeMessages")
+	}
+	if _, found := properties["referenceThreads"]; !found {
+		t.Fatal("current start_task schema missing referenceThreads")
+	}
+	previous, ok := DefinitionFor(Version-1, "send_turn")
+	if !ok {
+		t.Fatal("missing previous send_turn")
+	}
+	oldProperties, _ := previous.InputSchema["properties"].(map[string]any)
+	if _, found := oldProperties["referenceThreads"]; found {
+		t.Fatal("previous toolset advertised referenceThreads")
+	}
+	start, details := DecodeStartTask(json.RawMessage(`{"deviceId":"exec-a","cwd":"/fixture","goal":"test","prompt":"run","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000001","referenceThreads":["11111111-1111-4111-8111-111111111111"],"includeMessages":["message-a"]}`))
+	if len(details) != 0 || len(start.ReferenceThreads) != 1 || start.IncludeMessages[0] != "message-a" {
+		t.Fatalf("start=%+v details=%+v", start, details)
+	}
+	if _, details := DecodeSendTurn(json.RawMessage(`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"00000000-0000-4000-8000-000000000002","referenceThreads":null}`)); len(details) == 0 {
+		t.Fatal("null referenceThreads was accepted")
 	}
 }
 

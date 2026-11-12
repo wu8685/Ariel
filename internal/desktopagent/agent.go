@@ -196,6 +196,7 @@ func Run(ctx context.Context, cfg Config) error {
 		queues = append(queues, queueReader)
 	}
 	service := NewService(appserver.HistoryReader{RPC: readOnlyRPC}, func(ctx context.Context, id, cwd string) (Live, error) { return OpenFollower(ctx, cfg.Socket, id, cwd) }, queues...)
+	service.SetAgentStateDir(cwd)
 	service.SetThreadBootstrapper(AppServerBootstrapper{Binary: cfg.Binary})
 	service.editEnabled = verifiedEditBinary(ctx, cfg.Binary)
 	if !cfg.DisableExecutionSettings {

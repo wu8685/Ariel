@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 type fakeOrchestrator struct {
 	calls   []string
 	origins []Origin
+	params  []json.RawMessage
 	fn      func(string, json.RawMessage) Result
 }
 
@@ -20,6 +22,7 @@ func (f *fakeOrchestrator) Devices() []map[string]any {
 func (f *fakeOrchestrator) Forward(_ context.Context, origin Origin, _ string, method string, params json.RawMessage) Result {
 	f.calls = append(f.calls, method)
 	f.origins = append(f.origins, origin)
+	f.params = append(f.params, append(json.RawMessage(nil), params...))
 	if f.fn != nil {
 		return f.fn(method, params)
 	}
@@ -127,6 +130,8 @@ type fakeBackend struct {
 	readOnly   bool
 	watches    []string
 	finished   []string
+	handoff    Handoff
+	handoffErr error
 }
 
 func (f *fakeBackend) Authorize(_ context.Context, _ string, action Action) (string, error) {
@@ -202,6 +207,9 @@ func (f *fakeBackend) PostNotice(context.Context, string, string, string) (strin
 	return "notice-1", nil
 }
 func (f *fakeBackend) NoteThreadGone(context.Context, string, string, string) error { return nil }
+func (f *fakeBackend) HandoffContext(context.Context, HandoffQuery) (Handoff, error) {
+	return f.handoff, f.handoffErr
+}
 func (f *fakeBackend) FinishTask(_ context.Context, assistantID, taskID string, finish TaskFinish) (TaskFinishResult, error) {
 	task, ok := f.tasks[taskID]
 	if !ok || task.AssistantID != assistantID {
@@ -304,27 +312,32 @@ func TestStartTaskUsesTrustedSourceIdentityInsteadOfBrainGeneratedID(t *testing.
 	}
 }
 
-func TestStartTaskWithoutTrustedSourceStillRequiresUUID(t *testing.T) {
-	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+func TestStartTaskWithoutTrustedSourceGeneratesUUID(t *testing.T) {
+	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).ExecuteAuthorized(context.Background(), Call{
 		AssistantID: "assistant-a", Tool: "start_task",
 		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[]}`),
 	})
-	if result.Success || result.Code != "INVALID_ARGUMENT" || len(result.Details) == 0 || result.Details[0].Field != "clientTaskId" {
-		t.Fatalf("untrusted missing identity was accepted: %+v", result)
+	taskID, _ := result.Data["taskId"].(string)
+	if !result.Success || taskID == "" {
+		t.Fatalf("missing clientTaskId was not generated: %+v", result)
 	}
 }
 
-func TestStartTaskTrustedIdentityDoesNotRelaxUnknownOrInvalidFields(t *testing.T) {
-	for _, raw := range []string{
-		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":7}`,
-		`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"unknown":true}`,
-	} {
-		result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
-			AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task", Arguments: json.RawMessage(raw),
-		})
-		if result.Success || result.Code != "INVALID_ARGUMENT" {
-			t.Fatalf("unsafe field was accepted: raw=%s result=%+v", raw, result)
-		}
+func TestStartTaskTrustedIdentityDoesNotRelaxUnknownFields(t *testing.T) {
+	result := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"unknown":true}`),
+	})
+	if result.Success || result.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("unknown field was accepted: %+v", result)
+	}
+	generated := New(&fakeOrchestrator{}, &fakeBackend{tasks: map[string]Task{}}).Execute(context.Background(), Call{
+		AssistantID: "assistant-a", SourceMessageID: "user-message-turn63", Tool: "start_task",
+		Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":7}`),
+	})
+	taskID, _ := generated.Data["taskId"].(string)
+	if !generated.Success || taskID == "" || taskID == "7" {
+		t.Fatalf("numeric clientTaskId was not replaced: %+v", generated)
 	}
 }
 
@@ -409,7 +422,7 @@ func TestMutationValidationReturnsSafeFieldDetails(t *testing.T) {
 		tool, raw, field string
 	}{
 		{"start_task", `{}`, "deviceId"},
-		{"send_turn", `{"taskId":"task-a","text":"x","riskTags":[],"clientMessageId":"bad"}`, "clientMessageId"},
+		{"send_turn", `{"taskId":"task-a","text":"","riskTags":[]}`, "text"},
 	} {
 		result := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: test.tool, Arguments: json.RawMessage(test.raw)})
 		if result.Code != "INVALID_ARGUMENT" || len(result.Details) == 0 || result.Details[0].Field != test.field {
@@ -420,6 +433,91 @@ func TestMutationValidationReturnsSafeFieldDetails(t *testing.T) {
 			t.Fatalf("error echoed arguments: %s", encoded)
 		}
 	}
+}
+
+func TestSendTurnFillsClientMessageID(t *testing.T) {
+	valid := "00000000-0000-4000-8000-000000000002"
+	for _, raw := range []string{
+		`{"taskId":"task-a","text":"continue","riskTags":[]}`,
+		`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"not-a-uuid"}`,
+		`{"taskId":"task-a","text":"continue","riskTags":[],"clientMessageId":"` + valid + `"}`,
+	} {
+		orchestrator := &fakeOrchestrator{}
+		handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{"task-a": {ID: "task-a", AssistantID: "assistant-a", DeviceID: "exec-a", NativeThreadID: "thread-a"}}})
+		result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "send_turn", Arguments: json.RawMessage(raw)})
+		if !result.Success || len(orchestrator.params) != 1 {
+			t.Fatalf("raw=%s result=%+v", raw, result)
+		}
+		var params struct {
+			ClientMessageID string `json:"clientMessageId"`
+		}
+		if json.Unmarshal(orchestrator.params[0], &params) != nil || params.ClientMessageID == "" || params.ClientMessageID == "not-a-uuid" {
+			t.Fatalf("raw=%s params=%s", raw, orchestrator.params[0])
+		}
+		if strings.Contains(raw, valid) && params.ClientMessageID != valid {
+			t.Fatalf("valid id was replaced: %s", params.ClientMessageID)
+		}
+	}
+}
+
+func TestStartTaskWithoutClientTaskIDStillBootstraps(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	handler := New(orchestrator, &fakeBackend{tasks: map[string]Task{}})
+	result := handler.ExecuteAuthorized(context.Background(), Call{AssistantID: "assistant-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work","goal":"test","prompt":"do it","riskTags":[],"clientTaskId":"task-a"}`)})
+	if !result.Success || result.Data["taskId"] == "task-a" || result.Data["taskId"] == "" {
+		t.Fatalf("result=%+v", result)
+	}
+	var params struct {
+		ClientMessageID string `json:"clientMessageId"`
+	}
+	if json.Unmarshal(orchestrator.params[0], &params) != nil || params.ClientMessageID != result.Data["taskId"] {
+		t.Fatalf("params=%s data=%v", orchestrator.params[0], result.Data)
+	}
+}
+
+func TestWatchThreadDefaultsDevice(t *testing.T) {
+	orchestrator := &fakeOrchestrator{}
+	handler := New(orchestrator, &fakeBackend{})
+	only := handler.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"deviceId":"","threadId":"thread-a"}`)})
+	if !only.Success || only.Data["deviceId"] != "exec-a" {
+		t.Fatalf("only online=%+v", only)
+	}
+	many := &deviceList{devices: []map[string]any{
+		{"deviceId": "brain-a", "agentOnline": true},
+		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"send": true}},
+	}}
+	hinted := New(many, &hintBackend{brain: "brain-a", known: []string{"exec-a"}})
+	known := hinted.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"threadId":"thread-a"}`)})
+	if !known.Success || known.Data["deviceId"] != "exec-a" {
+		t.Fatalf("known device=%+v", known)
+	}
+	brain := New(many, &hintBackend{brain: "brain-a"})
+	fallback := brain.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"threadId":"thread-b"}`)})
+	if !fallback.Success || fallback.Data["deviceId"] != "brain-a" {
+		t.Fatalf("brain device=%+v", fallback)
+	}
+	ambiguous := New(many, &fakeBackend{})
+	rejected := ambiguous.Execute(context.Background(), Call{AssistantID: "assistant-a", Tool: "watch_thread", Arguments: json.RawMessage(`{"threadId":"thread-c"}`)})
+	if rejected.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("ambiguous=%+v", rejected)
+	}
+}
+
+type deviceList struct {
+	fakeOrchestrator
+	devices []map[string]any
+}
+
+func (d *deviceList) Devices() []map[string]any { return d.devices }
+
+type hintBackend struct {
+	fakeBackend
+	brain string
+	known []string
+}
+
+func (h *hintBackend) DeviceHint(context.Context, string, string) (string, []string, error) {
+	return h.brain, h.known, nil
 }
 
 func TestStartTaskUsesAtomicBootstrapAdapter(t *testing.T) {
@@ -876,5 +974,45 @@ func TestFinishTaskArchivesWithoutExecutionOrAuthorization(t *testing.T) {
 	}
 	if taskReusable(Task{ID: "task-a", NativeThreadID: "thread-a", Status: "archived"}) {
 		t.Fatal("archived task stayed reusable")
+	}
+}
+
+func TestStartTaskHandoffAttachesSessionLinksOnce(t *testing.T) {
+	threadID := "11111111-1111-4111-8111-111111111111"
+	orchestrator := &fakeOrchestrator{}
+	sessions := make([]HandoffSession, 0, MaxHandoffSessions+1)
+	for i := 0; i < MaxHandoffSessions+1; i++ {
+		sessions = append(sessions, HandoffSession{DeviceID: "exec-a", ThreadID: fmt.Sprintf("thread-%d", i), Title: "extra"})
+	}
+	sessions[0] = HandoffSession{Title: "方案讨论", DeviceID: "exec-a", CWD: "/work/watched", ThreadID: threadID}
+	backend := &fakeBackend{tasks: map[string]Task{}, handoff: Handoff{Sessions: sessions}}
+	handler := New(orchestrator, backend)
+	call := Call{AssistantID: "assistant-a", SourceMessageID: "user-message-a", Tool: "start_task", Arguments: json.RawMessage(`{"deviceId":"exec-a","cwd":"/work/new","goal":"落地","prompt":"我理解为要在新目录实现发布步骤。","riskTags":[],"clientTaskId":"00000000-0000-4000-8000-000000000201"}`)}
+	first := handler.Execute(context.Background(), call)
+	second := handler.Execute(context.Background(), call)
+	if !first.Success || !second.Success || len(orchestrator.calls) != 1 || orchestrator.calls[0] != "thread.bootstrap" {
+		t.Fatalf("first=%+v second=%+v calls=%v", first, second, orchestrator.calls)
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(orchestrator.params[0], &payload) != nil {
+		t.Fatal("bootstrap payload")
+	}
+	pack := payload.Text
+	if strings.Count(pack, HandoffSentinel) != 1 || !strings.HasPrefix(pack, "我理解为要在新目录实现发布步骤。\n") {
+		t.Fatalf("pack=%s", pack)
+	}
+	for _, want := range []string{"方案讨论", "/work/watched", "codex://threads/" + threadID, "deviceId: exec-a", "threadId: " + threadID, "【Referenced sessions】"} {
+		if !strings.Contains(pack, want) {
+			t.Fatalf("missing %q in %s", want, pack)
+		}
+	}
+	if strings.Contains(pack, "thread-4") || strings.Contains(pack, "已省略") || strings.Contains(pack, "conclusion") || strings.Contains(pack, "用户原话") {
+		t.Fatalf("pack included clipped or extracted text: %s", pack)
+	}
+	again := AppendHandoff(pack, backend.handoff)
+	if again != pack || strings.Count(again, HandoffSentinel) != 1 {
+		t.Fatal("retry duplicated the handoff pack")
 	}
 }

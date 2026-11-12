@@ -1,7 +1,9 @@
 package desktopagent
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -106,6 +108,21 @@ func TestNormalizeStoredThreadPreservesIdentityAndText(t *testing.T) {
 	items := turns[0].(map[string]any)["items"].([]any)
 	if len(items) != 2 || items[0].(map[string]any)["text"] != "hello" || items[1].(map[string]any)["text"] != "world" {
 		t.Fatalf("items: %v", items)
+	}
+}
+
+func TestNormalizeStoredThreadKeepsSessionAndTurnWorkspace(t *testing.T) {
+	thread, err := NormalizeStored(appserver.Thread{
+		ID: "thread-1", Name: "Workspace", CWD: "/Users/owner/.ariel/puck/assistant", SessionCWD: "/work/watched",
+		Status: json.RawMessage(`{"type":"idle"}`),
+		Turns:  []appserver.Turn{{ID: "turn-1", Status: "completed", CWD: "/work/from-turn"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := thread["turns"].([]any)
+	if thread["cwd"] != "/Users/owner/.ariel/puck/assistant" || thread["sessionCwd"] != "/work/watched" || turns[0].(map[string]any)["cwd"] != "/work/from-turn" {
+		t.Fatalf("thread=%v", thread)
 	}
 }
 
@@ -421,5 +438,61 @@ func TestNormalizeSecretUserInputDoesNotOfferRemoteAnswer(t *testing.T) {
 	card := thread["pendingInteractions"].([]any)[0].(map[string]any)
 	if card["kind"] != "unsupported" || len(card["availableDecisions"].([]string)) != 0 {
 		t.Fatalf("secret input exposed for remote answer: %v", card)
+	}
+}
+
+type payloadRPC struct{ body string }
+
+func (r payloadRPC) Call(_ context.Context, method string, _ any, result any) error {
+	if method != "thread/read" {
+		return errors.New(method)
+	}
+	return json.Unmarshal([]byte(r.body), result)
+}
+
+type storedThreadHistory struct{ thread appserver.Thread }
+
+func (storedThreadHistory) List(context.Context, string, int) (appserver.Page, error) {
+	return appserver.Page{}, nil
+}
+func (h storedThreadHistory) Read(context.Context, string) (appserver.Thread, error) {
+	return h.thread, nil
+}
+
+func TestReadCarriesSessionMetaAndAgentStateDir(t *testing.T) {
+	const id = "22222222-2222-4222-8222-222222222222"
+	const agentDir = "/Users/owner/Library/Application Support/ArielLocal"
+	const workspace = "/Users/owner/tmp/real-workspace"
+	body, err := json.Marshal(map[string]any{
+		"thread": map[string]any{
+			"id": id, "cwd": agentDir, "name": "fix tests", "updatedAt": 1760000000,
+			"status": map[string]any{"type": "idle"},
+			"session_meta": map[string]any{
+				"type": "session_meta",
+				"payload": map[string]any{
+					"id": id, "cwd": workspace, "originator": "codex_cli_rs", "cli_version": "0.160.0",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := (appserver.HistoryReader{RPC: payloadRPC{body: string(body)}}).Read(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := NormalizeStored(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(storedThreadHistory{thread: parsed}, nil)
+	service.SetAgentStateDir(agentDir)
+	read, err := service.Read(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized["cwd"] != agentDir || normalized["sessionCwd"] != workspace || read["sessionCwd"] != workspace || read["agentStateDir"] != agentDir || read["cwd"] != agentDir {
+		t.Fatalf("normalized=%v read=%v", normalized, read)
 	}
 }

@@ -43,8 +43,8 @@ func (f *fakeModuleBridge) Devices() []map[string]any {
 		executionPolicy = *f.executionPolicy
 	}
 	return []map[string]any{
-		{"deviceId": "brain-a", "agentOnline": true, "capabilities": map[string]bool{"puckBrainReady": true}},
-		{"deviceId": "exec-a", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": executionPolicy}},
+		{"deviceId": "brain-a", "deviceName": "大脑机", "agentOnline": true, "capabilities": map[string]bool{"puckBrainReady": true}},
+		{"deviceId": "exec-a", "deviceName": "执行机", "agentOnline": true, "capabilities": map[string]bool{"threadBootstrap": true, "send": true, "executionPolicy": executionPolicy}},
 	}
 }
 func (f *fakeModuleBridge) BrainThreads(v map[relay.BrainThread]string) { f.brains = v }

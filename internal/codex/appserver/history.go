@@ -1,9 +1,15 @@
 package appserver
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -25,10 +31,18 @@ type Thread struct {
 	Turns     []Turn          `json:"turns"`
 	IsPinned  *bool           `json:"isPinned,omitempty"`
 	Section   *ThreadSection  `json:"section,omitempty"`
+	// Path is the rollout file Codex returns on thread/read. The original
+	// workspace lives in that file's session_meta when the thread object cwd
+	// is only the app-server process directory.
+	Path string `json:"path,omitempty"`
+	// SessionCWD is the workspace from session_meta. Top-level cwd can be the
+	// app-server process directory instead.
+	SessionCWD string `json:"-"`
 }
 type Turn struct {
 	ID     string            `json:"id"`
 	Status string            `json:"status"`
+	CWD    string            `json:"cwd,omitempty"`
 	Items  []json.RawMessage `json:"items"`
 }
 type Page struct {
@@ -159,17 +173,155 @@ func (h HistoryReader) ReadFull(ctx context.Context, threadID string) (Thread, e
 }
 
 func (h HistoryReader) read(ctx context.Context, threadID string, includeTurns bool) (Thread, error) {
+	if threadID == "" {
+		return Thread{}, ErrProtocol
+	}
+	var raw json.RawMessage
+	if err := h.RPC.Call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": includeTurns}, &raw); err != nil {
+		return Thread{}, err
+	}
 	var out struct {
 		Thread Thread `json:"thread"`
 	}
-	if threadID == "" {
-		return out.Thread, ErrProtocol
+	if json.Unmarshal(raw, &out) != nil || out.Thread.ID != threadID {
+		return Thread{}, ErrProtocol
 	}
-	err := h.RPC.Call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": includeTurns}, &out)
-	if err == nil && out.Thread.ID != threadID {
-		err = ErrProtocol
+	if out.Thread.SessionCWD == "" {
+		out.Thread.SessionCWD = SessionMetaCWD(raw)
 	}
-	return out.Thread, err
+	if out.Thread.SessionCWD == "" {
+		out.Thread.SessionCWD = SessionMetaFromRollout(out.Thread.Path)
+	}
+	return out.Thread, nil
+}
+
+func (t *Thread) UnmarshalJSON(raw []byte) error {
+	type alias Thread
+	var decoded alias
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*t = Thread(decoded)
+	t.SessionCWD = SessionMetaCWD(raw)
+	return nil
+}
+
+var rolloutCWD = regexp.MustCompile(`"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// SessionMetaCWD reads the workspace recorded on the Codex session. thread/read
+// may put the app-server process directory in the top-level cwd, and may put
+// session_meta on the thread or beside it.
+func SessionMetaCWD(raw json.RawMessage) string {
+	var body map[string]any
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	if cwd := metaCWD(body); cwd != "" {
+		return cwd
+	}
+	thread, _ := body["thread"].(map[string]any)
+	return metaCWD(thread)
+}
+
+func metaCWD(body map[string]any) string {
+	if body == nil {
+		return ""
+	}
+	for _, key := range []string{"sessionMeta", "session_meta", "sessionMetadata", "session_metadata"} {
+		if cwd := nestedCWD(body[key]); cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
+func nestedCWD(value any) string {
+	switch typed := value.(type) {
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" || (text[0] != '{' && text[0] != '[') {
+			return ""
+		}
+		var decoded any
+		if json.Unmarshal([]byte(text), &decoded) != nil {
+			return ""
+		}
+		return nestedCWD(decoded)
+	case []any:
+		for _, item := range typed {
+			if cwd := nestedCWD(item); cwd != "" {
+				return cwd
+			}
+		}
+	case map[string]any:
+		if cwd, _ := typed["cwd"].(string); strings.TrimSpace(cwd) != "" {
+			return strings.TrimSpace(cwd)
+		}
+		for _, key := range []string{"payload", "session", "sessionMeta", "session_meta"} {
+			if cwd := nestedCWD(typed[key]); cwd != "" {
+				return cwd
+			}
+		}
+	}
+	return ""
+}
+
+// SessionMetaFromRollout reads the workspace from the first session_meta line
+// of a rollout file returned as thread.path. The line can be larger than the
+// prefix we read; cwd is recorded before the long instruction fields.
+func SessionMetaFromRollout(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !filepath.IsAbs(path) {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	reader := bufio.NewReader(io.LimitReader(file, 256*1024))
+	for index := 0; index < 8; index++ {
+		line, err := reader.ReadBytes('\n')
+		if cwd := sessionMetaLineCWD(line); cwd != "" {
+			return cwd
+		}
+		if err != nil {
+			return ""
+		}
+	}
+	return ""
+}
+
+func sessionMetaLineCWD(line []byte) string {
+	if !bytes.Contains(line, []byte("session_meta")) {
+		return ""
+	}
+	var row struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if json.Unmarshal(line, &row) == nil {
+		if row.Type != "session_meta" {
+			return ""
+		}
+		if len(row.Payload) > 0 {
+			var payload any
+			if json.Unmarshal(row.Payload, &payload) == nil {
+				if cwd := nestedCWD(payload); cwd != "" {
+					return cwd
+				}
+			}
+		}
+	}
+	match := rolloutCWD.FindSubmatch(line)
+	if match == nil {
+		return ""
+	}
+	var cwd string
+	if json.Unmarshal([]byte(`"`+string(match[1])+`"`), &cwd) != nil {
+		return ""
+	}
+	return strings.TrimSpace(cwd)
 }
 
 func (h HistoryReader) Turns(ctx context.Context, threadID, cursor string, limit int, itemsView string) (TurnPage, error) {
