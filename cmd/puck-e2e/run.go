@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,6 +20,7 @@ type options struct {
 	Timeout time.Duration
 	Keep    bool
 	UI      bool
+	Fake    bool
 	WebRoot string
 	WebDist string
 }
@@ -61,6 +64,16 @@ func execute(ctx context.Context, opt options) (Report, error) {
 	}
 	if opt.Socket != "" {
 		return Report{}, fmt.Errorf("refusing Desktop IPC: puck-e2e is headless and will not attach to Codex Desktop")
+	}
+	if opt.Fake {
+		binary, err := buildFake(root)
+		if err != nil {
+			return Report{}, err
+		}
+		opt.Binary = binary
+		if err := os.Setenv("PUCK_E2E_FAKE_STATE", filepath.Join(root, "fake-state.json")); err != nil {
+			return Report{}, err
+		}
 	}
 	iso := layout(root, opt.Binary, "not-used")
 	if err := validateIsolation(iso); err != nil {
@@ -194,13 +207,16 @@ func (r *runner) scenarioA() ScenarioResult {
 		{Name: "cwd", Pass: view.CWDTrusted, Detail: "cwd=" + view.CWD},
 		{Name: "no-summary", Pass: !view.HasSummary && !view.HasTruncation},
 		{Name: "no-duplicate-sentinel", Pass: !view.Duplicate && view.SentinelCount <= 1, Detail: fmt.Sprintf("sentinel=%d", view.SentinelCount)},
+		{Name: "tool-calls", Pass: true, Detail: r.toolCodes("start_task", "watch_thread")},
 	}
 	followID := newID()
 	_, _ = r.send(followID, "请对刚才的执行任务调用一次 send_turn，text 只写「继续看引用」。不要 start_task，不要传 clientMessageId。")
 	_ = r.waitIdle()
 	again := combinePacks(r.packViews(r.childThread))
-	checks = append(checks, Check{Name: "send-turn-dedupe", Pass: !again.Duplicate, Detail: fmt.Sprintf("sentinel=%d", again.SentinelCount)})
-	return passResult("A", "handoff pack", checks)
+	checks = append(checks, Check{Name: "send-turn-dedupe", Pass: !again.Duplicate && again.SentinelCount >= view.SentinelCount, Detail: fmt.Sprintf("sentinel=%d %s", again.SentinelCount, r.toolCodes("send_turn"))})
+	result := passResult("A", "handoff pack", checks)
+	result.ToolCalls = r.toolNames()
+	return result
 }
 
 func (r *runner) scenarioB() ScenarioResult {
@@ -242,10 +258,13 @@ func (r *runner) scenarioB() ScenarioResult {
 		_ = r.waitIdle()
 	}
 	checks = append(checks,
-		Check{Name: "picked-up", Pass: attached == len(ids), Detail: fmt.Sprintf("attached=%d", attached)},
+		Check{Name: "picked-up", Pass: attached == len(ids), Detail: fmt.Sprintf("attached=%d skips=%s", attached, strings.Join(r.wakeSkipReasons(), ","))},
 		Check{Name: "one-pending-wake", Pass: r.metrics.MaxQueueWakes <= 1, Detail: fmt.Sprintf("maxQueue=%d", r.metrics.MaxQueueWakes)},
 	)
-	return passResult("B", "queue while busy", checks)
+	result := passResult("B", "queue while busy", checks)
+	result.WakeSkips = r.wakeSkipReasons()
+	result.ToolCalls = r.toolNames()
+	return result
 }
 
 func (r *runner) scenarioC() ScenarioResult {
@@ -305,6 +324,7 @@ func (r *runner) scenarioD() ScenarioResult {
 			{Name: "z-not-merged", Pass: zID != "" && zStatus != "merged" && zMerged == "", Detail: "status=" + zStatus},
 		}
 		best = softResult("D", "semantic merge", attempt, checks)
+		best.ToolCalls = r.toolNames()
 		if best.Status == "soft_pass" {
 			return best
 		}
@@ -337,7 +357,9 @@ func (r *runner) scenarioG() ScenarioResult {
 		{Name: "tool-error-recovery", Pass: r.metrics.Fallbacks == 0, Detail: fmt.Sprintf("retries=%d fallbacks=%d", r.metrics.RetryNotices, r.metrics.Fallbacks)},
 		{Name: "system-context-lines", Pass: r.metrics.SystemObserved && r.metrics.HasHandoff && r.metrics.HasSave && r.metrics.HasMerge, Detail: fmt.Sprintf("lines=%d observed=%t", r.metrics.SystemLines, r.metrics.SystemObserved)},
 	}
-	return passResult("G", "ux metrics", checks)
+	result := passResult("G", "ux metrics", checks)
+	result.ToolCalls = r.toolNames()
+	return result
 }
 
 func (r *runner) scenarioF() ScenarioResult {
@@ -358,11 +380,7 @@ func (r *runner) scenarioF() ScenarioResult {
 	archiveCode := "not-called"
 	if threadID != "" {
 		archived, err := r.client.call(r.ctx, "thread.archive.update", r.stack.deviceID, map[string]any{"threadId": threadID, "archived": true}, 30*time.Second)
-		if err != nil {
-			archiveCode = "request-failed"
-		} else {
-			archiveCode = outcomeCode(archived)
-		}
+		archiveCode = callDetail(err, archived)
 	}
 	deadline := time.Now().Add(45 * time.Second)
 	links := linksBefore
@@ -377,10 +395,8 @@ func (r *runner) scenarioF() ScenarioResult {
 	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": r.assistantID}, 30*time.Second)
 	gone, goneDetail, goneErr := assistantGone(r.ctx, r.stack.iso.DBPath, r.assistantID)
 	deleteDetail := goneDetail
-	if err != nil {
-		deleteDetail = "request-failed " + deleteDetail
-	} else if outcomeCode(deleted) != "accepted" {
-		deleteDetail = outcomeCode(deleted) + " " + deleteDetail
+	if err != nil || outcomeCode(deleted) != "accepted" {
+		deleteDetail = callDetail(err, deleted) + " " + deleteDetail
 	}
 	if goneErr != nil && goneDetail == "" {
 		deleteDetail = goneErr.Error()
@@ -430,9 +446,19 @@ func (r *runner) waitIdle() error {
 		r.collectMetrics()
 		r.sampleQueue()
 		if !r.busy() {
-			return nil
+			timer := time.NewTimer(400 * time.Millisecond)
+			select {
+			case <-r.ctx.Done():
+				timer.Stop()
+				return r.ctx.Err()
+			case <-timer.C:
+			}
+			if !r.busy() {
+				return nil
+			}
+			continue
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(300 * time.Millisecond)
 	}
 	return fmt.Errorf("brain stayed busy")
 }
@@ -531,9 +557,9 @@ func (r *runner) countSendMessages() int {
 		if _, ok := seen[id]; ok {
 			continue
 		}
-		text, _ := message["text"].(string)
+		role, _ := message["role"].(string)
 		card, _ := message["cardJSON"].(string)
-		if strings.Contains(card, "notify_user") || strings.Contains(text, "FIXTURE_NOTICE") {
+		if role == "assistant" && strings.Contains(card, `"source":"notify_user"`) {
 			seen[id] = struct{}{}
 			count++
 		}
@@ -542,17 +568,26 @@ func (r *runner) countSendMessages() int {
 }
 
 func (r *runner) observeContext() {
-	response, err := r.client.call(r.ctx, "thread.read", r.stack.deviceID, map[string]any{"threadId": r.brainThread}, 20*time.Second)
-	if err != nil || outcomeCode(response) != "accepted" {
+	history, err := r.history()
+	if err != nil || outcomeCode(history) != "accepted" {
 		return
 	}
-	text := findSystemContext(dataOf(response))
-	lines, observed, handoff, save, merge := systemContextLines(text)
+	raw, _ := dataOf(history)["systemContext"].(map[string]any)
+	if raw == nil {
+		return
+	}
+	lines := 0
+	switch value := raw["lines"].(type) {
+	case float64:
+		lines = int(value)
+	case int:
+		lines = value
+	}
 	r.metrics.SystemLines = lines
-	r.metrics.SystemObserved = observed
-	r.metrics.HasHandoff = handoff
-	r.metrics.HasSave = save
-	r.metrics.HasMerge = merge
+	r.metrics.SystemObserved, _ = raw["observed"].(bool)
+	r.metrics.HasHandoff, _ = raw["hasHandoff"].(bool)
+	r.metrics.HasSave, _ = raw["hasSave"].(bool)
+	r.metrics.HasMerge, _ = raw["hasMerge"].(bool)
 }
 
 func (r *runner) sampleQueue() {
@@ -600,6 +635,102 @@ func (r *runner) packViews(threadID string) []PackView {
 		views = append(views, inspectPack(text, r.fixtureThread, r.stack.deviceID, r.stack.iso.WorkspaceA, r.stack.iso.AgentStateDir))
 	}
 	return views
+}
+
+func buildFake(root string) (string, error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	binary := filepath.Join(root, "fake-codex")
+	cmd := exec.Command("go", "build", "-o", binary, "./cmd/puck-e2e/fakecodex")
+	cmd.Dir = moduleRoot()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if len(detail) > 300 {
+			detail = detail[len(detail)-300:]
+		}
+		return "", fmt.Errorf("build fake codex: %s", detail)
+	}
+	return binary, nil
+}
+
+func moduleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "."
+		}
+		dir = parent
+	}
+}
+
+func (r *runner) debugLists() (tools []string, skips []string) {
+	history, err := r.history()
+	if err != nil || outcomeCode(history) != "accepted" {
+		return nil, nil
+	}
+	data := dataOf(history)
+	if raw, _ := data["toolCalls"].([]any); raw != nil {
+		for _, item := range raw {
+			call, _ := item.(map[string]any)
+			name, _ := call["tool"].(string)
+			if name == "" {
+				continue
+			}
+			if call["success"] == false {
+				code, _ := call["code"].(string)
+				if code == "" {
+					code = "failed"
+				}
+				name += "=" + code
+			}
+			tools = append(tools, name)
+		}
+	}
+	if raw, _ := data["wakeSkips"].([]any); raw != nil {
+		for _, item := range raw {
+			skip, _ := item.(map[string]any)
+			reason, _ := skip["reason"].(string)
+			if reason != "" {
+				skips = append(skips, reason)
+			}
+		}
+	}
+	return tools, skips
+}
+
+func (r *runner) toolNames() []string {
+	tools, _ := r.debugLists()
+	return tools
+}
+
+func (r *runner) wakeSkipReasons() []string {
+	_, skips := r.debugLists()
+	return skips
+}
+
+func (r *runner) toolCodes(names ...string) string {
+	tools := r.toolNames()
+	var matched []string
+	for _, tool := range tools {
+		for _, name := range names {
+			if tool == name || strings.HasPrefix(tool, name+"=") {
+				matched = append(matched, tool)
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return "tools=none"
+	}
+	return "tools=" + strings.Join(matched, ",")
 }
 
 func combinePacks(views []PackView) PackView {

@@ -394,10 +394,12 @@ func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, e
 	s.mu.Lock()
 	controller := s.threads[threadID]
 	s.mu.Unlock()
-	if controller == nil || controller.live == nil {
-		if !s.headless {
-			return "", ErrArchiveStateUnknown
-		}
+	if s.headless {
+		// A private app-server resume holds the thread. Release it before
+		// thread/archive so the write is not blocked on that process.
+		s.releaseHeadlessLive(controller)
+	} else if controller == nil || controller.live == nil {
+		return "", ErrArchiveStateUnknown
 	} else {
 		controller.mu.Lock()
 		if controller.live == nil {
@@ -418,7 +420,12 @@ func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, e
 			}
 		}
 	}
-	if err := s.archiver.Archive(ctx, threadID); err != nil {
+	archiveCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := s.archiver.Archive(archiveCtx, threadID); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(archiveCtx.Err(), context.DeadlineExceeded) {
+			return "", errors.New("TIMEOUT")
+		}
 		return "", err
 	}
 	now := time.Now()
@@ -435,6 +442,26 @@ func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, e
 	operationID := "archive-" + rand.Text()
 	s.archiveUndo = append(s.archiveUndo, archiveUndoRecord{operationID: operationID, threadID: threadID, expiresAt: now.Add(15 * time.Second)})
 	return operationID, nil
+}
+
+func (s *Service) releaseHeadlessLive(controller *threadController) {
+	if controller == nil {
+		return
+	}
+	controller.mu.Lock()
+	live := controller.live
+	controller.live = nil
+	controller.current = nil
+	controller.bootstrapHold = false
+	controller.migrating = false
+	if controller.retireTimer != nil {
+		controller.retireTimer.Stop()
+		controller.retireTimer = nil
+	}
+	controller.mu.Unlock()
+	if live != nil {
+		_ = live.Close()
+	}
 }
 
 func (s *Service) UndoArchive(ctx context.Context, threadID, operationID string) error {

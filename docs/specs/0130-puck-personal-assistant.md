@@ -581,9 +581,11 @@ Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒
 
 `cmd/puck-e2e` 与 `scripts/e2e/puck-e2e.sh` 只用于开发机验收 #93 与 #94，不进入 Relay 或 Desktop Agent 的生产启动路径，也不注册到 `ariel.sh`。
 
-它在临时目录启动隔离的 Relay（随机本机端口、临时 SQLite、临时 PIN）和隔离的 Desktop Agent（独立 `cwd` 与 Puck root）。Agent 以 headless 模式自己拉起 `codex app-server`（stdio），不连接 Desktop IPC，不启动 GUI，也不打开 `codex://`。Codex 进程自行读取本机登录；验收程序不读、不复制、不打印凭据或 `~/.codex/config.toml`。若配置了 Desktop IPC，程序直接失败。场景按顺序跑，同一时间只有一个 brain turn。可选 `-ui` 用 headless Chromium 打开这次的 Relay。Owner 会话直接写进临时库，不走 Passkey。驱动方式与 Web 相同：WebSocket `hello` 之后调用 `puck.*` 与 `thread.*`。
+它在临时目录启动隔离的 Relay（随机本机端口、临时 SQLite、临时 PIN）和隔离的 Desktop Agent（独立 `cwd` 与 Puck root）。Agent 以 headless 模式自己拉起 `codex app-server`（stdio），不连接 Desktop IPC，不启动 GUI，也不打开 `codex://`。Codex 进程自行读取本机登录；验收程序不读、不复制、不打印凭据或 `~/.codex/config.toml`。若配置了 Desktop IPC，程序直接失败。场景按顺序跑，同一时间只有一个 brain turn。可选 `-ui` 用 headless Chromium 打开这次的 Relay。PIN 页面也会读取 `/api/auth/status` 里的 Puck 状态，Relay 报告 ready 时才显示「打开 Puck」。`-fake` 改用仓库里的确定性假 app-server，不启动真实 Codex。Owner 会话直接写进临时库，不走 Passkey。驱动方式与 Web 相同：WebSocket `hello` 之后调用 `puck.*` 与 `thread.*`。
 
-场景 A–G 把断言写成 JSON。除 fixture 标记外不打印消息正文。D 与 G 依赖模型，记录结果并允许重试；失败记为 soft，不把整次验收当成硬失败。A、B、C、E、F 是硬断言。
+报告保留错误码和短错误说明，只抹掉 UUID、凭据和交接正文。WebSocket 失败会带上传输错误，不再只写 `request-failed`。headless 归档前先放开私有 app-server 对这条线程的 resume，避免 `thread/archive` 一直卡住。
+
+场景 A–G 把断言写成 JSON。除 fixture 标记外不打印消息正文。D 依赖模型，记录 search／attach／merge 等工具名；失败记为 soft。A、B、C、E、F、G 和开启后的 UI 是硬断言。
 
 ## 7. Relay 内的入口与门禁
 

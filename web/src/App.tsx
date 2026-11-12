@@ -2058,6 +2058,17 @@ export function App({ initialPairingCredential, initialRemoteLoginID, durableHis
   }, [client, webAuthMode]);
 
   useEffect(() => {
+    if (webAuthMode === "passkey") return;
+    let active = true;
+    void loadAuthStatus().then(auth => {
+      if (active) setPuckAvailability(normalizePuckStatus(auth.puck));
+    }).catch(() => {
+      if (active) setPuckAvailability({ state: "disabled" });
+    });
+    return () => { active = false };
+  }, [webAuthMode]);
+
+  useEffect(() => {
     if (webAuthMode !== "passkey") return;
     let active = true;
     const generation = authGeneration.current;

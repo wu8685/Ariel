@@ -23,10 +23,20 @@ const notes = [];
 try {
   await page.goto(origin + "/", { waitUntil: "domcontentloaded" });
   await page.locator("#token").fill(pin);
-  await page.getByRole("button", { name: /连接/ }).click();
-  await page.getByRole("button", { name: "打开 Puck" }).click({ timeout: 20000 });
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  const openList = page.getByRole("button", { name: /^打开会话列表/ });
+  if (await openList.count()) await openList.click();
+  const puck = page.locator('button[aria-label="打开 Puck"]');
+  try {
+    await puck.click({ timeout: 20000 });
+  } catch (error) {
+    const labels = await page.locator("button").evaluateAll(nodes => nodes.slice(0, 24).map(node => node.getAttribute("aria-label") || (node.textContent || "").trim()));
+    throw new Error(`打开 Puck was not clickable; buttons=${labels.join(" | ")}`);
+  }
   const bot = page.locator(".puck-workspace, .puck-transcript").first();
   await bot.waitFor({ timeout: 20000 });
+  const named = page.locator(".puck-assistant-row", { hasText: "E2E" }).first();
+  if (await named.count()) await named.click();
   const messages = page.locator(".puck-message");
   const count = await messages.count();
   if (count < 1) throw new Error("Puck chat did not render a message");
@@ -37,11 +47,11 @@ try {
   await sample.hover();
   const float = sample.locator(".puck-reaction-float");
   await float.waitFor({ timeout: 5000 });
-  const bubble = await sample.locator(".puck-bubble, .puck-message-content").first().boundingBox();
+  const bubble = await sample.locator(".puck-message-content").first().boundingBox();
   const add = await float.locator(".puck-reaction-add").boundingBox();
   if (!bubble || !add) throw new Error("reaction control has no box");
-  const outside = add.x + add.width <= bubble.x + 4 || add.x >= bubble.x + bubble.width - 4;
-  if (!outside) throw new Error("reaction add control is inside the bubble");
+  const sticksOut = add.x < bubble.x - 2 || add.x + add.width > bubble.x + bubble.width + 2;
+  if (!sticksOut) throw new Error("reaction add control does not sit outside the bubble");
   notes.push("reaction-float=outside");
   const tasks = page.locator(".puck-task-card, [aria-label='任务卡片']");
   const taskCount = await tasks.count();

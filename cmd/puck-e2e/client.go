@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -47,17 +48,17 @@ func (c *client) Close() {
 	}
 }
 
-func (c *client) call(ctx context.Context, method, deviceID string, params any, timeout time.Duration) (map[string]any, error) {
+func (c *client) call(ctx context.Context, method, deviceID string, params any, _ time.Duration) (map[string]any, error) {
 	c.seq++
 	requestID := fmt.Sprintf("00000000-0000-4000-8000-%012d", c.seq)
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if err := wsjson.Write(callCtx, c.conn, map[string]any{
+	// A cancelled read context closes the websocket. Keep the run context so
+	// one slow call cannot make the next call fail with a transport error.
+	if err := wsjson.Write(ctx, c.conn, map[string]any{
 		"type": "request", "v": 1, "requestId": requestID, "deviceId": deviceID, "method": method, "params": params,
 	}); err != nil {
 		return nil, err
 	}
-	return c.read(callCtx, requestID)
+	return c.read(ctx, requestID)
 }
 
 func (c *client) read(ctx context.Context, requestID string) (map[string]any, error) {
@@ -93,6 +94,27 @@ func outcomeCode(response map[string]any) string {
 		code = "rejected"
 	}
 	return code
+}
+
+func outcomeDetail(response map[string]any) string {
+	code := outcomeCode(response)
+	problem, _ := response["error"].(map[string]any)
+	message, _ := problem["message"].(string)
+	message = strings.TrimSpace(message)
+	if message == "" || message == code {
+		return code
+	}
+	if len(message) > 180 {
+		message = message[:180]
+	}
+	return code + ": " + message
+}
+
+func callDetail(err error, response map[string]any) string {
+	if err != nil {
+		return "request-failed: " + err.Error()
+	}
+	return outcomeDetail(response)
 }
 
 func newID() string {

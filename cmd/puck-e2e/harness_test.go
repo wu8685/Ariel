@@ -163,3 +163,14 @@ func TestIsolatedRelayBootsOwnerWithoutPasskey(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRedactKeepsErrorText(t *testing.T) {
+	raw := "request-failed: context deadline exceeded\n[puck-handoff]\nthread 11111111-1111-4111-8111-111111111111\n\nnext line\ngoroutine 1 [running]\nat main.boom"
+	got := redact(raw)
+	if !strings.Contains(got, "request-failed: context deadline exceeded") || !strings.Contains(got, "next line") {
+		t.Fatalf("error text dropped: %s", got)
+	}
+	if strings.Contains(got, "11111111") || strings.Contains(got, "[puck-handoff]") || strings.Contains(got, "goroutine") {
+		t.Fatalf("secret or body kept: %s", got)
+	}
+}
