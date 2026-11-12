@@ -17,6 +17,9 @@ type options struct {
 	Retries int
 	Timeout time.Duration
 	Keep    bool
+	UI      bool
+	WebRoot string
+	WebDist string
 }
 
 type metrics struct {
@@ -56,7 +59,10 @@ func execute(ctx context.Context, opt options) (Report, error) {
 			return Report{}, err
 		}
 	}
-	iso := layout(root, opt.Binary, opt.Socket)
+	if opt.Socket != "" {
+		return Report{}, fmt.Errorf("refusing Desktop IPC: puck-e2e is headless and will not attach to Codex Desktop")
+	}
+	iso := layout(root, opt.Binary, "not-used")
 	if err := validateIsolation(iso); err != nil {
 		return Report{}, err
 	}
@@ -70,13 +76,16 @@ func execute(ctx context.Context, opt options) (Report, error) {
 			_ = os.RemoveAll(root)
 		}
 	}()
+	if opt.UI {
+		stack.webDist = opt.WebDist
+	}
 	if err := stack.startRelay(ctx); err != nil {
 		return Report{}, err
 	}
 	if err := stack.startAgent(ctx); err != nil {
 		return Report{}, err
 	}
-	owner, err := dialOwner(ctx, stack.wsURL(), webOrigin, stack.pin)
+	owner, err := dialOwner(ctx, stack.wsURL(), stack.origin, stack.pin)
 	if err != nil {
 		return Report{}, err
 	}
@@ -99,6 +108,12 @@ func execute(ctx context.Context, opt options) (Report, error) {
 		{"D", "semantic merge", false, run.scenarioD},
 		{"E", "completion cleanup", true, run.scenarioE},
 		{"G", "ux metrics", true, run.scenarioG},
+		{"UI", "headless browser", true, func() ScenarioResult {
+			if !opt.UI {
+				return ScenarioResult{ID: "UI", Name: "headless browser", Status: "skipped"}
+			}
+			return run.scenarioUI(opt.WebRoot)
+		}},
 		{"F", "unlink and delete", true, run.scenarioF},
 	}
 	for _, scenario := range order {
@@ -204,6 +219,10 @@ func (r *runner) scenarioB() ScenarioResult {
 		persisted, err := messagePersisted(r.ctx, r.stack.iso.DBPath, r.assistantID, id)
 		checks = append(checks, Check{Name: "persisted-" + labels[index], Pass: err == nil && persisted})
 		r.sampleQueue()
+		if err := r.waitIdle(); err != nil {
+			checks = append(checks, Check{Name: "idle-" + labels[index], Pass: false, Detail: "timeout"})
+			break
+		}
 	}
 	r.noteAck()
 	deadline := time.Now().Add(r.step)
@@ -238,7 +257,7 @@ func (r *runner) scenarioC() ScenarioResult {
 	if err := r.stack.restart(r.ctx); err != nil || r.stack.startAgent(r.ctx) != nil {
 		return passResult("C", "restart mid-queue", []Check{{Name: "restart", Pass: false}})
 	}
-	owner, err := dialOwner(r.ctx, r.stack.wsURL(), webOrigin, r.stack.pin)
+	owner, err := dialOwner(r.ctx, r.stack.wsURL(), r.stack.origin, r.stack.pin)
 	if err != nil {
 		return passResult("C", "restart mid-queue", []Check{{Name: "redial", Pass: false}})
 	}

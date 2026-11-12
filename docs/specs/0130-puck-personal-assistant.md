@@ -581,7 +581,7 @@ Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒
 
 `cmd/puck-e2e` 与 `scripts/e2e/puck-e2e.sh` 只用于开发机验收 #93 与 #94，不进入 Relay 或 Desktop Agent 的生产启动路径，也不注册到 `ariel.sh`。
 
-它在临时目录启动隔离的 Relay（随机本机端口、临时 SQLite、临时 PIN）和隔离的 Desktop Agent（独立 `cwd` 与 Puck root，接本机 Codex app-server）。Owner 会话直接写进临时库，不走 Passkey，不读取、不修改 ArielLocal、真实 token、Passkey 凭据或 `~/.codex/config.toml`。驱动方式与 Web 相同：WebSocket `hello` 之后调用 `puck.*` 与 `thread.*`。
+它在临时目录启动隔离的 Relay（随机本机端口、临时 SQLite、临时 PIN）和隔离的 Desktop Agent（独立 `cwd` 与 Puck root）。Agent 以 headless 模式自己拉起 `codex app-server`（stdio），不连接 Desktop IPC，不启动 GUI，也不打开 `codex://`。Codex 进程自行读取本机登录；验收程序不读、不复制、不打印凭据或 `~/.codex/config.toml`。若配置了 Desktop IPC，程序直接失败。场景按顺序跑，同一时间只有一个 brain turn。可选 `-ui` 用 headless Chromium 打开这次的 Relay。Owner 会话直接写进临时库，不走 Passkey。驱动方式与 Web 相同：WebSocket `hello` 之后调用 `puck.*` 与 `thread.*`。
 
 场景 A–G 把断言写成 JSON。除 fixture 标记外不打印消息正文。D 与 G 依赖模型，记录结果并允许重试；失败记为 soft，不把整次验收当成硬失败。A、B、C、E、F 是硬断言。
 

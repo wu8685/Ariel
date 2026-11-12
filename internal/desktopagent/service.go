@@ -193,6 +193,7 @@ type Service struct {
 	idleGrace        time.Duration
 	archiveUndo      []archiveUndoRecord
 	agentStateDir    string
+	headless         bool
 }
 
 type archiveUndoRecord struct {
@@ -219,6 +220,13 @@ func (s *Service) QueueEnabled() bool { return s.queue != nil }
 // SetAgentStateDir records the working directory this agent was started with.
 // thread/read often reports that directory as thread.cwd; callers can reject
 // it instead of treating it as the session workspace.
+func (s *Service) SetHeadless(headless bool) {
+	if s == nil {
+		return
+	}
+	s.headless = headless
+}
+
 func (s *Service) SetAgentStateDir(dir string) {
 	if s == nil {
 		return
@@ -386,23 +394,29 @@ func (s *Service) ArchiveThread(ctx context.Context, threadID string) (string, e
 	s.mu.Lock()
 	controller := s.threads[threadID]
 	s.mu.Unlock()
-	if controller == nil {
-		return "", ErrArchiveStateUnknown
-	}
-	controller.mu.Lock()
-	if controller.live == nil {
-		controller.mu.Unlock()
-		return "", ErrArchiveStateUnknown
-	}
-	raw, err := controller.live.Current()
-	if err != nil {
-		controller.mu.Unlock()
-		return "", ErrArchiveStateUnknown
-	}
-	current, err := NormalizeLive(controller.id, controller.title, controller.cwd, raw)
-	controller.mu.Unlock()
-	if err != nil || current["runtime"] != "idle" {
-		return "", ErrArchiveStateUnknown
+	if controller == nil || controller.live == nil {
+		if !s.headless {
+			return "", ErrArchiveStateUnknown
+		}
+	} else {
+		controller.mu.Lock()
+		if controller.live == nil {
+			controller.mu.Unlock()
+			if !s.headless {
+				return "", ErrArchiveStateUnknown
+			}
+		} else {
+			raw, err := controller.live.Current()
+			if err != nil {
+				controller.mu.Unlock()
+				return "", ErrArchiveStateUnknown
+			}
+			current, err := NormalizeLive(controller.id, controller.title, controller.cwd, raw)
+			controller.mu.Unlock()
+			if err != nil || current["runtime"] != "idle" {
+				return "", ErrArchiveStateUnknown
+			}
+		}
 	}
 	if err := s.archiver.Archive(ctx, threadID); err != nil {
 		return "", err

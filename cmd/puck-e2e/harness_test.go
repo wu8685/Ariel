@@ -150,7 +150,7 @@ func TestIsolatedRelayBootsOwnerWithoutPasskey(t *testing.T) {
 	if status["mode"] != "pin" || status["authenticated"] != false {
 		t.Fatalf("status=%v", status)
 	}
-	owner, err := dialOwner(ctx, stack.wsURL(), webOrigin, stack.pin)
+	owner, err := dialOwner(ctx, stack.wsURL(), stack.origin, stack.pin)
 	if err != nil {
 		t.Fatal(err)
 	}

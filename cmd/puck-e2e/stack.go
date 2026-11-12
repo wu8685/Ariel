@@ -9,6 +9,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wu8685/Ariel/internal/desktopagent"
@@ -16,14 +19,14 @@ import (
 	"github.com/wu8685/Ariel/internal/relay"
 )
 
-const webOrigin = "http://127.0.0.1"
-
 type stack struct {
 	iso      Isolation
 	token    string
 	pin      string
 	deviceID string
 	listen   string
+	origin   string
+	webDist  string
 
 	module      *puck.Module
 	relay       *relay.Server
@@ -56,25 +59,34 @@ func newStack(iso Isolation) (*stack, error) {
 }
 
 func (s *stack) startRelay(ctx context.Context) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	s.origin = "http://" + listener.Addr().String()
 	r, err := relay.New(relay.Config{
 		Token: s.token, WebPIN: s.pin, WebAuthMode: relay.WebAuthPIN,
-		AllowedOrigins: []string{webOrigin}, PuckState: puck.StateReady, MutationTimeout: 3 * time.Minute,
+		AllowedOrigins: []string{s.origin}, PuckState: puck.StateReady, MutationTimeout: 3 * time.Minute,
 	})
 	if err != nil {
+		listener.Close()
 		return err
 	}
 	module, err := puck.NewModule(s.iso.PuckDir, r.PuckBridge())
 	if err != nil {
+		listener.Close()
 		return err
 	}
 	r.SetPuckHandler(module)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		module.Close()
-		return err
-	}
 	mux := http.NewServeMux()
 	mux.Handle("/ws", r.Handler())
+	if s.webDist != "" {
+		if err := serveWeb(mux, s.webDist); err != nil {
+			module.Close()
+			listener.Close()
+			return err
+		}
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok")
@@ -95,16 +107,19 @@ func (s *stack) startRelay(ctx context.Context) error {
 }
 
 func (s *stack) startAgent(ctx context.Context) error {
-	if s.iso.CodexBinary == "" || s.iso.IPCSocket == "" {
-		return errors.New("codex binary and ipc socket are required")
+	if s.iso.CodexBinary == "" {
+		return errors.New("codex CLI binary is required")
+	}
+	if s.iso.IPCSocket != "" && s.iso.IPCSocket != "not-used" {
+		return errors.New("headless harness refuses the Desktop IPC socket")
 	}
 	agentCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
 		done <- desktopagent.Run(agentCtx, desktopagent.Config{
 			URL: "ws://" + s.listen + "/ws", Token: s.token, DeviceID: s.deviceID, DeviceName: "Puck E2E",
-			Binary: s.iso.CodexBinary, Socket: s.iso.IPCSocket, CWD: s.iso.AgentStateDir,
-			PuckBrain: true, PuckRoot: s.iso.BrainRoot,
+			Binary: s.iso.CodexBinary, CWD: s.iso.AgentStateDir,
+			PuckBrain: true, PuckRoot: s.iso.BrainRoot, Headless: true,
 		})
 	}()
 	s.agentCancel, s.agentDone = cancel, done
@@ -173,6 +188,27 @@ func (s *stack) waitHealth(ctx context.Context) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func serveWeb(mux *http.ServeMux, dist string) error {
+	index, err := os.ReadFile(filepath.Join(dist, "index.html"))
+	if err != nil {
+		return fmt.Errorf("web dist is required for -ui (%s): %w", dist, err)
+	}
+	html := strings.ReplaceAll(string(index), "__ARIEL_WEB_AUTH__", "pin")
+	html = strings.ReplaceAll(html, "__ARIEL_FILE_CONTEXT__", "false")
+	html = strings.ReplaceAll(html, "__ARIEL_CHILLING_FILE_CONTEXT__", "false")
+	files := http.FileServer(http.Dir(dist))
+	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/" || req.URL.Path == "/index.html" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write([]byte(html))
+			return
+		}
+		files.ServeHTTP(w, req)
+	})
+	return nil
 }
 
 func randomHex(n int) (string, error) {

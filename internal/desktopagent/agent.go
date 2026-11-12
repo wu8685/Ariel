@@ -49,6 +49,9 @@ type Config struct {
 	OnNotReady                                                         func()
 	PuckBrain                                                          bool
 	PuckRoot                                                           string
+	// Headless uses a private codex app-server stdio process. It never dials
+	// the Desktop IPC socket and never activates the Desktop GUI.
+	Headless bool
 }
 type FileContext interface {
 	Ready() bool
@@ -156,6 +159,12 @@ func Run(ctx context.Context, cfg Config) error {
 			return errors.New("task manager-only requires explicit task flag")
 		}
 		return RunWithService(ctx, cfg, nil)
+	}
+	if cfg.Headless {
+		if cfg.Socket != "" {
+			return errors.New("headless mode refuses the Desktop IPC socket")
+		}
+		return runHeadless(ctx, cfg)
 	}
 	if cfg.Binary == "" || cfg.Socket == "" {
 		return errors.New("Codex binary and Desktop IPC socket are required")
