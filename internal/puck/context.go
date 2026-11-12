@@ -128,6 +128,34 @@ func legacyBrainInstructions(id, name, description, custom string, toolset int) 
 %s`, name, id, strings.TrimSpace(description), cleanupInstruction(toolset), customContextBlock(custom))
 }
 
+// systemContextDebug describes the instructions actually injected for this
+// assistant. thread.read of the brain thread stays private to Puck.
+func systemContextDebug(a Assistant) map[string]any {
+	text := brainInstructions(a.ID, a.Name, a.Description, a.CustomContext, a.ToolsetVersion)
+	start := strings.Index(text, "【系统上下文】")
+	body := text
+	if start >= 0 {
+		body = text[start:]
+	}
+	if end := strings.Index(body, "【机主自定义上下文"); end >= 0 {
+		body = body[:end]
+	}
+	lines := 0
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines++
+		}
+	}
+	return map[string]any{
+		"version":    a.ToolsetVersion,
+		"lines":      lines,
+		"observed":   start >= 0 && lines > 0,
+		"hasHandoff": strings.Contains(body, "交接时 Puck 会附上被引用会话的链接"),
+		"hasSave":    strings.Contains(body, "接住的事用 save_bot_task 记成任务"),
+		"hasMerge":   strings.Contains(body, "先 list_bot_tasks"),
+	}
+}
+
 func envelopeContext(a Assistant) string {
 	if a.ToolsetVersion < sendMessageToolset {
 		return legacyEnvelopeContext(a)

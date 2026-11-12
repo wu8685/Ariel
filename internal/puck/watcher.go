@@ -441,7 +441,13 @@ func (m *Module) enqueueLocked(ctx context.Context, wake BrainWake) {
 	wake.ID = newUUID()
 	wake.CreatedAt = now
 	wake.NotBefore = m.nextWakeTimeLocked(ctx, wake.AssistantID, wake.TaskKey, now)
-	if m.pendingTurn(wake.AssistantID).turnID != "" || wake.NotBefore.After(now) {
+	if m.pendingTurn(wake.AssistantID).turnID != "" {
+		m.noteWakeSkip(wake.AssistantID, wake.TaskKey, "turn_busy")
+		_ = m.store.UpsertBrainWake(ctx, wake)
+		return
+	}
+	if wake.NotBefore.After(now) {
+		m.noteWakeSkip(wake.AssistantID, wake.TaskKey, "backoff")
 		_ = m.store.UpsertBrainWake(ctx, wake)
 		return
 	}
@@ -509,8 +515,11 @@ func (m *Module) pumpLocked(ctx context.Context, assistantID string) {
 			}
 			next := m.nextWakeTimeLocked(ctx, assistantID, wakes[i].TaskKey, now)
 			if next.After(now) {
-				wakes[i].NotBefore = next
-				_ = m.store.UpsertBrainWake(ctx, wakes[i])
+				if next.After(wakes[i].NotBefore) {
+					wakes[i].NotBefore = next
+					_ = m.store.UpsertBrainWake(ctx, wakes[i])
+					m.noteWakeSkip(assistantID, wakes[i].TaskKey, "rate_limit")
+				}
 				continue
 			}
 			index = i

@@ -50,10 +50,24 @@ type Module struct {
 	wakeMu             sync.Mutex
 	pendingMu          sync.Mutex
 	pending            map[string]pendingBrainTurn
+	toolCalls          map[string][]observedToolCall
+	wakeSkips          map[string][]observedWakeSkip
 	lifecycle          sync.RWMutex
 	ackDelay           time.Duration
 	now                func() time.Time
 	watchSnapshotReads atomic.Uint64
+}
+
+type observedToolCall struct {
+	Tool    string
+	Success bool
+	Code    string
+}
+
+type observedWakeSkip struct {
+	TaskKey string
+	Reason  string
+	At      time.Time
 }
 
 type pendingBrainTurn struct {
@@ -74,7 +88,7 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, ackDelay: 3 * time.Second, now: time.Now}
+	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
 	m.wg.Add(2)
@@ -234,6 +248,11 @@ func (m *Module) handleBrainEvent(ctx context.Context, event relay.BrainEvent) {
 	m.pendingMu.Unlock()
 	sourceMessageID := m.sourceMessageID(ctx, event.AssistantID)
 	result := m.tools.Execute(ctx, pucktools.Call{AssistantID: event.AssistantID, SourceMessageID: sourceMessageID, Tool: input.Tool, Arguments: input.Arguments})
+	code := result.Code
+	if result.Success {
+		code = ""
+	}
+	m.noteToolCall(event.AssistantID, input.Tool, result.Success, code)
 	if result.Diagnostic != nil {
 		diagnostic, _ := json.Marshal(result.Diagnostic)
 		log.Printf("puck structured tool rejected: diagnostic=%s", diagnostic)
@@ -473,7 +492,9 @@ func (m *Module) finishBrainTurnMessage(ctx context.Context, assistantID, turnID
 	pending := m.clearPendingForTurn(assistantID, turnID)
 	defer m.pumpAssistant(ctx, assistantID)
 	defer m.rearmUnassignedInbox(ctx, assistantID, pending.queueKey)
-	defer m.scheduleBotQueue(ctx, assistantID, pending.messageID)
+	// The message that just finished is still unassigned until a tool attaches
+	// it. Skipping it here left the newest inbox row without a wake.
+	defer m.scheduleBotQueue(ctx, assistantID, "")
 	if brainSilent(text) {
 		if pending.responseID != "" {
 			_ = m.store.DeleteMessage(ctx, assistantID, pending.responseID)
@@ -1487,14 +1508,20 @@ func (m *Module) history(ctx context.Context, raw json.RawMessage) relay.PuckRes
 	if json.Unmarshal(raw, &input) != nil {
 		return moduleError("INVALID_ARGUMENT", "invalid assistant")
 	}
-	if _, err := m.store.Assistant(ctx, input.AssistantID); err != nil {
-		return notFound()
-	}
 	messages, err := m.store.Messages(ctx, input.AssistantID, 200)
 	if err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	return accepted(map[string]any{"messages": messages})
+	assistant, err := m.store.Assistant(ctx, input.AssistantID)
+	if err != nil {
+		return notFound()
+	}
+	return accepted(map[string]any{
+		"messages":      messages,
+		"systemContext": systemContextDebug(assistant),
+		"toolCalls":     m.recentToolCalls(input.AssistantID),
+		"wakeSkips":     m.recentWakeSkips(input.AssistantID),
+	})
 }
 
 func (m *Module) read(ctx context.Context, raw json.RawMessage) relay.PuckResponse {

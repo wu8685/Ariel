@@ -111,6 +111,71 @@ func TestBotTaskMergeKeepsHistoryAndSearchReturnsFullText(t *testing.T) {
 	}
 }
 
+func TestIdleTurnWakesTheMessageItJustFinished(t *testing.T) {
+	module, id := newQueueModule(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 1, 0, 0, 0, time.UTC)
+	module.now = func() time.Time { return now }
+	if err := module.store.AppendMessage(ctx, Message{ID: "user-1", AssistantID: id, Role: "user", Kind: "text", Text: "FIXTURE_Q1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.AddInbox(ctx, id, "user-1", now); err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := module.store.Assistant(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module.setPending(assistant, "brain-turn-a", "user-1", "user-1-processing", now, false, "")
+	module.handleBrainEvent(ctx, brainEvent(id, "turn/completed", `{"turnId":"brain-turn-a","turn":{"id":"brain-turn-a","status":"completed"}}`))
+	waitFor(t, func() bool { return len(botQueueTurns(moduleBridge(module))) == 1 })
+	text := botQueueTurns(moduleBridge(module))[0]
+	if !strings.Contains(text, "user-1") || !strings.Contains(text, "尚未归属") {
+		t.Fatalf("wake=%s", text)
+	}
+}
+
+func TestHistoryExposesContextAndToolCode(t *testing.T) {
+	module, id := newQueueModule(t)
+	ctx := context.Background()
+	module.noteToolCall(id, "send_turn", false, "TURN_BUSY")
+	module.noteWakeSkip(id, "queue:inbox:user-1", "backoff")
+	history := module.Handle(ctx, "puck.history", mustJSON(map[string]any{"assistantId": id}))
+	if history.Error != nil {
+		t.Fatal(history.Error)
+	}
+	contextField, _ := history.Data["systemContext"].(map[string]any)
+	if contextField["observed"] != true || contextField["hasHandoff"] != true || contextField["hasSave"] != true || contextField["hasMerge"] != true {
+		t.Fatalf("context=%v", contextField)
+	}
+	if lines, _ := contextField["lines"].(int); lines < 2 {
+		t.Fatalf("lines=%v", contextField["lines"])
+	}
+	calls, _ := history.Data["toolCalls"].([]map[string]any)
+	if len(calls) != 1 || calls[0]["tool"] != "send_turn" || calls[0]["success"] != false || calls[0]["code"] != "TURN_BUSY" {
+		t.Fatalf("calls=%v", history.Data["toolCalls"])
+	}
+	skips, _ := history.Data["wakeSkips"].([]map[string]any)
+	if len(skips) != 1 || skips[0]["reason"] != "backoff" {
+		t.Fatalf("skips=%v", history.Data["wakeSkips"])
+	}
+	posted := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, Tool: "send_message", Arguments: mustJSON(map[string]any{"text": "FIXTURE_NOTICE"})})
+	if !posted.Success {
+		t.Fatalf("send_message=%+v", posted)
+	}
+	history = module.Handle(ctx, "puck.history", mustJSON(map[string]any{"assistantId": id}))
+	messages, _ := history.Data["messages"].([]Message)
+	found := false
+	for _, message := range messages {
+		if strings.Contains(message.Text, "FIXTURE_NOTICE") && strings.Contains(message.CardJSON, "notify_user") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("history missed notify_user: %+v", messages)
+	}
+}
+
 func TestUnassignedInboxWakesOnceThenRetries(t *testing.T) {
 	module, id := newQueueModule(t)
 	ctx := context.Background()

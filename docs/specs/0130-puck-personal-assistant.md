@@ -565,9 +565,9 @@ Brain 用 `start_task` 或 `send_turn` 派活时，服务端不摘抄用户原�
 
 用户向 Bot 发出的每条聊天消息都写入 `bot_inbox`，直到 Brain 用 `attach_bot_task` 把它挂到某个 Bot 任务上。Bot 任务存在 `bot_tasks`（schema 11），含 id、assistant、title、goal、status（`accepted`／`in_progress`／`waiting_user`／`done`／`cancelled`／`merged`）、`merged_into`、时间戳，以及消息和子会话链接。代码不自动创建任务，也不自动合并或摘要。
 
-Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒在排队，就用既有 `brain_wakes`／`wake_log` 唤醒一次：先取最旧的未归属消息，否则取最旧的未完成任务。同一事项 5 分钟内不重复投递，避免空转。
+Brain 一轮结束、没有 in-flight turn 时，若没有别的 `queue:` 唤醒在排队，就立刻唤醒一次：先取最旧的未归属消息（包含刚刚这一轮处理过、但仍未挂上的那条），否则取最旧的未完成任务。同一条未归属消息被叫醒后如果还没挂上，下一次才按短退避推迟；不是在第一次空闲时就推迟。跳过唤醒时记下原因（`turn_busy`、`queue_wake_pending`、`backoff`、`rate_limit`），随 `puck.history` 的 `wakeSkips` 返回，不写消息正文。
 
-工具集 11 增加 `list_bot_tasks`、`search_messages`、`save_bot_task`、`attach_bot_task`、`merge_bot_tasks`。搜索按关键词分页，单页最多 50 条，消息正文原样返回。`merge_bot_tasks` 把来源标成 `merged` 并保留其消息和子会话，同时把这些链接复制到目标。系统上下文只多两行：接住的事记成任务；新请求可能是延续时先查再合并。每条用户消息和队列唤醒的短信封另附本 Bot 最近 10 条未完成任务的 id 和 title，不截断 title。inbox 唤醒写明该消息尚未归属，Brain 必须挂到已有任务、合并，或新建后再挂上。一轮结束时若 inbox 仍未归属，下一次唤醒在短退避后发出，而不是马上连发。删除 Bot 时同时清掉它的 Bot 任务、消息链接、子会话链接、inbox、watch 和 wake。归档子会话时解开对应的 `bot_task_sessions`。
+工具集 11 增加 `list_bot_tasks`、`search_messages`、`save_bot_task`、`attach_bot_task`、`merge_bot_tasks`。搜索按关键词分页，单页最多 50 条，消息正文原样返回。`merge_bot_tasks` 把来源标成 `merged` 并保留其消息和子会话，同时把这些链接复制到目标。系统上下文只多两行：接住的事记成任务；新请求可能是延续时先查再合并。每条用户消息和队列唤醒的短信封另附本 Bot 最近 10 条未完成任务的 id 和 title，不截断 title。inbox 唤醒写明该消息尚未归属，Brain 必须挂到已有任务、合并，或新建后再挂上。一轮结束时若 inbox 仍未归属，下一次唤醒在短退避后发出，而不是马上连发。`puck.history` 返回最近 200 条消息（旧的窗口留在库里），并附上当前注入的系统上下文行数和是否包含交接、记任务、合并这三句，以及最近工具调用的名字、成败和错误码。不附参数，不附正文。Brain 会话本身仍不对 Web 开放 `thread.read`。删除 Bot 时同时清掉它的 Bot 任务、消息链接、子会话链接、inbox、watch 和 wake。归档子会话时解开对应的 `bot_task_sessions`。
 
 删除 Bot 时删掉它的任务、链接和 inbox。子会话消失时只解开 `bot_task_sessions` 里对应的链接，不删任务。主机广告到 11 后，下一次用户消息经 `ensureCurrentToolset` 轮换 brain thread。
 

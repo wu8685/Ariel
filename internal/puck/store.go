@@ -567,7 +567,7 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at FROM conversation_messages WHERE assistant_id=? ORDER BY created_at,id LIMIT ?`, assistantID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,assistant_id,role,kind,text,card_json,reaction,work_summary,brain_turn_id,reply_to,created_at FROM conversation_messages WHERE assistant_id=? ORDER BY created_at DESC, id DESC LIMIT ?`, assistantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -582,7 +582,14 @@ func (s *Store) Messages(ctx context.Context, assistantID string, limit int) ([]
 		message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 		messages = append(messages, message)
 	}
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The query keeps the newest page. Callers still receive it oldest-first.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
 }
 
 func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Message, error) {
