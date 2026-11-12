@@ -91,14 +91,14 @@ func (r *rpc) handle(msg message) {
 	case "thread/start":
 		r.reply(msg.ID, map[string]any{"thread": r.startThread(msg.Params)})
 	case "thread/resume":
-		r.reply(msg.ID, map[string]any{"thread": threadView(loadThread(paramString(msg.Params, "threadId")))})
+		r.reply(msg.ID, map[string]any{"thread": threadReadView(loadThread(paramString(msg.Params, "threadId")))})
 	case "thread/read":
 		thread := loadThread(paramString(msg.Params, "threadId"))
 		if thread.ID == "" {
 			r.fail(msg.ID, -32602, "unknown thread")
 			return
 		}
-		r.reply(msg.ID, map[string]any{"thread": threadView(thread)})
+		r.reply(msg.ID, map[string]any{"thread": threadReadView(thread)})
 	case "thread/turns/list":
 		thread := loadThread(paramString(msg.Params, "threadId"))
 		data := make([]any, 0, len(thread.Turns))
@@ -111,7 +111,7 @@ func (r *rpc) handle(msg message) {
 		data := []any{}
 		for _, thread := range listThreads() {
 			if thread.Archived == archived {
-				data = append(data, threadView(thread))
+				data = append(data, threadReadView(thread))
 			}
 		}
 		r.reply(msg.ID, map[string]any{"data": data})
@@ -177,7 +177,15 @@ func (r *rpc) play(params json.RawMessage, turnID string) {
 		})
 		rememberTask(nestedString(started, "data", "taskId"))
 	case strings.Contains(text, "send_turn") && strings.Contains(text, "继续看引用"):
-		r.tool(threadID, "send_turn", map[string]any{"taskId": rememberedTask(), "text": "继续看引用", "riskTags": []any{}})
+		taskID := rememberedTask()
+		// Real runs pass taskId together with threadId, then retry once the
+		// error names taskId. The retry must still carry the handoff pack.
+		rejected := r.tool(threadID, "send_turn", map[string]any{"taskId": taskID, "threadId": "not-a-locator", "text": "继续看引用", "riskTags": []any{}})
+		message, _ := rejected["message"].(string)
+		if rejected["success"] == true || !strings.Contains(message, "taskId") {
+			return
+		}
+		r.tool(threadID, "send_turn", map[string]any{"taskId": taskID, "text": "继续看引用", "riskTags": []any{}})
 	case strings.Contains(text, "FIXTURE_Q"):
 		r.saveAndAttach(threadID, fixtureTitle(text), messageID)
 	case strings.Contains(text, "FIXTURE_X 的延续"):
@@ -272,11 +280,13 @@ func (r *rpc) beginTurn(params json.RawMessage) string {
 			thread.ID = threadID
 			thread.CWD = paramString(params, "cwd")
 		}
-		item, _ := json.Marshal(map[string]any{
+		inner, _ := json.Marshal(map[string]any{
 			"id": newUUID(), "type": "userMessage",
-			"content": []any{map[string]any{"type": "text", "text": text}},
+			"content": []any{map[string]any{"type": "input_text", "text": text}},
 		})
-		thread.Turns = append(thread.Turns, storedTurn{ID: turnID, Status: "completed", Items: []json.RawMessage{item}})
+		item, _ := json.Marshal(map[string]any{"id": newUUID(), "type": "entry", "item": json.RawMessage(inner)})
+		status, _ := json.Marshal(map[string]any{"type": "completed"})
+		thread.Turns = append(thread.Turns, storedTurn{ID: turnID, Status: status, Items: []json.RawMessage{item}})
 		state.Threads[threadID] = thread
 	})
 	return turnID

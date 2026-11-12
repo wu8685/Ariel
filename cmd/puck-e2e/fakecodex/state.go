@@ -9,7 +9,7 @@ import (
 
 type storedTurn struct {
 	ID     string            `json:"id"`
-	Status string            `json:"status"`
+	Status json.RawMessage   `json:"status"`
 	Items  []json.RawMessage `json:"items"`
 }
 
@@ -114,10 +114,29 @@ func rememberedTask() string {
 }
 
 func threadView(thread storedThread) map[string]any {
+	return threadResponse(thread, false)
+}
+
+func threadReadView(thread storedThread) map[string]any {
+	return threadResponse(thread, true)
+}
+
+// thread/read from a real app-server keeps the requested workspace in
+// session_meta.payload.cwd and can report updatedAt as an RFC3339 string.
+// Turn items come back as timeline entries whose user text is input_text.
+func threadResponse(thread storedThread, read bool) map[string]any {
 	status, _ := json.Marshal(map[string]any{"type": "idle"})
-	return map[string]any{
-		"id": thread.ID, "name": thread.Name, "cwd": thread.CWD, "updatedAt": 1,
-		"status": json.RawMessage(status), "turns": thread.Turns,
-		"session_meta": map[string]any{"cwd": thread.CWD},
+	cwd := thread.CWD
+	view := map[string]any{
+		"id": thread.ID, "name": thread.Name, "cwd": cwd, "updatedAt": "2026-11-12T00:00:00Z",
+		"status":       json.RawMessage(status),
+		"session_meta": map[string]any{"type": "session_meta", "payload": map[string]any{"cwd": thread.CWD, "id": thread.ID}},
+		"rollout_path": "/tmp/fakecodex-rollout/" + thread.ID + ".jsonl",
 	}
+	if read {
+		// List and read omit inline turns. thread/turns/list carries the items.
+		return view
+	}
+	view["turns"] = thread.Turns
+	return view
 }

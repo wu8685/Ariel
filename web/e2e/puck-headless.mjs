@@ -47,8 +47,26 @@ try {
   const bot = page.locator(".puck-workspace, .puck-transcript").first();
   await bot.waitFor({ timeout: 20000 });
   const named = page.locator(".puck-assistant-row", { hasText: "E2E" }).first();
-  if (await named.count()) await named.click();
+  try {
+    await named.waitFor({ timeout: 20000 });
+    await named.click();
+  } catch {
+    // The only assistant row may already be selected.
+  }
   const messages = page.locator('[data-testid="puck-message"]');
+  try {
+    await messages.first().waitFor({ timeout: 45000 });
+  } catch {
+    const counts = await page.evaluate(() => {
+      const found = {};
+      for (const node of document.querySelectorAll("[data-testid]")) {
+        const name = node.getAttribute("data-testid") || "";
+        if (name) found[name] = (found[name] || 0) + 1;
+      }
+      return found;
+    });
+    throw new Error("Puck chat did not render a message; testids=" + JSON.stringify(counts));
+  }
   const count = await messages.count();
   if (count < 1) throw new Error("Puck chat did not render a message");
   notes.push(`messages=${count}`);

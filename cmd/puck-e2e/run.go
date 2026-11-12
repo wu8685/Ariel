@@ -200,22 +200,24 @@ func (r *runner) scenarioA() ScenarioResult {
 	if err := r.waitIdle(); err != nil {
 		return passResult("A", "handoff pack", []Check{{Name: "idle", Pass: false, Detail: "timeout"}})
 	}
-	r.childThread = r.latestTaskThread()
-	views := r.packViews(r.childThread)
-	view := combinePacks(views)
-	checks := []Check{
-		{Name: "codex-link", Pass: view.HasLink, Detail: "thread=" + r.fixtureThread},
-		{Name: "device-and-thread", Pass: view.HasDeviceID && view.HasThreadID, Detail: "device=" + r.stack.deviceID},
-		{Name: "cwd", Pass: view.CWDTrusted, Detail: "cwd=" + view.CWD},
-		{Name: "no-summary", Pass: !view.HasSummary && !view.HasTruncation},
-		{Name: "no-duplicate-sentinel", Pass: !view.Duplicate && view.SentinelCount <= 1, Detail: fmt.Sprintf("sentinel=%d", view.SentinelCount)},
-		{Name: "tool-calls", Pass: true, Detail: r.toolCodes("start_task", "watch_thread")},
-	}
+	r.childThread = r.waitChildThread()
+	first := r.packViewsReady(r.childThread)
+	early := combinePacks(first)
 	followID := newID()
 	_, _ = r.send(followID, "请对刚才的执行任务调用一次 send_turn，text 只写「继续看引用」。不要 start_task，不要传 clientMessageId。")
 	_ = r.waitIdle()
-	again := combinePacks(r.packViews(r.childThread))
-	checks = append(checks, Check{Name: "send-turn-dedupe", Pass: !again.Duplicate && again.SentinelCount >= view.SentinelCount, Detail: fmt.Sprintf("sentinel=%d %s", again.SentinelCount, r.toolCodes("send_turn"))})
+	later := r.packViewsReady(r.childThread)
+	again := combinePacks(later)
+	view := combinePacks(append(append([]PackView{}, first...), later...))
+	checks := []Check{
+		{Name: "codex-link", Pass: view.HasLink, Detail: "thread=" + r.fixtureThread},
+		{Name: "device-and-thread", Pass: view.HasDeviceID && view.HasThreadID, Detail: "device=" + r.stack.deviceID},
+		{Name: "cwd", Pass: view.CWDTrusted && view.CWD != "", Detail: "cwd=" + view.CWD},
+		{Name: "no-summary", Pass: !view.HasSummary && !view.HasTruncation},
+		{Name: "no-duplicate-sentinel", Pass: !view.Duplicate && view.SentinelCount <= 1 && view.SentinelCount >= 1, Detail: fmt.Sprintf("sentinel=%d early=%d", view.SentinelCount, early.SentinelCount)},
+		{Name: "tool-calls", Pass: true, Detail: r.toolCodes("start_task", "watch_thread")},
+		{Name: "send-turn-dedupe", Pass: !again.Duplicate && again.SentinelCount >= early.SentinelCount && again.HasLink, Detail: fmt.Sprintf("sentinel=%d %s", again.SentinelCount, r.toolCodes("send_turn"))},
+	}
 	result := passResult("A", "handoff pack", checks)
 	result.ToolCalls = r.toolNames()
 	return result
@@ -666,6 +668,40 @@ func (r *runner) latestTaskThread() string {
 
 func jsonUnmarshal(raw []byte, dest any) error {
 	return json.Unmarshal(raw, dest)
+}
+
+func (r *runner) waitChildThread() string {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if id := r.latestTaskThread(); id != "" {
+			return id
+		}
+		if time.Now().After(deadline) || r.ctx.Err() != nil {
+			return ""
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func (r *runner) packViewsReady(threadID string) []PackView {
+	var views []PackView
+	for attempt := 0; attempt < 15; attempt++ {
+		views = r.packViews(threadID)
+		if packVisible(views) || attempt == 14 || r.ctx.Err() != nil {
+			return views
+		}
+		time.Sleep(time.Second)
+	}
+	return views
+}
+
+func packVisible(views []PackView) bool {
+	for _, view := range views {
+		if view.SentinelCount > 0 || view.HasLink {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *runner) packViews(threadID string) []PackView {
