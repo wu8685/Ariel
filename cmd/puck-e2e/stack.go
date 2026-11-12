@@ -167,6 +167,22 @@ func (s *stack) close() {
 	s.stopRelay()
 }
 
+func (s *stack) agentExitError() error {
+	if s == nil || s.agentDone == nil {
+		return nil
+	}
+	select {
+	case err := <-s.agentDone:
+		s.agentDone <- err
+		if err == nil {
+			return errors.New("desktop agent exited")
+		}
+		return err
+	default:
+		return nil
+	}
+}
+
 func (s *stack) wsURL() string { return "ws://" + s.listen + "/ws" }
 
 func (s *stack) waitHealth(ctx context.Context) error {

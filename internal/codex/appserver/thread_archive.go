@@ -4,7 +4,12 @@ import "context"
 
 // ThreadArchiver changes only Codex-owned archive state and verifies the
 // result against both active and archived indexes. It never retries a write.
-type ThreadArchiver struct{ RPC RPC }
+type ThreadArchiver struct {
+	RPC RPC
+	// Direct archives one known thread and does not list the rest of the
+	// Codex thread index.
+	Direct bool
+}
 
 func (a ThreadArchiver) Archive(ctx context.Context, threadID string) error {
 	if a.RPC == nil || threadID == "" {
@@ -13,6 +18,9 @@ func (a ThreadArchiver) Archive(ctx context.Context, threadID string) error {
 	var out struct{}
 	if err := a.RPC.Call(ctx, "thread/archive", map[string]any{"threadId": threadID}, &out); err != nil {
 		return err
+	}
+	if a.Direct {
+		return nil
 	}
 	return a.verify(ctx, threadID, true)
 }

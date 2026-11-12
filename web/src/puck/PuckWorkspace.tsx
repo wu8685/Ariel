@@ -290,7 +290,7 @@ function Card({ message, submitting, onAction }: { message: Message; submitting:
   }
   if (message.kind === "task") {
     const status = String(data.status || "pending");
-    return <section className="puck-card puck-task-card" role="group" aria-label="任务卡片">
+    return <section className="puck-card puck-task-card" data-testid="puck-task-card" role="group" aria-label="任务卡片">
       <div className="puck-card-title"><span className="puck-card-icon" aria-hidden="true">›_</span><strong>{message.text}</strong><span className="puck-state" data-state={status}><i aria-hidden="true"/>{taskLabels[status] || status || "待处理"}</span></div>
       <details><summary><span aria-hidden="true">›</span>{message.workSummary || "查看工作过程"}</summary><p>{String(data.summary || "执行细节按需展开，不在对话中刷屏。")}</p></details>
       {Boolean(data.deviceId && data.threadId) && <div className="puck-card-actions"><button className="puck-btn" type="button" onClick={()=>onAction("task",data,"open")}>打开会话 <span aria-hidden="true">↗</span></button></div>}
@@ -1118,7 +1118,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
         </button>
         {(selected || activeGroup) && <div className="puck-header-actions puck-glass-chip">{busy ? <button className="puck-stop puck-icon-btn" type="button" aria-label="停止全部工作" onClick={() => void stop()}><span aria-hidden="true"/></button> : <button className="puck-icon-btn" type="button" aria-label="更多助理操作" onClick={openInfo}><span className="puck-more" aria-hidden="true">•••</span></button>}</div>}
       </header>
-	      <div className="puck-transcript" ref={transcriptRef} aria-live="polite" onScroll={trackTranscriptScroll}>{systemNotice && <div className="puck-system-notice" role="status" aria-label="任务通知"><strong>{systemNotice.title}</strong><span>{systemNotice.body}</span></div>}{assistants.length === 0 && groups.length === 0 ? <div className="puck-empty">
+	      <div className="puck-transcript" data-testid={(activeGroup ? groupMessages : messages).some(message => message.kind === "task") ? "puck-task-list" : undefined} ref={transcriptRef} aria-live="polite" onScroll={trackTranscriptScroll}>{systemNotice && <div className="puck-system-notice" role="status" aria-label="任务通知"><strong>{systemNotice.title}</strong><span>{systemNotice.body}</span></div>}{assistants.length === 0 && groups.length === 0 ? <div className="puck-empty">
         <PuckAvatar assistantId="puck-empty" name="Puck" size="large" animated={false}/><h2>创建你的第一个助理</h2><p>给它一个名字，选择在哪台设备上思考。</p><button className="puck-btn primary puck-btn-md" type="button" aria-label="新建助理" onClick={() => setCreating(true)} disabled={assistantCreateDisabled}>新建助理</button>
 	      </div> : <PuckConversationErrorBoundary key={activeGroup?.groupId || selectedID}>{(activeGroup ? groupMessages : messages).map((message,index,transcriptMessages) => {
         const now = clock || Date.now();
@@ -1141,7 +1141,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 	        const addReaction = <button type="button" className="puck-reaction-add" aria-label="给消息添加回应" onClick={() => setReactionTarget(current => current === message.id ? "" : message.id)}>＋</button>;
 	        const quoted = message.replyTo ? transcriptMessages.find(candidate => candidate.id === message.replyTo) : undefined;
 	        const speaker = activeGroup ? assistants.find(item => item.assistantId === message.authorAssistantId) : selected;
-	        return <article key={message.id} data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`} onPointerDown={event=>beginMessagePointer(message,event.pointerType,event.clientX,event.clientY)} onPointerUp={event=>endMessagePointer(message,event.pointerType,event.clientX,event.clientY)} onPointerCancel={()=>{messagePointer.current=undefined;cancelReactionLongPress();}}>
+	        return <article key={message.id} data-testid="puck-message" data-message-id={message.id} className={`puck-message ${message.role} ${message.kind}${continued ? " continued" : ""}${working ? " with-avatar" : ""}`} onPointerDown={event=>beginMessagePointer(message,event.pointerType,event.clientX,event.clientY)} onPointerUp={event=>endMessagePointer(message,event.pointerType,event.clientX,event.clientY)} onPointerCancel={()=>{messagePointer.current=undefined;cancelReactionLongPress();}}>
           {working && speaker && <PuckAvatar assistantId={speaker.assistantId} name={speaker.name} design={avatarDesign(speaker)} state={puckState} size="small"/>}
           <div className="puck-message-content">
 	            {activeGroup && message.role === "assistant" && <strong className="puck-group-author">{message.authorName || speaker?.name || "助理"}</strong>}

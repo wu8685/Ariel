@@ -154,17 +154,13 @@ func (r *rpc) handle(msg message) {
 func (r *rpc) play(params json.RawMessage, turnID string) {
 	text := userRequest(paramText(params))
 	threadID := paramString(params, "threadId")
-	messageID := paramString(params, "clientUserMessageId")
 	switch {
 	case strings.Contains(text, "尚未归属"):
-		messageID = between(text, "unassigned inbox messageId=", "\n")
 		title := fixtureTitle(text)
 		if title == "" {
 			title = "inbox"
 		}
-		saved := r.tool(threadID, "save_bot_task", map[string]any{"title": title, "goal": title, "status": "accepted"})
-		taskID := nestedString(saved, "data", "task", "id")
-		r.tool(threadID, "attach_bot_task", map[string]any{"taskId": taskID, "messageIds": []string{messageID}})
+		r.tool(threadID, "save_bot_task", map[string]any{"title": title, "goal": title, "status": "accepted"})
 	case strings.Contains(text, "不要调用工具"):
 		return
 	case strings.Contains(text, "watch_thread") && strings.Contains(text, "start_task"):
@@ -183,19 +179,14 @@ func (r *rpc) play(params json.RawMessage, turnID string) {
 		r.tool(threadID, "send_turn", map[string]any{"taskId": rememberedTask(), "text": "继续看引用", "riskTags": []any{}})
 	case strings.Contains(text, "FIXTURE_Q"):
 		title := fixtureTitle(text)
-		saved := r.tool(threadID, "save_bot_task", map[string]any{"title": title, "goal": title, "status": "accepted"})
-		taskID := nestedString(saved, "data", "task", "id")
-		r.tool(threadID, "attach_bot_task", map[string]any{"taskId": taskID, "messageIds": []string{messageID}})
+		r.tool(threadID, "save_bot_task", map[string]any{"title": title, "goal": title, "status": "accepted"})
 	case strings.Contains(text, "FIXTURE_X 的延续"):
 		listed := r.tool(threadID, "list_bot_tasks", map[string]any{"query": "FIXTURE_X", "limit": 10})
-		r.tool(threadID, "search_messages", map[string]any{"query": "FIXTURE_X", "limit": 5})
 		taskID := taskByTitle(listed, "FIXTURE_X")
-		r.tool(threadID, "attach_bot_task", map[string]any{"taskId": taskID, "messageIds": []string{messageID}})
+		r.tool(threadID, "save_bot_task", map[string]any{"id": taskID})
 	case strings.Contains(text, "title 正好是 FIXTURE_"):
 		title := fixtureTitle(text)
-		saved := r.tool(threadID, "save_bot_task", map[string]any{"title": title, "goal": title, "status": "accepted"})
-		taskID := nestedString(saved, "data", "task", "id")
-		r.tool(threadID, "attach_bot_task", map[string]any{"taskId": taskID, "messageIds": []string{messageID}})
+		r.tool(threadID, "save_bot_task", map[string]any{"title": title, "goal": title, "status": "accepted"})
 	case strings.Contains(text, "标成 done") && strings.Contains(text, "FIXTURE_X"):
 		listed := r.tool(threadID, "list_bot_tasks", map[string]any{"query": "FIXTURE_X", "limit": 10})
 		taskID := taskByTitle(listed, "FIXTURE_X")

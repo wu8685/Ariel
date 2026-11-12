@@ -15,7 +15,9 @@ import (
 
 type client struct {
 	conn   *websocket.Conn
+	url    string
 	origin string
+	pin    string
 	seq    int
 }
 
@@ -25,7 +27,7 @@ func dialOwner(ctx context.Context, url, origin, pin string) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	owner := &client{conn: conn, origin: origin}
+	owner := &client{conn: conn, url: url, origin: origin, pin: pin}
 	if err := wsjson.Write(ctx, conn, map[string]any{"type": "hello", "v": 1, "role": "web", "token": pin}); err != nil {
 		conn.CloseNow()
 		return nil, err
@@ -48,7 +50,42 @@ func (c *client) Close() {
 	}
 }
 
-func (c *client) call(ctx context.Context, method, deviceID string, params any, _ time.Duration) (map[string]any, error) {
+func (c *client) reconnect(ctx context.Context) error {
+	if c == nil || c.url == "" {
+		return fmt.Errorf("owner websocket is not connected")
+	}
+	next, err := dialOwner(ctx, c.url, c.origin, c.pin)
+	if err != nil {
+		return err
+	}
+	if c.conn != nil {
+		c.conn.CloseNow()
+	}
+	c.conn = next.conn
+	c.seq = next.seq
+	return nil
+}
+
+func (c *client) call(ctx context.Context, method, deviceID string, params any, timeout time.Duration) (map[string]any, error) {
+	response, err := c.callOnce(ctx, method, deviceID, params, timeout)
+	if err == nil || !transportError(err) {
+		return response, err
+	}
+	if reconnectErr := c.reconnect(ctx); reconnectErr != nil {
+		return nil, err
+	}
+	return c.callOnce(ctx, method, deviceID, params, timeout)
+}
+
+func transportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "closed network connection") || strings.Contains(text, "broken pipe") || strings.Contains(text, "use of closed") || strings.Contains(text, "connection reset") || strings.Contains(text, "websocket: close")
+}
+
+func (c *client) callOnce(ctx context.Context, method, deviceID string, params any, _ time.Duration) (map[string]any, error) {
 	c.seq++
 	requestID := fmt.Sprintf("00000000-0000-4000-8000-%012d", c.seq)
 	// A cancelled read context closes the websocket. Keep the run context so

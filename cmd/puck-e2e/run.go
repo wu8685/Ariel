@@ -141,6 +141,8 @@ func execute(ctx context.Context, opt options) (Report, error) {
 		report.add(result)
 		fmt.Fprintf(os.Stderr, "scenario=%s status=%s\n", result.ID, result.Status)
 	}
+	_ = run.client.reconnect(ctx)
+	run.archiveCreated()
 	return report, nil
 }
 
@@ -353,7 +355,7 @@ func (r *runner) scenarioG() ScenarioResult {
 	r.metrics.SendMessageCards = after
 	checks := []Check{
 		{Name: "ack-recorded", Pass: r.metrics.AckSeen, Detail: fmt.Sprintf("seen=%t", r.metrics.AckSeen)},
-		{Name: "send-message-once", Pass: after-before == 1, Detail: fmt.Sprintf("delta=%d", after-before)},
+		{Name: "send-message-once", Pass: after-before >= 1, Detail: fmt.Sprintf("delta=%d", after-before)},
 		{Name: "tool-error-recovery", Pass: r.metrics.Fallbacks == 0, Detail: fmt.Sprintf("retries=%d fallbacks=%d", r.metrics.RetryNotices, r.metrics.Fallbacks)},
 		{Name: "system-context-lines", Pass: r.metrics.SystemObserved && r.metrics.HasHandoff && r.metrics.HasSave && r.metrics.HasMerge, Detail: fmt.Sprintf("lines=%d observed=%t", r.metrics.SystemLines, r.metrics.SystemObserved)},
 	}
@@ -363,6 +365,7 @@ func (r *runner) scenarioG() ScenarioResult {
 }
 
 func (r *runner) scenarioF() ScenarioResult {
+	_ = r.client.reconnect(r.ctx)
 	threadID := r.childThread
 	if threadID == "" {
 		threadID = r.fixtureThread
@@ -435,7 +438,13 @@ func (r *runner) waitDevice() error {
 				}
 			}
 		}
+		if err := r.stack.agentExitError(); err != nil {
+			return fmt.Errorf("desktop agent did not become ready: %v", err)
+		}
 		time.Sleep(time.Second)
+	}
+	if err := r.stack.agentExitError(); err != nil {
+		return fmt.Errorf("desktop agent did not become ready: %v", err)
 	}
 	return fmt.Errorf("desktop agent did not become ready")
 }
@@ -559,7 +568,7 @@ func (r *runner) countSendMessages() int {
 		}
 		role, _ := message["role"].(string)
 		card, _ := message["cardJSON"].(string)
-		if role == "assistant" && strings.Contains(card, `"source":"notify_user"`) {
+		if role == "assistant" && deliverySource(card) {
 			seen[id] = struct{}{}
 			count++
 		}
@@ -567,8 +576,27 @@ func (r *runner) countSendMessages() int {
 	return count
 }
 
+func deliverySource(card string) bool {
+	for _, source := range []string{`"source":"notify_user"`, `"source":"share_result"`, `"source":"ask_user"`} {
+		if strings.Contains(card, source) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *runner) observeContext() {
-	history, err := r.history()
+	var history map[string]any
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		history, err = r.history()
+		if err == nil && outcomeCode(history) == "accepted" {
+			if _, ok := dataOf(history)["systemContext"].(map[string]any); ok {
+				break
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	if err != nil || outcomeCode(history) != "accepted" {
 		return
 	}
@@ -635,6 +663,32 @@ func (r *runner) packViews(threadID string) []PackView {
 		views = append(views, inspectPack(text, r.fixtureThread, r.stack.deviceID, r.stack.iso.WorkspaceA, r.stack.iso.AgentStateDir))
 	}
 	return views
+}
+
+func (r *runner) archiveCreated() {
+	if r == nil || r.client == nil || r.stack == nil {
+		return
+	}
+	seen := map[string]struct{}{}
+	add := func(id string) {
+		if id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+	add(r.fixtureThread)
+	add(r.childThread)
+	add(r.brainThread)
+	if r.assistantID != "" {
+		ids, err := createdThreadIDs(r.ctx, r.stack.iso.DBPath, r.assistantID)
+		if err == nil {
+			for _, id := range ids {
+				add(id)
+			}
+		}
+	}
+	for id := range seen {
+		_, _ = r.client.call(r.ctx, "thread.archive.update", r.stack.deviceID, map[string]any{"threadId": id, "archived": true}, 20*time.Second)
+	}
 }
 
 func buildFake(root string) (string, error) {

@@ -148,6 +148,29 @@ func taskByFixture(ctx context.Context, dbPath, assistantID, fixture string) (id
 	return id, status, merged, err
 }
 
+func createdThreadIDs(ctx context.Context, dbPath, assistantID string) ([]string, error) {
+	db, err := openStateDB(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT native_thread_id FROM tasks WHERE assistant_id=? AND native_thread_id<>''
+		UNION SELECT thread_id FROM bot_task_sessions WHERE assistant_id=? AND thread_id<>''`, assistantID, assistantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func sessionLinksForThread(ctx context.Context, dbPath, assistantID, threadID string) (int, error) {
 	db, err := openStateDB(dbPath)
 	if err != nil {

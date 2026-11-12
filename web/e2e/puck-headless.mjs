@@ -13,11 +13,22 @@ if (!origin || !/^[0-9]{6}$/.test(pin) || !profile || !shots) {
 await mkdir(shots, { recursive: true });
 await mkdir(profile, { recursive: true });
 
-const context = await chromium.launchPersistentContext(profile, {
-  headless: true,
-  viewport: { width: 1280, height: 800 },
-  locale: "zh-CN",
-});
+let context;
+let launchError;
+for (let attempt = 0; attempt < 2; attempt++) {
+  try {
+    context = await chromium.launchPersistentContext(profile, {
+      headless: true,
+      viewport: { width: 1280, height: 800 },
+      locale: "zh-CN",
+    });
+    launchError = undefined;
+    break;
+  } catch (error) {
+    launchError = error;
+  }
+}
+if (!context) throw launchError;
 const page = context.pages()[0] || await context.newPage();
 const notes = [];
 try {
@@ -37,7 +48,7 @@ try {
   await bot.waitFor({ timeout: 20000 });
   const named = page.locator(".puck-assistant-row", { hasText: "E2E" }).first();
   if (await named.count()) await named.click();
-  const messages = page.locator(".puck-message");
+  const messages = page.locator('[data-testid="puck-message"]');
   const count = await messages.count();
   if (count < 1) throw new Error("Puck chat did not render a message");
   notes.push(`messages=${count}`);
@@ -53,9 +64,12 @@ try {
   const sticksOut = add.x < bubble.x - 2 || add.x + add.width > bubble.x + bubble.width + 2;
   if (!sticksOut) throw new Error("reaction add control does not sit outside the bubble");
   notes.push("reaction-float=outside");
-  const tasks = page.locator(".puck-task-card, [aria-label='任务卡片']");
+  const tasks = page.locator('[data-testid="puck-task-card"]');
   const taskCount = await tasks.count();
   notes.push(`taskCards=${taskCount}`);
+  if (await page.locator('[data-testid="puck-task-list"]').count() > 0 && taskCount < 1) {
+    throw new Error("task list is present without a task card");
+  }
   if (taskCount > 0) await tasks.first().scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(shots, "puck-chat.png"), fullPage: true });
   console.log(notes.join(" "));

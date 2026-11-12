@@ -35,7 +35,7 @@ func runHeadless(ctx context.Context, cfg Config) error {
 	if !cfg.DisableExecutionSettings {
 		service.SetModelReader(appserver.ModelReader{RPC: readOnlyRPC})
 	}
-	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC})
+	service.SetThreadArchiver(appserver.ThreadArchiver{RPC: readOnlyRPC, Direct: true})
 	service.SetThreadMetadataWriter(appserver.ThreadMetadataWriter{RPC: readOnlyRPC})
 	defer service.Close()
 	return runTransportLoop(ctx, cfg, service)
