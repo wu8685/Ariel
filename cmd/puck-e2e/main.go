@@ -28,7 +28,7 @@ func main() {
 	flag.BoolVar(&realEmbedder, "real-embedder", false, "embed with llama-server from ARIEL_LLAMA_SERVER instead of the HTTP stub")
 	flag.StringVar(&embedModel, "embed-model", os.Getenv("ARIEL_PUCK_EMBEDDER_MODEL"), "GGUF path used with -real-embedder")
 	flag.StringVar(&webDist, "web-dist", "web/dist", "built web assets served when -ui is set")
-	flag.StringVar(&jsonPath, "json", "", "write the JSON report to this path in addition to stdout")
+	flag.StringVar(&jsonPath, "json", "report.json", "write the JSON report here before shutdown, in addition to stdout")
 	flag.Parse()
 	if socket != "" || os.Getenv("ARIEL_IPC_SOCKET") != "" {
 		fmt.Fprintln(os.Stderr, "refusing Desktop IPC: puck-e2e is headless and will not attach to Codex Desktop. Unset ARIEL_IPC_SOCKET and do not pass -ipc-socket.")
@@ -51,7 +51,7 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	report, err := execute(ctx, options{Root: root, Binary: binary, Only: selected, Retries: retries, Timeout: timeout, Keep: keep, UI: ui, Fake: fake, RealEmbedder: realEmbedder, EmbedModel: embedModel, WebRoot: "web", WebDist: webDist})
+	report, err := execute(ctx, options{Root: root, Binary: binary, Only: selected, Retries: retries, Timeout: timeout, Keep: keep, UI: ui, Fake: fake, RealEmbedder: realEmbedder, EmbedModel: embedModel, WebRoot: "web", WebDist: webDist, JSONPath: jsonPath})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

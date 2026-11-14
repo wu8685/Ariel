@@ -130,7 +130,7 @@ CREATE TABLE bot_memory_embedder (
 
 工具集 13 起声明。更低版本的 `DefinitionFor` 不包含这两个名字，旧 Brain 调用得到现有的未知工具错误。描述用中文，风格与 `save_bot_task` 相同：只说 Bot 用得着的事，不写表名、向量、FTS 或内部 id。
 
-声明给 Codex 的 `inputSchema` 只保留它转给模型时会重新序列化的子集：`type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`description`，以及 `anyOf`／`oneOf`／`allOf`。`minLength`、`maxLength`、`minimum`、`maximum`、`minItems`、`maxItems`、`uniqueItems`、`pattern`、`examples` 留在解码器里执行，不放进 `dynamicTools`。这些关键字留在线上时，`thread/start` 仍会成功，随后每一次 `turn/completed` 都以失败结束。假 app-server 对仍带这些关键字的工具集同样把回合标成失败。回合失败时日志只记 `BRAIN_UNAVAILABLE`、错误类别、`codexErrorInfo`、工具名和消息字节数，不记消息正文。
+声明给 Codex 的 `inputSchema` 只保留它转给模型时会重新序列化的子集：`type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`description`，以及 `anyOf`／`oneOf`／`allOf`。`minLength`、`maxLength`、`minimum`、`maximum`、`minItems`、`maxItems`、`uniqueItems`、`pattern`、`examples` 留在解码器里执行，不放进 `dynamicTools`。这些关键字留在线上时，`thread/start` 仍会成功，随后每一次 `turn/completed` 都以失败结束。假 app-server 对仍带这些关键字的工具集同样把回合标成失败。回合失败时日志记 `BRAIN_UNAVAILABLE`、错误类别、`codexErrorInfo`、HTTP 状态、工具名、消息字节数，以及 provider 消息的前 120 个码位。形如 token 的片段打成 `[redacted]`。不记用户消息正文。
 
 ### 4.1 `update_memory`
 

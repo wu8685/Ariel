@@ -27,6 +27,7 @@ type options struct {
 	EmbedModel   string
 	WebRoot      string
 	WebDist      string
+	JSONPath     string
 }
 
 type metrics struct {
@@ -68,6 +69,17 @@ func execute(ctx context.Context, opt options) (Report, error) {
 			return Report{}, err
 		}
 	}
+	var stack *stack
+	report := Report{}
+	defer func() {
+		writeReportFiles(root, opt.JSONPath, report)
+		if stack != nil {
+			stack.close()
+		}
+		if !opt.Keep {
+			_ = os.RemoveAll(root)
+		}
+	}()
 	if opt.Socket != "" {
 		return Report{}, fmt.Errorf("refusing Desktop IPC: puck-e2e is headless and will not attach to Codex Desktop")
 	}
@@ -130,12 +142,6 @@ func execute(ctx context.Context, opt options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	defer func() {
-		stack.close()
-		if !opt.Keep {
-			_ = os.RemoveAll(root)
-		}
-	}()
 	if opt.UI {
 		stack.webDist = opt.WebDist
 	}
@@ -151,7 +157,7 @@ func execute(ctx context.Context, opt options) (Report, error) {
 	}
 	run := &runner{ctx: ctx, stack: stack, client: owner, marker: "FIXTURE-MARKER-" + stack.token[:8], retries: opt.Retries, step: 6 * time.Minute, seen: map[string]struct{}{}, fake: opt.Fake, stub: stub}
 	defer func() { run.client.Close() }()
-	report := Report{OK: true, Listen: stack.listen, Isolation: iso}
+	report = Report{OK: true, Listen: stack.listen, Isolation: iso}
 	if err := run.boot(); err != nil {
 		report.add(ScenarioResult{ID: "boot", Name: "owner and brain", Status: "fail", Checks: []Check{{Name: "boot", Detail: err.Error()}}})
 		return report, nil

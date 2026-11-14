@@ -133,15 +133,22 @@ func (s *stack) restart(ctx context.Context) error {
 }
 
 func (s *stack) stopAgent() {
-	if s.agentCancel != nil {
-		s.agentCancel()
+	if s.agentCancel == nil {
+		return
+	}
+	s.agentCancel()
+	select {
+	case <-s.agentDone:
+	case <-time.After(3 * time.Second):
+		killHarnessProcesses(os.Getpid(), s.iso.Root)
 		select {
 		case <-s.agentDone:
-		case <-time.After(15 * time.Second):
+		case <-time.After(3 * time.Second):
+			killHarnessProcesses(os.Getpid(), s.iso.Root)
 		}
-		s.agentCancel = nil
-		s.agentDone = nil
 	}
+	s.agentCancel = nil
+	s.agentDone = nil
 }
 
 func (s *stack) stopRelay() {
@@ -163,8 +170,17 @@ func (s *stack) stopRelay() {
 }
 
 func (s *stack) close() {
-	s.stopAgent()
-	s.stopRelay()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.stopAgent()
+		s.stopRelay()
+	}()
+	select {
+	case <-done:
+	case <-time.After(12 * time.Second):
+		killHarnessProcesses(os.Getpid(), s.iso.Root)
+	}
 }
 
 func (s *stack) agentExitError() error {

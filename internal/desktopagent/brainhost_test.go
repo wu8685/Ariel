@@ -281,30 +281,40 @@ func TestBrainHostTurnsFailedCompletionIntoSafeTerminalMessage(t *testing.T) {
 	if _, err := host.Turn(context.Background(), threadID, "client-message", "fixture", nil, "", "low"); err != nil {
 		t.Fatal(err)
 	}
-	process.incoming <- brainFrame{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"brain-thread","turn":{"id":"brain-turn","status":"failed","error":{"message":"private provider details","codexErrorInfo":"other"}}}`)}
+	process.incoming <- brainFrame{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"brain-thread","turn":{"id":"brain-turn","status":"failed","error":{"message":"unexpected status 429: quota sk-abcDEF1234567890","codexErrorInfo":"other"}}}`)}
 	event := <-events
 	if event.Kind != "puck.brain.event" || event.Payload["method"] != "item/agentMessage/completed" {
 		t.Fatalf("safe terminal event missing: %+v", event)
 	}
 	encoded, _ := json.Marshal(event.Payload)
-	if !strings.Contains(string(encoded), "BRAIN_UNAVAILABLE") || strings.Contains(string(encoded), "private provider details") {
+	if !strings.Contains(string(encoded), "BRAIN_UNAVAILABLE") || strings.Contains(string(encoded), "sk-abcDEF") || strings.Contains(string(encoded), "quota") {
 		t.Fatalf("unsafe terminal event: %s", encoded)
 	}
-	if capture.leaks("private provider details") {
-		t.Fatal("failed completion log leaked provider details")
+	if capture.leaks("sk-abcDEF1234567890") {
+		t.Fatal("failed completion log leaked a token")
 	}
 	found := false
 	capture.mu.Lock()
 	for _, record := range capture.records {
 		fields := map[string]slog.Value{}
 		record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
-		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" && fields["category"].String() == "provider" && fields["errorInfo"].String() == "other" && fields["messageBytes"].Int64() > 0 {
+		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" && fields["category"].String() == "rate" && fields["errorInfo"].String() == "other" && fields["status"].Int64() == 429 && fields["messageBytes"].Int64() > 0 && strings.Contains(fields["provider"].String(), "quota") && strings.Contains(fields["provider"].String(), "[redacted]") && !strings.Contains(fields["provider"].String(), "sk-abcDEF") {
 			found = true
 		}
 	}
 	capture.mu.Unlock()
 	if !found {
 		t.Fatalf("failed completion was not logged safely: %v", capture.phases())
+	}
+}
+
+func TestRedactedProviderMessageDropsTokensAndStaysShort(t *testing.T) {
+	got := redactProviderMessage("  line one\nsk-liveKey1234567890\n" + strings.Repeat("甲", 200))
+	if strings.Contains(got, "sk-liveKey") || strings.Contains(got, "\n") {
+		t.Fatalf("summary=%q", got)
+	}
+	if !strings.Contains(got, "[redacted]") || len([]rune(got)) != 120 {
+		t.Fatalf("summary=%q len=%d", got, len([]rune(got)))
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -456,59 +457,139 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 	}
 }
 
+type classifiedTurnError struct {
+	info, category, tool, summary string
+	status, messageBytes          int
+}
+
 func turnFailureAttrs(raw json.RawMessage) []any {
-	info, category, tool, size := classifyTurnError(raw)
-	attrs := []any{"error", "BRAIN_UNAVAILABLE", "category", category, "messageBytes", size}
-	if info != "" {
-		attrs = append(attrs, "errorInfo", info)
+	failure := classifyTurnError(raw)
+	attrs := []any{"error", "BRAIN_UNAVAILABLE", "category", failure.category, "messageBytes", failure.messageBytes}
+	if failure.info != "" {
+		attrs = append(attrs, "errorInfo", failure.info)
 	}
-	if tool != "" {
-		attrs = append(attrs, "tool", tool)
+	if failure.tool != "" {
+		attrs = append(attrs, "tool", failure.tool)
+	}
+	if failure.status != 0 {
+		attrs = append(attrs, "status", failure.status)
+	}
+	if failure.summary != "" {
+		attrs = append(attrs, "provider", failure.summary)
 	}
 	return attrs
 }
 
-var toolNameInError = regexp.MustCompile(`(?i)(?:function|tool)[^a-zA-Z0-9_]{1,12}([a-z][a-z0-9_]{0,64})`)
+var (
+	toolNameInError = regexp.MustCompile(`(?i)(?:function|tool)[^a-zA-Z0-9_]{1,12}([a-z][a-z0-9_]{0,64})`)
+	statusInMessage = regexp.MustCompile(`(?i)\b(?:https?|http|status)\s*[:= ]*\s*(\d{3})\b`)
+	secretInMessage = regexp.MustCompile(`(?i)\b(?:sk|pk|rk|ghp|gho|github_pat|xox[baprs]|ya29|AKIA)[A-Za-z0-9_\-]{8,}\b|Bearer\s+\S{8,}|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}(?:\.[A-Za-z0-9_\-]+)?|\b[A-Fa-f0-9]{32,}\b`)
+)
 
-func classifyTurnError(raw json.RawMessage) (info, category, tool string, messageBytes int) {
+func classifyTurnError(raw json.RawMessage) classifiedTurnError {
+	failure := classifiedTurnError{category: "provider"}
 	var completion struct {
 		Turn struct {
 			Error json.RawMessage `json:"error"`
 		} `json:"turn"`
 	}
 	if json.Unmarshal(raw, &completion) != nil || len(completion.Turn.Error) == 0 {
-		return "", "provider", "", 0
+		return failure
 	}
 	var fields map[string]any
 	if json.Unmarshal(completion.Turn.Error, &fields) != nil {
-		return "", "provider", "", len(completion.Turn.Error)
+		failure.messageBytes = len(completion.Turn.Error)
+		failure.summary = redactProviderMessage(string(completion.Turn.Error))
+		return failure
 	}
-	info = shortToken(fields["codexErrorInfo"])
-	if info == "" {
-		info = shortToken(fields["code"])
-	}
-	if info == "" {
-		info = shortToken(fields["type"])
-	}
+	failure.info = firstToken(fields, "codexErrorInfo", "code", "type", "errorCode")
+	failure.status = httpStatus(fields)
 	message, _ := fields["message"].(string)
-	messageBytes = len(message)
-	lower := strings.ToLower(message)
+	failure.messageBytes = len(message)
+	if failure.status == 0 {
+		if match := statusInMessage.FindStringSubmatch(message); len(match) == 2 {
+			failure.status = atoiStatus(match[1])
+		}
+	}
+	lower := strings.ToLower(message + " " + failure.info)
 	switch {
 	case strings.Contains(lower, "schema") || strings.Contains(lower, "invalid_function") || strings.Contains(lower, "validation failed"):
-		category = "schema"
+		failure.category = "schema"
 	case strings.Contains(lower, "context") && (strings.Contains(lower, "length") || strings.Contains(lower, "window")):
-		category = "context"
-	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit"):
-		category = "rate"
-	case strings.Contains(lower, "unauthorized") || strings.Contains(lower, "api key"):
-		category = "auth"
+		failure.category = "context"
+	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit") || failure.status == 429:
+		failure.category = "rate"
+	case strings.Contains(lower, "unauthorized") || strings.Contains(lower, "api key") || failure.status == 401 || failure.status == 403:
+		failure.category = "auth"
+	case failure.status >= 500:
+		failure.category = "provider"
 	default:
-		category = "provider"
+		failure.category = "provider"
 	}
 	if match := toolNameInError.FindStringSubmatch(message); len(match) == 2 {
-		tool = match[1]
+		failure.tool = match[1]
 	}
-	return info, category, tool, messageBytes
+	failure.summary = redactProviderMessage(message)
+	return failure
+}
+
+func firstToken(fields map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if token := shortToken(fields[key]); token != "" {
+			return token
+		}
+	}
+	if nested, _ := fields["error"].(map[string]any); nested != nil {
+		for _, key := range keys {
+			if token := shortToken(nested[key]); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func httpStatus(fields map[string]any) int {
+	for _, key := range []string{"status", "httpStatus", "statusCode"} {
+		if status := atoiStatus(fmtStatus(fields[key])); status >= 100 && status < 600 {
+			return status
+		}
+	}
+	if nested, _ := fields["error"].(map[string]any); nested != nil {
+		return httpStatus(nested)
+	}
+	return 0
+}
+
+func fmtStatus(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.Itoa(int(typed))
+	case json.Number:
+		return typed.String()
+	default:
+		return ""
+	}
+}
+
+func atoiStatus(text string) int {
+	status, err := strconv.Atoi(text)
+	if err != nil || status < 100 || status > 599 {
+		return 0
+	}
+	return status
+}
+
+func redactProviderMessage(message string) string {
+	message = strings.TrimSpace(strings.Join(strings.Fields(message), " "))
+	message = secretInMessage.ReplaceAllString(message, "[redacted]")
+	runes := []rune(message)
+	if len(runes) > 120 {
+		return string(runes[:120])
+	}
+	return string(runes)
 }
 
 func shortToken(value any) string {

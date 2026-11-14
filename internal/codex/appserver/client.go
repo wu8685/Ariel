@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -316,7 +317,7 @@ func Start(ctx context.Context, binary, cwd string) (*Process, error) {
 		stdin.Close()
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startCommand(cmd); err != nil {
 		stdin.Close()
 		stdout.Close()
 		return nil, errors.New("failed to start configured Codex binary")
@@ -331,11 +332,38 @@ func Start(ctx context.Context, binary, cwd string) (*Process, error) {
 }
 func (p *Process) Close() error {
 	p.Session.Close()
-	select {
-	case <-p.exited:
-	case <-time.After(2 * time.Second):
-		p.cmd.Process.Kill()
-		<-p.exited
-	}
+	stopCommand(p.cmd, p.exited)
 	return nil
+}
+
+func startCommand(cmd *exec.Cmd) error {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	return cmd.Start()
+}
+
+func stopCommand(cmd *exec.Cmd, exited <-chan struct{}) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	select {
+	case <-exited:
+		return
+	case <-time.After(2 * time.Second):
+	}
+	killCommand(cmd)
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+	}
+}
+
+func killCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = cmd.Process.Kill()
 }

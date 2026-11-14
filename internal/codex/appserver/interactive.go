@@ -309,7 +309,7 @@ func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*I
 		_ = stdin.Close()
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startCommand(cmd); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		return nil, errors.New("failed to start configured Codex binary")
@@ -325,11 +325,6 @@ func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*I
 
 func (p *InteractiveProcess) Close() error {
 	_ = p.InteractiveSession.Close()
-	select {
-	case <-p.exited:
-	case <-time.After(2 * time.Second):
-		_ = p.cmd.Process.Kill()
-		<-p.exited
-	}
+	stopCommand(p.cmd, p.exited)
 	return nil
 }
