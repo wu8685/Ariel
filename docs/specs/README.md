@@ -144,6 +144,7 @@
 | 0148 | [Puck 侧边栏分组](0148-puck-sidebar-sections.md) | Implemented（2026-11-10） | 空白处右键建分组；可改名、收起和移动 Bot 与群聊；删除分组只取消归属；加号菜单与名称搜索；状态保存在 owner 的 Puck SQLite |
 | 0149 | [Puck 头像页](0149-puck-avatar-sheet.md) | Implemented（2026-11-10） | 独立「头像」页；形状固定 4+4+5，颜色固定 6+5 且白色起头；「上传」与「重置为默认」会保存；「生成」只作说明 |
 | 0150 | [Puck Bot 配置栏默认收起](0150-puck-bot-config-column.md) | Implemented（2026-11-10） | 日常会话右侧配置栏默认收起；Bot 行右键「编辑」打开；× 或 Esc 关闭；空白处右键仍是「建分组」 |
+| 0151 | [Puck 主 Bot 的记忆](0151-puck-bot-memory.md) | Draft（2026-11-14；评审前不实现） | 每 Bot 的 profile／journal 与共享层；`update_memory`／`recall_memory`；SQLite FTS5 + sqlite-vec；Qwen3-Embedding 按需启动，空闲退出，不可用时只走关键词 |
 
 ## 设计基线
 
