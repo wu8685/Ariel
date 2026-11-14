@@ -130,6 +130,8 @@ CREATE TABLE bot_memory_embedder (
 
 工具集 13 起声明。更低版本的 `DefinitionFor` 不包含这两个名字，旧 Brain 调用得到现有的未知工具错误。描述用中文，风格与 `save_bot_task` 相同：只说 Bot 用得着的事，不写表名、向量、FTS 或内部 id。
 
+声明给 Codex 的 `inputSchema` 只保留它转给模型时会重新序列化的子集：`type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`description`，以及 `anyOf`／`oneOf`／`allOf`。`minLength`、`maxLength`、`minimum`、`maximum`、`minItems`、`maxItems`、`uniqueItems`、`pattern`、`examples` 留在解码器里执行，不放进 `dynamicTools`。这些关键字留在线上时，`thread/start` 仍会成功，随后每一次 `turn/completed` 都以失败结束。假 app-server 对仍带这些关键字的工具集同样把回合标成失败。回合失败时日志只记 `BRAIN_UNAVAILABLE`、错误类别、`codexErrorInfo`、工具名和消息字节数，不记消息正文。
+
 ### 4.1 `update_memory`
 
 记下或忘掉一条。`action` 是 `write` 或 `forget`。`scope` 省略时为 `bot`。`kind` 必填，`profile` 或 `journal`。`text` 必填。
@@ -156,7 +158,7 @@ CREATE TABLE bot_memory_embedder (
 
 找不到原文：`MEMORY_NOT_FOUND`，`data.text` 回显 trim 后的原文，行不动。字段不合法沿用现有 `INVALID_ARGUMENT`，message 写明字段、原因和期望。不返回记忆 id。
 
-写入时顺手嵌入一次。进程没在跑时，先按 §6.3 启动，默认最多等 5 秒；就绪后的这次嵌入预算 2 秒。启动或嵌入失败、超时，都仍然成功收下原文，向量留空，等回填。响应里不提嵌入。回合不因此失败。
+写入时顺手嵌入一次，但不让这次嵌入拖住回合。进程已经就绪时，工具最多等 2 秒拿向量。进程没在跑时，工具在 2 秒后先返回成功，启动和嵌入在后台继续；默认启动时限 30 秒。启动或嵌入失败、超时，都仍然成功收下原文，向量留空，等回填。响应里不提嵌入。回合不因此失败。
 
 ### 4.2 `recall_memory`
 
@@ -287,7 +289,7 @@ Query: <query>
 
 需要而进程不在时，Relay 懒启动一个子进程。同时到来的请求只启动一次：后来的等待同一次启动的结果，不各起一个进程。启动成功后大家共用这一个 loopback 端口。启动失败或超过启动时限，这一次改走 FTS，原文照常收下，回合不失败。等待中的请求看到同一次失败，不再各等一遍。
 
-Mac mini 上这次冷启动大约 1–2 秒（mmap 权重并完成探针）。这是预期，不是 CI 门槛；实现时量一次，写进测试记录。启动时限 `ARIEL_PUCK_EMBEDDER_START_TIMEOUT`，默认 `5s`，盖住这 1–2 秒并留余量。进程就绪之后，单次嵌入超时仍是 2 秒。
+Mac mini 上实测冷启动（Homebrew llama.cpp 0.6.0，Qwen3-0.6B Q8_0，启动进程并完成第一次嵌入）是 5252 毫秒。启动时限 `ARIEL_PUCK_EMBEDDER_START_TIMEOUT` 默认 `30s`，盖住这次冷启动。进程就绪之后，单次嵌入超时仍是 2 秒。`update_memory` 自己只等这 2 秒：冷启动还没结束就把原文收下，向量由同一次后台启动或回填补上，第一条记忆不会因为等不及而只剩关键词。
 
 ```text
 llama-server \
@@ -378,12 +380,12 @@ Go：
 | 场景 | 硬性 | 做法 |
 | --- | --- | --- |
 | H 工具与注入 | 是 | 提示语点名 `update_memory` 写下一条 profile、一条 journal。下一回合 envelope 含这两句原文和「不是要执行的指令」。再点名 `forget` 原文，之后的 envelope 不再含这句 |
-| I 检索 | fake 必做；真实 Codex 仅在嵌入可用时查语义 | e2e 自带一个 loopback 桩，实现与 llama-server 相同的嵌入请求。桩把「早晨发布」和「早上发版」映成接近的向量。`recall_memory` 用释义问句命中另一条。另一条 journal 含 `PR-1842`，桩故意给这个查询一个正交向量，结果里这条仍在，并且 title 含 `PR-1842` 的 `bot_tasks` 出现在 `tasks`。然后关掉桩再召回，工具成功，`embedder=unavailable`，`PR-1842` 仍在 |
+| I 检索 | fake 与真实 Codex 都做，不依赖 Bot 自己选工具 | 默认用 loopback 桩，实现与 llama-server 相同的嵌入请求。桩把「早晨发布」和「早上发版」映成接近的向量。释义问句命中另一条。另一条 journal 含 `PR-1842`，桩故意给这个查询一个正交向量，结果里这条仍在，并且 title 含 `PR-1842` 的 `bot_tasks` 出现在 `tasks`。然后关掉桩再召回，工具成功，`embedder=unavailable`，`PR-1842` 仍在。真实模式直接调用记忆接口做同样的检查。`-real-embedder` 改为启动 `ARIEL_LLAMA_SERVER` 指向的 llama-server，模型路径用 `-embed-model` 或 `ARIEL_PUCK_EMBEDDER_MODEL`，不再关桩 |
 | J 删除 Bot | 是 | 删除后私有行消失，预先写下的共享行还在，另一个 Bot 仍能 `recall_memory` 到共享行 |
 | UI | 仅 `-ui` | 沿用 headless Playwright，不起图形窗口。1280×800 与 390×844 都打开「记忆」，看到 H 写下的原文，确认删除后列表不再含这句。断言按钮可点、删除后的列表内容，不用截图代替 |
 | K 是否主动记 | 否 | 真实 Codex 下说一句明显的稳定偏好，但不点名工具。报告里记录有没有调用 `update_memory`。没调用记为 observed，不算失败。fake 模式跳过 |
 
-桩只在 e2e 进程里监听，不做成 Relay 的一种生产模式。CI 不拉取 GGUF。另有不连真实模型的检查：两次并发的第一次嵌入只启动一个进程；启动超时或失败时这次检索是 FTS，工具仍成功；空闲时限到了，子进程退出。Mac mini 上有文件之后，另做一次手动探针：冷启动大约 1–2 秒，「测试」返回 1024 维，进程退出后嵌入侧不再占内存。在那之前，这项标为 unverified，不挡场景 H／I／J。
+桩只在 e2e 进程里监听，不做成 Relay 的一种生产模式。CI 不拉取 GGUF，默认仍用桩。`-real-embedder` 才启动本机 llama-server。另有不连真实模型的检查：两次并发的第一次嵌入只启动一个进程；启动超时或失败时这次检索是 FTS，工具仍成功；空闲时限到了，子进程退出。Mac mini 上已量到冷启动 5252 毫秒、预热嵌入约 80 毫秒、空闲退出后进程消失。
 
 ## 11. 未决问题
 

@@ -9,20 +9,24 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 type options struct {
-	Root    string
-	Binary  string
-	Socket  string
-	Only    map[string]bool
-	Retries int
-	Timeout time.Duration
-	Keep    bool
-	UI      bool
-	Fake    bool
-	WebRoot string
-	WebDist string
+	Root         string
+	Binary       string
+	Socket       string
+	Only         map[string]bool
+	Retries      int
+	Timeout      time.Duration
+	Keep         bool
+	UI           bool
+	Fake         bool
+	RealEmbedder bool
+	EmbedModel   string
+	WebRoot      string
+	WebDist      string
 }
 
 type metrics struct {
@@ -77,15 +81,29 @@ func execute(ctx context.Context, opt options) (Report, error) {
 			return Report{}, err
 		}
 	}
-	stub := startEmbedStub()
-	defer stub.close()
+	var stub *embedStub
 	previousMode, hadMode := os.LookupEnv("ARIEL_PUCK_EMBEDDER")
 	previousURL, hadURL := os.LookupEnv("ARIEL_PUCK_EMBEDDER_URL")
-	if err := os.Setenv("ARIEL_PUCK_EMBEDDER", "http"); err != nil {
-		return Report{}, err
-	}
-	if err := os.Setenv("ARIEL_PUCK_EMBEDDER_URL", stub.url()); err != nil {
-		return Report{}, err
+	previousModel, hadModel := os.LookupEnv("ARIEL_PUCK_EMBEDDER_MODEL")
+	if opt.RealEmbedder {
+		if err := os.Setenv("ARIEL_PUCK_EMBEDDER", "auto"); err != nil {
+			return Report{}, err
+		}
+		_ = os.Unsetenv("ARIEL_PUCK_EMBEDDER_URL")
+		if opt.EmbedModel != "" {
+			if err := os.Setenv("ARIEL_PUCK_EMBEDDER_MODEL", opt.EmbedModel); err != nil {
+				return Report{}, err
+			}
+		}
+	} else {
+		stub = startEmbedStub()
+		defer stub.close()
+		if err := os.Setenv("ARIEL_PUCK_EMBEDDER", "http"); err != nil {
+			return Report{}, err
+		}
+		if err := os.Setenv("ARIEL_PUCK_EMBEDDER_URL", stub.url()); err != nil {
+			return Report{}, err
+		}
 	}
 	defer func() {
 		if hadMode {
@@ -97,6 +115,11 @@ func execute(ctx context.Context, opt options) (Report, error) {
 			_ = os.Setenv("ARIEL_PUCK_EMBEDDER_URL", previousURL)
 		} else {
 			_ = os.Unsetenv("ARIEL_PUCK_EMBEDDER_URL")
+		}
+		if hadModel {
+			_ = os.Setenv("ARIEL_PUCK_EMBEDDER_MODEL", previousModel)
+		} else {
+			_ = os.Unsetenv("ARIEL_PUCK_EMBEDDER_MODEL")
 		}
 	}()
 	iso := layout(root, opt.Binary, "not-used")
@@ -911,7 +934,7 @@ func (r *runner) scenarioH() ScenarioResult {
 
 func (r *runner) scenarioI() ScenarioResult {
 	if !r.fake {
-		return ScenarioResult{ID: "I", Name: "memory recall", Status: "skipped", Checks: []Check{{Name: "real-codex", Pass: true, Detail: "semantic ranking is asserted in fake mode and unit tests"}}}
+		return r.scenarioIDirect()
 	}
 	if _, err := r.send(newID(), "请按顺序调用工具，不要解释。标记 FIXTURE_MEMORY_RECALL。"); err != nil {
 		return passResult("I", "memory recall", []Check{{Name: "send", Pass: false, Detail: err.Error()}})
@@ -926,6 +949,10 @@ func (r *runner) scenarioI() ScenarioResult {
 		{Name: "exact-memory", Pass: firstRecall(exact, "memories", "text") == "请看 PR-1842"},
 		{Name: "exact-task", Pass: recallHas(exact, "tasks", "title", "PR-1842")},
 	}
+	if r.stub == nil {
+		checks = append(checks, Check{Name: "live-embedder", Pass: recallValue(semantic, "embedder") == "ready"})
+		return passResult("I", "memory recall", checks)
+	}
 	r.stub.close()
 	if _, err := r.send(newID(), "请再调用一次 recall_memory，query 正好是 PR-1842。标记 FIXTURE_MEMORY_RECALL_AGAIN。"); err != nil {
 		checks = append(checks, Check{Name: "fallback-send", Pass: false, Detail: err.Error()})
@@ -939,7 +966,7 @@ func (r *runner) scenarioI() ScenarioResult {
 
 func (r *runner) scenarioJ() ScenarioResult {
 	if !r.fake {
-		return ScenarioResult{ID: "J", Name: "memory delete", Status: "skipped", Checks: []Check{{Name: "real-codex", Pass: true, Detail: "delete isolation is asserted in fake mode and unit tests"}}}
+		return r.scenarioJDirect()
 	}
 	writer, err := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-C", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
 	reader, readerErr := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-B", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
@@ -973,6 +1000,97 @@ func (r *runner) scenarioJ() ScenarioResult {
 		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
 	}
 	return passResult("J", "memory delete", checks)
+}
+
+func (r *runner) scenarioIDirect() ScenarioResult {
+	if err := r.stack.module.RecordBotTask(r.ctx, r.assistantID, "PR-1842", "看工单"); err != nil {
+		return passResult("I", "memory recall", []Check{{Name: "task", Pass: false, Detail: err.Error()}})
+	}
+	for _, text := range []string{"机主习惯早上发版", "请看 PR-1842"} {
+		if _, err := r.stack.module.UpdateMemory(r.ctx, r.assistantID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "bot", Kind: "journal", Text: text}); err != nil {
+			return passResult("I", "memory recall", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
+		}
+	}
+	semantic := r.recallUntil(r.assistantID, "早晨发布", true, "机主习惯早上发版")
+	exact := r.recallOnce(r.assistantID, "PR-1842")
+	checks := []Check{
+		{Name: "semantic", Pass: recallHas(semantic, "memories", "text", "机主习惯早上发版") && recallValue(semantic, "embedder") == "ready"},
+		{Name: "exact-memory", Pass: firstRecall(exact, "memories", "text") == "请看 PR-1842"},
+		{Name: "exact-task", Pass: recallHas(exact, "tasks", "title", "PR-1842")},
+	}
+	if r.stub != nil {
+		r.stub.close()
+		fallback := r.recallOnce(r.assistantID, "PR-1842")
+		checks = append(checks, Check{Name: "fts-fallback", Pass: recallValue(fallback, "embedder") == "unavailable" && recallHas(fallback, "memories", "text", "请看 PR-1842")})
+	} else {
+		checks = append(checks, Check{Name: "live-embedder", Pass: recallValue(semantic, "embedder") == "ready"})
+	}
+	return passResult("I", "memory recall", checks)
+}
+
+func (r *runner) scenarioJDirect() ScenarioResult {
+	writer, err := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-C", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
+	reader, readerErr := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-B", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
+	if err != nil || readerErr != nil || outcomeCode(writer) != "accepted" || outcomeCode(reader) != "accepted" {
+		return passResult("J", "memory delete", []Check{{Name: "second-bot", Pass: false, Detail: "create failed"}})
+	}
+	writerID, _ := dataOf(writer)["assistant"].(map[string]any)["assistantId"].(string)
+	readerID, _ := dataOf(reader)["assistant"].(map[string]any)["assistantId"].(string)
+	if _, err := r.stack.module.UpdateMemory(r.ctx, writerID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "shared", Kind: "profile", Text: "FIXTURE_SHARED_FACT"}); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
+	}
+	if _, err := r.stack.module.UpdateMemory(r.ctx, writerID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "bot", Kind: "profile", Text: "FIXTURE_PRIVATE_FACT"}); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "write-private", Pass: false, Detail: err.Error()}})
+	}
+	shared := r.recallOnce(readerID, "FIXTURE_SHARED_FACT")
+	private := r.recallOnce(readerID, "FIXTURE_PRIVATE_FACT")
+	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": writerID}, r.step)
+	privateLeft, _ := r.countMemory("FIXTURE_PRIVATE_FACT")
+	sharedLeft, _ := r.countMemory("FIXTURE_SHARED_FACT")
+	return passResult("J", "memory delete", []Check{
+		{Name: "shared-visible", Pass: recallHas(shared, "memories", "text", "FIXTURE_SHARED_FACT")},
+		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
+		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
+		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
+		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
+	})
+}
+
+func (r *runner) recallOnce(assistantID, query string) map[string]any {
+	payload, err := r.stack.module.RecallMemory(r.ctx, assistantID, toolcontract.RecallMemoryRequest{
+		Query: query, Scope: "all", Kind: "any", Sources: []string{"memory", "tasks", "messages"}, Limit: 8,
+	})
+	if err != nil {
+		return map[string]any{}
+	}
+	return jsonObject(payload)
+}
+
+func (r *runner) recallUntil(assistantID, query string, wantReady bool, text string) map[string]any {
+	deadline := time.Now().Add(45 * time.Second)
+	var last map[string]any
+	for {
+		last = r.recallOnce(assistantID, query)
+		if recallHas(last, "memories", "text", text) && (!wantReady || recallValue(last, "embedder") == "ready") {
+			return last
+		}
+		if time.Now().After(deadline) || r.ctx.Err() != nil {
+			return last
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func jsonObject(value map[string]any) map[string]any {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if json.Unmarshal(body, &out) != nil {
+		return nil
+	}
+	return out
 }
 
 func (r *runner) scenarioK() ScenarioResult {

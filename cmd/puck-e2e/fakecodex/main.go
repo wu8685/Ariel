@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 func main() {
@@ -131,16 +133,24 @@ func (r *rpc) handle(msg message) {
 	case "turn/start":
 		turnID := r.beginTurn(msg.Params)
 		r.reply(msg.ID, map[string]any{"turn": map[string]any{"id": turnID}})
-		if strings.Contains(paramText(msg.Params), "PUCK_ENVELOPE") {
+		problem := loadThread(paramString(msg.Params, "threadId")).BadSchema
+		if problem == "" && strings.Contains(paramText(msg.Params), "PUCK_ENVELOPE") {
 			r.play(msg.Params, turnID)
 		}
 		// Let Ariel record the turn before the completion, or the processing
 		// bubble stays up and the harness never sees idle.
 		time.Sleep(4 * time.Second)
+		turn := map[string]any{"id": turnID, "status": "completed"}
+		if problem != "" {
+			// thread/start still succeeds. The model request is what fails,
+			// matching a provider that rejects the tool schema.
+			turn["status"] = "failed"
+			turn["error"] = map[string]any{"codexErrorInfo": "invalid_tool_schema", "message": "invalid tool schema: " + problem}
+		}
 		r.write(map[string]any{"method": "turn/completed", "params": map[string]any{
 			"threadId": paramString(msg.Params, "threadId"),
 			"turnId":   turnID,
-			"turn":     map[string]any{"id": turnID, "status": "completed"},
+			"turn":     turn,
 		}})
 	case "turn/interrupt":
 		r.reply(msg.ID, map[string]any{})
@@ -286,9 +296,27 @@ func toolPayload(raw json.RawMessage) map[string]any {
 
 func (r *rpc) startThread(params json.RawMessage) map[string]any {
 	cwd := paramString(params, "cwd")
-	thread := storedThread{ID: newUUID(), CWD: cwd, Name: "fake"}
+	thread := storedThread{ID: newUUID(), CWD: cwd, Name: "fake", BadSchema: dynamicToolSchemaProblem(params)}
 	saveThread(thread)
 	return threadView(thread)
+}
+
+func dynamicToolSchemaProblem(params json.RawMessage) string {
+	var body struct {
+		DynamicTools []struct {
+			Name        string         `json:"name"`
+			InputSchema map[string]any `json:"inputSchema"`
+		} `json:"dynamicTools"`
+	}
+	if json.Unmarshal(params, &body) != nil {
+		return ""
+	}
+	for _, tool := range body.DynamicTools {
+		if problem := toolcontract.SchemaProblem(tool.Name, tool.InputSchema); problem != "" {
+			return problem
+		}
+	}
+	return ""
 }
 
 func (r *rpc) beginTurn(params json.RawMessage) string {

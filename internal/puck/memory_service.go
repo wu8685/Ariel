@@ -48,6 +48,24 @@ func (m *Module) syncEmbedderModel(ctx context.Context) {
 	m.embedderReady = true
 }
 
+// embedMemorySoon returns as soon as the vector is stored, or after the warm
+// embed budget. A cold llama-server start keeps running and the row is filled
+// by that goroutine or the backfill loop.
+func (m *Module) embedMemorySoon(entry Memory) {
+	if m.embedder == nil || !m.embedder.Available() {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.embedMemory(m.rootCtx, entry)
+	}()
+	select {
+	case <-done:
+	case <-time.After(defaultEmbedBudget):
+	}
+}
+
 func (m *Module) embedMemory(ctx context.Context, entry Memory) {
 	embedder := m.embedder
 	if embedder == nil || !embedder.Available() {
@@ -118,7 +136,7 @@ func (m *Module) updateMemory(ctx context.Context, assistantID string, request t
 		return nil, err
 	}
 	if !deduped {
-		m.embedMemory(ctx, entry)
+		m.embedMemorySoon(entry)
 	}
 	return memoryToolJSON("write", entry, deduped), nil
 }
@@ -272,6 +290,22 @@ func fitRecallPayload(payload map[string]any) map[string]any {
 		encoded, _ = json.Marshal(payload)
 	}
 	return payload
+}
+
+func (m *Module) UpdateMemory(ctx context.Context, assistantID string, request toolcontract.UpdateMemoryRequest) (map[string]any, error) {
+	return m.updateMemory(ctx, assistantID, request)
+}
+
+func (m *Module) RecallMemory(ctx context.Context, assistantID string, request toolcontract.RecallMemoryRequest) (map[string]any, error) {
+	return m.recallMemory(ctx, assistantID, request)
+}
+
+func (m *Module) RecordBotTask(ctx context.Context, assistantID, title, goal string) error {
+	if _, err := m.store.Assistant(ctx, assistantID); err != nil {
+		return err
+	}
+	_, err := m.store.SaveBotTask(ctx, BotTask{AssistantID: assistantID, Title: title, Goal: goal, Status: botTaskAccepted})
+	return err
 }
 
 func (b toolBackend) UpdateMemory(ctx context.Context, assistantID string, request toolcontract.UpdateMemoryRequest) (map[string]any, error) {

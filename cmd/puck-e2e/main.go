@@ -12,10 +12,10 @@ import (
 )
 
 func main() {
-	var root, binary, socket, only, jsonPath, webDist string
+	var root, binary, socket, only, jsonPath, webDist, embedModel string
 	var retries int
 	var timeout time.Duration
-	var keep, ui, fake bool
+	var keep, ui, fake, realEmbedder bool
 	flag.StringVar(&root, "state", "", "empty temp directory; default is a new directory under the system temp dir")
 	flag.StringVar(&binary, "codex-binary", os.Getenv("ARIEL_CODEX_BINARY"), "Codex CLI binary used as a private app-server; default is the Desktop bundle")
 	flag.StringVar(&socket, "ipc-socket", "", "rejected; this harness never attaches to the Desktop IPC socket")
@@ -25,6 +25,8 @@ func main() {
 	flag.BoolVar(&keep, "keep", false, "keep the temp directory, including UI screenshots, after the run")
 	flag.BoolVar(&ui, "ui", false, "after the chat scenarios, open the isolated Relay in headless Chromium")
 	flag.BoolVar(&fake, "fake", false, "use the deterministic fake codex app-server instead of a real Codex CLI")
+	flag.BoolVar(&realEmbedder, "real-embedder", false, "embed with llama-server from ARIEL_LLAMA_SERVER instead of the HTTP stub")
+	flag.StringVar(&embedModel, "embed-model", os.Getenv("ARIEL_PUCK_EMBEDDER_MODEL"), "GGUF path used with -real-embedder")
 	flag.StringVar(&webDist, "web-dist", "web/dist", "built web assets served when -ui is set")
 	flag.StringVar(&jsonPath, "json", "", "write the JSON report to this path in addition to stdout")
 	flag.Parse()
@@ -49,7 +51,7 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	report, err := execute(ctx, options{Root: root, Binary: binary, Only: selected, Retries: retries, Timeout: timeout, Keep: keep, UI: ui, Fake: fake, WebRoot: "web", WebDist: webDist})
+	report, err := execute(ctx, options{Root: root, Binary: binary, Only: selected, Retries: retries, Timeout: timeout, Keep: keep, UI: ui, Fake: fake, RealEmbedder: realEmbedder, EmbedModel: embedModel, WebRoot: "web", WebDist: webDist})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

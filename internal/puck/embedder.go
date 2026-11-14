@@ -28,7 +28,7 @@ const (
 	embedderDim        = 1024
 	qwen3Q8SHA256      = "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439"
 	defaultEmbedIdle   = 5 * time.Minute
-	defaultStartBudget = 5 * time.Second
+	defaultStartBudget = 30 * time.Second
 	defaultEmbedBudget = 2 * time.Second
 	embedderCooldown   = 30 * time.Second
 	qwenQueryPrefix    = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
@@ -81,7 +81,10 @@ func newEmbedder(dataDir string) Embedder {
 		if bin == "" {
 			bin = filepath.Join(root, "bin", "llama-server")
 		}
-		model := filepath.Join(root, "models", "Qwen3-Embedding-0.6B-Q8_0.gguf")
+		model := strings.TrimSpace(os.Getenv("ARIEL_PUCK_EMBEDDER_MODEL"))
+		if model == "" {
+			model = filepath.Join(root, "models", "Qwen3-Embedding-0.6B-Q8_0.gguf")
+		}
 		if _, err := os.Stat(bin); err != nil {
 			return disabledEmbedder{}
 		}

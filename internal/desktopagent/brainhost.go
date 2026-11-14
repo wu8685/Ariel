@@ -7,9 +7,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
@@ -169,7 +171,7 @@ func brainThreadParams(cwd string, request BrainEnsure) map[string]any {
 }
 
 func puckDynamicTools(version int) []map[string]any {
-	return toolcontract.DynamicTools(version)
+	return toolcontract.CodexWireTools(version)
 }
 
 func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text string, images []string, model, effort string) (string, error) {
@@ -428,7 +430,7 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 		if ok {
 			attrs := []any{"durationMs", time.Since(started).Milliseconds(), "ok", !failed}
 			if failed {
-				attrs = append(attrs, "error", "BRAIN_UNAVAILABLE")
+				attrs = append(attrs, turnFailureAttrs(frame.Params)...)
 			}
 			logPhase("brain-turn-complete", identity.ThreadID, attrs...)
 		}
@@ -452,6 +454,75 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 	if h.cfg.Emit != nil {
 		h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.event", AssistantID: assistant, ThreadID: identity.ThreadID, TurnID: identity.TurnID, Payload: map[string]any{"method": frame.Method, "params": json.RawMessage(frame.Params)}})
 	}
+}
+
+func turnFailureAttrs(raw json.RawMessage) []any {
+	info, category, tool, size := classifyTurnError(raw)
+	attrs := []any{"error", "BRAIN_UNAVAILABLE", "category", category, "messageBytes", size}
+	if info != "" {
+		attrs = append(attrs, "errorInfo", info)
+	}
+	if tool != "" {
+		attrs = append(attrs, "tool", tool)
+	}
+	return attrs
+}
+
+var toolNameInError = regexp.MustCompile(`(?i)(?:function|tool)[^a-zA-Z0-9_]{1,12}([a-z][a-z0-9_]{0,64})`)
+
+func classifyTurnError(raw json.RawMessage) (info, category, tool string, messageBytes int) {
+	var completion struct {
+		Turn struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &completion) != nil || len(completion.Turn.Error) == 0 {
+		return "", "provider", "", 0
+	}
+	var fields map[string]any
+	if json.Unmarshal(completion.Turn.Error, &fields) != nil {
+		return "", "provider", "", len(completion.Turn.Error)
+	}
+	info = shortToken(fields["codexErrorInfo"])
+	if info == "" {
+		info = shortToken(fields["code"])
+	}
+	if info == "" {
+		info = shortToken(fields["type"])
+	}
+	message, _ := fields["message"].(string)
+	messageBytes = len(message)
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "schema") || strings.Contains(lower, "invalid_function") || strings.Contains(lower, "validation failed"):
+		category = "schema"
+	case strings.Contains(lower, "context") && (strings.Contains(lower, "length") || strings.Contains(lower, "window")):
+		category = "context"
+	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit"):
+		category = "rate"
+	case strings.Contains(lower, "unauthorized") || strings.Contains(lower, "api key"):
+		category = "auth"
+	default:
+		category = "provider"
+	}
+	if match := toolNameInError.FindStringSubmatch(message); len(match) == 2 {
+		tool = match[1]
+	}
+	return info, category, tool, messageBytes
+}
+
+func shortToken(value any) string {
+	text, _ := value.(string)
+	text = strings.TrimSpace(text)
+	if text == "" || len(text) > 64 || strings.ContainsAny(text, " \n\t\"'") {
+		return ""
+	}
+	for _, r := range text {
+		if r > 127 || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' && r != '.') {
+			return ""
+		}
+	}
+	return text
 }
 
 func brainTurnCompletionFailed(raw json.RawMessage) bool {

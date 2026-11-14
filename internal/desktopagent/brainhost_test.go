@@ -298,7 +298,7 @@ func TestBrainHostTurnsFailedCompletionIntoSafeTerminalMessage(t *testing.T) {
 	for _, record := range capture.records {
 		fields := map[string]slog.Value{}
 		record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
-		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" {
+		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" && fields["category"].String() == "provider" && fields["errorInfo"].String() == "other" && fields["messageBytes"].Int64() > 0 {
 			found = true
 		}
 	}

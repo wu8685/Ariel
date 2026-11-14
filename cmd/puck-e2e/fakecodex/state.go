@@ -14,11 +14,12 @@ type storedTurn struct {
 }
 
 type storedThread struct {
-	ID       string       `json:"id"`
-	CWD      string       `json:"cwd"`
-	Name     string       `json:"name"`
-	Archived bool         `json:"archived"`
-	Turns    []storedTurn `json:"turns"`
+	ID        string       `json:"id"`
+	CWD       string       `json:"cwd"`
+	Name      string       `json:"name"`
+	Archived  bool         `json:"archived"`
+	BadSchema string       `json:"badSchema,omitempty"`
+	Turns     []storedTurn `json:"turns"`
 }
 
 type world struct {
