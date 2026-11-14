@@ -13,6 +13,9 @@ const finishTaskToolset = 8
 const sendMessageToolset = 9
 const handoffToolset = 10
 const botTaskToolset = 11
+const memoryToolset = 13
+
+const memoryToolLine = "会反复用到的事实才用 update_memory 记下：profile 记稳定的习惯和做法，journal 记带日期的经过。大家的 Bot 都该知道的用 shared，只跟自己有关的用 bot。改一条要先 forget 原文再 write。开口问机主之前先 recall_memory；它也能按关键词搜到以前的任务和对话。不要记密码、token 或密钥。怎么做这份工作以自己的记忆为准；关于机主本人，以更新的一条为准。"
 
 func normalizeCustomContext(raw string) (string, error) {
 	text := strings.TrimSpace(raw)
@@ -107,6 +110,9 @@ func toolsetPromptLines(toolset int) string {
 	if toolset >= botTaskToolset {
 		lines = append(lines, "- 要记住的事用 save_bot_task 新建。延续已有任务时把那个 taskId 传给 save_bot_task，当前消息会挂上去。只想挂上当前消息时调用 attach_bot_task，可以只传 taskId。确认是不是旧事用 list_bot_tasks 或 search_messages。两条任务是同一件才用 merge_bot_tasks。")
 	}
+	if toolset >= memoryToolset {
+		lines = append(lines, "- "+memoryToolLine)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -152,6 +158,7 @@ func systemContextDebug(a Assistant) map[string]any {
 		"hasHandoff": strings.Contains(body, "交接时 Puck 会附上被引用会话的链接"),
 		"hasSave":    strings.Contains(body, "save_bot_task"),
 		"hasMerge":   strings.Contains(body, "merge_bot_tasks"),
+		"hasMemory":  strings.Contains(body, "update_memory"),
 	}
 }
 

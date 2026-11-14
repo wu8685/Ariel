@@ -56,6 +56,9 @@ type Module struct {
 	ackDelay           time.Duration
 	now                func() time.Time
 	watchSnapshotReads atomic.Uint64
+	embedder           Embedder
+	embedMu            sync.Mutex
+	embedderReady      bool
 }
 
 type observedToolCall struct {
@@ -89,11 +92,13 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
+	m.embedder = newEmbedder(dataDir)
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
-	m.wg.Add(2)
+	m.wg.Add(3)
 	go m.runBrainEvents(ctx)
 	go m.runTaskWatches(ctx)
+	go m.runMemoryBackfill(ctx)
 	return m, nil
 }
 
@@ -113,6 +118,9 @@ func (m *Module) Close() error {
 	m.pendingMu.Unlock()
 	m.wg.Wait()
 	m.watchWg.Wait()
+	if m.embedder != nil {
+		m.embedder.Close()
+	}
 	return m.store.Close()
 }
 
@@ -999,6 +1007,10 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.sectionCollapse(ctx, params)
 		case "puck.section.move":
 			response = m.sectionMove(ctx, params)
+		case "puck.memory.list":
+			response = m.memoryList(ctx, params)
+		case "puck.memory.delete":
+			response = m.memoryDelete(ctx, params)
 		default:
 			response = moduleError("UNSUPPORTED", "Puck method is not available in P0")
 		}
@@ -1090,7 +1102,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	m.syncBrainThreads(ctx)
 	greetingID := newUUID()
 	startedAt := m.now()
-	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。"), "model": a.BrainModel, "effort": "low"}))
+	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。", m.memoryBlock(ctx, a)), "model": a.BrainModel, "effort": "low"}))
 	if greeting.Error != nil {
 		_ = m.store.AppendMessage(ctx, Message{ID: greetingID, AssistantID: a.ID, Role: "assistant", Kind: "notice", Text: fmt.Sprintf("你好，我是 %s。大脑暂时无法生成问候，你仍可以直接告诉我想做什么。", a.Name)})
 		return accepted(map[string]any{"assistant": assistantData(a), "greeting": map[string]any{"state": "fallback", "messageId": greetingID}})
@@ -1988,8 +2000,8 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	encoded, _ := json.Marshal(card)
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
-func brainEnvelope(a Assistant, text string) string {
-	return brainEnvelopeWithReply(a, text, nil, nil, nil, nil)
+func brainEnvelope(a Assistant, text, memory string) string {
+	return brainEnvelopeWithReply(a, text, nil, nil, nil, nil, memory)
 }
 
 func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, reply *Message) string {
@@ -2001,10 +2013,10 @@ func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, 
 	if err != nil {
 		openTasks = nil
 	}
-	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks, m.taskSnippets(ctx, a.ID, openTasks))
+	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks, m.taskSnippets(ctx, a.ID, openTasks), m.memoryBlock(ctx, a))
 }
 
-func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask, snippets map[string]string) string {
+func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask, snippets map[string]string, memory string) string {
 	context := ""
 	if reply != nil {
 		author := "用户"
@@ -2027,6 +2039,7 @@ func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Ta
 	}
 	context += reusableTaskContext(tasks)
 	context += openBotTaskContext(openTasks, snippets)
+	context += memory
 	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n%s%s\n\n用户请求：%s", a.ID, newUUID(), envelopeContext(a), context, text)
 }
 

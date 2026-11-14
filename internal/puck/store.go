@@ -14,9 +14,10 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite/vec"
 )
 
-const storeSchemaVersion = 11
+const storeSchemaVersion = 12
 
 type Store struct {
 	db       *sql.DB
@@ -267,8 +268,16 @@ func (s *Store) migrate(ctx context.Context) error {
             PRIMARY KEY (assistant_id, message_id))`,
 		)
 	}
+	if version < 12 {
+		statements = append(statements, memorySchemaSQL()...)
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	if version < 12 {
+		if err := probeMemoryCapabilities(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -465,6 +474,9 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_inbox WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if err := deletePrivateMemories(ctx, tx, assistantID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE assistant_id=?`, assistantID); err != nil {

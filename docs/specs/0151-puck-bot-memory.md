@@ -1,6 +1,6 @@
 # 0151：Puck 主 Bot 的记忆
 
-- 状态：Draft（2026-11-14 负责人已确认文首四条。改为 Approved 之前不实现。）
+- 状态：Approved（2026-11-14 负责人批准实现。嵌入模型为 Qwen3-Embedding-0.6B，按需启动，空闲退出。）
 - 日期：2026-11-14。
 - 关联：[0130 Puck 个人助理](0130-puck-personal-assistant.md) §6.1.5 与 P2 记忆、[0150 Bot 配置栏](0150-puck-bot-config-column.md)、`internal/puck` schema 11 与工具集 12、`cmd/puck-e2e`。
 

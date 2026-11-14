@@ -116,7 +116,7 @@ func (m *Module) groupMessage(ctx context.Context, raw json.RawMessage) relay.Pu
 		prompt := fmt.Sprintf("你正在小组「%s」里发言，成员有：%s。请只用你自己的口吻用一两句话回复，不要调用工具，不要代替其他成员发言。\n\n%s", group.Name, strings.Join(names, "、"), input.Text)
 		result := m.startBrainTurn(ctx, assistant, mustJSON(map[string]any{
 			"assistantId": assistant.ID, "threadId": assistant.BrainThreadID, "clientMessageId": input.ClientMessageID,
-			"text": brainEnvelope(assistant, prompt), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
+			"text": brainEnvelope(assistant, prompt, m.memoryBlock(ctx, assistant)), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
 		}))
 		if result.Error != nil {
 			_ = m.store.AppendGroupMessage(ctx, GroupMessage{ID: responseID, GroupID: group.ID, Role: "assistant", AuthorAssistantID: assistant.ID, Kind: "error", Text: member.Name + " 这轮没有开始。"})

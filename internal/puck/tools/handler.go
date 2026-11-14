@@ -208,6 +208,10 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		result = h.attachBotTask(ctx, call)
 	case "merge_bot_tasks":
 		result = h.mergeBotTasks(ctx, call)
+	case "update_memory":
+		result = h.updateMemory(ctx, call)
+	case "recall_memory":
+		result = h.recallMemory(ctx, call)
 	default:
 		result = toolError("INVALID_ARGUMENT", "unknown Puck tool")
 	}

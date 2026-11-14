@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = 12
+const Version = 13
 const canonicalMutationToolVersion = 2
 
 const (
@@ -142,6 +142,11 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 			return Definition{}, false
 		}
 		return botTaskDefinition(name)
+	case "update_memory", "recall_memory":
+		if version < 13 {
+			return Definition{}, false
+		}
+		return memoryDefinition(name)
 	default:
 		return Definition{}, false
 	}
@@ -157,6 +162,9 @@ func DynamicTools(version int) []map[string]any {
 	}
 	if version >= 11 {
 		names = append(names, "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks")
+	}
+	if version >= 13 {
+		names = append(names, "update_memory", "recall_memory")
 	}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -207,6 +215,12 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 		return value, details
 	case "merge_bot_tasks":
 		value, details := DecodeMergeBotTasks(raw)
+		return value, details
+	case "update_memory":
+		value, details := DecodeUpdateMemory(raw)
+		return value, details
+	case "recall_memory":
+		value, details := DecodeRecallMemory(raw)
 		return value, details
 	default:
 		return nil, []FieldError{{Field: "tool", Reason: "unknown tool contract", Expected: "documented Puck tool"}}

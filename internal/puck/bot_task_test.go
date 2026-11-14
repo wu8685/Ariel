@@ -23,7 +23,7 @@ func TestBotTaskSchemaMigratesToV11(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 11 {
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != storeSchemaVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	for _, table := range []string{"bot_tasks", "bot_task_messages", "bot_task_sessions", "bot_inbox"} {

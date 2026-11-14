@@ -152,7 +152,9 @@ func (r *rpc) handle(msg message) {
 }
 
 func (r *rpc) play(params json.RawMessage, turnID string) {
-	text := userRequest(paramText(params))
+	full := paramText(params)
+	rememberEnvelope(full)
+	text := userRequest(full)
 	threadID := paramString(params, "threadId")
 	messageID := paramString(params, "clientUserMessageId")
 	switch {
@@ -201,6 +203,25 @@ func (r *rpc) play(params json.RawMessage, turnID string) {
 		r.tool(threadID, "save_bot_task", map[string]any{"id": taskID, "title": "FIXTURE_X", "status": "done"})
 	case strings.Contains(text, "FIXTURE_NOTICE"):
 		r.tool(threadID, "send_message", map[string]any{"text": "FIXTURE_NOTICE"})
+	case strings.Contains(text, "FIXTURE_MEMORY_WRITE"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "profile", "text": "FIXTURE_PROFILE_FACT"})
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "journal", "text": "FIXTURE_JOURNAL_FACT"})
+	case strings.Contains(text, "FIXTURE_MEMORY_FORGET"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "forget", "scope": "bot", "kind": "journal", "text": "FIXTURE_JOURNAL_FACT"})
+	case strings.Contains(text, "FIXTURE_MEMORY_RECALL_AGAIN"):
+		rememberRecall("fallback", r.tool(threadID, "recall_memory", map[string]any{"query": "PR-1842"}))
+	case strings.Contains(text, "FIXTURE_MEMORY_RECALL_SHARED"):
+		rememberRecall("shared", r.tool(threadID, "recall_memory", map[string]any{"query": "FIXTURE_SHARED_FACT"}))
+		rememberRecall("private", r.tool(threadID, "recall_memory", map[string]any{"query": "FIXTURE_PRIVATE_FACT"}))
+	case strings.Contains(text, "FIXTURE_MEMORY_SHARED"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "shared", "kind": "profile", "text": "FIXTURE_SHARED_FACT"})
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "profile", "text": "FIXTURE_PRIVATE_FACT"})
+	case strings.Contains(text, "FIXTURE_MEMORY_RECALL"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "journal", "text": "机主习惯早上发版"})
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "journal", "text": "请看 PR-1842"})
+		r.tool(threadID, "save_bot_task", map[string]any{"title": "PR-1842", "goal": "看工单", "status": "accepted"})
+		rememberRecall("semantic", r.tool(threadID, "recall_memory", map[string]any{"query": "早晨发布"}))
+		rememberRecall("exact", r.tool(threadID, "recall_memory", map[string]any{"query": "PR-1842"}))
 	default:
 		_ = turnID
 	}

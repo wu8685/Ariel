@@ -132,8 +132,13 @@ func createAgainstAdvertisedToolset(t *testing.T, advertised int) (string, int, 
 		t.Fatal(err)
 	}
 	var response map[string]any
-	if err := wsjson.Read(ctx, web, &response); err != nil {
-		t.Fatal(err)
+	for {
+		if err := wsjson.Read(ctx, web, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response["type"] == "response" {
+			break
+		}
 	}
 	code := ""
 	if problem, ok := response["error"].(map[string]any); ok {
@@ -165,8 +170,13 @@ func createAgainstAdvertisedToolset(t *testing.T, advertised int) (string, int, 
 		t.Fatal(err)
 	}
 	var message map[string]any
-	if err := wsjson.Read(ctx, web, &message); err != nil {
-		t.Fatal(err)
+	for {
+		if err := wsjson.Read(ctx, web, &message); err != nil {
+			t.Fatal(err)
+		}
+		if message["type"] == "response" {
+			break
+		}
 	}
 	messageCode := ""
 	if message["outcome"] != "accepted" {
