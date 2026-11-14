@@ -1,6 +1,6 @@
 # 0151：Puck 主 Bot 的记忆
 
-- 状态：Draft（2026-11-14 负责人已确认下面三条；嵌入模型与 Mac mini 内存仍待决，见 §11。改为 Approved 之前不实现。）
+- 状态：Draft（2026-11-14 负责人已确认文首四条。改为 Approved 之前不实现。）
 - 日期：2026-11-14。
 - 关联：[0130 Puck 个人助理](0130-puck-personal-assistant.md) §6.1.5 与 P2 记忆、[0150 Bot 配置栏](0150-puck-bot-config-column.md)、`internal/puck` schema 11 与工具集 12、`cmd/puck-e2e`。
 
@@ -13,8 +13,7 @@
 1. 删除 Bot 时，它写下的共享行保留。私有行删除。作者名继续用 `writer_name` 显示。
 2. 任一 Bot 都可以 `forget` 共享行。机主可以在记忆页删除共享行，不限原作者。
 3. 代码不按密钥、token 或高熵字符串的形状拒绝写入。只在系统上下文里禁止 Bot 记下密码、token 和密钥。
-
-嵌入模型尚未选定，见 §11。
+4. 嵌入模型用 **Qwen3-Embedding-0.6B**（Q8_0，1024 维）。`llama-server` 不常驻：Relay 在第一次需要嵌入或召回时再启动，权重从磁盘 mmap，空闲数分钟后退出。空闲时这项内存约为 0。向量留在 SQLite 文件里。详见 §6.3。
 
 ## 1. 范围
 
@@ -123,7 +122,7 @@ CREATE TABLE bot_memory_embedder (
 
 原文写入后不修改。FTS 用外部内容表，INSERT／DELETE 触发器跟上 `bot_memories`。不建 UPDATE 触发器。
 
-`vec0` 不保证外键级联。`forget` 和删除 Bot 都在同一事务里按 `memory_rowid` 删掉向量行，再删关系行（FTS 靠触发器）。上面的 `float[1024]` 是 §6.2 建议模型的维度，随 §11 一起定。实现还没开始，若改选别的模型，就在这次 v12 迁移里改掉列宽、`Dim()` 和探针，不另开版本。实现开始之后再换维度，才另开 schema 版本，不在运行时 `DROP` 这张虚拟表。同一维度换 `model_id` 只清空向量表再回填，不动原文。几千行用 vec0 默认的全表扫描，不加 partition key。
+`vec0` 不保证外键级联。`forget` 和删除 Bot 都在同一事务里按 `memory_rowid` 删掉向量行，再删关系行（FTS 靠触发器）。向量列是 `float[1024]`，对应 Qwen3-Embedding-0.6B。向量只住在这个 SQLite 文件里，不随 `llama-server` 进退。同一维度换 `model_id` 只清空向量表再回填，不动原文。换维度要另开 schema 版本，不在运行时 `DROP` 这张虚拟表。几千行用 vec0 默认的全表扫描，不加 partition key。
 
 `bot_tasks` 和 `conversation_messages` 不加向量，也不新开 FTS。`recall_memory` 查它们时沿用现在的 `LIKE`（与 `list_bot_tasks`／`search_messages` 相同的转义）。
 
@@ -157,7 +156,7 @@ CREATE TABLE bot_memory_embedder (
 
 找不到原文：`MEMORY_NOT_FOUND`，`data.text` 回显 trim 后的原文，行不动。字段不合法沿用现有 `INVALID_ARGUMENT`，message 写明字段、原因和期望。不返回记忆 id。
 
-写入时顺手嵌入一次，预算 2 秒。嵌入失败或超时仍然成功收下原文，向量留空，等回填。响应里不提嵌入。
+写入时顺手嵌入一次。进程没在跑时，先按 §6.3 启动，默认最多等 5 秒；就绪后的这次嵌入预算 2 秒。启动或嵌入失败、超时，都仍然成功收下原文，向量留空，等回填。响应里不提嵌入。回合不因此失败。
 
 ### 4.2 `recall_memory`
 
@@ -239,7 +238,7 @@ profile 按 `created_at` 从早到晚，全部原文。journal 按 `created_at` 
 ```text
 Embedder
   ModelID() string          // 例如 "qwen3-embedding-0.6b-q8"
-  Dim() int                 // 与选定模型一致；当前建议为 1024
+  Dim() int                 // 1024
   Available() bool
   EmbedDocuments(ctx, texts) ([][]float32, error)  // 原文，不加指令前缀
   EmbedQuery(ctx, query) ([]float32, error)        // 仅查询加模型自己的前缀
@@ -251,7 +250,7 @@ v1 有两个实现：
 
 | `ARIEL_PUCK_EMBEDDER` | 行为 |
 | --- | --- |
-| `auto`（默认） | 本机 llama-server 和模型文件都在，就拉起并使用；缺任何一个就保持关键词，Relay 照常启动 |
+| `auto`（默认） | 二进制和模型文件都在时，第一次嵌入或召回再启动，空闲后退出。缺任何一个就保持关键词。Relay 启动本身不拉起进程 |
 | `off` | 不探测、不拉起 |
 | `http` | 使用已经在跑的 `ARIEL_PUCK_EMBEDDER_URL`，只接受 loopback。非 loopback 记一条原因并降为关键词，不发出请求 |
 
@@ -259,7 +258,7 @@ v1 有两个实现：
 
 ### 6.2 模型
 
-模型还没选定，见 §11。当前建议是 **Qwen3-Embedding-0.6B**，量化 **Q8_0**，运行时 **llama.cpp `llama-server`**。在 §11 有结论之前，不把模型文件、维度或 sidecar 写进实现。下面的比较供这次选择使用。
+已选定 **Qwen3-Embedding-0.6B**，量化 **Q8_0**，维度 1024，运行时 **llama.cpp `llama-server`**。进程按 §6.3 按需进出，不常驻。下面是选定前的比较，留下作为理由。
 
 | | Qwen3-Embedding-0.6B Q8_0 | bge-small-zh-v1.5 | EmbeddingGemma 300M |
 | --- | --- | --- | --- |
@@ -280,11 +279,15 @@ Instruct: Given a web search query, retrieve relevant passages that answer the q
 Query: <query>
 ```
 
-适配器对返回向量做 L2 归一化再入库。探针嵌入固定字符串「测试」：维度必须等于 `Dim()`，归一化后的模长在 0.9 到 1.1。不对就标记不可用，已经写下的原文保留，检索走 FTS。`--pooling last` 不能省，省了探针就过不了。Qwen3 这条路径的 `Dim()` 是 1024。
+适配器对返回向量做 L2 归一化再入库。探针嵌入固定字符串「测试」：维度必须是 1024，归一化后的模长在 0.9 到 1.1。不对就标记不可用，已经写下的原文保留，检索走 FTS。`--pooling last` 不能省，省了探针就过不了。
 
 ### 6.3 进程
 
-Relay 在 `auto` 且文件齐全时拉起一个子进程，Relay 退出时关掉它。不进 Docker 镜像，不进 git。
+`llama-server` 不常驻，也不在 Relay 启动时拉起。只有 `update_memory` 的写入嵌入、`recall_memory` 的语义检索，或回填，才算需要。注入记忆块不嵌入，不因此启动。Desktop Agent 不启动它。
+
+需要而进程不在时，Relay 懒启动一个子进程。同时到来的请求只启动一次：后来的等待同一次启动的结果，不各起一个进程。启动成功后大家共用这一个 loopback 端口。启动失败或超过启动时限，这一次改走 FTS，原文照常收下，回合不失败。等待中的请求看到同一次失败，不再各等一遍。
+
+Mac mini 上这次冷启动大约 1–2 秒（mmap 权重并完成探针）。这是预期，不是 CI 门槛；实现时量一次，写进测试记录。启动时限 `ARIEL_PUCK_EMBEDDER_START_TIMEOUT`，默认 `5s`，盖住这 1–2 秒并留余量。进程就绪之后，单次嵌入超时仍是 2 秒。
 
 ```text
 llama-server \
@@ -293,11 +296,13 @@ llama-server \
   -c 2048 --host 127.0.0.1 --port <ephemeral> -t 4
 ```
 
-`-c 2048` 避免按 32K 预留 KV cache。二进制路径为 `ARIEL_LLAMA_SERVER`，缺省时找 `$ARIEL_PUCK_DATA_DIR/bin/llama-server`（darwin/arm64）。模型来自 Hugging Face `Qwen/Qwen3-Embedding-0.6B-GGUF`。实现时把文件的 SHA256 写进安装说明，哈希不符则不启动，并降为关键词。
+不传 `--no-mmap`，不传 `--mlock`。权重由 llama.cpp 从 GGUF mmap，不在 Relay 进程里再复制一份。`-c 2048` 避免按 32K 预留 KV cache。二进制路径为 `ARIEL_LLAMA_SERVER`，缺省时找 `$ARIEL_PUCK_DATA_DIR/bin/llama-server`（darwin/arm64）。模型来自 Hugging Face `Qwen/Qwen3-Embedding-0.6B-GGUF`。实现时把文件的 SHA256 写进安装说明，哈希不符则不启动，并降为关键词。文件不进 Docker 镜像，不进 git。
 
-子进程的内存算在 Relay 的 `GOMEMLIMIT` 之外。Q8 权重约 600 MiB，加上运行时，按约 1 GB RSS 预留；实现时在 Mac mini 上量一次，写进测试记录。公网 `www.kan.chat` 的 Linux Relay 默认没有这个二进制，记忆工具仍在，检索是关键词。不要为了嵌入把原文送到 Mac mini 再送回来。
+空闲时限 `ARIEL_PUCK_EMBEDDER_IDLE`，默认 `5m`。一次成功的嵌入或召回会重新计时。到点后 Relay 结束自己拉起的子进程，先 SIGTERM，短等后再 SIGKILL。非法或非正的时限退回 `5m`。不提供「一直留着」的设置。`http` 模式用的是别人已经在跑的进程，Relay 不替它计空闲，也不关掉它。Relay 自己退出时，关掉自己拉起的子进程。
 
-单次嵌入超时 2 秒。失败后 30 秒内 `Available` 为 false，避免每个回合都打一次拒绝连接。连续启动失败 3 次后，本次 Relay 进程不再重启子进程。
+进程退出后，嵌入侧内存约为 0。向量仍在 Puck SQLite 文件里。进程活着时，它的内存算在 Relay 的 `GOMEMLIMIT` 之外，用完即走，不按常驻 1 GB 预留。
+
+启动失败后 30 秒内不再尝试，这段时间 `Available` 为 false，检索只用关键词。连续启动失败 3 次后，本次 Relay 进程不再启动它。公网 `www.kan.chat` 的 Linux Relay 默认没有这个二进制，记忆工具仍在，检索是关键词。不要为了嵌入把原文送到 Mac mini 再送回来。
 
 ### 6.4 排序与回填
 
@@ -311,7 +316,7 @@ llama-server \
 
 只把 `bot_memory_vectors.model_id` 等于当前模型的行放进 KNN。模型 id 变化时，先确认新模型探针通过，再在一个事务里清空 `bot_memory_vec` 和 `bot_memory_vectors`，更新 `bot_memory_embedder`。原文不动。探针没过则保留旧向量，但查询不使用与当前 id 不符的向量。`off` 或文件缺失不清空向量。
 
-回填是 Relay 里的一个 goroutine，每批最多 16 条尚无当前模型向量的行，不挡住开库和回合，关闭时取消。失败的行留到下一批。去重命中不回填。
+回填是 Relay 里的一个 goroutine，每批最多 16 条尚无当前模型向量的行，不挡住开库和回合，关闭时取消。它走同一套按需启动和空闲计时：一批算一次活动，没有下一批就等空闲时限退出。失败的行留到下一批。去重命中不回填。
 
 ## 7. 界面
 
@@ -349,7 +354,7 @@ Web 方法：
 
 1. 先对 Puck SQLite 做一次在线备份，再启动带本次迁移的 Relay。旧二进制遇到 `user_version` 12 会拒绝打开，这是现有行为。
 2. Agent 与 Relay 一起发。Agent 广告的工具集不到 13 时不轮换 Brain，不注入记忆块，表可以已经存在。
-3. Mac mini 上把 `llama-server` 和 GGUF 放到 §6.3 的路径，或保持缺失。缺失时记忆工具和页面可用，检索只有关键词。
+3. Mac mini 上把 `llama-server` 和 GGUF 放到 §6.3 的路径，或保持缺失。缺失时记忆工具和页面可用，检索只有关键词。文件在时，Relay 仍不在启动时拉起进程。
 4. 公网容器不放入模型，不把 `ARIEL_PUCK_EMBEDDER` 设成会访问外网的值。
 
 回滚：停掉新 Relay，用升级前的备份恢复数据库文件，再跑旧二进制。不要让旧二进制打开已经升到 12 的文件。升级之后写下的记忆随备份点之后的文件一起回到升级前。不做就地降级迁移。
@@ -378,8 +383,8 @@ Go：
 | UI | 仅 `-ui` | 沿用 headless Playwright，不起图形窗口。1280×800 与 390×844 都打开「记忆」，看到 H 写下的原文，确认删除后列表不再含这句。断言按钮可点、删除后的列表内容，不用截图代替 |
 | K 是否主动记 | 否 | 真实 Codex 下说一句明显的稳定偏好，但不点名工具。报告里记录有没有调用 `update_memory`。没调用记为 observed，不算失败。fake 模式跳过 |
 
-桩只在 e2e 进程里监听，不做成 Relay 的一种生产模式。CI 不拉取 GGUF。Mac mini 上选定模型之后，另做一次手动探针：真实 `llama-server` 对「测试」返回该模型的维度，并记下 RSS。在那之前，这项标为 unverified，不挡场景 H／I／J。
+桩只在 e2e 进程里监听，不做成 Relay 的一种生产模式。CI 不拉取 GGUF。另有不连真实模型的检查：两次并发的第一次嵌入只启动一个进程；启动超时或失败时这次检索是 FTS，工具仍成功；空闲时限到了，子进程退出。Mac mini 上有文件之后，另做一次手动探针：冷启动大约 1–2 秒，「测试」返回 1024 维，进程退出后嵌入侧不再占内存。在那之前，这项标为 unverified，不挡场景 H／I／J。
 
 ## 11. 未决问题
 
-**Mac mini 上的嵌入模型。** §6.2 建议用 Qwen3-Embedding-0.6B Q8_0，权重约 600 MiB，sidecar 按约 1 GB RSS 预留，并且算在 Relay 的 `GOMEMLIMIT` 之外。这个体量放在正在跑 Codex 的 Mac mini 上是否挤，还没定。若挤，备选是 bge-small-zh-v1.5：更小，中文释义弱一档，运行时要另定，维度是 512 而不是 1024。实现还没开始，改选就改同一次 v12 迁移里的列宽。FTS、工具、注入和页面不依赖这个选择。
+无。
