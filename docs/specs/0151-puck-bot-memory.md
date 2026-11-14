@@ -1,12 +1,20 @@
 # 0151：Puck 主 Bot 的记忆
 
-- 状态：Draft（方向已按负责人 2026-11-14 的决定写入；本稿待评审。改为 Approved 之前不实现。）
+- 状态：Draft（2026-11-14 负责人已确认下面三条；嵌入模型与 Mac mini 内存仍待决，见 §11。改为 Approved 之前不实现。）
 - 日期：2026-11-14。
 - 关联：[0130 Puck 个人助理](0130-puck-personal-assistant.md) §6.1.5 与 P2 记忆、[0150 Bot 配置栏](0150-puck-bot-config-column.md)、`internal/puck` schema 11 与工具集 12、`cmd/puck-e2e`。
 
 记忆和 Bot 任务队列是两套东西。队列（`bot_tasks`、`bot_task_messages`、`bot_task_sessions`、`bot_inbox`）记还要做的事。记忆记可以跨回合使用的事实。代码不从队列抄一份摘要进记忆，也不把记忆当成任务。
 
 本稿取代 0130 里尚未实现的记忆工具（`memory_read`／`memory_write`／`memory_delete`）、写入时拒绝高熵串、B9「删记忆要授权」，以及「助理之间不共享记忆」这一条。只对共享层放开，任务、对话、watch 仍然按 Bot 隔离。0130 的「已记住」对话标签、记忆导出、记忆编辑不在本稿。例行仍不在本稿。
+
+负责人 2026-11-14 已确认：
+
+1. 删除 Bot 时，它写下的共享行保留。私有行删除。作者名继续用 `writer_name` 显示。
+2. 任一 Bot 都可以 `forget` 共享行。机主可以在记忆页删除共享行，不限原作者。
+3. 代码不按密钥、token 或高熵字符串的形状拒绝写入。只在系统上下文里禁止 Bot 记下密码、token 和密钥。
+
+嵌入模型尚未选定，见 §11。
 
 ## 1. 范围
 
@@ -19,7 +27,7 @@ Ariel 只做这些事：
 5. 删除 Bot 时清掉它的私有记忆。
 6. Puck 里有一页可以查看和删除记忆。
 
-代码不做的事：不判断哪句值得记，不合并相近句子，不把旧 journal 收成摘要，不为了塞进上下文而砍掉一条已经收下的原文，不在对话里自动插「已记住」标签。
+代码不做的事：不判断哪句值得记，不合并相近句子，不把旧 journal 收成摘要，不为了塞进上下文而砍掉一条已经收下的原文，不在对话里自动插「已记住」标签，不按密钥或 token 的形状拦截写入。看起来像密钥的原文，只要没超容量，就原样入库；机主可以在记忆页删掉。
 
 群聊没有自己的记忆。自定义上下文（最多 4000 字、用户编辑、系统规则优先）继续单独存在，不并进记忆。
 
@@ -115,7 +123,7 @@ CREATE TABLE bot_memory_embedder (
 
 原文写入后不修改。FTS 用外部内容表，INSERT／DELETE 触发器跟上 `bot_memories`。不建 UPDATE 触发器。
 
-`vec0` 不保证外键级联。`forget` 和删除 Bot 都在同一事务里按 `memory_rowid` 删掉向量行，再删关系行（FTS 靠触发器）。v1 的向量列固定 `float[1024]`。换一个仍是 1024 维的 `model_id` 只清空向量表再回填，不动原文。换维度要另开 schema 版本，不在运行时 `DROP` 这张虚拟表。几千行用 vec0 默认的全表扫描，不加 partition key。
+`vec0` 不保证外键级联。`forget` 和删除 Bot 都在同一事务里按 `memory_rowid` 删掉向量行，再删关系行（FTS 靠触发器）。上面的 `float[1024]` 是 §6.2 建议模型的维度，随 §11 一起定。实现还没开始，若改选别的模型，就在这次 v12 迁移里改掉列宽、`Dim()` 和探针，不另开版本。实现开始之后再换维度，才另开 schema 版本，不在运行时 `DROP` 这张虚拟表。同一维度换 `model_id` 只清空向量表再回填，不动原文。几千行用 vec0 默认的全表扫描，不加 partition key。
 
 `bot_tasks` 和 `conversation_messages` 不加向量，也不新开 FTS。`recall_memory` 查它们时沿用现在的 `LIKE`（与 `list_bot_tasks`／`search_messages` 相同的转义）。
 
@@ -127,7 +135,7 @@ CREATE TABLE bot_memory_embedder (
 
 记下或忘掉一条。`action` 是 `write` 或 `forget`。`scope` 省略时为 `bot`。`kind` 必填，`profile` 或 `journal`。`text` 必填。
 
-`write` 收下 trim 后的原文。完全相同的一条已经在时，返回原来的 `createdAt`，`deduped` 为 true，不改时间，也不重新嵌入。`forget` 只删 scope、kind 和原文都对得上、并且这个 Bot 看得见的那一条。私有行只能删自己的。共享行任何 Bot 都能删。
+`write` 收下 trim 后的原文。完全相同的一条已经在时，返回原来的 `createdAt`，`deduped` 为 true，不改时间，也不重新嵌入。不检查原文是不是密码、token 或密钥。`forget` 只删 scope、kind 和原文都对得上、并且这个 Bot 看得见的那一条。私有行只能删自己的。共享行任何一个 Bot 都能删，机主也能在记忆页删，不限原作者。
 
 ```json
 {"action":"write","scope":"bot","kind":"profile","text":"机主希望先给结论，再用中文短句。"}
@@ -231,7 +239,7 @@ profile 按 `created_at` 从早到晚，全部原文。journal 按 `created_at` 
 ```text
 Embedder
   ModelID() string          // 例如 "qwen3-embedding-0.6b-q8"
-  Dim() int                 // v1 为 1024
+  Dim() int                 // 与选定模型一致；当前建议为 1024
   Available() bool
   EmbedDocuments(ctx, texts) ([][]float32, error)  // 原文，不加指令前缀
   EmbedQuery(ctx, query) ([]float32, error)        // 仅查询加模型自己的前缀
@@ -251,7 +259,7 @@ v1 有两个实现：
 
 ### 6.2 模型
 
-推荐 **Qwen3-Embedding-0.6B**，量化 **Q8_0**，运行时 **llama.cpp `llama-server`**。
+模型还没选定，见 §11。当前建议是 **Qwen3-Embedding-0.6B**，量化 **Q8_0**，运行时 **llama.cpp `llama-server`**。在 §11 有结论之前，不把模型文件、维度或 sidecar 写进实现。下面的比较供这次选择使用。
 
 | | Qwen3-Embedding-0.6B Q8_0 | bge-small-zh-v1.5 | EmbeddingGemma 300M |
 | --- | --- | --- | --- |
@@ -272,7 +280,7 @@ Instruct: Given a web search query, retrieve relevant passages that answer the q
 Query: <query>
 ```
 
-适配器对返回向量做 L2 归一化再入库。探针嵌入固定字符串「测试」：维度必须是 1024，归一化后的模长在 0.9 到 1.1。不对就标记不可用，已经写下的原文保留，检索走 FTS。`--pooling last` 不能省，省了探针就过不了。
+适配器对返回向量做 L2 归一化再入库。探针嵌入固定字符串「测试」：维度必须等于 `Dim()`，归一化后的模长在 0.9 到 1.1。不对就标记不可用，已经写下的原文保留，检索走 FTS。`--pooling last` 不能省，省了探针就过不了。Qwen3 这条路径的 `Dim()` 是 1024。
 
 ### 6.3 进程
 
@@ -335,9 +343,7 @@ Web 方法：
 
 ## 8. 删除 Bot
 
-`SoftDeleteAssistant` 的同一事务里增加：删掉 `scope='bot' AND assistant_id=?` 的记忆、对应的向量行，并让 FTS 触发器去掉索引。不删 `scope='shared'` 的行，即使作者是这个 Bot。其他 Bot 的私有行不动。聊天记录仍按现有软删除留在库里。
-
-这是建议，见 §11 Q1。在 Q1 维持这个建议时，按本节实现。
+`SoftDeleteAssistant` 的同一事务里增加：删掉 `scope='bot' AND assistant_id=?` 的记忆、对应的向量行，并让 FTS 触发器去掉索引。`scope='shared'` 的行保留，即使作者是这个 Bot；注入和记忆页继续用 `writer_name` 显示作者。其他 Bot 的私有行不动。聊天记录仍按现有软删除留在库里。
 
 ## 9. 发布与回滚
 
@@ -357,7 +363,7 @@ Go：
 1. user_version 11 的库打开后变为 12，表、trigram、`vec_version()` 可用；高于 12 的库拒绝打开。
 2. `write` 原样入库；第二次相同原文 `deduped` 且 `createdAt` 不变；只差首尾空白视为同一条；profile 与 journal 互不挤占。
 3. 第 17 条 profile，或合计超过 2400 码位，返回 `MEMORY_PROFILE_FULL`，原文没有被截断，旧行还在。301 个码位被拒绝。journal 第 2001 条同理。
-4. `forget` 只删字面相同的那一条；差一个字返回 `MEMORY_NOT_FOUND` 且行还在。Bot A 读不到、删不掉 Bot B 的私有行。共享行两边都读得到，第二位写入去重。
+4. `forget` 只删字面相同的那一条；差一个字返回 `MEMORY_NOT_FOUND` 且行还在。Bot A 读不到、删不掉 Bot B 的私有行。共享行两边都读得到，第二位写入去重。Bot B 可以用原文 `forget` 掉 Bot A 写下的共享行。形如 token 的原文会被原样收下。
 5. 注入块含全部 profile 原文、8＋4 条 journal、资料声明和冲突两句；更早的 journal 不在块里；空库不产生 `【记忆】`。工具说明只在工具集 13 的系统上下文出现一次，不在 envelope。工具集 12 的系统上下文没有这句，也不注入记忆块。
 6. 假向量下，释义查询把语义近的一条排在无关条目前面；正文含 `PR-1842` 的一条即使用远的向量也排在前面。嵌入返回错误时，同一条仍因关键词出现，工具成功，`embedder` 为 `unavailable`。
 7. 删除 Bot 后它的私有记忆、向量和 FTS 行都没有了；它写下的共享行还在；另一个 Bot 的私有行还在。
@@ -372,11 +378,8 @@ Go：
 | UI | 仅 `-ui` | 沿用 headless Playwright，不起图形窗口。1280×800 与 390×844 都打开「记忆」，看到 H 写下的原文，确认删除后列表不再含这句。断言按钮可点、删除后的列表内容，不用截图代替 |
 | K 是否主动记 | 否 | 真实 Codex 下说一句明显的稳定偏好，但不点名工具。报告里记录有没有调用 `update_memory`。没调用记为 observed，不算失败。fake 模式跳过 |
 
-桩只在 e2e 进程里监听，不做成 Relay 的一种生产模式。CI 不拉取 GGUF。Mac mini 上有模型之后，另做一次手动探针：真实 `llama-server` 对「测试」返回 1024 维，并记下 RSS。在那之前，这项标为 unverified，不挡场景 H／I／J。
+桩只在 e2e 进程里监听，不做成 Relay 的一种生产模式。CI 不拉取 GGUF。Mac mini 上选定模型之后，另做一次手动探针：真实 `llama-server` 对「测试」返回该模型的维度，并记下 RSS。在那之前，这项标为 unverified，不挡场景 H／I／J。
 
 ## 11. 未决问题
 
-1. **删 Bot 时共享行留不留。** 本稿建议留下：共享事实属于机主，作者名用 `writer_name` 继续显示。若评审要求作者被删则共享行一并删除，改 §8，并让 J 的断言反过来。
-2. **Mac mini 的内存。** 推荐模型按约 1 GB RSS 预留，在 Codex 旁边是否挤，要在这台机器上量。若挤，再改选 bge-small-zh-v1.5（更小，中文释义弱一档，运行时要另定），那会换维度，从而是新的 schema 版本，而不是改一行配置。
-3. **谁可以忘掉共享行。** 本稿允许任一 Bot `forget`，用户也可以在页面上删。若只允许原作者忘掉，工具要对别人的共享行返回 `MEMORY_NOT_FOUND`，页面则仍可删。
-4. **代码要不要拦截密钥形状的字符串。** 本稿不拦截：误伤会变成代码替 Bot 决定记什么，和 §1 冲突。只在系统上下文里禁止记下密码、token、密钥。用户可以在记忆页删。
+**Mac mini 上的嵌入模型。** §6.2 建议用 Qwen3-Embedding-0.6B Q8_0，权重约 600 MiB，sidecar 按约 1 GB RSS 预留，并且算在 Relay 的 `GOMEMLIMIT` 之外。这个体量放在正在跑 Codex 的 Mac mini 上是否挤，还没定。若挤，备选是 bge-small-zh-v1.5：更小，中文释义弱一档，运行时要另定，维度是 512 而不是 1024。实现还没开始，改选就改同一次 v12 迁移里的列宽。FTS、工具、注入和页面不依赖这个选择。
