@@ -28,6 +28,12 @@ type brainProcess interface {
 	Close() error
 }
 
+type brainProcessExitDiagnostic = appserver.InteractiveProcessExitDiagnostic
+
+type brainProcessWithExitDiagnostic interface {
+	ExitDiagnostic() brainProcessExitDiagnostic
+}
+
 type BrainHostConfig struct {
 	Enabled        bool
 	Binary         string
@@ -330,16 +336,39 @@ func (h *BrainHost) ensureProcess(ctx context.Context) (brainProcess, error) {
 	}
 	h.process = p
 	h.mu.Unlock()
-	go h.run(p)
+	exitCh := make(chan brainProcessExitDiagnostic, 1)
+	if process, ok := p.(brainProcessWithExitDiagnostic); ok {
+		go h.captureProcessExit(p, process, exitCh)
+	}
+	go h.run(p, exitCh)
 	return p, nil
 }
 
-func (h *BrainHost) run(process brainProcess) {
+func (h *BrainHost) captureProcessExit(process brainProcess, diagnostic brainProcessWithExitDiagnostic, exitCh chan<- brainProcessExitDiagnostic) {
+	<-process.Done()
+	exitCh <- diagnostic.ExitDiagnostic()
+}
+
+func (h *BrainHost) run(process brainProcess, exitCh <-chan brainProcessExitDiagnostic) {
+	var exitDiagnostic *brainProcessExitDiagnostic
+	diagnosticProcess := false
+	if _, ok := process.(brainProcessWithExitDiagnostic); ok {
+		diagnosticProcess = true
+	}
 	for {
 		select {
+		case diagnostic := <-exitCh:
+			exitDiagnostic = &diagnostic
 		case frame := <-process.Incoming():
 			h.handleFrame(process, frame)
 		case <-process.Done():
+			if diagnosticProcess && exitDiagnostic == nil {
+				select {
+				case diagnostic := <-exitCh:
+					exitDiagnostic = &diagnostic
+				case <-h.ctx.Done():
+				}
+			}
 			h.mu.Lock()
 			if h.process == process {
 				h.process = nil
@@ -376,7 +405,7 @@ func (h *BrainHost) run(process brainProcess) {
 			circuitOpen := now.Before(h.circuitUntil)
 			h.mu.Unlock()
 			for _, event := range lost {
-				logPhase("brain-turn-lost", event.ThreadID, "ok", false, "error", "BRAIN_UNAVAILABLE")
+				logPhase("brain-turn-lost", event.ThreadID, append([]any{"ok", false, "error", "BRAIN_UNAVAILABLE"}, brainProcessExitAttrs(exitDiagnostic)...)...)
 				if h.cfg.Emit != nil {
 					h.cfg.Emit(event)
 				}
@@ -394,6 +423,21 @@ func (h *BrainHost) run(process brainProcess) {
 			return
 		}
 	}
+}
+
+func brainProcessExitAttrs(diagnostic *brainProcessExitDiagnostic) []any {
+	if diagnostic == nil {
+		return nil
+	}
+	exit := *diagnostic
+	attrs := []any{"processExit", exit.Kind, "transport", exit.Transport, "contextCancelled", exit.ContextCancelled}
+	if exit.Kind == "exit" {
+		attrs = append(attrs, "exitCode", exit.ExitCode)
+	}
+	if exit.Signal != "" {
+		attrs = append(attrs, "signal", exit.Signal)
+	}
+	return attrs
 }
 
 func (h *BrainHost) restart(requests []BrainEnsure) {

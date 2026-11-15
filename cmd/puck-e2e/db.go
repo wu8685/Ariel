@@ -228,6 +228,17 @@ func assistantGone(ctx context.Context, dbPath, assistantID string) (bool, strin
 	return false, strings.Join(left, " "), nil
 }
 
+func transientMessageCount(ctx context.Context, dbPath, assistantID string) (int, error) {
+	db, err := openStateDB(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var count int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversation_messages WHERE assistant_id=? AND kind IN ('processing','acknowledged','greeting_processing')`, assistantID).Scan(&count)
+	return count, err
+}
+
 func linkChildSession(ctx context.Context, dbPath, assistantID, deviceID, threadID string) error {
 	if assistantID == "" || deviceID == "" || threadID == "" {
 		return fmt.Errorf("missing link identity")

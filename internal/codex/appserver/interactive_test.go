@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os/exec"
 	"slices"
 	"testing"
 	"time"
@@ -94,5 +95,69 @@ func TestInteractiveSessionRejectsOversizeUnsolicitedFrame(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("oversize frame did not close session")
+	}
+}
+
+func TestInteractiveProcessExitDiagnosticSeparatesSignalTransportAndOwnership(t *testing.T) {
+	command := exec.Command("sh", "-c", "kill -TERM $$")
+	if err := command.Run(); err == nil {
+		t.Fatal("signal fixture unexpectedly succeeded")
+	}
+	diagnostic := newInteractiveProcessExitDiagnostic(context.Background(), command.ProcessState, nil, true)
+	if diagnostic.Kind != "signal" || diagnostic.Signal != "terminated" || diagnostic.Transport != "none" || diagnostic.ContextCancelled {
+		t.Fatalf("signal diagnostic=%+v", diagnostic)
+	}
+	if got := newInteractiveProcessExitDiagnostic(context.Background(), command.ProcessState, ErrProtocol, true); got.Transport != "protocol" {
+		t.Fatalf("transport diagnostic=%+v", got)
+	}
+	if got := newInteractiveProcessExitDiagnostic(context.Background(), nil, nil, false); got.Kind != "none" || got.Transport != "closed" {
+		t.Fatalf("pipe-close diagnostic=%+v", got)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := newInteractiveProcessExitDiagnostic(ctx, nil, nil, false); !got.ContextCancelled {
+		t.Fatalf("cancelled owner was not identified: %+v", got)
+	}
+}
+
+func TestInteractiveProcessExitDiagnosticSeparatesExitCode(t *testing.T) {
+	command := exec.Command("sh", "-c", "exit 17")
+	if err := command.Run(); err == nil {
+		t.Fatal("exit fixture unexpectedly succeeded")
+	}
+	if got := newInteractiveProcessExitDiagnostic(context.Background(), command.ProcessState, nil, true); got.Kind != "exit" || got.ExitCode != 17 || got.Transport != "none" {
+		t.Fatalf("exit diagnostic=%+v", got)
+	}
+}
+
+func TestInteractiveProcessExitDiagnosticBoundsSessionDoneWithoutProcessExit(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	process := &InteractiveProcess{
+		InteractiveSession: &InteractiveSession{done: done},
+		cmd:                &exec.Cmd{},
+		ctx:                context.Background(),
+		exited:             make(chan struct{}),
+	}
+	diagnosticCh := make(chan InteractiveProcessExitDiagnostic, 1)
+	go func() { diagnosticCh <- process.ExitDiagnostic() }()
+	select {
+	case diagnostic := <-diagnosticCh:
+		if diagnostic.Kind != "none" || diagnostic.Transport != "closed" {
+			t.Fatalf("transport-only diagnostic=%+v", diagnostic)
+		}
+	case <-time.After(2 * time.Second):
+		close(process.exited)
+		t.Fatal("session done with live process blocked exit diagnostic")
+	}
+
+	command := exec.Command("sh", "-c", "kill -TERM $$")
+	if err := command.Run(); err == nil {
+		t.Fatal("signal fixture unexpectedly succeeded")
+	}
+	process.cmd.ProcessState = command.ProcessState
+	close(process.exited)
+	if diagnostic := process.ExitDiagnostic(); diagnostic.Kind != "signal" || diagnostic.Signal != "terminated" {
+		t.Fatalf("completed process diagnostic=%+v", diagnostic)
 	}
 }

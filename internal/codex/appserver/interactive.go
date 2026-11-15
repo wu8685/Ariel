@@ -15,7 +15,10 @@ import (
 	"unicode/utf8"
 )
 
-const interactiveIncomingLimit = 64
+const (
+	interactiveIncomingLimit      = 64
+	interactiveExitDiagnosticWait = time.Second
+)
 
 // IncomingFrame is an App Server notification or server-initiated request.
 // A non-empty ID distinguishes requests that require an explicit reply.
@@ -251,7 +254,55 @@ func (s *InteractiveSession) readLoop() {
 type InteractiveProcess struct {
 	*InteractiveSession
 	cmd    *exec.Cmd
+	ctx    context.Context
 	exited chan struct{}
+}
+
+type InteractiveProcessExitDiagnostic struct {
+	Kind             string
+	ExitCode         int
+	Signal           string
+	Transport        string
+	ContextCancelled bool
+}
+
+func newInteractiveProcessExitDiagnostic(ctx context.Context, state *os.ProcessState, sessionErr error, exited bool) InteractiveProcessExitDiagnostic {
+	diagnostic := InteractiveProcessExitDiagnostic{Kind: "none", ExitCode: -1, Transport: ErrorClass(sessionErr)}
+	if diagnostic.Transport == "" {
+		diagnostic.Transport = "none"
+		if !exited {
+			diagnostic.Transport = "closed"
+		}
+	}
+	if ctx != nil {
+		diagnostic.ContextCancelled = ctx.Err() != nil
+	}
+	if !exited || state == nil {
+		return diagnostic
+	}
+	diagnostic.ExitCode = state.ExitCode()
+	diagnostic.Kind = "exit"
+	if status, ok := processWaitStatus(state); ok && status.signaled() {
+		diagnostic.Kind = "signal"
+		diagnostic.Signal = status.signal()
+	}
+	return diagnostic
+}
+
+func (p *InteractiveProcess) ExitDiagnostic() InteractiveProcessExitDiagnostic {
+	select {
+	case <-p.Done():
+		timer := time.NewTimer(interactiveExitDiagnosticWait)
+		defer timer.Stop()
+		select {
+		case <-p.exited:
+		case <-timer.C:
+			return newInteractiveProcessExitDiagnostic(p.ctx, nil, p.Err(), false)
+		}
+	default:
+		return newInteractiveProcessExitDiagnostic(p.ctx, nil, p.Err(), false)
+	}
+	return newInteractiveProcessExitDiagnostic(p.ctx, p.cmd.ProcessState, p.Err(), true)
 }
 
 func StartInteractive(ctx context.Context, binary, cwd string) (*InteractiveProcess, error) {
@@ -314,7 +365,7 @@ func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*I
 		_ = stdout.Close()
 		return nil, errors.New("failed to start configured Codex binary")
 	}
-	p := &InteractiveProcess{InteractiveSession: NewInteractiveSession(pipes{stdout, stdin}, 0), cmd: cmd, exited: make(chan struct{})}
+	p := &InteractiveProcess{InteractiveSession: NewInteractiveSession(pipes{stdout, stdin}, 0), cmd: cmd, ctx: ctx, exited: make(chan struct{})}
 	go func() { _ = cmd.Wait(); p.InteractiveSession.fail(ErrClosed); close(p.exited) }()
 	if err := p.Initialize(ctx); err != nil {
 		_ = p.Close()

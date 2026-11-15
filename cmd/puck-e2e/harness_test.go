@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck"
 )
 
 func TestIsolationRejectsRealState(t *testing.T) {
@@ -257,5 +259,28 @@ func TestRedactKeepsErrorText(t *testing.T) {
 	}
 	if strings.Contains(got, "11111111") || strings.Contains(got, "[puck-handoff]") || strings.Contains(got, "goroutine") {
 		t.Fatalf("secret or body kept: %s", got)
+	}
+}
+
+func TestTransientMessageCountMakesGreetingResidueDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	iso := layout(root, filepath.Join(root, "codex"), "not-used")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := puck.OpenStore(iso.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const readerID = "reader"
+	if err := store.CreateAssistant(ctx, puck.Assistant{ID: readerID, Name: "reader", BrainDeviceID: "brain-a", ToolsetVersion: 1, Status: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, puck.Message{ID: "greeting", AssistantID: readerID, Role: "assistant", Kind: "greeting_processing", Text: "fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	count, err := transientMessageCount(ctx, iso.DBPath, readerID)
+	if err != nil || count != 1 {
+		t.Fatalf("transient greeting count=%d err=%v", count, err)
 	}
 }

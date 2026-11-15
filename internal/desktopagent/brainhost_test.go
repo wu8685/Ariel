@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
@@ -427,6 +428,51 @@ func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
 			t.Fatal("missing turn.lost event with interrupted turn identity")
 		}
 	}
+}
+
+func TestBrainHostLogsProcessExitDiagnosticOnLostTurn(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	process := &diagnosticBrainProcess{fakeBrainProcess: newFakeBrainProcess(), diagnostic: appserver.InteractiveProcessExitDiagnostic{Kind: "signal", ExitCode: -1, Signal: "killed", Transport: "closed"}}
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), RestartBackoff: time.Minute, Start: func(context.Context, string, string) (brainProcess, error) { return process, nil }})
+	defer host.Close()
+	threadID, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message", "fixture", nil, "", "low"); err != nil {
+		t.Fatal(err)
+	}
+	process.exit()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		capture.mu.Lock()
+		found := false
+		for _, record := range capture.records {
+			fields := map[string]slog.Value{}
+			record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
+			if fields["phase"].String() == "brain-turn-lost" && fields["processExit"].String() == "signal" && fields["signal"].String() == "killed" && fields["transport"].String() == "closed" && fields["contextCancelled"].Bool() == false {
+				found = true
+			}
+		}
+		capture.mu.Unlock()
+		if found {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("process exit evidence missing: %v", capture.phases())
+}
+
+type diagnosticBrainProcess struct {
+	*fakeBrainProcess
+	diagnostic appserver.InteractiveProcessExitDiagnostic
+}
+
+func (p *diagnosticBrainProcess) ExitDiagnostic() appserver.InteractiveProcessExitDiagnostic {
+	<-p.done
+	return p.diagnostic
 }
 
 func TestBrainHostReportsFailedRestartResume(t *testing.T) {

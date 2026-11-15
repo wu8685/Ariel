@@ -1018,6 +1018,8 @@ func (r *runner) scenarioJ() ScenarioResult {
 	}
 	writerID, _ := dataOf(writer)["assistant"].(map[string]any)["assistantId"].(string)
 	readerID, _ := dataOf(reader)["assistant"].(map[string]any)["assistantId"].(string)
+	greetingsDone, greetingDetail := r.waitAuxiliaryGreetings(r.ctx, []string{writerID, readerID})
+	readerTransient, readerTransientErr := transientMessageCount(r.ctx, r.stack.iso.DBPath, readerID)
 	if _, err := r.sendTo(writerID, newID(), "请写下两条记忆。标记 FIXTURE_MEMORY_SHARED。"); err != nil {
 		return passResult("J", "memory delete", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
 	}
@@ -1041,6 +1043,8 @@ func (r *runner) scenarioJ() ScenarioResult {
 		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
 		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
 		{Name: "deleted-transient-cleanup", Pass: writerGoneErr == nil && writerGone, Detail: writerGoneDetail},
+		{Name: "auxiliary-greetings-finished", Pass: greetingsDone, Detail: greetingDetail},
+		{Name: "reader-transient-cleanup", Pass: readerTransientErr == nil && readerTransient == 0, Detail: fmt.Sprintf("count=%d", readerTransient)},
 		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
 		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
 	}
@@ -1083,6 +1087,8 @@ func (r *runner) scenarioJDirect() ScenarioResult {
 	}
 	writerID, _ := dataOf(writer)["assistant"].(map[string]any)["assistantId"].(string)
 	readerID, _ := dataOf(reader)["assistant"].(map[string]any)["assistantId"].(string)
+	greetingsDone, greetingDetail := r.waitAuxiliaryGreetings(r.ctx, []string{writerID, readerID})
+	readerTransient, readerTransientErr := transientMessageCount(r.ctx, r.stack.iso.DBPath, readerID)
 	if _, err := r.stack.module.UpdateMemory(r.ctx, writerID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "shared", Kind: "profile", Text: "FIXTURE_SHARED_FACT"}); err != nil {
 		return passResult("J", "memory delete", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
 	}
@@ -1100,6 +1106,8 @@ func (r *runner) scenarioJDirect() ScenarioResult {
 		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
 		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
 		{Name: "deleted-transient-cleanup", Pass: writerGoneErr == nil && writerGone, Detail: writerGoneDetail},
+		{Name: "auxiliary-greetings-finished", Pass: greetingsDone, Detail: greetingDetail},
+		{Name: "reader-transient-cleanup", Pass: readerTransientErr == nil && readerTransient == 0, Detail: fmt.Sprintf("count=%d", readerTransient)},
 		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
 		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
 	})
@@ -1163,6 +1171,63 @@ func (r *runner) waitAssistant(id string) error {
 		time.Sleep(300 * time.Millisecond)
 	}
 	return fmt.Errorf("brain stayed busy")
+}
+
+func (r *runner) waitAuxiliaryGreetings(ctx context.Context, assistantIDs []string) (bool, string) {
+	ready := func() (bool, string, error) {
+		for _, id := range assistantIDs {
+			response, err := r.client.call(ctx, "puck.history", "relay", map[string]any{"assistantId": id}, 20*time.Second)
+			if err != nil {
+				return false, "history unavailable", err
+			}
+			if outcomeCode(response) != "accepted" {
+				return false, "history rejected", fmt.Errorf("history rejected")
+			}
+			messages := messagesOf(response)
+			if messagesBusy(messages) || messagesFailed(messages) {
+				return false, "active or lost greeting", nil
+			}
+		}
+		return true, "finished", nil
+	}
+	deadline := time.Now().Add(r.step)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		done, _, err := ready()
+		if err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		lastErr = nil
+		if done {
+			for _, id := range assistantIDs {
+				count, err := transientMessageCount(ctx, r.stack.iso.DBPath, id)
+				if err != nil || count != 0 {
+					return false, fmt.Sprintf("transient rows=%d", count)
+				}
+			}
+			return true, "finished; transient rows=0"
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	_, detail, err := ready()
+	if err != nil {
+		if lastErr != nil {
+			return false, lastErr.Error()
+		}
+		return false, err.Error()
+	}
+	for _, id := range assistantIDs {
+		count, err := transientMessageCount(ctx, r.stack.iso.DBPath, id)
+		if err != nil {
+			return false, err.Error()
+		}
+		if count != 0 {
+			return false, fmt.Sprintf("%s; transient rows=%d", detail, count)
+		}
+	}
+	return false, detail
 }
 
 func (r *runner) sendTo(assistantID, id, text string) (map[string]any, error) {
