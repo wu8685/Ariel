@@ -37,6 +37,8 @@ func ErrorClass(err error) string {
 		return "method_unavailable"
 	case errors.Is(err, ErrResponseTooLarge):
 		return "too_large"
+	case errors.Is(err, ErrCapacity):
+		return "capacity"
 	case errors.Is(err, ErrOutcomeUnknown):
 		return "outcome_unknown"
 	default:

@@ -130,6 +130,19 @@ func TestInteractiveProcessExitDiagnosticSeparatesExitCode(t *testing.T) {
 	}
 }
 
+func TestInteractiveProcessExitDiagnosticIdentifiesFullIncomingQueueAfterExit(t *testing.T) {
+	process := &InteractiveProcess{
+		InteractiveSession: &InteractiveSession{err: ErrCapacity},
+		cmd:                &exec.Cmd{},
+		ctx:                context.Background(),
+		exited:             make(chan struct{}),
+	}
+	close(process.exited)
+	if diagnostic := process.ExitDiagnostic(); diagnostic.Transport != "capacity" {
+		t.Fatalf("transport diagnostic=%+v", diagnostic)
+	}
+}
+
 func TestInteractiveProcessExitDiagnosticBoundsSessionDoneWithoutProcessExit(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
