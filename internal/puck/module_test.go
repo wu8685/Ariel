@@ -37,6 +37,7 @@ type fakeModuleBridge struct {
 	watches           map[string]chan map[string]any
 	snapshots         map[string]map[string]any
 	turnSeq           int
+	turnIDs           []string
 }
 
 func (f *fakeModuleBridge) Devices() []map[string]any {
@@ -102,6 +103,11 @@ func (f *fakeModuleBridge) Forward(_ context.Context, origin relay.Origin, devic
 			return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{}}
 		}
 		f.turnSeq++
+		if len(f.turnIDs) > 0 {
+			turnID := f.turnIDs[0]
+			f.turnIDs = f.turnIDs[1:]
+			return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": turnID}}
+		}
 		return relay.PuckResponse{Outcome: "accepted", Data: map[string]any{"turnId": "brain-turn-a"}}
 	}
 	if method == "thread.bootstrap" {
@@ -156,7 +162,7 @@ func TestMessageRejectsAcceptedBrainTurnWithoutAuthoritativeID(t *testing.T) {
 }
 
 func TestTextMessageOmitsNullImagesFromBrainTurn(t *testing.T) {
-	bridge := &fakeModuleBridge{}
+	bridge := &fakeModuleBridge{turnIDs: []string{"greeting-turn", "brain-turn-lost", "brain-turn-next"}}
 	module, err := NewModule(t.TempDir(), bridge)
 	if err != nil {
 		t.Fatal(err)
@@ -1644,6 +1650,130 @@ func TestNextUserMessageSchedulesAfterPreviousCompletion(t *testing.T) {
 	response, err := module.store.Message(ctx, id, "message-b-processing")
 	if err != nil || response.Kind != "processing" {
 		t.Fatalf("next response=%+v err=%v", response, err)
+	}
+}
+
+func TestLostBrainTurnTerminatesResponseAndSchedulesNextMessage(t *testing.T) {
+	bridge := &fakeModuleBridge{turnIDs: []string{"greeting-turn", "brain-turn-lost", "brain-turn-next"}}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	bridge.mu.Lock()
+	bridge.calls, bridge.params, bridge.origins = nil, nil, nil
+	bridge.mu.Unlock()
+	first := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "first"}))
+	if first.Error != nil {
+		t.Fatal(first.Error)
+	}
+	if err := module.store.AddInbox(ctx, id, "message-b", module.now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := module.store.AppendMessage(ctx, Message{ID: "message-b", AssistantID: id, Role: "user", Kind: "text", Text: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	module.scheduleBotQueue(ctx, id, "", "")
+	module.handleBrainEvent(ctx, relay.BrainEvent{
+		AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.status",
+		Payload: json.RawMessage(`{"event":"puck.brain.status","payload":{"state":"degraded","reason":"turn.lost","turnId":"brain-turn-lost"}}`),
+	})
+	response, err := module.store.Message(ctx, id, "message-a-processing")
+	if err != nil || response.Kind != "error" {
+		t.Fatalf("lost response was not terminated as an error: kind=%s err=%v", response.Kind, err)
+	}
+	if pending := module.pendingTurn(id); pending.turnID == "" || pending.messageID == "message-a" {
+		t.Fatalf("next queued message did not get its own pending turn: %+v", pending)
+	}
+	bridge.mu.Lock()
+	starts := 0
+	for _, method := range bridge.calls {
+		if method == "puck.brain.turn.start" {
+			starts++
+		}
+	}
+	bridge.mu.Unlock()
+	if starts != 2 {
+		t.Fatalf("turn starts=%d, want original and queued next turn", starts)
+	}
+}
+
+func TestLostBrainTurnBeforePendingIsNotForgotten(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	assistant, err := module.store.Assistant(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module.handleBrainEvent(ctx, relay.BrainEvent{
+		AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.status",
+		Payload: json.RawMessage(`{"event":"puck.brain.status","payload":{"state":"degraded","reason":"turn.lost","turnId":"brain-turn-a"}}`),
+	})
+	started := module.now()
+	if err := module.store.AppendMessage(ctx, Message{ID: "message-a-processing", AssistantID: id, Role: "assistant", Kind: "processing", Text: "正在处理…", BrainTurnID: "brain-turn-a", CreatedAt: started}); err != nil {
+		t.Fatal(err)
+	}
+	module.setPending(assistant, "brain-turn-a", "message-a", "message-a-processing", started, false, "")
+	waitFor(t, func() bool {
+		response, messageErr := module.store.Message(ctx, id, "message-a-processing")
+		return module.pendingTurn(id).turnID == "" && messageErr == nil && response.Kind == "error"
+	})
+}
+
+func TestLostBrainTurnCannotTerminateAnotherTurn(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	assistant, err := module.store.Assistant(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module.setPending(assistant, "brain-turn-current", "message-current", "message-current-processing", module.now(), false, "")
+	module.handleBrainEvent(ctx, relay.BrainEvent{
+		AssistantID: id, DeviceID: "brain-a", ThreadID: "brain-thread-a", Name: "puck.brain.status",
+		Payload: json.RawMessage(`{"event":"puck.brain.status","payload":{"state":"degraded","reason":"turn.lost","turnId":"brain-turn-old"}}`),
+	})
+	if pending := module.pendingTurn(id); pending.turnID != "brain-turn-current" {
+		t.Fatalf("stale loss terminated the current turn: %+v", pending)
+	}
+	module.setPending(assistant, "brain-turn-old", "message-old", "message-old-processing", module.now(), false, "")
+	waitFor(t, func() bool { return module.pendingTurn(id).turnID == "" })
+	module.setPending(assistant, "brain-turn-next", "message-next", "message-next-processing", module.now(), false, "")
+	if pending := module.pendingTurn(id); pending.turnID != "brain-turn-next" {
+		t.Fatalf("consumed loss affected a later turn: %+v", pending)
+	}
+}
+
+func TestToolCallEvidenceRecordsItsPendingTurn(t *testing.T) {
+	module, id := newQueueModule(t)
+	assistant, err := module.store.Assistant(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module.setPending(assistant, "brain-turn-current", "message-current", "message-current-processing", module.now(), false, "")
+	module.noteToolCall(id, "update_memory", true, "")
+	calls := module.recentToolCalls(id)
+	if len(calls) != 1 || calls[0]["turnId"] != "brain-turn-current" {
+		t.Fatalf("tool evidence is not scoped to the pending turn: %+v", calls)
 	}
 }
 

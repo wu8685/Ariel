@@ -173,6 +173,37 @@ func TestObservedScenariosDoNotFailTheRun(t *testing.T) {
 	}
 }
 
+func TestQueueEvidenceRequiresEveryPromptTurnOpportunity(t *testing.T) {
+	result := queueWhileBusyResult([]Check{{Name: "picked-up", Pass: true}, {Name: "one-pending-wake", Pass: true}}, []string{"message-a", "message-b"}, func(string) bool { return false })
+	if result.Status != "fail" {
+		t.Fatalf("missing prompt turn opportunities produced %q", result.Status)
+	}
+	result = queueWhileBusyResult([]Check{{Name: "picked-up", Pass: false}, {Name: "one-pending-wake", Pass: true}}, []string{"message-a"}, func(string) bool { return false })
+	if result.Status != "fail" {
+		t.Fatalf("unobserved pickup without a prompt turn produced %q", result.Status)
+	}
+}
+
+func TestToolChoiceEvidenceIsScopedToPromptTurn(t *testing.T) {
+	calls := []any{
+		map[string]any{"tool": "update_memory", "success": true, "turnId": "turn-old"},
+		map[string]any{"tool": "send_message", "success": true, "turnId": "turn-current"},
+	}
+	for _, name := range toolNamesForTurn(calls, "turn-current") {
+		if strings.Contains(name, "update_memory") {
+			t.Fatalf("prior turn tool choice counted for current prompt: %v", calls)
+		}
+	}
+	calls = append(calls, map[string]any{"tool": "update_memory", "success": true, "turnId": "turn-current"})
+	found := false
+	for _, name := range toolNamesForTurn(calls, "turn-current") {
+		found = found || strings.Contains(name, "update_memory")
+	}
+	if !found {
+		t.Fatal("current turn tool choice was hidden by an earlier call with the same name")
+	}
+}
+
 func TestBusyOnlyFollowsTransientRowsAfterLatestUserMessage(t *testing.T) {
 	history := map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
 		{"id": "old-user", "role": "user", "kind": "text"},
@@ -201,6 +232,20 @@ func TestBusyOnlyFollowsTransientRowsAfterLatestUserMessage(t *testing.T) {
 	}}}
 	if !messagesBusy(messagesOf(history)) {
 		t.Fatal("active greeting after the latest user message was ignored")
+	}
+}
+
+func TestTerminalErrorStopsWaitingWithoutHidingHistory(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "assistant", "kind": "error"},
+		{"role": "user", "kind": "text"},
+	}
+	if messagesFailed(messages) {
+		t.Fatal("an earlier error made a new prompt fail before it ran")
+	}
+	messages = append(messages, map[string]any{"role": "assistant", "kind": "error"})
+	if !messagesFailed(messages) {
+		t.Fatal("current terminal error was not diagnostic")
 	}
 }
 

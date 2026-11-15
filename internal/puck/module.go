@@ -50,6 +50,7 @@ type Module struct {
 	wakeMu             sync.Mutex
 	pendingMu          sync.Mutex
 	pending            map[string]pendingBrainTurn
+	lostBrainTurns     map[string]time.Time
 	toolCalls          map[string][]observedToolCall
 	wakeSkips          map[string][]observedWakeSkip
 	lifecycle          sync.RWMutex
@@ -64,6 +65,7 @@ type observedToolCall struct {
 	Tool    string
 	Success bool
 	Code    string
+	TurnID  string
 }
 
 type observedWakeSkip struct {
@@ -90,7 +92,7 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
+	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, lostBrainTurns: map[string]time.Time{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
 	m.acknowledge = store.AcknowledgeMessage
 	m.acknowledgeGroup = store.AcknowledgeGroupMessage
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
@@ -388,6 +390,10 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if method == "" {
 		method = envelope.Payload.Method
 	}
+	if event.Name == "puck.brain.status" {
+		m.recordBrainStatus(ctx, event)
+		return
+	}
 	if method != "item/completed" && method != "item/agentMessage/completed" && method != "turn/completed" {
 		return
 	}
@@ -446,6 +452,42 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 		}
 		summary, _ := json.Marshal(map[string]any{"startedAt": pending.startedAt.UTC(), "state": "running", "steps": pending.steps})
 		_ = m.store.UpsertMessage(ctx, Message{ID: pending.responseID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, WorkSummary: string(summary), BrainTurnID: params.TurnID})
+	}
+}
+
+func (m *Module) recordBrainStatus(ctx context.Context, event relay.BrainEvent) {
+	var status struct {
+		Payload struct {
+			Reason string `json:"reason"`
+			TurnID string `json:"turnId"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(event.Payload, &status) != nil || status.Payload.Reason != "turn.lost" || status.Payload.TurnID == "" {
+		return
+	}
+	turnID := status.Payload.TurnID
+	m.pendingMu.Lock()
+	now := m.now()
+	m.lostBrainTurns[turnID] = now
+	for id, at := range m.lostBrainTurns {
+		if now.Sub(at) > 10*time.Minute {
+			delete(m.lostBrainTurns, id)
+		}
+	}
+	for len(m.lostBrainTurns) > 128 {
+		oldestID := ""
+		var oldest time.Time
+		for id, at := range m.lostBrainTurns {
+			if oldestID == "" || at.Before(oldest) {
+				oldestID, oldest = id, at
+			}
+		}
+		delete(m.lostBrainTurns, oldestID)
+	}
+	pending := m.pending[event.AssistantID]
+	m.pendingMu.Unlock()
+	if pending.turnID == turnID {
+		m.finishBrainTurnMessage(ctx, event.AssistantID, turnID, "刚才中断了，我重新看一下。", "error")
 	}
 }
 
@@ -1492,10 +1534,17 @@ func (m *Module) markPendingTaskEvent(assistantID, card string) {
 func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, startedAt time.Time, ack bool, groupID string) {
 	m.clearPending(a.ID)
 	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, groupID: groupID, startedAt: startedAt, toolFailures: map[string]int{}, ack: ack}
-	if !ack {
+	m.pendingMu.Lock()
+	_, lost := m.lostBrainTurns[turnID]
+	delete(m.lostBrainTurns, turnID)
+	m.pendingMu.Unlock()
+	if !ack || lost {
 		m.pendingMu.Lock()
 		m.pending[a.ID] = pending
 		m.pendingMu.Unlock()
+		if lost {
+			go m.finishBrainTurnMessage(m.rootCtx, a.ID, turnID, "刚才中断了，我重新看一下。", "error")
+		}
 		return
 	}
 	pending.timer = time.AfterFunc(m.ackDelay, func() {

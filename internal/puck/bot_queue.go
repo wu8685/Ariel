@@ -16,7 +16,7 @@ func (m *Module) noteToolCall(assistantID, tool string, success bool, code strin
 	}
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
-	calls := append(m.toolCalls[assistantID], observedToolCall{Tool: tool, Success: success, Code: code})
+	calls := append(m.toolCalls[assistantID], observedToolCall{Tool: tool, Success: success, Code: code, TurnID: m.pending[assistantID].turnID})
 	if len(calls) > 40 {
 		calls = calls[len(calls)-40:]
 	}
@@ -32,6 +32,9 @@ func (m *Module) recentToolCalls(assistantID string) []map[string]any {
 		item := map[string]any{"tool": call.Tool, "success": call.Success}
 		if call.Code != "" {
 			item["code"] = call.Code
+		}
+		if call.TurnID != "" {
+			item["turnId"] = call.TurnID
 		}
 		out = append(out, item)
 	}

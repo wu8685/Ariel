@@ -68,6 +68,7 @@ type BrainHost struct {
 	pending      map[string]pendingBrainCall
 	ensures      map[string]BrainEnsure
 	turnStarted  map[string]time.Time
+	turnThreads  map[string]string
 	failures     []time.Time
 	circuitUntil time.Time
 }
@@ -91,7 +92,7 @@ func NewBrainHost(cfg BrainHostConfig) *BrainHost {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}, turnStarted: map[string]time.Time{}}
+	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}, turnStarted: map[string]time.Time{}, turnThreads: map[string]string{}}
 }
 
 func (h *BrainHost) Ready() bool {
@@ -207,7 +208,22 @@ func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text st
 	}
 	h.mu.Lock()
 	h.turnStarted[started.Turn.ID] = startedAt
+	h.turnThreads[started.Turn.ID] = threadID
+	alive := h.process == process
+	select {
+	case <-process.Done():
+		alive = false
+	default:
+	}
+	if !alive {
+		delete(h.turnStarted, started.Turn.ID)
+		delete(h.turnThreads, started.Turn.ID)
+	}
 	h.mu.Unlock()
+	if !alive {
+		logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", false, "error", "BRAIN_UNAVAILABLE")
+		return "", errors.New("BRAIN_UNAVAILABLE")
+	}
 	logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true, "effort", effort, "model", model, "promptBytes", len(text))
 	if h.cfg.TurnStarted != nil {
 		h.cfg.TurnStarted(clientMessageID)
@@ -333,6 +349,15 @@ func (h *BrainHost) run(process brainProcess) {
 				delete(h.pending, id)
 			}
 			h.turnStarted = map[string]time.Time{}
+			lost := make([]BrainHostEvent, 0, len(h.turnThreads))
+			for turnID, threadID := range h.turnThreads {
+				assistantID := h.threads[threadID]
+				if assistantID == "" {
+					continue
+				}
+				lost = append(lost, BrainHostEvent{Kind: "puck.brain.status", AssistantID: assistantID, ThreadID: threadID, TurnID: turnID, Payload: map[string]any{"state": "degraded", "reason": "turn.lost", "turnId": turnID}})
+			}
+			h.turnThreads = map[string]string{}
 			now := time.Now()
 			kept := h.failures[:0]
 			for _, at := range h.failures {
@@ -350,6 +375,12 @@ func (h *BrainHost) run(process brainProcess) {
 			}
 			circuitOpen := now.Before(h.circuitUntil)
 			h.mu.Unlock()
+			for _, event := range lost {
+				logPhase("brain-turn-lost", event.ThreadID, "ok", false, "error", "BRAIN_UNAVAILABLE")
+				if h.cfg.Emit != nil {
+					h.cfg.Emit(event)
+				}
+			}
 			if h.cfg.Emit != nil {
 				for _, request := range requests {
 					h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.status", AssistantID: request.AssistantID, ThreadID: request.ThreadID, Payload: map[string]any{"state": "degraded", "reason": "turn.lost"}})
@@ -366,6 +397,7 @@ func (h *BrainHost) run(process brainProcess) {
 }
 
 func (h *BrainHost) restart(requests []BrainEnsure) {
+	started := time.Now()
 	timer := time.NewTimer(h.cfg.RestartBackoff)
 	defer timer.Stop()
 	select {
@@ -375,12 +407,20 @@ func (h *BrainHost) restart(requests []BrainEnsure) {
 	}
 	for _, request := range requests {
 		if _, err := h.Ensure(h.ctx, request); err != nil {
+			logPhase("brain-restart", request.ThreadID, "durationMs", time.Since(started).Milliseconds(), "ok", false, "error", requestErrorCode("puck.brain.restart", err))
 			return
 		}
 	}
+	logPhase("brain-restart", "", "durationMs", time.Since(started).Milliseconds(), "ok", true)
 }
 
 func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
+	h.mu.Lock()
+	current := h.process == process
+	h.mu.Unlock()
+	if !current {
+		return
+	}
 	var identity struct {
 		ThreadID string `json:"threadId"`
 		TurnID   string `json:"turnId"`
@@ -431,6 +471,7 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 		h.mu.Lock()
 		started, ok := h.turnStarted[identity.TurnID]
 		delete(h.turnStarted, identity.TurnID)
+		delete(h.turnThreads, identity.TurnID)
 		h.mu.Unlock()
 		if ok {
 			attrs := []any{"durationMs", time.Since(started).Milliseconds(), "ok", !failed}

@@ -279,19 +279,24 @@ func (r *runner) scenarioB() ScenarioResult {
 		Check{Name: "picked-up", Pass: attached == len(ids), Detail: fmt.Sprintf("attached=%d skips=%s", attached, strings.Join(r.wakeSkipReasons(), ","))},
 		Check{Name: "one-pending-wake", Pass: r.metrics.MaxQueueWakes <= 1, Detail: fmt.Sprintf("maxQueue=%d", r.metrics.MaxQueueWakes)},
 	)
-	result := passResult("B", "queue while busy", checks)
+	result := queueWhileBusyResult(checks, ids, r.brainTurnReceived)
+	result.WakeSkips = r.wakeSkipReasons()
+	result.ToolCalls = r.toolNames()
+	return result
+}
+
+func queueWhileBusyResult(checks []Check, ids []string, brainTurnReceived func(string) bool) ScenarioResult {
 	brainTurns := 0
 	for _, id := range ids {
-		if r.brainTurnReceived(id) {
+		if brainTurnReceived(id) {
 			brainTurns++
 		}
 	}
-	result.Checks = append(result.Checks, Check{Name: "brain-turns-started", Pass: brainTurns == len(ids), Detail: fmt.Sprintf("started=%d", brainTurns)})
+	checks = append(checks, Check{Name: "brain-turns-started", Pass: brainTurns == len(ids), Detail: fmt.Sprintf("started=%d", brainTurns)})
+	result := passResult("B", "queue while busy", checks)
 	if result.Status == "fail" && onlyFailed(result, "picked-up") {
 		result.Status = "observed"
 	}
-	result.WakeSkips = r.wakeSkipReasons()
-	result.ToolCalls = r.toolNames()
 	return result
 }
 
@@ -508,6 +513,9 @@ func (r *runner) waitIdle() error {
 		r.collectBrainTurns()
 		r.collectMetrics()
 		r.sampleQueue()
+		if r.failed() {
+			return fmt.Errorf("brain turn ended with an error")
+		}
 		if !r.busy() {
 			timer := time.NewTimer(400 * time.Millisecond)
 			select {
@@ -566,6 +574,26 @@ func messagesBusy(messages []map[string]any) bool {
 		}
 	}
 	return busy
+}
+
+func messagesFailed(messages []map[string]any) bool {
+	failed := false
+	for _, message := range messages {
+		role, _ := message["role"].(string)
+		if role == "user" {
+			failed = false
+			continue
+		}
+		if role == "assistant" && message["kind"] == "error" {
+			failed = true
+		}
+	}
+	return failed
+}
+
+func (r *runner) failed() bool {
+	history, err := r.history()
+	return err == nil && messagesFailed(messagesOf(history))
 }
 
 func (r *runner) history() (map[string]any, error) {
@@ -868,6 +896,52 @@ func (r *runner) toolNames() []string {
 	return tools
 }
 
+func (r *runner) toolNamesForTurn(turnID string) []string {
+	history, err := r.history()
+	if err != nil || outcomeCode(history) != "accepted" {
+		return nil
+	}
+	calls, _ := dataOf(history)["toolCalls"].([]any)
+	return toolNamesForTurn(calls, turnID)
+}
+
+func toolNamesForTurn(calls []any, turnID string) []string {
+	var names []string
+	for _, raw := range calls {
+		call, _ := raw.(map[string]any)
+		if call["turnId"] != turnID {
+			continue
+		}
+		name, _ := call["tool"].(string)
+		if name == "" {
+			continue
+		}
+		if call["success"] == false {
+			code, _ := call["code"].(string)
+			if code == "" {
+				code = "failed"
+			}
+			name += "=" + code
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func (r *runner) brainTurnForResponse(responseID string) string {
+	history, err := r.history()
+	if err != nil || outcomeCode(history) != "accepted" {
+		return ""
+	}
+	for _, message := range messagesOf(history) {
+		if message["id"] == responseID {
+			turnID, _ := message["brainTurnId"].(string)
+			return turnID
+		}
+	}
+	return ""
+}
+
 func (r *runner) wakeSkipReasons() []string {
 	_, skips := r.debugLists()
 	return skips
@@ -1057,7 +1131,6 @@ func (r *runner) scenarioK() ScenarioResult {
 	if r.fake {
 		return ScenarioResult{ID: "K", Name: "remember choice", Status: "skipped"}
 	}
-	before := r.toolNames()
 	messageID := newID()
 	if _, err := r.send(messageID, "记住：我以后都希望你先给结论，再用很短的中文。这是长期偏好。"); err != nil {
 		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-started", Detail: "send rejected"}}}
@@ -1069,8 +1142,8 @@ func (r *runner) scenarioK() ScenarioResult {
 		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-completed", Detail: "timeout"}}}
 	}
 	called := false
-	for _, name := range r.toolNames() {
-		if strings.Contains(name, "update_memory") && !containsText(before, name) {
+	for _, name := range r.toolNamesForTurn(r.brainTurnForResponse(messageID + "-processing")) {
+		if strings.Contains(name, "update_memory") {
 			called = true
 		}
 	}
