@@ -89,6 +89,28 @@ try {
     throw new Error("task list is present without a task card");
   }
   if (taskCount > 0) await tasks.first().scrollIntoViewIfNeeded();
+  await page.locator(".puck-assistant-row", { hasText: "E2E" }).first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "编辑" }).click();
+  await page.getByRole("button", { name: "记忆", exact: true }).click();
+  const memory = page.getByRole("dialog", { name: "记忆" });
+  await memory.getByText("FIXTURE_PROFILE_FACT").waitFor({ timeout: 15000 });
+  const assertDelete = async () => {
+    const button = memory.getByRole("button", { name: "删除记忆 FIXTURE_PROFILE_FACT" });
+    const box = await button.boundingBox();
+    const viewport = page.viewportSize();
+    if (!box || !viewport || box.width < 20 || box.x < 0 || box.x + box.width > viewport.width + 2) {
+      throw new Error(`memory delete control is outside the viewport ${JSON.stringify({ box, viewport })}`);
+    }
+  };
+  await assertDelete();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertDelete();
+  notes.push("memory-visible");
+  await memory.getByRole("button", { name: "删除记忆 FIXTURE_PROFILE_FACT" }).click();
+  await page.getByRole("button", { name: "确认删除记忆 FIXTURE_PROFILE_FACT" }).click();
+  await memory.getByText("FIXTURE_PROFILE_FACT").waitFor({ state: "detached", timeout: 15000 });
+  notes.push("memory-deleted");
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.screenshot({ path: path.join(shots, "puck-chat.png"), fullPage: true });
   console.log(notes.join(" "));
 } catch (error) {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wu8685/Ariel/internal/desktopagent"
@@ -28,12 +29,14 @@ type stack struct {
 	origin   string
 	webDist  string
 
-	module      *puck.Module
-	relay       *relay.Server
-	server      *http.Server
-	listener    net.Listener
-	agentCancel context.CancelFunc
-	agentDone   chan error
+	module       *puck.Module
+	relay        *relay.Server
+	server       *http.Server
+	listener     net.Listener
+	agentCancel  context.CancelFunc
+	agentDone    chan error
+	brainTurnsMu sync.Mutex
+	brainTurns   []string
 }
 
 func newStack(iso Isolation) (*stack, error) {
@@ -120,10 +123,23 @@ func (s *stack) startAgent(ctx context.Context) error {
 			URL: "ws://" + s.listen + "/ws", Token: s.token, DeviceID: s.deviceID, DeviceName: "Puck E2E",
 			Binary: s.iso.CodexBinary, CWD: s.iso.AgentStateDir,
 			PuckBrain: true, PuckRoot: s.iso.BrainRoot, Headless: true,
+			BrainTurnStarted: func(clientMessageID string) {
+				s.brainTurnsMu.Lock()
+				s.brainTurns = append(s.brainTurns, clientMessageID)
+				s.brainTurnsMu.Unlock()
+			},
 		})
 	}()
 	s.agentCancel, s.agentDone = cancel, done
 	return nil
+}
+
+func (s *stack) drainBrainTurns() []string {
+	s.brainTurnsMu.Lock()
+	defer s.brainTurnsMu.Unlock()
+	ids := s.brainTurns
+	s.brainTurns = nil
+	return ids
 }
 
 func (s *stack) restart(ctx context.Context) error {
@@ -133,15 +149,22 @@ func (s *stack) restart(ctx context.Context) error {
 }
 
 func (s *stack) stopAgent() {
-	if s.agentCancel != nil {
-		s.agentCancel()
+	if s.agentCancel == nil {
+		return
+	}
+	s.agentCancel()
+	select {
+	case <-s.agentDone:
+	case <-time.After(3 * time.Second):
+		killHarnessProcesses(os.Getpid(), s.iso.Root)
 		select {
 		case <-s.agentDone:
-		case <-time.After(15 * time.Second):
+		case <-time.After(3 * time.Second):
+			killHarnessProcesses(os.Getpid(), s.iso.Root)
 		}
-		s.agentCancel = nil
-		s.agentDone = nil
 	}
+	s.agentCancel = nil
+	s.agentDone = nil
 }
 
 func (s *stack) stopRelay() {
@@ -163,8 +186,17 @@ func (s *stack) stopRelay() {
 }
 
 func (s *stack) close() {
-	s.stopAgent()
-	s.stopRelay()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.stopAgent()
+		s.stopRelay()
+	}()
+	select {
+	case <-done:
+	case <-time.After(12 * time.Second):
+		killHarnessProcesses(os.Getpid(), s.iso.Root)
+	}
 }
 
 func (s *stack) agentExitError() error {

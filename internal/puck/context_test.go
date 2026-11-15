@@ -112,7 +112,7 @@ func TestCustomContextStaysBelowSystemSafetyRules(t *testing.T) {
 
 func TestHandoffPromptAddsOneLineOnlyOnTheCurrentToolset(t *testing.T) {
 	line := "交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
-	taskLine := "要记住的事用 save_bot_task 新建。"
+	taskLine := "description 写这件任务的内容"
 	current := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
 	previous := brainInstructions("assistant-a", "小帕", "开发助理", "", botTaskToolset-1)
 	older := brainInstructions("assistant-a", "小帕", "开发助理", "", handoffToolset-1)
@@ -177,10 +177,10 @@ func TestFinishTaskCleansOnlyTheCallerRecords(t *testing.T) {
 	if err := module.store.AppendMessage(ctx, Message{ID: "user-other", AssistantID: otherID, Role: "user", Kind: "text", Text: "别人的原话也要留下"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-owned", AssistantID: ownerID, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-owned", Goal: "检查", Status: "review", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-owned", AssistantID: ownerID, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-owned", Goal: "检查", Status: "review"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-other", AssistantID: otherID, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-other", Goal: "别的任务", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-other", AssistantID: otherID, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "exec-thread-other", Goal: "别的任务", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := module.store.SaveThreadWatch(ctx, ThreadWatch{ID: "watch-owned", AssistantID: ownerID, DeviceID: "exec-a", ThreadID: "exec-thread-owned"}); err != nil {
@@ -247,7 +247,7 @@ func TestFinishTaskCleansOnlyTheCallerRecords(t *testing.T) {
 	if status := taskStatus(t, module, otherID, "task-other"); status != "running" {
 		t.Fatalf("other task status=%s", status)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-brain", AssistantID: ownerID, DeviceID: "brain-a", CWD: "/agent-managed/puck/" + ownerID, NativeThreadID: owner["brainThreadId"].(string), Goal: "brain", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-brain", AssistantID: ownerID, DeviceID: "brain-a", CWD: "/agent-managed/puck/" + ownerID, NativeThreadID: owner["brainThreadId"].(string), Goal: "brain", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	refused := module.tools.Execute(ctx, pucktools.Call{AssistantID: ownerID, Tool: "finish_task", Arguments: []byte(`{"taskId":"task-brain","outcome":"failed"}`)})

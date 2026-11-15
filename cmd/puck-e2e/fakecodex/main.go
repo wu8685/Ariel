@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 func main() {
@@ -131,16 +133,24 @@ func (r *rpc) handle(msg message) {
 	case "turn/start":
 		turnID := r.beginTurn(msg.Params)
 		r.reply(msg.ID, map[string]any{"turn": map[string]any{"id": turnID}})
-		if strings.Contains(paramText(msg.Params), "PUCK_ENVELOPE") {
+		problem := loadThread(paramString(msg.Params, "threadId")).BadSchema
+		if problem == "" && strings.Contains(paramText(msg.Params), "PUCK_ENVELOPE") {
 			r.play(msg.Params, turnID)
 		}
 		// Let Ariel record the turn before the completion, or the processing
 		// bubble stays up and the harness never sees idle.
 		time.Sleep(4 * time.Second)
+		turn := map[string]any{"id": turnID, "status": "completed"}
+		if problem != "" {
+			// thread/start still succeeds. The model request is what fails,
+			// matching a provider that rejects the tool schema.
+			turn["status"] = "failed"
+			turn["error"] = map[string]any{"codexErrorInfo": "invalid_tool_schema", "message": "invalid tool schema: " + problem}
+		}
 		r.write(map[string]any{"method": "turn/completed", "params": map[string]any{
 			"threadId": paramString(msg.Params, "threadId"),
 			"turnId":   turnID,
-			"turn":     map[string]any{"id": turnID, "status": "completed"},
+			"turn":     turn,
 		}})
 	case "turn/interrupt":
 		r.reply(msg.ID, map[string]any{})
@@ -152,7 +162,9 @@ func (r *rpc) handle(msg message) {
 }
 
 func (r *rpc) play(params json.RawMessage, turnID string) {
-	text := userRequest(paramText(params))
+	full := paramText(params)
+	rememberEnvelope(full)
+	text := userRequest(full)
 	threadID := paramString(params, "threadId")
 	messageID := paramString(params, "clientUserMessageId")
 	switch {
@@ -201,6 +213,17 @@ func (r *rpc) play(params json.RawMessage, turnID string) {
 		r.tool(threadID, "save_bot_task", map[string]any{"id": taskID, "title": "FIXTURE_X", "status": "done"})
 	case strings.Contains(text, "FIXTURE_NOTICE"):
 		r.tool(threadID, "send_message", map[string]any{"text": "FIXTURE_NOTICE"})
+	case strings.Contains(text, "FIXTURE_MEMORY_WRITE"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "profile", "text": "FIXTURE_PROFILE_FACT"})
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "journal", "text": "FIXTURE_JOURNAL_FACT"})
+	case strings.Contains(text, "FIXTURE_MEMORY_FORGET"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "forget", "scope": "bot", "kind": "journal", "text": "FIXTURE_JOURNAL_FACT"})
+	case strings.Contains(text, "FIXTURE_MEMORY_RECALL_SHARED"):
+		rememberRecall("shared", r.tool(threadID, "recall_memory", map[string]any{"query": "FIXTURE_SHARED_FACT"}))
+		rememberRecall("private", r.tool(threadID, "recall_memory", map[string]any{"query": "FIXTURE_PRIVATE_FACT"}))
+	case strings.Contains(text, "FIXTURE_MEMORY_SHARED"):
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "shared", "kind": "profile", "text": "FIXTURE_SHARED_FACT"})
+		r.tool(threadID, "update_memory", map[string]any{"action": "write", "scope": "bot", "kind": "profile", "text": "FIXTURE_PRIVATE_FACT"})
 	default:
 		_ = turnID
 	}
@@ -265,9 +288,27 @@ func toolPayload(raw json.RawMessage) map[string]any {
 
 func (r *rpc) startThread(params json.RawMessage) map[string]any {
 	cwd := paramString(params, "cwd")
-	thread := storedThread{ID: newUUID(), CWD: cwd, Name: "fake"}
+	thread := storedThread{ID: newUUID(), CWD: cwd, Name: "fake", BadSchema: dynamicToolSchemaProblem(params)}
 	saveThread(thread)
 	return threadView(thread)
+}
+
+func dynamicToolSchemaProblem(params json.RawMessage) string {
+	var body struct {
+		DynamicTools []struct {
+			Name        string         `json:"name"`
+			InputSchema map[string]any `json:"inputSchema"`
+		} `json:"dynamicTools"`
+	}
+	if json.Unmarshal(params, &body) != nil {
+		return ""
+	}
+	for _, tool := range body.DynamicTools {
+		if problem := toolcontract.SchemaProblem(tool.Name, tool.InputSchema); problem != "" {
+			return problem
+		}
+	}
+	return ""
 }
 
 func (r *rpc) beginTurn(params json.RawMessage) string {

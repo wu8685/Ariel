@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -44,6 +46,23 @@ func (r *Report) add(result ScenarioResult) {
 	case "observed":
 	}
 	r.OK = !r.HardFailed && !r.SoftFailed
+}
+
+func writeReportFiles(root, extra string, report Report) {
+	body, err := report.JSON()
+	if err != nil {
+		body = []byte(`{"ok":false}`)
+	}
+	body = append(body, '\n')
+	if root != "" {
+		_ = os.WriteFile(filepath.Join(root, "report.json"), body, 0o600)
+	}
+	if extra != "" && extra != filepath.Join(root, "report.json") {
+		if dir := filepath.Dir(extra); dir != "" && dir != "." {
+			_ = os.MkdirAll(dir, 0o700)
+		}
+		_ = os.WriteFile(extra, body, 0o600)
+	}
 }
 
 func (r Report) exitCode() int {

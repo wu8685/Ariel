@@ -14,16 +14,19 @@ type storedTurn struct {
 }
 
 type storedThread struct {
-	ID       string       `json:"id"`
-	CWD      string       `json:"cwd"`
-	Name     string       `json:"name"`
-	Archived bool         `json:"archived"`
-	Turns    []storedTurn `json:"turns"`
+	ID        string       `json:"id"`
+	CWD       string       `json:"cwd"`
+	Name      string       `json:"name"`
+	Archived  bool         `json:"archived"`
+	BadSchema string       `json:"badSchema,omitempty"`
+	Turns     []storedTurn `json:"turns"`
 }
 
 type world struct {
-	Threads map[string]storedThread `json:"threads"`
-	TaskID  string                  `json:"taskId"`
+	Threads  map[string]storedThread `json:"threads"`
+	TaskID   string                  `json:"taskId"`
+	Envelope string                  `json:"envelope"`
+	Recalls  map[string]string       `json:"recalls"`
 }
 
 var stateMu sync.Mutex
@@ -111,6 +114,20 @@ func rememberedTask() string {
 	var id string
 	withState(func(state *world) { id = state.TaskID })
 	return id
+}
+
+func rememberEnvelope(text string) {
+	withState(func(state *world) { state.Envelope = text })
+}
+
+func rememberRecall(name string, payload map[string]any) {
+	encoded, _ := json.Marshal(payload)
+	withState(func(state *world) {
+		if state.Recalls == nil {
+			state.Recalls = map[string]string{}
+		}
+		state.Recalls[name] = string(encoded)
+	})
 }
 
 func threadView(thread storedThread) map[string]any {

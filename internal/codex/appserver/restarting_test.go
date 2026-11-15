@@ -286,7 +286,7 @@ func TestRestartingRPCRetriesThreadListOnceMoreAfterTwoRemoteRejections(t *testi
 	if err := rpc.Call(context.Background(), "thread/list", nil, &result); err != nil || !result.OK || started.Load() != 3 || first.calls != 1 || second.calls != 1 || third.calls != 1 {
 		t.Fatalf("list did not take a second fresh process: result=%v err=%v starts=%d calls=%d/%d/%d", result.OK, err, started.Load(), first.calls, second.calls, third.calls)
 	}
-	if ErrorClass(ErrRemote) != "remote" || ErrorClass(ErrProtocol) != "protocol" {
+	if ErrorClass(ErrRemote) != "remote" || ErrorClass(ErrProtocol) != "protocol" || ErrorClass(ErrCapacity) != "capacity" {
 		t.Fatal("error class")
 	}
 }

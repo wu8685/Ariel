@@ -19,11 +19,15 @@ type SearchMessagesRequest struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
+const maxTaskDescription = 4000
+
 type SaveBotTaskRequest struct {
-	ID     string `json:"id,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Goal   string `json:"goal,omitempty"`
-	Status string `json:"status,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Title          string `json:"title,omitempty"`
+	Goal           string `json:"goal,omitempty"`
+	Description    string `json:"description,omitempty"`
+	DescriptionSet bool   `json:"-"`
+	Status         string `json:"status,omitempty"`
 }
 
 type BotTaskSessionRef struct {
@@ -44,14 +48,20 @@ type MergeBotTasksRequest struct {
 	IntoID string `json:"intoId"`
 }
 
+type GetBotTaskRequest struct {
+	TaskID string `json:"taskId"`
+}
+
 func botTaskDefinition(name string) (Definition, bool) {
 	switch name {
 	case "list_bot_tasks":
-		return Definition{Name: name, Description: "列出或按关键词搜索这个 Bot 自己的任务。每条含 title、最近更新时间，以及最后一条用户消息的原文片段，不另写摘要。可用 status 过滤，用 cursor 翻页。", InputSchema: listBotTasksSchema()}, true
+		return Definition{Name: name, Description: "列出或按关键词搜索这个 Bot 自己的任务。每条只给 id、title、description 和 status，由你自己选择。description 是当初写下的原文，不是系统摘要。选定后调用 get_bot_task 读取完整上下文。可用 status 过滤，用 cursor 翻页。", InputSchema: listBotTasksSchema()}, true
+	case "get_bot_task":
+		return Definition{Name: name, Description: "读取一条已选定任务的完整上下文：title、goal、description 原文、挂上的消息原文，以及 Codex 会话的 deviceId 和 threadId。先用 list_bot_tasks 看到 id 和 description，再自己决定读哪一条。", InputSchema: getBotTaskSchema()}, true
 	case "search_messages":
 		return Definition{Name: name, Description: "按关键词搜索这个 Bot 的 Ariel 对话。返回消息原文，不摘要。用 cursor 翻页。", InputSchema: searchMessagesSchema()}, true
 	case "save_bot_task":
-		return Definition{Name: name, Description: "新建或更新这个 Bot 的任务。传入已有任务的 id 或 taskId 会更新那一条，并挂上当前正在处理的用户消息。不传 id 则新建，不挂消息。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
+		return Definition{Name: name, Description: "新建或更新这个 Bot 的任务。description 由你写下这件任务的内容，系统不会生成或截断。传入已有任务的 id 或 taskId 会更新那一条，并挂上当前正在处理的用户消息。不传 id 则新建，不挂消息。省略 description 不会改掉已有原文。status 可以是 accepted、in_progress、waiting_user、done、cancelled。", InputSchema: saveBotTaskSchema()}, true
 	case "attach_bot_task":
 		return Definition{Name: name, Description: "把用户消息或本助理的子会话挂到已有任务上。可以只传 taskId，这时挂上本回合正在处理的用户消息。messageIds 是可选的 Ariel 消息 id。sessions.kind 为 task 时传 id，为 watch 时传 deviceId 和 threadId。", InputSchema: attachBotTaskSchema()}, true
 	case "merge_bot_tasks":
@@ -119,7 +129,7 @@ func DecodeSaveBotTask(raw json.RawMessage) (SaveBotTaskRequest, []FieldError) {
 	if detail != nil {
 		return value, []FieldError{*detail}
 	}
-	if details := rejectUnknown(fields, "id", "taskId", "title", "goal", "status"); len(details) != 0 {
+	if details := rejectUnknown(fields, "id", "taskId", "title", "goal", "description", "status"); len(details) != 0 {
 		return value, details
 	}
 	if details := optionalBoundedString(fields, "id", &value.ID, maxIDLength); len(details) != 0 {
@@ -139,6 +149,12 @@ func DecodeSaveBotTask(raw json.RawMessage) (SaveBotTaskRequest, []FieldError) {
 	}
 	if details := optionalBoundedString(fields, "goal", &value.Goal, maxTextLength); len(details) != 0 {
 		return value, details
+	}
+	if _, ok := fields["description"]; ok {
+		value.DescriptionSet = true
+		if details := optionalBoundedString(fields, "description", &value.Description, maxTaskDescription); len(details) != 0 {
+			return value, details
+		}
 	}
 	if details := optionalBoundedString(fields, "status", &value.Status, 32); len(details) != 0 {
 		return value, details
@@ -300,6 +316,24 @@ func jsonNumber(value int) string {
 	return string(encoded)
 }
 
+func DecodeGetBotTask(raw json.RawMessage) (GetBotTaskRequest, []FieldError) {
+	var value GetBotTaskRequest
+	fields, detail := decodeObject(raw)
+	if detail != nil {
+		return value, []FieldError{*detail}
+	}
+	if details := rejectUnknown(fields, "taskId"); len(details) != 0 {
+		return value, details
+	}
+	if detail := requiredString(fields, "taskId", &value.TaskID, "non-empty string"); detail != nil {
+		return value, []FieldError{*detail}
+	}
+	if utf8.RuneCountInString(value.TaskID) > maxIDLength {
+		return value, fieldError("taskId", "value is too long", "at most 128 characters")
+	}
+	return value, nil
+}
+
 func listBotTasksSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 		"query": stringProperty(0, 256), "status": map[string]any{"type": "string", "enum": []any{"accepted", "in_progress", "waiting_user", "done", "cancelled", "merged"}},
@@ -315,7 +349,7 @@ func searchMessagesSchema() map[string]any {
 
 func saveBotTaskSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
-		"id": stringProperty(0, maxIDLength), "taskId": stringProperty(0, maxIDLength), "title": stringProperty(0, maxGoalLength), "goal": stringProperty(0, maxTextLength),
+		"id": stringProperty(0, maxIDLength), "taskId": stringProperty(0, maxIDLength), "title": stringProperty(0, maxGoalLength), "goal": stringProperty(0, maxTextLength), "description": stringProperty(0, maxTaskDescription),
 		"status": map[string]any{"type": "string", "enum": []any{"accepted", "in_progress", "waiting_user", "done", "cancelled"}},
 	}}
 }
@@ -326,6 +360,12 @@ func attachBotTaskSchema() map[string]any {
 		"sessions": map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string", "enum": []any{"task", "watch"}}, "id": stringProperty(0, maxIDLength), "deviceId": stringProperty(0, maxIDLength), "threadId": stringProperty(0, maxIDLength),
 		}}},
+	}}
+}
+
+func getBotTaskSchema() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"taskId"}, "properties": map[string]any{
+		"taskId": stringProperty(1, maxIDLength),
 	}}
 }
 

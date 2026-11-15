@@ -11,7 +11,10 @@ import (
 	"io"
 	"os/exec"
 	"regexp"
+	"runtime"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -34,6 +37,8 @@ func ErrorClass(err error) string {
 		return "method_unavailable"
 	case errors.Is(err, ErrResponseTooLarge):
 		return "too_large"
+	case errors.Is(err, ErrCapacity):
+		return "capacity"
 	case errors.Is(err, ErrOutcomeUnknown):
 		return "outcome_unknown"
 	default:
@@ -316,7 +321,7 @@ func Start(ctx context.Context, binary, cwd string) (*Process, error) {
 		stdin.Close()
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startCommand(cmd); err != nil {
 		stdin.Close()
 		stdout.Close()
 		return nil, errors.New("failed to start configured Codex binary")
@@ -331,11 +336,54 @@ func Start(ctx context.Context, binary, cwd string) (*Process, error) {
 }
 func (p *Process) Close() error {
 	p.Session.Close()
-	select {
-	case <-p.exited:
-	case <-time.After(2 * time.Second):
-		p.cmd.Process.Kill()
-		<-p.exited
-	}
+	stopCommand(p.cmd, p.exited)
 	return nil
+}
+
+func startCommand(cmd *exec.Cmd) error {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	// macOS SIGKILLs a Go child about 150ms after Go's posix_spawn starts it
+	// with a new process group and stdio pipes. The same binary stays up when
+	// a shell execs it. The shell inherits the pipes, directory, and group;
+	// exec keeps that pid, so the later group kill still reaches the binary.
+	if runtime.GOOS == "darwin" {
+		script := "exec " + shellQuote(cmd.Path)
+		for _, arg := range cmd.Args[1:] {
+			script += " " + shellQuote(arg)
+		}
+		cmd.Path = "/bin/sh"
+		cmd.Args = []string{"sh", "-c", script}
+	}
+	return cmd.Start()
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func stopCommand(cmd *exec.Cmd, exited <-chan struct{}) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	select {
+	case <-exited:
+		return
+	case <-time.After(2 * time.Second):
+	}
+	killCommand(cmd)
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+	}
+}
+
+func killCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = cmd.Process.Kill()
 }

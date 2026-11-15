@@ -1286,4 +1286,30 @@ describe("PuckWorkspace", () => {
 		expect(document.querySelector(".puck-workspace")?.classList.contains("info-open")).toBe(false);
 		expect(Object.keys(localStorage).filter(key => key !== "ariel.puck.lastAssistantId.v1")).toEqual([]);
 	});
+
+	it("shows and deletes a memory entry from the bot config", async () => {
+		let entries = [{ id: "mem-1", scope: "bot", kind: "profile", text: "机主希望先给结论。", writerName: "小帕", createdAt: "2026-11-14T02:00:00.000Z" }];
+		const request = vi.fn(async (method: string, _target: string, params: Record<string, unknown>) => {
+			if (method === "puck.list") return accepted({ assistants: [{ assistantId: "a-1", name: "小帕", brainDeviceId: "brain-a", status: "ready" }] });
+			if (method === "puck.history") return accepted({ messages: [] });
+			if (method === "puck.memory.list") return accepted({ entries: params.scope === "shared" ? [] : entries });
+			if (method === "puck.memory.delete") {
+				entries = entries.filter(entry => entry.id !== params.memoryId);
+				return accepted({ entry: { id: params.memoryId } });
+			}
+			return accepted({});
+		});
+		render(<PuckWorkspace request={request} state="ready" devices={[]} />);
+		await screen.findByRole("button", { name: /小帕/ });
+		openBotConfig(/小帕/);
+		fireEvent.click(screen.getByRole("button", { name: "记忆" }));
+		expect(await screen.findByRole("dialog", { name: "记忆" })).toBeTruthy();
+		expect(screen.getByText("机主希望先给结论。")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "删除记忆 机主希望先给结论。" }));
+		expect(screen.getByRole("dialog", { name: "删除这条记忆？" }).textContent).toContain("这个 Bot 之后的回合不会再看到它");
+		fireEvent.click(screen.getByRole("button", { name: "确认删除记忆 机主希望先给结论。" }));
+		await waitFor(() => expect(screen.queryByText("机主希望先给结论。")).toBeNull());
+		expect(screen.getByText("还没有记忆。")).toBeTruthy();
+		expect(request).toHaveBeenCalledWith("puck.memory.delete", "relay", { assistantId: "a-1", memoryId: "mem-1" });
+	});
 });

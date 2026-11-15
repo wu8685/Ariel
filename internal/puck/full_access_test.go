@@ -134,7 +134,7 @@ func TestExistingBotMigratesToFullAccessBrain(t *testing.T) {
 	if err := module.store.AppendMessage(ctx, Message{ID: "kept-chat", AssistantID: id, Role: "user", Kind: "text", Text: "保留的聊天"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-kept", AssistantID: id, DeviceID: "exec-a", CWD: "/work/ariel", NativeThreadID: "exec-thread-kept", Goal: "继续", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-kept", AssistantID: id, DeviceID: "exec-a", CWD: "/work/ariel", NativeThreadID: "exec-thread-kept", Goal: "继续", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	sent := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "00000000-0000-4000-8000-000000000904", "text": "继续"}))
@@ -187,10 +187,10 @@ func TestDeleteAssistantPurgesItsPuckDataAndKeepsChat(t *testing.T) {
 	if err := module.store.AppendMessage(ctx, Message{ID: "stay-chat", AssistantID: stayID, Role: "user", Kind: "text", Text: "别人的对话"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-gone", AssistantID: goneID, DeviceID: "exec-a", CWD: "/work/gone", NativeThreadID: "thread-gone", Goal: "删", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-gone", AssistantID: goneID, DeviceID: "exec-a", CWD: "/work/gone", NativeThreadID: "thread-gone", Goal: "删", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-stay", AssistantID: stayID, DeviceID: "exec-a", CWD: "/work/stay", NativeThreadID: "thread-stay", Goal: "留", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-stay", AssistantID: stayID, DeviceID: "exec-a", CWD: "/work/stay", NativeThreadID: "thread-stay", Goal: "留", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := module.store.SaveThreadWatch(ctx, ThreadWatch{ID: "watch-gone", AssistantID: goneID, DeviceID: "exec-a", ThreadID: "thread-gone"}); err != nil {
@@ -274,13 +274,13 @@ func TestSubsessionDeletionWakesEachOwnerOnce(t *testing.T) {
 		ids = append(ids, created.Data["assistant"].(map[string]any)["assistantId"].(string))
 		module.clearPending(ids[len(ids)-1])
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-a", AssistantID: ids[0], DeviceID: "exec-a", CWD: "/work/a", NativeThreadID: "thread-shared", Goal: "甲", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-a", AssistantID: ids[0], DeviceID: "exec-a", CWD: "/work/a", NativeThreadID: "thread-shared", Goal: "甲", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-b", AssistantID: ids[1], DeviceID: "exec-a", CWD: "/work/b", NativeThreadID: "thread-shared", Goal: "乙", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-b", AssistantID: ids[1], DeviceID: "exec-a", CWD: "/work/b", NativeThreadID: "thread-shared", Goal: "乙", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-c", AssistantID: ids[2], DeviceID: "exec-a", CWD: "/work/c", NativeThreadID: "thread-other", Goal: "丙", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-c", AssistantID: ids[2], DeviceID: "exec-a", CWD: "/work/c", NativeThreadID: "thread-other", Goal: "丙", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := module.store.SaveThreadWatch(ctx, ThreadWatch{ID: "watch-a", AssistantID: ids[0], DeviceID: "exec-a", ThreadID: "thread-shared", Until: "完成"}); err != nil {
@@ -336,7 +336,7 @@ func TestSendTurnNotFoundOrphansTheSubsession(t *testing.T) {
 	created := module.Handle(ctx, "puck.create", mustJSON(map[string]any{"name": "Helper", "brainDeviceId": "brain-a"}))
 	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
 	module.clearPending(id)
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-missing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-missing", Goal: "查", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-missing", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-missing", Goal: "查", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	bridge.turnStartCode = "NOT_FOUND"

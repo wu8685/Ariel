@@ -6,6 +6,7 @@ import { useImeEnterGuard } from "../ime-enter";
 import { readAvatarImageFile } from "./avatarImageFile";
 import { avatarColorHex, avatarImage, canonicalShape, deriveAvatar, nearestAvatarColor, PuckAvatar, type AvatarColor, type AvatarDesign, type AvatarShape, type PuckState } from "./PuckAvatar";
 import { PuckAvatarSheet } from "./PuckAvatarSheet";
+import { PuckMemorySheet } from "./PuckMemorySheet";
 import { enableTaskNotifications, isProactiveTaskMessage, notificationPermission, pageFocused, registerTaskWorker, showTaskNotification, taskNotificationsEnabled, type NotificationPermissionState } from "./taskNotification";
 import "./puck.css";
 
@@ -413,6 +414,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
   const [editingCustomContext, setEditingCustomContext] = useState(false);
   const [customContextDraft, setCustomContextDraft] = useState("");
   const [avatarSheetOpen, setAvatarSheetOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const faviconOriginal = useRef<{ href:string; type:string } | undefined>(undefined);
 
   useEffect(() => {
@@ -896,7 +898,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		updateScopedMessages(assistantID, current => current.map(item => item.id === message.id ? { ...item, reaction:String(response.data?.reaction || "") } : item)); if (selectedRef.current === assistantID) setReactionTarget("");
 	}
 
-	useEffect(() => { setAvatarSheetOpen(false); }, [selectedID]);
+	useEffect(() => { setAvatarSheetOpen(false); setMemoryOpen(false); }, [selectedID]);
 	useEffect(() => {
 		const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]'); if (!link) return;
 		if (!faviconOriginal.current) faviconOriginal.current = { href:link.getAttribute("href") || "", type:link.getAttribute("type") || "" };
@@ -916,14 +918,14 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 			if (sidebarMenu || plusOpen) { setSidebarMenu(undefined); setPlusOpen(false); return; }
 			if (searchOpen) { setSearchOpen(false); setSidebarQuery(""); return; }
 			const target = event.target;
-			if (target instanceof HTMLElement && target.closest("input, textarea, select, .puck-dialog, .puck-avatar-sheet")) return;
-			if (avatarSheetOpen || creating || creatingGroup || creatingSection || renamingSection || deletingSection || deleteTarget) return;
+			if (target instanceof HTMLElement && target.closest("input, textarea, select, .puck-dialog, .puck-avatar-sheet, .puck-memory-sheet")) return;
+			if (avatarSheetOpen || memoryOpen || creating || creatingGroup || creatingSection || renamingSection || deletingSection || deleteTarget) return;
 			closeInfo();
 		};
 		window.addEventListener("pointerdown", close);
 		window.addEventListener("keydown", onKey);
 		return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", onKey); };
-	}, [sidebarMenu, plusOpen, searchOpen, infoOpen, mobilePanel, avatarSheetOpen, creating, creatingGroup, creatingSection, renamingSection, deletingSection, deleteTarget]);
+	}, [sidebarMenu, plusOpen, searchOpen, infoOpen, mobilePanel, avatarSheetOpen, memoryOpen, creating, creatingGroup, creatingSection, renamingSection, deletingSection, deleteTarget]);
 	useLayoutEffect(() => { if (searchOpen) searchInputRef.current?.focus(); }, [searchOpen]);
 	useEffect(() => {
 		if (!rowDrag) return;
@@ -1168,6 +1170,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		<section className="puck-info-details"><h4>自定义上下文</h4>{editingCustomContext ? <div className="puck-description-editor"><textarea aria-label="自定义上下文" maxLength={4000} value={customContextDraft} onChange={event => setCustomContextDraft(event.target.value)}/><div><button className="puck-btn" type="button" onClick={() => { setEditingCustomContext(false); setCustomContextDraft(selected.customContext || ""); }}>取消</button><button className="puck-btn primary" type="button" aria-label="保存自定义上下文" onClick={() => void saveCustomContext()}>保存</button></div></div> : <><p className={`puck-custom-context${selected.customContext ? "" : " is-empty"}`}>{selected.customContext || "尚未添加自定义上下文"}</p><button className="puck-description-edit" type="button" aria-label="编辑自定义上下文" onClick={() => { setCustomContextDraft(selected.customContext || ""); setEditingCustomContext(true); }}>编辑</button></>}<small>系统安全规则始终优先。修改从下一轮对话生效，不会更换大脑会话。</small></section>
 		<section className="puck-info-details"><h4>详情</h4><dl><dt>名称</dt><dd>{selected.name}</dd><dt>状态</dt><dd><span className="puck-info-status" data-state={puckState}><i aria-hidden="true"/>{statusLabel}</span></dd><dt>大脑主机</dt><dd><span aria-hidden="true">▣</span> {devices.find(device => device.deviceId === selected.brainDeviceId)?.name || selected.brainDeviceId}</dd><dt>运行权限</dt><dd><label className="puck-permission-setting"><span className="sr-only">运行权限</span><select aria-label="运行权限" value={selected.permissionMode || "full"} onChange={event=>void updatePermissionMode(event.target.value as "full" | "ask")}><option value="full">Full Access（默认）</option><option value="ask">每次询问</option></select></label><small>{(selected.permissionMode || "full") === "full" ? "可执行任意命令并访问主机文件，不再询问" : "高风险操作会请求确认"}</small></dd><dt>任务通知</dt><dd><button className="puck-btn" type="button" aria-label="任务通知" aria-pressed={noticePref === "granted"} onClick={() => void enableTaskNotifications().then(setNoticePref)}>{noticePref === "granted" ? "已开启" : noticePref === "denied" ? "已被浏览器拒绝" : noticePref === "unsupported" ? "当前环境不可用" : "开启通知"}</button><small>离开这个页面时，任务完成、卡住或失败会弹出系统通知。关闭标签页后的推送还没接上。</small></dd></dl></section>
 		<section className="puck-authorization-rules"><h4>以后都允许</h4>{authorizationRules.length === 0 ? <p>尚未保存规则</p> : <ul>{authorizationRules.map(rule=><li key={rule.id}><div><strong>{rule.actionType}</strong><span>{rule.deviceId}</span><code>{rule.cwd}</code><time dateTime={rule.createdAt}>{new Date(rule.createdAt).toLocaleString("zh-CN")}</time></div><button className="puck-btn" type="button" aria-label={`撤销规则 ${rule.actionType} ${rule.cwd}`} onClick={()=>void revokeAuthorizationRule(rule.id)}>撤销</button></li>)}</ul>}</section>
+		<section className="puck-info-details"><h4>记忆</h4><p>查看这个 Bot 记下的事实，以及所有 Bot 共享的事实。</p><button className="puck-btn" type="button" onClick={() => setMemoryOpen(true)}>记忆</button></section>
 		<section className="puck-danger-zone"><h4>危险操作</h4><p>删除后，这个 Bot 及其历史将不再显示。</p><button className="puck-btn danger" type="button" onClick={()=>setDeleteTarget(selected)}>删除 Bot</button></section>
       </div> : <p className="puck-info-empty">选择助理后查看设置。</p>}
     </aside>
@@ -1182,6 +1185,7 @@ export function PuckWorkspace({ request, subscribeEvents, state, reason, devices
 		{sidebarMenu?.kind === "blank" && <div className="puck-context-menu" role="menu" aria-label="侧边栏菜单" style={{ left: sidebarMenu.x, top: sidebarMenu.y }}><button type="button" role="menuitem" onClick={() => { setSectionName(""); setCreatingSection(true); setSidebarMenu(undefined); }}>建分组</button></div>}
 		{sidebarMenu?.kind === "assistant" && <div className="puck-context-menu" role="menu" aria-label={`${sidebarMenu.name}菜单`} style={{ left: sidebarMenu.x, top: sidebarMenu.y }}><button type="button" role="menuitem" onClick={() => { const id = sidebarMenu.id; setSidebarMenu(undefined); selectAssistant(id); openInfo(); }}>编辑</button></div>}
 		{avatarSheetOpen && selected && <PuckAvatarSheet assistantId={selected.assistantId} name={selected.name} design={avatarDesign(selected)} onClose={() => setAvatarSheetOpen(false)} onShape={shape => void updateAvatar(shape, avatarDesign(selected).color)} onColor={color => void updateAvatar(avatarDesign(selected).shape, color)} onReset={resetAvatar} onUpload={uploadAvatar} onClearImage={clearAvatarImage}/>}
+		{memoryOpen && selected && <PuckMemorySheet assistantId={selected.assistantId} request={request} onClose={() => setMemoryOpen(false)}/>}
 		{deleteTarget && <div className="puck-dialog-backdrop" role="presentation"><section className="puck-dialog puck-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="puck-delete-title"><h2 id="puck-delete-title">删除 Bot</h2><p>将删除“{deleteTarget.name}”，停止该 Bot 的后台大脑，历史不再显示。</p><p className="puck-dialog-note">已派发的 Codex 任务不会被强制停止，仍可在 Ariel 会话中继续查看。</p><div><button className="puck-btn puck-btn-md" type="button" disabled={deleting} onClick={()=>setDeleteTarget(undefined)}>取消</button><button className="puck-btn puck-btn-md danger" type="button" aria-label={`确认删除${deleteTarget.name}`} disabled={deleting} onClick={()=>void deleteAssistant()}>{deleting ? "正在删除…" : "删除"}</button></div></section></div>}
   </main>;
 }

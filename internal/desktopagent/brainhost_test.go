@@ -3,6 +3,7 @@ package desktopagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
@@ -21,6 +23,8 @@ type fakeBrainProcess struct {
 	incoming chan brainFrame
 	done     chan struct{}
 	replies  []string
+	callErr  error
+	exitTurn bool
 }
 type brainCall struct {
 	method string
@@ -33,6 +37,9 @@ func newFakeBrainProcess() *fakeBrainProcess {
 func (f *fakeBrainProcess) Call(_ context.Context, method string, params any, result any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.callErr != nil && method == "thread/resume" {
+		return f.callErr
+	}
 	encoded, _ := json.Marshal(params)
 	var values map[string]any
 	_ = json.Unmarshal(encoded, &values)
@@ -42,6 +49,9 @@ func (f *fakeBrainProcess) Call(_ context.Context, method string, params any, re
 	}
 	if method == "turn/start" {
 		_ = json.Unmarshal([]byte(`{"turn":{"id":"brain-turn"}}`), result)
+		if f.exitTurn {
+			f.exit()
+		}
 	}
 	return nil
 }
@@ -262,6 +272,25 @@ func TestBrainHostLogsSanitizedPhaseLatency(t *testing.T) {
 	}
 }
 
+func TestBrainHostReportsSuccessfulTurnClientMessage(t *testing.T) {
+	process := newFakeBrainProcess()
+	var reported string
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) {
+		return process, nil
+	}, TurnStarted: func(clientMessageID string) { reported = clientMessageID }})
+	defer host.Close()
+	threadID, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if reported != "client-message-a" {
+		t.Fatalf("reported client message=%q", reported)
+	}
+}
+
 func TestBrainHostTurnsFailedCompletionIntoSafeTerminalMessage(t *testing.T) {
 	capture := &capturedPhases{}
 	restore := SetPhaseLogger(slog.New(capture))
@@ -281,30 +310,40 @@ func TestBrainHostTurnsFailedCompletionIntoSafeTerminalMessage(t *testing.T) {
 	if _, err := host.Turn(context.Background(), threadID, "client-message", "fixture", nil, "", "low"); err != nil {
 		t.Fatal(err)
 	}
-	process.incoming <- brainFrame{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"brain-thread","turn":{"id":"brain-turn","status":"failed","error":{"message":"private provider details","codexErrorInfo":"other"}}}`)}
+	process.incoming <- brainFrame{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"brain-thread","turn":{"id":"brain-turn","status":"failed","error":{"message":"unexpected status 429: quota sk-abcDEF1234567890","codexErrorInfo":"other"}}}`)}
 	event := <-events
 	if event.Kind != "puck.brain.event" || event.Payload["method"] != "item/agentMessage/completed" {
 		t.Fatalf("safe terminal event missing: %+v", event)
 	}
 	encoded, _ := json.Marshal(event.Payload)
-	if !strings.Contains(string(encoded), "BRAIN_UNAVAILABLE") || strings.Contains(string(encoded), "private provider details") {
+	if !strings.Contains(string(encoded), "BRAIN_UNAVAILABLE") || strings.Contains(string(encoded), "sk-abcDEF") || strings.Contains(string(encoded), "quota") {
 		t.Fatalf("unsafe terminal event: %s", encoded)
 	}
-	if capture.leaks("private provider details") {
-		t.Fatal("failed completion log leaked provider details")
+	if capture.leaks("sk-abcDEF1234567890") {
+		t.Fatal("failed completion log leaked a token")
 	}
 	found := false
 	capture.mu.Lock()
 	for _, record := range capture.records {
 		fields := map[string]slog.Value{}
 		record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
-		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" {
+		if fields["phase"].String() == "brain-turn-complete" && !fields["ok"].Bool() && fields["error"].String() == "BRAIN_UNAVAILABLE" && fields["category"].String() == "rate" && fields["errorInfo"].String() == "other" && fields["status"].Int64() == 429 && fields["messageBytes"].Int64() > 0 && strings.Contains(fields["provider"].String(), "quota") && strings.Contains(fields["provider"].String(), "[redacted]") && !strings.Contains(fields["provider"].String(), "sk-abcDEF") {
 			found = true
 		}
 	}
 	capture.mu.Unlock()
 	if !found {
 		t.Fatalf("failed completion was not logged safely: %v", capture.phases())
+	}
+}
+
+func TestRedactedProviderMessageDropsTokensAndStaysShort(t *testing.T) {
+	got := redactProviderMessage("  line one\nsk-liveKey1234567890\n" + strings.Repeat("甲", 200))
+	if strings.Contains(got, "sk-liveKey") || strings.Contains(got, "\n") {
+		t.Fatalf("summary=%q", got)
+	}
+	if !strings.Contains(got, "[redacted]") || len([]rune(got)) != 120 {
+		t.Fatalf("summary=%q len=%d", got, len([]rune(got)))
 	}
 }
 
@@ -358,6 +397,9 @@ func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
 	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := host.Turn(context.Background(), "brain-thread", "client-message-a", "hello", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	first.exit()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -375,13 +417,172 @@ func TestBrainHostRestartsAndResumesAfterProcessExit(t *testing.T) {
 	if !resumed || starts != 2 {
 		t.Fatalf("starts=%d resumed=%v", starts, resumed)
 	}
+	var lost bool
+	for !lost {
+		select {
+		case event := <-events:
+			if event.Kind == "puck.brain.status" && event.ThreadID == "brain-thread" && event.TurnID == "brain-turn" && event.Payload["reason"] == "turn.lost" {
+				lost = true
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing turn.lost event with interrupted turn identity")
+		}
+	}
+}
+
+func TestBrainHostLogsProcessExitDiagnosticOnLostTurn(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	process := &diagnosticBrainProcess{fakeBrainProcess: newFakeBrainProcess(), diagnostic: appserver.InteractiveProcessExitDiagnostic{Kind: "signal", ExitCode: -1, Signal: "killed", Transport: "closed"}}
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), RestartBackoff: time.Minute, Start: func(context.Context, string, string) (brainProcess, error) { return process, nil }})
+	defer host.Close()
+	threadID, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message", "fixture", nil, "", "low"); err != nil {
+		t.Fatal(err)
+	}
+	process.exit()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		capture.mu.Lock()
+		found := false
+		for _, record := range capture.records {
+			fields := map[string]slog.Value{}
+			record.Attrs(func(attr slog.Attr) bool { fields[attr.Key] = attr.Value; return true })
+			if fields["phase"].String() == "brain-turn-lost" && fields["processExit"].String() == "signal" && fields["signal"].String() == "killed" && fields["transport"].String() == "closed" && fields["contextCancelled"].Bool() == false {
+				found = true
+			}
+		}
+		capture.mu.Unlock()
+		if found {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("process exit evidence missing: %v", capture.phases())
+}
+
+type diagnosticBrainProcess struct {
+	*fakeBrainProcess
+	diagnostic appserver.InteractiveProcessExitDiagnostic
+}
+
+func (p *diagnosticBrainProcess) ExitDiagnostic() appserver.InteractiveProcessExitDiagnostic {
+	<-p.done
+	return p.diagnostic
+}
+
+func TestBrainHostReportsFailedRestartResume(t *testing.T) {
+	capture := &capturedPhases{}
+	restore := SetPhaseLogger(slog.New(capture))
+	defer restore()
+	first, second := newFakeBrainProcess(), newFakeBrainProcess()
+	second.callErr = errors.New("fixture resume failed")
+	starts := 0
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), RestartBackoff: time.Millisecond, Start: func(context.Context, string, string) (brainProcess, error) {
+		starts++
+		if starts == 1 {
+			return first, nil
+		}
+		return second, nil
+	}})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	first.exit()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		capture.mu.Lock()
+		found := false
+		for _, record := range capture.records {
+			record.Attrs(func(attr slog.Attr) bool {
+				if attr.Key == "phase" && attr.Value.String() == "brain-restart" {
+					found = true
+				}
+				return true
+			})
+		}
+		capture.mu.Unlock()
+		if found {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("failed restart was not recorded")
+}
+
+func TestBrainHostCloseDoesNotReportActiveTurnAsLost(t *testing.T) {
+	process := newFakeBrainProcess()
+	events := make(chan BrainHostEvent, 4)
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) { return process, nil }, Emit: func(event BrainHostEvent) { events <- event }})
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), "brain-thread", "client-message", "fixture", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Close(); err != nil {
+		t.Fatal(err)
+	}
+	process.exit()
 	select {
 	case event := <-events:
-		if event.ThreadID != "brain-thread" || event.Payload["reason"] != "turn.lost" {
-			t.Fatalf("event=%+v", event)
+		t.Fatalf("graceful close emitted unexpected recovery event: %+v", event)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestBrainHostIgnoresFramesFromReplacedProcess(t *testing.T) {
+	first, second := newFakeBrainProcess(), newFakeBrainProcess()
+	starts := 0
+	events := make(chan BrainHostEvent, 8)
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), RestartBackoff: time.Millisecond, Start: func(context.Context, string, string) (brainProcess, error) {
+		starts++
+		if starts == 1 {
+			return first, nil
 		}
-	default:
-		t.Fatal("missing turn.lost event")
+		return second, nil
+	}, Emit: func(event BrainHostEvent) { events <- event }})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	first.exit()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		second.mu.Lock()
+		resumed := len(second.calls) > 0 && second.calls[0].method == "thread/resume"
+		second.mu.Unlock()
+		if resumed {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for len(events) > 0 {
+		<-events
+	}
+	host.handleFrame(first, brainFrame{ID: json.RawMessage(`1`), Method: "item/tool/call", Params: json.RawMessage(`{"threadId":"brain-thread","callId":"stale-call","tool":"list_devices","arguments":{}}`)})
+	select {
+	case event := <-events:
+		t.Fatalf("replaced process emitted an event: %+v", event)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestBrainHostRejectsTurnWhoseProcessExitedBeforeRegistration(t *testing.T) {
+	process := newFakeBrainProcess()
+	process.exitTurn = true
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) { return process, nil }})
+	defer host.Close()
+	if _, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), "brain-thread", "client-message", "fixture", nil, "", ""); err == nil {
+		t.Fatal("turn was accepted after its process had already exited")
 	}
 }
 

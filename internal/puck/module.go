@@ -50,10 +50,13 @@ type Module struct {
 	wakeMu             sync.Mutex
 	pendingMu          sync.Mutex
 	pending            map[string]pendingBrainTurn
+	lostBrainTurns     map[string]time.Time
 	toolCalls          map[string][]observedToolCall
 	wakeSkips          map[string][]observedWakeSkip
 	lifecycle          sync.RWMutex
 	ackDelay           time.Duration
+	acknowledge        func(context.Context, string, string, string, string, string) error
+	acknowledgeGroup   func(context.Context, string, string, string) error
 	now                func() time.Time
 	watchSnapshotReads atomic.Uint64
 }
@@ -62,6 +65,7 @@ type observedToolCall struct {
 	Tool    string
 	Success bool
 	Code    string
+	TurnID  string
 }
 
 type observedWakeSkip struct {
@@ -88,7 +92,9 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
+	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, lostBrainTurns: map[string]time.Time{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
+	m.acknowledge = store.AcknowledgeMessage
+	m.acknowledgeGroup = store.AcknowledgeGroupMessage
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
 	m.wg.Add(2)
@@ -384,6 +390,10 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 	if method == "" {
 		method = envelope.Payload.Method
 	}
+	if event.Name == "puck.brain.status" {
+		m.recordBrainStatus(ctx, event)
+		return
+	}
 	if method != "item/completed" && method != "item/agentMessage/completed" && method != "turn/completed" {
 		return
 	}
@@ -442,6 +452,42 @@ func (m *Module) recordBrainMessage(ctx context.Context, event relay.BrainEvent)
 		}
 		summary, _ := json.Marshal(map[string]any{"startedAt": pending.startedAt.UTC(), "state": "running", "steps": pending.steps})
 		_ = m.store.UpsertMessage(ctx, Message{ID: pending.responseID, AssistantID: event.AssistantID, Role: "assistant", Kind: kind, Text: text, WorkSummary: string(summary), BrainTurnID: params.TurnID})
+	}
+}
+
+func (m *Module) recordBrainStatus(ctx context.Context, event relay.BrainEvent) {
+	var status struct {
+		Payload struct {
+			Reason string `json:"reason"`
+			TurnID string `json:"turnId"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(event.Payload, &status) != nil || status.Payload.Reason != "turn.lost" || status.Payload.TurnID == "" {
+		return
+	}
+	turnID := status.Payload.TurnID
+	m.pendingMu.Lock()
+	now := m.now()
+	m.lostBrainTurns[turnID] = now
+	for id, at := range m.lostBrainTurns {
+		if now.Sub(at) > 10*time.Minute {
+			delete(m.lostBrainTurns, id)
+		}
+	}
+	for len(m.lostBrainTurns) > 128 {
+		oldestID := ""
+		var oldest time.Time
+		for id, at := range m.lostBrainTurns {
+			if oldestID == "" || at.Before(oldest) {
+				oldestID, oldest = id, at
+			}
+		}
+		delete(m.lostBrainTurns, oldestID)
+	}
+	pending := m.pending[event.AssistantID]
+	m.pendingMu.Unlock()
+	if pending.turnID == turnID {
+		m.finishBrainTurnMessage(ctx, event.AssistantID, turnID, "刚才中断了，我重新看一下。", "error")
 	}
 }
 
@@ -667,7 +713,7 @@ func (b toolBackend) PermissionMode(ctx context.Context, assistantID string) str
 	return permissionMode(a)
 }
 func (b toolBackend) SaveTask(ctx context.Context, task pucktools.Task) error {
-	if err := b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, SourceMessageID: task.SourceMessageID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, CreatedBy: "puck", LastTurnID: task.LastTurnID}); err != nil {
+	if err := b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, SourceMessageID: task.SourceMessageID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, LastTurnID: task.LastTurnID}); err != nil {
 		return err
 	}
 	card, _ := json.Marshal(map[string]any{"taskId": task.ID, "status": task.Status, "cardState": task.Status, "threadId": task.NativeThreadID, "deviceId": task.DeviceID, "cwd": task.CWD})
@@ -999,6 +1045,10 @@ func (m *Module) Handle(ctx context.Context, method string, params json.RawMessa
 			response = m.sectionCollapse(ctx, params)
 		case "puck.section.move":
 			response = m.sectionMove(ctx, params)
+		case "puck.memory.list":
+			response = m.memoryList(ctx, params)
+		case "puck.memory.delete":
+			response = m.memoryDelete(ctx, params)
 		default:
 			response = moduleError("UNSUPPORTED", "Puck method is not available in P0")
 		}
@@ -1065,7 +1115,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if contextErr != nil {
 		return moduleError("INVALID_ARGUMENT", contextErr.Error())
 	}
-	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, Persona: input.Description, CustomContext: customContext, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: m.toolsetForHost(input.BrainDeviceID), AllowedScope: string(scope), Status: "provisioning"}
+	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, CustomContext: customContext, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: m.toolsetForHost(input.BrainDeviceID), AllowedScope: string(scope), Status: "provisioning"}
 	a.Policy = policyWithPermissionMode(a.Policy, input.PermissionMode)
 	if err := m.store.CreateAssistantLimited(ctx, a, MaxActiveAssistants); errors.Is(err, ErrAssistantLimitReached) {
 		return moduleError("OVERLOADED", fmt.Sprintf("active assistant limit reached (%d)", MaxActiveAssistants))
@@ -1090,7 +1140,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	m.syncBrainThreads(ctx)
 	greetingID := newUUID()
 	startedAt := m.now()
-	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。"), "model": a.BrainModel, "effort": "low"}))
+	greeting := m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.start", mustJSON(map[string]any{"assistantId": a.ID, "threadId": a.BrainThreadID, "clientMessageId": greetingID, "text": brainEnvelope(a, "请用一条简短消息介绍自己、能做什么，并问我想先做什么。不要调用工具。", m.memoryBlock(ctx, a)), "model": a.BrainModel, "effort": "low"}))
 	if greeting.Error != nil {
 		_ = m.store.AppendMessage(ctx, Message{ID: greetingID, AssistantID: a.ID, Role: "assistant", Kind: "notice", Text: fmt.Sprintf("你好，我是 %s。大脑暂时无法生成问候，你仍可以直接告诉我想做什么。", a.Name)})
 		return accepted(map[string]any{"assistant": assistantData(a), "greeting": map[string]any{"state": "fallback", "messageId": greetingID}})
@@ -1140,7 +1190,7 @@ func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResp
 		a.Name = *input.Name
 	}
 	if input.Description != nil {
-		a.Description, a.Persona = *input.Description, *input.Description
+		a.Description = *input.Description
 	}
 	if input.CustomContext != nil {
 		customContext, contextErr := normalizeCustomContext(*input.CustomContext)
@@ -1332,13 +1382,19 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if err != nil {
 		return notFound()
 	}
+	pending := m.clearPending(a.ID)
+	if err := m.discardRecoveredTransientResponses(ctx, a.ID, pending); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if err := m.deletePendingResponse(ctx, a.ID, pending); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
 	if err := m.store.SoftDeleteAssistant(ctx, a.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return notFound()
 		}
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	m.clearPending(a.ID)
 	m.releaseAssistant(a.ID)
 	m.syncBrainThreads(ctx)
 	if a.BrainThreadID != "" {
@@ -1379,6 +1435,9 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.interrupt", mustJSON(map[string]any{"threadId": previous.threadID, "expectedTurnId": previous.turnID}))
 	}
 	if err := m.deletePendingResponse(ctx, a.ID, previous); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if err := m.discardRecoveredTransientResponses(ctx, a.ID, previous); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	cardJSON := ""
@@ -1475,28 +1534,34 @@ func (m *Module) markPendingTaskEvent(assistantID, card string) {
 func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, startedAt time.Time, ack bool, groupID string) {
 	m.clearPending(a.ID)
 	pending := pendingBrainTurn{threadID: a.BrainThreadID, turnID: turnID, messageID: messageID, responseID: responseID, groupID: groupID, startedAt: startedAt, toolFailures: map[string]int{}, ack: ack}
-	if !ack {
+	m.pendingMu.Lock()
+	_, lost := m.lostBrainTurns[turnID]
+	delete(m.lostBrainTurns, turnID)
+	m.pendingMu.Unlock()
+	if !ack || lost {
 		m.pendingMu.Lock()
 		m.pending[a.ID] = pending
 		m.pendingMu.Unlock()
+		if lost {
+			go m.finishBrainTurnMessage(m.rootCtx, a.ID, turnID, "刚才中断了，我重新看一下。", "error")
+		}
 		return
 	}
 	pending.timer = time.AfterFunc(m.ackDelay, func() {
 		m.pendingMu.Lock()
+		defer m.pendingMu.Unlock()
 		current, ok := m.pending[a.ID]
-		if ok && current.messageID == messageID {
-			current.timer = nil
-			m.pending[a.ID] = current
+		if !ok || current.messageID != messageID || current.turnID != turnID || current.responseID != responseID {
+			return
 		}
-		m.pendingMu.Unlock()
-		if ok && current.messageID == messageID {
-			if current.groupID != "" {
-				_ = m.store.UpsertGroupMessage(context.Background(), GroupMessage{ID: responseID, GroupID: current.groupID, Role: "assistant", AuthorAssistantID: a.ID, Kind: "acknowledged", Text: "收到，我正在处理。", CreatedAt: startedAt})
-				return
-			}
-			summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
-			_ = m.store.UpsertMessage(context.Background(), Message{ID: responseID, AssistantID: a.ID, Role: "assistant", Kind: "acknowledged", Text: "收到，我正在处理。", WorkSummary: string(summary), BrainTurnID: turnID})
+		current.timer = nil
+		m.pending[a.ID] = current
+		if current.groupID != "" {
+			_ = m.acknowledgeGroup(context.Background(), current.groupID, responseID, "收到，我正在处理。")
+			return
 		}
+		summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
+		_ = m.acknowledge(context.Background(), a.ID, responseID, turnID, "收到，我正在处理。", string(summary))
 	})
 	m.pendingMu.Lock()
 	m.pending[a.ID] = pending
@@ -1517,6 +1582,13 @@ func (m *Module) deletePendingResponse(ctx context.Context, assistantID string, 
 		return nil
 	}
 	return err
+}
+
+func (m *Module) discardRecoveredTransientResponses(ctx context.Context, assistantID string, pending pendingBrainTurn) error {
+	if pending.turnID != "" {
+		return nil
+	}
+	return m.store.DeleteTransientMessages(ctx, assistantID)
 }
 
 func (m *Module) clearPending(assistantID string) pendingBrainTurn {
@@ -1988,8 +2060,8 @@ func (m *Module) finalizeCard(ctx context.Context, assistantID, messageID, state
 	encoded, _ := json.Marshal(card)
 	return m.store.UpdateMessageCard(ctx, assistantID, messageID, string(encoded))
 }
-func brainEnvelope(a Assistant, text string) string {
-	return brainEnvelopeWithReply(a, text, nil, nil, nil, nil)
+func brainEnvelope(a Assistant, text, memory string) string {
+	return brainEnvelopeWithReply(a, text, nil, nil, nil, nil, memory)
 }
 
 func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, reply *Message) string {
@@ -2001,10 +2073,10 @@ func (m *Module) trustedEnvelope(ctx context.Context, a Assistant, text string, 
 	if err != nil {
 		openTasks = nil
 	}
-	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks, m.taskSnippets(ctx, a.ID, openTasks))
+	return brainEnvelopeWithReply(a, text, reply, tasks, openTasks, m.taskSnippets(ctx, a.ID, openTasks), m.memoryBlock(ctx, a))
 }
 
-func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask, snippets map[string]string) string {
+func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Task, openTasks []BotTask, snippets map[string]string, memory string) string {
 	context := ""
 	if reply != nil {
 		author := "用户"
@@ -2027,6 +2099,7 @@ func brainEnvelopeWithReply(a Assistant, text string, reply *Message, tasks []Ta
 	}
 	context += reusableTaskContext(tasks)
 	context += openBotTaskContext(openTasks, snippets)
+	context += memory
 	return fmt.Sprintf("PUCK_ENVELOPE assistant=%s nonce=%s\n%s%s\n\n用户请求：%s", a.ID, newUUID(), envelopeContext(a), context, text)
 }
 

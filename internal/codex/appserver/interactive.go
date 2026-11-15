@@ -13,9 +13,14 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 )
 
-const interactiveIncomingLimit = 64
+const (
+	interactiveIncomingByteLimit  = 64 << 20
+	interactiveIncomingFrameBytes = int(unsafe.Sizeof(IncomingFrame{}))
+	interactiveExitDiagnosticWait = time.Second
+)
 
 // IncomingFrame is an App Server notification or server-initiated request.
 // A non-empty ID distinguishes requests that require an explicit reply.
@@ -29,7 +34,9 @@ func (f IncomingFrame) IsRequest() bool { return len(f.ID) > 0 && string(f.ID) !
 
 // InteractiveSession is intentionally separate from Session. Session remains
 // read-only and rejects interactive requests; this transport exposes them to a
-// bounded bootstrap owner without ever approving one implicitly.
+// bounded bootstrap owner without ever approving one implicitly. Incoming frame
+// metadata and payload storage are bounded by the same 64 MiB maximum as one
+// transport frame.
 type InteractiveSession struct {
 	rw       io.ReadWriteCloser
 	limit    int
@@ -40,14 +47,21 @@ type InteractiveSession struct {
 	done     chan struct{}
 	incoming chan IncomingFrame
 	writeMu  sync.Mutex
+
+	incomingMu    sync.Mutex
+	incomingQueue []IncomingFrame
+	incomingHead  int
+	incomingBytes int
+	incomingReady chan struct{}
 }
 
 func NewInteractiveSession(rw io.ReadWriteCloser, limit int) *InteractiveSession {
 	if limit <= 0 {
 		limit = DefaultMaxResponseBytes
 	}
-	s := &InteractiveSession{rw: rw, limit: limit, pending: map[string]chan response{}, done: make(chan struct{}), incoming: make(chan IncomingFrame, interactiveIncomingLimit)}
+	s := &InteractiveSession{rw: rw, limit: limit, pending: map[string]chan response{}, done: make(chan struct{}), incoming: make(chan IncomingFrame), incomingReady: make(chan struct{}, 1)}
 	go s.readLoop()
+	go s.deliverIncoming()
 	return s
 }
 
@@ -59,6 +73,78 @@ func (s *InteractiveSession) Err() error {
 	return s.err
 }
 func (s *InteractiveSession) Close() error { s.fail(ErrClosed); return nil }
+
+func incomingFrameBytes(frame IncomingFrame) int {
+	return interactiveIncomingFrameBytes + len(frame.ID) + len(frame.Method) + len(frame.Params)
+}
+
+func (s *InteractiveSession) compactIncoming() {
+	remaining := copy(s.incomingQueue, s.incomingQueue[s.incomingHead:])
+	clear(s.incomingQueue[remaining:])
+	s.incomingQueue = s.incomingQueue[:remaining]
+	s.incomingHead = 0
+}
+
+// The reader only appends to this bounded FIFO. A separate delivery goroutine
+// may wait for the consumer without delaying responses behind notifications.
+func (s *InteractiveSession) enqueueIncoming(frame IncomingFrame) error {
+	size := incomingFrameBytes(frame)
+	s.incomingMu.Lock()
+	defer s.incomingMu.Unlock()
+	select {
+	case <-s.done:
+		return s.Err()
+	default:
+	}
+	if size > interactiveIncomingByteLimit-s.incomingBytes {
+		return ErrCapacity
+	}
+	if s.incomingHead > 0 {
+		s.compactIncoming()
+	}
+	s.incomingQueue = append(s.incomingQueue, frame)
+	s.incomingBytes += size
+	select {
+	case s.incomingReady <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *InteractiveSession) deliverIncoming() {
+	for {
+		s.incomingMu.Lock()
+		if s.incomingHead == len(s.incomingQueue) {
+			s.incomingQueue = nil
+			s.incomingHead = 0
+			s.incomingMu.Unlock()
+			select {
+			case <-s.incomingReady:
+			case <-s.done:
+				return
+			}
+			continue
+		}
+		frame := s.incomingQueue[s.incomingHead]
+		s.incomingMu.Unlock()
+		select {
+		case s.incoming <- frame:
+			s.incomingMu.Lock()
+			s.incomingQueue[s.incomingHead] = IncomingFrame{}
+			s.incomingHead++
+			s.incomingBytes -= incomingFrameBytes(frame)
+			if s.incomingHead == len(s.incomingQueue) {
+				s.incomingQueue = nil
+				s.incomingHead = 0
+			} else if s.incomingHead >= len(s.incomingQueue)-s.incomingHead {
+				s.compactIncoming()
+			}
+			s.incomingMu.Unlock()
+		case <-s.done:
+			return
+		}
+	}
+}
 
 func (s *InteractiveSession) fail(err error) {
 	s.mu.Lock()
@@ -224,10 +310,8 @@ func (s *InteractiveSession) readLoop() {
 				return
 			}
 			incoming.Params = raw.Params
-			select {
-			case s.incoming <- incoming:
-			default:
-				s.fail(ErrCapacity)
+			if err := s.enqueueIncoming(incoming); err != nil {
+				s.fail(err)
 				return
 			}
 			continue
@@ -251,7 +335,55 @@ func (s *InteractiveSession) readLoop() {
 type InteractiveProcess struct {
 	*InteractiveSession
 	cmd    *exec.Cmd
+	ctx    context.Context
 	exited chan struct{}
+}
+
+type InteractiveProcessExitDiagnostic struct {
+	Kind             string
+	ExitCode         int
+	Signal           string
+	Transport        string
+	ContextCancelled bool
+}
+
+func newInteractiveProcessExitDiagnostic(ctx context.Context, state *os.ProcessState, sessionErr error, exited bool) InteractiveProcessExitDiagnostic {
+	diagnostic := InteractiveProcessExitDiagnostic{Kind: "none", ExitCode: -1, Transport: ErrorClass(sessionErr)}
+	if diagnostic.Transport == "" {
+		diagnostic.Transport = "none"
+		if !exited {
+			diagnostic.Transport = "closed"
+		}
+	}
+	if ctx != nil {
+		diagnostic.ContextCancelled = ctx.Err() != nil
+	}
+	if !exited || state == nil {
+		return diagnostic
+	}
+	diagnostic.ExitCode = state.ExitCode()
+	diagnostic.Kind = "exit"
+	if status, ok := processWaitStatus(state); ok && status.signaled() {
+		diagnostic.Kind = "signal"
+		diagnostic.Signal = status.signal()
+	}
+	return diagnostic
+}
+
+func (p *InteractiveProcess) ExitDiagnostic() InteractiveProcessExitDiagnostic {
+	select {
+	case <-p.Done():
+		timer := time.NewTimer(interactiveExitDiagnosticWait)
+		defer timer.Stop()
+		select {
+		case <-p.exited:
+		case <-timer.C:
+			return newInteractiveProcessExitDiagnostic(p.ctx, nil, p.Err(), false)
+		}
+	default:
+		return newInteractiveProcessExitDiagnostic(p.ctx, nil, p.Err(), false)
+	}
+	return newInteractiveProcessExitDiagnostic(p.ctx, p.cmd.ProcessState, p.Err(), true)
 }
 
 func StartInteractive(ctx context.Context, binary, cwd string) (*InteractiveProcess, error) {
@@ -309,12 +441,12 @@ func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*I
 		_ = stdin.Close()
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startCommand(cmd); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		return nil, errors.New("failed to start configured Codex binary")
 	}
-	p := &InteractiveProcess{InteractiveSession: NewInteractiveSession(pipes{stdout, stdin}, 0), cmd: cmd, exited: make(chan struct{})}
+	p := &InteractiveProcess{InteractiveSession: NewInteractiveSession(pipes{stdout, stdin}, 0), cmd: cmd, ctx: ctx, exited: make(chan struct{})}
 	go func() { _ = cmd.Wait(); p.InteractiveSession.fail(ErrClosed); close(p.exited) }()
 	if err := p.Initialize(ctx); err != nil {
 		_ = p.Close()
@@ -325,11 +457,6 @@ func startInteractiveCommand(ctx context.Context, cmd *exec.Cmd, cwd string) (*I
 
 func (p *InteractiveProcess) Close() error {
 	_ = p.InteractiveSession.Close()
-	select {
-	case <-p.exited:
-	case <-time.After(2 * time.Second):
-		_ = p.cmd.Process.Kill()
-		<-p.exited
-	}
+	stopCommand(p.cmd, p.exited)
 	return nil
 }

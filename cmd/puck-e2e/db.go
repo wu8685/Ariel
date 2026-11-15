@@ -196,12 +196,19 @@ func assistantGone(ctx context.Context, dbPath, assistantID string) (bool, strin
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bot_task_messages WHERE assistant_id=?`, assistantID).Scan(&messages); err != nil {
 		return false, "bot_task_messages: " + err.Error(), err
 	}
+	var transient int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversation_messages WHERE assistant_id=? AND kind IN ('processing','acknowledged','greeting_processing')`, assistantID).Scan(&transient); err != nil {
+		return false, "transient_messages: " + err.Error(), err
+	}
 	var left []string
 	if snap.BotTasks != 0 {
 		left = append(left, fmt.Sprintf("bot_tasks=%d", snap.BotTasks))
 	}
 	if messages != 0 {
 		left = append(left, fmt.Sprintf("bot_task_messages=%d", messages))
+	}
+	if transient != 0 {
+		left = append(left, fmt.Sprintf("transient_messages=%d", transient))
 	}
 	if snap.SessionLinks != 0 {
 		left = append(left, fmt.Sprintf("bot_task_sessions=%d", snap.SessionLinks))
@@ -219,6 +226,17 @@ func assistantGone(ctx context.Context, dbPath, assistantID string) (bool, strin
 		return true, "gone", nil
 	}
 	return false, strings.Join(left, " "), nil
+}
+
+func transientMessageCount(ctx context.Context, dbPath, assistantID string) (int, error) {
+	db, err := openStateDB(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var count int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversation_messages WHERE assistant_id=? AND kind IN ('processing','acknowledged','greeting_processing')`, assistantID).Scan(&count)
+	return count, err
 }
 
 func linkChildSession(ctx context.Context, dbPath, assistantID, deviceID, threadID string) error {

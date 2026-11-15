@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck"
 )
 
 func TestIsolationRejectsRealState(t *testing.T) {
@@ -173,6 +175,82 @@ func TestObservedScenariosDoNotFailTheRun(t *testing.T) {
 	}
 }
 
+func TestQueueEvidenceRequiresEveryPromptTurnOpportunity(t *testing.T) {
+	result := queueWhileBusyResult([]Check{{Name: "picked-up", Pass: true}, {Name: "one-pending-wake", Pass: true}}, []string{"message-a", "message-b"}, func(string) bool { return false })
+	if result.Status != "fail" {
+		t.Fatalf("missing prompt turn opportunities produced %q", result.Status)
+	}
+	result = queueWhileBusyResult([]Check{{Name: "picked-up", Pass: false}, {Name: "one-pending-wake", Pass: true}}, []string{"message-a"}, func(string) bool { return false })
+	if result.Status != "fail" {
+		t.Fatalf("unobserved pickup without a prompt turn produced %q", result.Status)
+	}
+}
+
+func TestToolChoiceEvidenceIsScopedToPromptTurn(t *testing.T) {
+	calls := []any{
+		map[string]any{"tool": "update_memory", "success": true, "turnId": "turn-old"},
+		map[string]any{"tool": "send_message", "success": true, "turnId": "turn-current"},
+	}
+	for _, name := range toolNamesForTurn(calls, "turn-current") {
+		if strings.Contains(name, "update_memory") {
+			t.Fatalf("prior turn tool choice counted for current prompt: %v", calls)
+		}
+	}
+	calls = append(calls, map[string]any{"tool": "update_memory", "success": true, "turnId": "turn-current"})
+	found := false
+	for _, name := range toolNamesForTurn(calls, "turn-current") {
+		found = found || strings.Contains(name, "update_memory")
+	}
+	if !found {
+		t.Fatal("current turn tool choice was hidden by an earlier call with the same name")
+	}
+}
+
+func TestBusyOnlyFollowsTransientRowsAfterLatestUserMessage(t *testing.T) {
+	history := map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "old-user", "role": "user", "kind": "text"},
+		{"id": "old-response", "role": "assistant", "kind": "acknowledged"},
+		{"id": "new-user", "role": "user", "kind": "text"},
+	}}}
+	if messagesBusy(messagesOf(history)) {
+		t.Fatal("historical acknowledgement kept a completed conversation busy")
+	}
+	history = map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "new-user", "role": "user", "kind": "text"},
+		{"id": "new-response", "role": "assistant", "kind": "processing"},
+	}}}
+	if !messagesBusy(messagesOf(history)) {
+		t.Fatal("current processing response was ignored")
+	}
+	history = map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "greeting", "role": "assistant", "kind": "greeting_processing"},
+	}}}
+	if !messagesBusy(messagesOf(history)) {
+		t.Fatal("processing greeting did not establish initial busy state")
+	}
+	history = map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "new-user", "role": "user", "kind": "text"},
+		{"id": "greeting", "role": "assistant", "kind": "greeting_processing"},
+	}}}
+	if !messagesBusy(messagesOf(history)) {
+		t.Fatal("active greeting after the latest user message was ignored")
+	}
+}
+
+func TestTerminalErrorStopsWaitingWithoutHidingHistory(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "assistant", "kind": "error"},
+		{"role": "user", "kind": "text"},
+	}
+	if messagesFailed(messages) {
+		t.Fatal("an earlier error made a new prompt fail before it ran")
+	}
+	messages = append(messages, map[string]any{"role": "assistant", "kind": "error"})
+	if !messagesFailed(messages) {
+		t.Fatal("current terminal error was not diagnostic")
+	}
+}
+
 func TestRedactKeepsErrorText(t *testing.T) {
 	raw := "request-failed: context deadline exceeded\n[puck-handoff]\nthread 11111111-1111-4111-8111-111111111111\n\nnext line\ngoroutine 1 [running]\nat main.boom"
 	got := redact(raw)
@@ -181,5 +259,28 @@ func TestRedactKeepsErrorText(t *testing.T) {
 	}
 	if strings.Contains(got, "11111111") || strings.Contains(got, "[puck-handoff]") || strings.Contains(got, "goroutine") {
 		t.Fatalf("secret or body kept: %s", got)
+	}
+}
+
+func TestTransientMessageCountMakesGreetingResidueDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	iso := layout(root, filepath.Join(root, "codex"), "not-used")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := puck.OpenStore(iso.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const readerID = "reader"
+	if err := store.CreateAssistant(ctx, puck.Assistant{ID: readerID, Name: "reader", BrainDeviceID: "brain-a", ToolsetVersion: 1, Status: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, puck.Message{ID: "greeting", AssistantID: readerID, Role: "assistant", Kind: "greeting_processing", Text: "fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	count, err := transientMessageCount(ctx, iso.DBPath, readerID)
+	if err != nil || count != 1 {
+		t.Fatalf("transient greeting count=%d err=%v", count, err)
 	}
 }

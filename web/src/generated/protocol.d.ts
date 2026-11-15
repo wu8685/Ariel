@@ -109,7 +109,9 @@ export type Request = {
     | "puck.section.move"
     | "puck.group.create"
     | "puck.group.history"
-    | "puck.group.message.send";
+    | "puck.group.message.send"
+    | "puck.memory.list"
+    | "puck.memory.delete";
   params: {
     [k: string]: unknown;
   };

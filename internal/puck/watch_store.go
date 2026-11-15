@@ -34,7 +34,7 @@ func (s *Store) UpdateTaskObservation(ctx context.Context, assistantID, taskID, 
 }
 
 func (s *Store) ActiveExecutionTasks(ctx context.Context) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT tasks.task_id,tasks.assistant_id,tasks.source_message_id,tasks.device_id,tasks.cwd,tasks.native_thread_id,tasks.goal,tasks.status,tasks.risk_tags,tasks.created_by,tasks.last_turn_id,tasks.last_seen_revision,tasks.last_summary
+	rows, err := s.db.QueryContext(ctx, `SELECT tasks.task_id,tasks.assistant_id,tasks.source_message_id,tasks.device_id,tasks.cwd,tasks.native_thread_id,tasks.goal,tasks.status,tasks.last_turn_id,tasks.last_seen_revision,tasks.last_summary
 		FROM tasks JOIN assistants ON assistants.id=tasks.assistant_id
 		WHERE assistants.deleted_at IS NULL AND tasks.native_thread_id<>'' AND tasks.status IN ('running','dispatching','review','waiting_user','attention','reconciling','stopping','awaiting_authorization')`)
 	if err != nil {
@@ -44,7 +44,7 @@ func (s *Store) ActiveExecutionTasks(ctx context.Context) ([]Task, error) {
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, task)
@@ -53,7 +53,7 @@ func (s *Store) ActiveExecutionTasks(ctx context.Context) ([]Task, error) {
 }
 
 func (s *Store) TasksForThread(ctx context.Context, deviceID, threadID string) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE device_id=? AND native_thread_id=?`, deviceID, threadID)
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE device_id=? AND native_thread_id=?`, deviceID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (s *Store) TasksForThread(ctx context.Context, deviceID, threadID string) (
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, task)
@@ -71,8 +71,8 @@ func (s *Store) TasksForThread(ctx context.Context, deviceID, threadID string) (
 
 func (s *Store) OwnedTaskForThread(ctx context.Context, assistantID, deviceID, threadID string) (Task, error) {
 	var task Task
-	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND device_id=? AND native_thread_id=?`, assistantID, deviceID, threadID).Scan(
-		&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
+	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND device_id=? AND native_thread_id=?`, assistantID, deviceID, threadID).Scan(
+		&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
 	return task, err
 }
 

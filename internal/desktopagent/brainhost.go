@@ -7,9 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/wu8685/Ariel/internal/codex/appserver"
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
@@ -25,6 +28,12 @@ type brainProcess interface {
 	Close() error
 }
 
+type brainProcessExitDiagnostic = appserver.InteractiveProcessExitDiagnostic
+
+type brainProcessWithExitDiagnostic interface {
+	ExitDiagnostic() brainProcessExitDiagnostic
+}
+
 type BrainHostConfig struct {
 	Enabled        bool
 	Binary         string
@@ -34,6 +43,7 @@ type BrainHostConfig struct {
 	RestartBackoff time.Duration
 	Start          func(context.Context, string, string) (brainProcess, error)
 	Emit           func(BrainHostEvent)
+	TurnStarted    func(string)
 }
 
 type BrainEnsure struct {
@@ -64,6 +74,7 @@ type BrainHost struct {
 	pending      map[string]pendingBrainCall
 	ensures      map[string]BrainEnsure
 	turnStarted  map[string]time.Time
+	turnThreads  map[string]string
 	failures     []time.Time
 	circuitUntil time.Time
 }
@@ -87,7 +98,7 @@ func NewBrainHost(cfg BrainHostConfig) *BrainHost {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}, turnStarted: map[string]time.Time{}}
+	return &BrainHost{cfg: cfg, ctx: ctx, cancel: cancel, threads: map[string]string{}, pending: map[string]pendingBrainCall{}, ensures: map[string]BrainEnsure{}, turnStarted: map[string]time.Time{}, turnThreads: map[string]string{}}
 }
 
 func (h *BrainHost) Ready() bool {
@@ -169,7 +180,7 @@ func brainThreadParams(cwd string, request BrainEnsure) map[string]any {
 }
 
 func puckDynamicTools(version int) []map[string]any {
-	return toolcontract.DynamicTools(version)
+	return toolcontract.CodexWireTools(version)
 }
 
 func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text string, images []string, model, effort string) (string, error) {
@@ -203,8 +214,26 @@ func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text st
 	}
 	h.mu.Lock()
 	h.turnStarted[started.Turn.ID] = startedAt
+	h.turnThreads[started.Turn.ID] = threadID
+	alive := h.process == process
+	select {
+	case <-process.Done():
+		alive = false
+	default:
+	}
+	if !alive {
+		delete(h.turnStarted, started.Turn.ID)
+		delete(h.turnThreads, started.Turn.ID)
+	}
 	h.mu.Unlock()
+	if !alive {
+		logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", false, "error", "BRAIN_UNAVAILABLE")
+		return "", errors.New("BRAIN_UNAVAILABLE")
+	}
 	logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true, "effort", effort, "model", model, "promptBytes", len(text))
+	if h.cfg.TurnStarted != nil {
+		h.cfg.TurnStarted(clientMessageID)
+	}
 	return started.Turn.ID, nil
 }
 
@@ -307,16 +336,39 @@ func (h *BrainHost) ensureProcess(ctx context.Context) (brainProcess, error) {
 	}
 	h.process = p
 	h.mu.Unlock()
-	go h.run(p)
+	exitCh := make(chan brainProcessExitDiagnostic, 1)
+	if process, ok := p.(brainProcessWithExitDiagnostic); ok {
+		go h.captureProcessExit(p, process, exitCh)
+	}
+	go h.run(p, exitCh)
 	return p, nil
 }
 
-func (h *BrainHost) run(process brainProcess) {
+func (h *BrainHost) captureProcessExit(process brainProcess, diagnostic brainProcessWithExitDiagnostic, exitCh chan<- brainProcessExitDiagnostic) {
+	<-process.Done()
+	exitCh <- diagnostic.ExitDiagnostic()
+}
+
+func (h *BrainHost) run(process brainProcess, exitCh <-chan brainProcessExitDiagnostic) {
+	var exitDiagnostic *brainProcessExitDiagnostic
+	diagnosticProcess := false
+	if _, ok := process.(brainProcessWithExitDiagnostic); ok {
+		diagnosticProcess = true
+	}
 	for {
 		select {
+		case diagnostic := <-exitCh:
+			exitDiagnostic = &diagnostic
 		case frame := <-process.Incoming():
 			h.handleFrame(process, frame)
 		case <-process.Done():
+			if diagnosticProcess && exitDiagnostic == nil {
+				select {
+				case diagnostic := <-exitCh:
+					exitDiagnostic = &diagnostic
+				case <-h.ctx.Done():
+				}
+			}
 			h.mu.Lock()
 			if h.process == process {
 				h.process = nil
@@ -326,6 +378,15 @@ func (h *BrainHost) run(process brainProcess) {
 				delete(h.pending, id)
 			}
 			h.turnStarted = map[string]time.Time{}
+			lost := make([]BrainHostEvent, 0, len(h.turnThreads))
+			for turnID, threadID := range h.turnThreads {
+				assistantID := h.threads[threadID]
+				if assistantID == "" {
+					continue
+				}
+				lost = append(lost, BrainHostEvent{Kind: "puck.brain.status", AssistantID: assistantID, ThreadID: threadID, TurnID: turnID, Payload: map[string]any{"state": "degraded", "reason": "turn.lost", "turnId": turnID}})
+			}
+			h.turnThreads = map[string]string{}
 			now := time.Now()
 			kept := h.failures[:0]
 			for _, at := range h.failures {
@@ -343,6 +404,12 @@ func (h *BrainHost) run(process brainProcess) {
 			}
 			circuitOpen := now.Before(h.circuitUntil)
 			h.mu.Unlock()
+			for _, event := range lost {
+				logPhase("brain-turn-lost", event.ThreadID, append([]any{"ok", false, "error", "BRAIN_UNAVAILABLE"}, brainProcessExitAttrs(exitDiagnostic)...)...)
+				if h.cfg.Emit != nil {
+					h.cfg.Emit(event)
+				}
+			}
 			if h.cfg.Emit != nil {
 				for _, request := range requests {
 					h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.status", AssistantID: request.AssistantID, ThreadID: request.ThreadID, Payload: map[string]any{"state": "degraded", "reason": "turn.lost"}})
@@ -358,7 +425,23 @@ func (h *BrainHost) run(process brainProcess) {
 	}
 }
 
+func brainProcessExitAttrs(diagnostic *brainProcessExitDiagnostic) []any {
+	if diagnostic == nil {
+		return nil
+	}
+	exit := *diagnostic
+	attrs := []any{"processExit", exit.Kind, "transport", exit.Transport, "contextCancelled", exit.ContextCancelled}
+	if exit.Kind == "exit" {
+		attrs = append(attrs, "exitCode", exit.ExitCode)
+	}
+	if exit.Signal != "" {
+		attrs = append(attrs, "signal", exit.Signal)
+	}
+	return attrs
+}
+
 func (h *BrainHost) restart(requests []BrainEnsure) {
+	started := time.Now()
 	timer := time.NewTimer(h.cfg.RestartBackoff)
 	defer timer.Stop()
 	select {
@@ -368,12 +451,20 @@ func (h *BrainHost) restart(requests []BrainEnsure) {
 	}
 	for _, request := range requests {
 		if _, err := h.Ensure(h.ctx, request); err != nil {
+			logPhase("brain-restart", request.ThreadID, "durationMs", time.Since(started).Milliseconds(), "ok", false, "error", requestErrorCode("puck.brain.restart", err))
 			return
 		}
 	}
+	logPhase("brain-restart", "", "durationMs", time.Since(started).Milliseconds(), "ok", true)
 }
 
 func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
+	h.mu.Lock()
+	current := h.process == process
+	h.mu.Unlock()
+	if !current {
+		return
+	}
 	var identity struct {
 		ThreadID string `json:"threadId"`
 		TurnID   string `json:"turnId"`
@@ -424,11 +515,12 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 		h.mu.Lock()
 		started, ok := h.turnStarted[identity.TurnID]
 		delete(h.turnStarted, identity.TurnID)
+		delete(h.turnThreads, identity.TurnID)
 		h.mu.Unlock()
 		if ok {
 			attrs := []any{"durationMs", time.Since(started).Milliseconds(), "ok", !failed}
 			if failed {
-				attrs = append(attrs, "error", "BRAIN_UNAVAILABLE")
+				attrs = append(attrs, turnFailureAttrs(frame.Params)...)
 			}
 			logPhase("brain-turn-complete", identity.ThreadID, attrs...)
 		}
@@ -452,6 +544,155 @@ func (h *BrainHost) handleFrame(process brainProcess, frame brainFrame) {
 	if h.cfg.Emit != nil {
 		h.cfg.Emit(BrainHostEvent{Kind: "puck.brain.event", AssistantID: assistant, ThreadID: identity.ThreadID, TurnID: identity.TurnID, Payload: map[string]any{"method": frame.Method, "params": json.RawMessage(frame.Params)}})
 	}
+}
+
+type classifiedTurnError struct {
+	info, category, tool, summary string
+	status, messageBytes          int
+}
+
+func turnFailureAttrs(raw json.RawMessage) []any {
+	failure := classifyTurnError(raw)
+	attrs := []any{"error", "BRAIN_UNAVAILABLE", "category", failure.category, "messageBytes", failure.messageBytes}
+	if failure.info != "" {
+		attrs = append(attrs, "errorInfo", failure.info)
+	}
+	if failure.tool != "" {
+		attrs = append(attrs, "tool", failure.tool)
+	}
+	if failure.status != 0 {
+		attrs = append(attrs, "status", failure.status)
+	}
+	if failure.summary != "" {
+		attrs = append(attrs, "provider", failure.summary)
+	}
+	return attrs
+}
+
+var (
+	toolNameInError = regexp.MustCompile(`(?i)(?:function|tool)[^a-zA-Z0-9_]{1,12}([a-z][a-z0-9_]{0,64})`)
+	statusInMessage = regexp.MustCompile(`(?i)\b(?:https?|http|status)\s*[:= ]*\s*(\d{3})\b`)
+	secretInMessage = regexp.MustCompile(`(?i)\b(?:sk|pk|rk|ghp|gho|github_pat|xox[baprs]|ya29|AKIA)[A-Za-z0-9_\-]{8,}\b|Bearer\s+\S{8,}|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}(?:\.[A-Za-z0-9_\-]+)?|\b[A-Fa-f0-9]{32,}\b`)
+)
+
+func classifyTurnError(raw json.RawMessage) classifiedTurnError {
+	failure := classifiedTurnError{category: "provider"}
+	var completion struct {
+		Turn struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &completion) != nil || len(completion.Turn.Error) == 0 {
+		return failure
+	}
+	var fields map[string]any
+	if json.Unmarshal(completion.Turn.Error, &fields) != nil {
+		failure.messageBytes = len(completion.Turn.Error)
+		failure.summary = redactProviderMessage(string(completion.Turn.Error))
+		return failure
+	}
+	failure.info = firstToken(fields, "codexErrorInfo", "code", "type", "errorCode")
+	failure.status = httpStatus(fields)
+	message, _ := fields["message"].(string)
+	failure.messageBytes = len(message)
+	if failure.status == 0 {
+		if match := statusInMessage.FindStringSubmatch(message); len(match) == 2 {
+			failure.status = atoiStatus(match[1])
+		}
+	}
+	lower := strings.ToLower(message + " " + failure.info)
+	switch {
+	case strings.Contains(lower, "schema") || strings.Contains(lower, "invalid_function") || strings.Contains(lower, "validation failed"):
+		failure.category = "schema"
+	case strings.Contains(lower, "context") && (strings.Contains(lower, "length") || strings.Contains(lower, "window")):
+		failure.category = "context"
+	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit") || failure.status == 429:
+		failure.category = "rate"
+	case strings.Contains(lower, "unauthorized") || strings.Contains(lower, "api key") || failure.status == 401 || failure.status == 403:
+		failure.category = "auth"
+	case failure.status >= 500:
+		failure.category = "provider"
+	default:
+		failure.category = "provider"
+	}
+	if match := toolNameInError.FindStringSubmatch(message); len(match) == 2 {
+		failure.tool = match[1]
+	}
+	failure.summary = redactProviderMessage(message)
+	return failure
+}
+
+func firstToken(fields map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if token := shortToken(fields[key]); token != "" {
+			return token
+		}
+	}
+	if nested, _ := fields["error"].(map[string]any); nested != nil {
+		for _, key := range keys {
+			if token := shortToken(nested[key]); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func httpStatus(fields map[string]any) int {
+	for _, key := range []string{"status", "httpStatus", "statusCode"} {
+		if status := atoiStatus(fmtStatus(fields[key])); status >= 100 && status < 600 {
+			return status
+		}
+	}
+	if nested, _ := fields["error"].(map[string]any); nested != nil {
+		return httpStatus(nested)
+	}
+	return 0
+}
+
+func fmtStatus(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.Itoa(int(typed))
+	case json.Number:
+		return typed.String()
+	default:
+		return ""
+	}
+}
+
+func atoiStatus(text string) int {
+	status, err := strconv.Atoi(text)
+	if err != nil || status < 100 || status > 599 {
+		return 0
+	}
+	return status
+}
+
+func redactProviderMessage(message string) string {
+	message = strings.TrimSpace(strings.Join(strings.Fields(message), " "))
+	message = secretInMessage.ReplaceAllString(message, "[redacted]")
+	runes := []rune(message)
+	if len(runes) > 120 {
+		return string(runes[:120])
+	}
+	return string(runes)
+}
+
+func shortToken(value any) string {
+	text, _ := value.(string)
+	text = strings.TrimSpace(text)
+	if text == "" || len(text) > 64 || strings.ContainsAny(text, " \n\t\"'") {
+		return ""
+	}
+	for _, r := range text {
+		if r > 127 || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' && r != '.') {
+			return ""
+		}
+	}
+	return text
 }
 
 func brainTurnCompletionFailed(raw json.RawMessage) bool {

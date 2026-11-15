@@ -561,7 +561,7 @@ func (m *Module) deliverWakeLocked(ctx context.Context, wake BrainWake) {
 	openTasks, _ := m.store.RecentOpenBotTasks(ctx, assistant.ID, 10)
 	request := mustJSON(map[string]any{
 		"assistantId": assistant.ID, "threadId": assistant.BrainThreadID, "clientMessageId": responseID,
-		"text": taskEventEnvelope(assistant, wake, openTasks, m.taskSnippets(ctx, assistant.ID, openTasks)), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
+		"text": taskEventEnvelope(assistant, wake, openTasks, m.taskSnippets(ctx, assistant.ID, openTasks), m.memoryBlock(ctx, assistant)), "model": assistant.BrainModel, "effort": assistant.BrainReasoning,
 	})
 	result := m.startBrainTurnTriggered(ctx, assistant, request, "event")
 	if result.Error != nil || result.Outcome != "accepted" {
@@ -607,12 +607,12 @@ func taskEventTemplate(status, summary string) string {
 	return lead + "。" + summary
 }
 
-func taskEventEnvelope(assistant Assistant, wake BrainWake, openTasks []BotTask, snippets map[string]string) string {
+func taskEventEnvelope(assistant Assistant, wake BrainWake, openTasks []BotTask, snippets map[string]string, memory string) string {
 	if wake.Status == "bot_queue" {
 		return "PUCK_ENVELOPE assistant=" + assistant.ID + " nonce=" + newUUID() + " kind=bot_queue\n" +
 			"这是还没做完的工作或尚未归入任务的用户消息，不是新的执行结果。需要时自己读全文。\n" +
 			wake.Summary + "\n" +
-			openBotTaskContext(openTasks, snippets) + "\n" +
+			openBotTaskContext(openTasks, snippets) + memory + "\n" +
 			"没有新的话要说就只回复 PUCK_SILENT。\n" +
 			envelopeContext(assistant)
 	}
@@ -639,5 +639,5 @@ func taskEventEnvelope(assistant Assistant, wake BrainWake, openTasks []BotTask,
 		"watch=" + mode + "\n" +
 		"summary=" + wake.Summary + "\n" +
 		speak + "watch_only 时不要调用 send_turn 或 start_task。若这没有新的结果，最终回复只写 PUCK_SILENT，不要写别的字，也不要调用 send_message。review 只表示这一轮结束，不等于任务完成。\n" +
-		cleanup + "\n" + envelopeContext(assistant)
+		cleanup + memory + "\n" + envelopeContext(assistant)
 }

@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeSchemaVersion = 11
+const storeSchemaVersion = 13
 
 type Store struct {
 	db       *sql.DB
@@ -28,14 +28,14 @@ type Store struct {
 var ErrAssistantLimitReached = errors.New("active assistant limit reached")
 
 type Assistant struct {
-	ID, Name, Avatar, Description, Persona, CustomContext           string
-	BrainDeviceID, BrainCWD, BrainModel, BrainReasoning             string
-	BrainThreadID, BrainThreadHistory, AllowedScope, Policy, Limits string
-	Status                                                          string
-	ToolsetVersion                                                  int
-	UnreadCount                                                     int
-	LastMessagePreview                                              string
-	LastActivityAt                                                  time.Time
+	ID, Name, Avatar, Description, CustomContext            string
+	BrainDeviceID, BrainCWD, BrainModel, BrainReasoning     string
+	BrainThreadID, BrainThreadHistory, AllowedScope, Policy string
+	Status                                                  string
+	ToolsetVersion                                          int
+	UnreadCount                                             int
+	LastMessagePreview                                      string
+	LastActivityAt                                          time.Time
 }
 
 type Message struct {
@@ -53,8 +53,8 @@ type Message struct {
 }
 
 type Task struct {
-	ID, AssistantID, SourceMessageID, DeviceID, CWD, NativeThreadID, Goal, Status, RiskTags, CreatedBy, LastTurnID, LastSeenRevision, LastSummary string
-	UpdatedAt                                                                                                                                     time.Time `json:"-"`
+	ID, AssistantID, SourceMessageID, DeviceID, CWD, NativeThreadID, Goal, Status, LastTurnID, LastSeenRevision, LastSummary string
+	UpdatedAt                                                                                                                time.Time `json:"-"`
 }
 
 type Authorization struct {
@@ -143,10 +143,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version == 0 {
 		statements = append(statements,
 			`CREATE TABLE assistants (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, avatar TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', persona TEXT NOT NULL DEFAULT '',
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, avatar TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
             brain_device_id TEXT NOT NULL, brain_cwd TEXT NOT NULL, brain_model TEXT NOT NULL DEFAULT '', brain_reasoning TEXT NOT NULL DEFAULT '',
             brain_thread_id TEXT NOT NULL DEFAULT '', brain_thread_history TEXT NOT NULL DEFAULT '[]', toolset_version INTEGER NOT NULL,
-            allowed_scope TEXT NOT NULL DEFAULT '{}', policy TEXT NOT NULL DEFAULT '{}', limits TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL,
+            allowed_scope TEXT NOT NULL DEFAULT '{}', policy TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL,
             unread_count INTEGER NOT NULL DEFAULT 0, last_message_preview TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)`,
 			`CREATE TABLE conversation_messages (
@@ -155,7 +155,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE INDEX conversation_messages_assistant_at ON conversation_messages(assistant_id, created_at)`,
 			`CREATE TABLE tasks (
             task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id), device_id TEXT NOT NULL, cwd TEXT NOT NULL, native_thread_id TEXT NOT NULL,
-            goal TEXT NOT NULL, status TEXT NOT NULL, risk_tags TEXT NOT NULL DEFAULT '[]', created_by TEXT NOT NULL DEFAULT 'puck', last_turn_id TEXT NOT NULL DEFAULT '',
+            goal TEXT NOT NULL, status TEXT NOT NULL, last_turn_id TEXT NOT NULL DEFAULT '',
 			source_message_id TEXT NOT NULL DEFAULT '', last_seen_revision TEXT NOT NULL DEFAULT '', last_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 			`CREATE INDEX tasks_assistant ON tasks(assistant_id)`,
 			`CREATE UNIQUE INDEX tasks_assistant_source_message ON tasks(assistant_id,source_message_id) WHERE source_message_id<>''`,
@@ -267,8 +267,51 @@ func (s *Store) migrate(ctx context.Context) error {
             PRIMARY KEY (assistant_id, message_id))`,
 		)
 	}
+	if version < 12 {
+		var descriptionColumn int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('bot_tasks') WHERE name='description'`).Scan(&descriptionColumn); err != nil {
+			return err
+		}
+		if descriptionColumn == 0 {
+			statements = append(statements, `ALTER TABLE bot_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
+		}
+		statements = append(statements, memorySchemaSQL()...)
+	}
+	if version < 13 {
+		for _, column := range []struct{ table, name string }{
+			{"assistants", "persona"}, {"assistants", "limits"},
+			{"tasks", "created_by"}, {"tasks", "risk_tags"},
+		} {
+			drop, err := dropColumnSQL(ctx, tx, column.table, column.name)
+			if err != nil {
+				return err
+			}
+			if drop != "" {
+				statements = append(statements, drop)
+			}
+		}
+		updatedAt, err := dropColumnSQL(ctx, tx, "bot_memories", "updated_at")
+		if err != nil {
+			return err
+		}
+		if updatedAt != "" {
+			statements = append(statements,
+				`DROP TRIGGER IF EXISTS bot_memories_ai`,
+				`DROP TRIGGER IF EXISTS bot_memories_ad`,
+				`DROP TABLE IF EXISTS bot_memories_fts`,
+				updatedAt,
+			)
+			statements = append(statements, memoryFTSSQL()...)
+			statements = append(statements, `INSERT INTO bot_memories_fts(bot_memories_fts) VALUES('rebuild')`)
+		}
+	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	if version < 12 {
+		if err := probeMemoryCapabilities(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -276,6 +319,17 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func dropColumnSQL(ctx context.Context, tx sqlContext, table, column string) (string, error) {
+	var count int
+	if err := tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name=?`, table), column).Scan(&count); err != nil {
+		return "", err
+	}
+	if count == 0 {
+		return "", nil
+	}
+	return `ALTER TABLE ` + table + ` DROP COLUMN ` + column, nil
 }
 
 func nowText(value time.Time) string {
@@ -303,8 +357,8 @@ type assistantInserter interface {
 func insertAssistant(ctx context.Context, target assistantInserter, a Assistant) error {
 	now := nowText(time.Time{})
 	_, err := target.ExecContext(ctx, `INSERT INTO assistants
-		(id,name,avatar,description,persona,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Name, a.Avatar, a.Description, a.Persona, a.CustomContext, a.BrainDeviceID, a.BrainCWD, a.BrainModel, a.BrainReasoning, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), defaultJSON(a.Limits, "{}"), a.Status, a.UnreadCount, a.LastMessagePreview, now, now)
+		(id,name,avatar,description,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,status,unread_count,last_message_preview,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Name, a.Avatar, a.Description, a.CustomContext, a.BrainDeviceID, a.BrainCWD, a.BrainModel, a.BrainReasoning, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), a.Status, a.UnreadCount, a.LastMessagePreview, now, now)
 	return err
 }
 
@@ -341,12 +395,12 @@ func defaultJSON(value, fallback string) string {
 
 func (s *Store) Assistant(ctx context.Context, id string) (Assistant, error) {
 	var a Assistant
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,avatar,description,persona,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview FROM assistants WHERE id=? AND deleted_at IS NULL`, id).Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.CustomContext, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview)
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,avatar,description,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,status,unread_count,last_message_preview FROM assistants WHERE id=? AND deleted_at IS NULL`, id).Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.CustomContext, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Status, &a.UnreadCount, &a.LastMessagePreview)
 	return a, err
 }
 
 func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,persona,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,limits,status,unread_count,last_message_preview,COALESCE((SELECT created_at FROM conversation_messages WHERE assistant_id=assistants.id ORDER BY created_at DESC,rowid DESC LIMIT 1), updated_at) FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,avatar,description,custom_context,brain_device_id,brain_cwd,brain_model,brain_reasoning,brain_thread_id,brain_thread_history,toolset_version,allowed_scope,policy,status,unread_count,last_message_preview,COALESCE((SELECT created_at FROM conversation_messages WHERE assistant_id=assistants.id ORDER BY created_at DESC,rowid DESC LIMIT 1), updated_at) FROM assistants WHERE deleted_at IS NULL ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +409,7 @@ func (s *Store) Assistants(ctx context.Context) ([]Assistant, error) {
 	for rows.Next() {
 		var a Assistant
 		var activity string
-		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.Persona, &a.CustomContext, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Limits, &a.Status, &a.UnreadCount, &a.LastMessagePreview, &activity); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Avatar, &a.Description, &a.CustomContext, &a.BrainDeviceID, &a.BrainCWD, &a.BrainModel, &a.BrainReasoning, &a.BrainThreadID, &a.BrainThreadHistory, &a.ToolsetVersion, &a.AllowedScope, &a.Policy, &a.Status, &a.UnreadCount, &a.LastMessagePreview, &activity); err != nil {
 			return nil, err
 		}
 		a.LastActivityAt, _ = time.Parse(time.RFC3339Nano, activity)
@@ -378,8 +432,8 @@ func (s *Store) SetAssistantBrain(ctx context.Context, assistantID, threadID, st
 }
 
 func (s *Store) UpdateAssistant(ctx context.Context, a Assistant) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,persona=?,custom_context=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,policy=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
-		a.Name, a.Avatar, a.Description, a.Persona, a.CustomContext, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), a.Status, nowText(time.Time{}), a.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE assistants SET name=?,avatar=?,description=?,custom_context=?,brain_device_id=?,brain_thread_id=?,brain_thread_history=?,toolset_version=?,allowed_scope=?,policy=?,status=?,updated_at=? WHERE id=? AND deleted_at IS NULL`,
+		a.Name, a.Avatar, a.Description, a.CustomContext, a.BrainDeviceID, a.BrainThreadID, defaultJSON(a.BrainThreadHistory, "[]"), a.ToolsetVersion, defaultJSON(a.AllowedScope, "{}"), defaultJSON(a.Policy, "{}"), a.Status, nowText(time.Time{}), a.ID)
 	if err != nil {
 		return err
 	}
@@ -420,6 +474,18 @@ func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
 		err = s.updateAssistantMessageState(ctx, m, previousKind == "" || !messageCountsUnread(previousKind))
 	}
 	return s.changed(err)
+}
+
+func (s *Store) AcknowledgeMessage(ctx context.Context, assistantID, messageID, turnID, text, summary string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE conversation_messages SET kind='acknowledged',text=?,work_summary=? WHERE assistant_id=? AND id=? AND brain_turn_id=? AND kind IN ('processing','acknowledged','greeting_processing')`, text, summary, assistantID, messageID, turnID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return nil
+	}
+	return s.changed(s.updateAssistantMessageState(ctx, Message{ID: messageID, AssistantID: assistantID, Role: "assistant", Kind: "acknowledged", Text: text}, false))
 }
 
 func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) error {
@@ -465,6 +531,9 @@ func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_inbox WHERE assistant_id=?`, assistantID); err != nil {
+		return err
+	}
+	if err := deletePrivateMemories(ctx, tx, assistantID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE assistant_id=?`, assistantID); err != nil {
@@ -540,6 +609,11 @@ func (s *Store) DeleteMessage(ctx context.Context, assistantID, messageID string
 	return nil
 }
 
+func (s *Store) DeleteTransientMessages(ctx context.Context, assistantID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM conversation_messages WHERE assistant_id=? AND role='assistant' AND kind IN ('processing','acknowledged','greeting_processing')`, assistantID)
+	return s.changed(err)
+}
+
 func (s *Store) UpdateMessageReaction(ctx context.Context, assistantID, messageID, actor, emoji string) (string, error) {
 	if actor != "user" && actor != "assistant" {
 		return "", errors.New("invalid reaction actor")
@@ -606,26 +680,26 @@ func (s *Store) Message(ctx context.Context, assistantID, messageID string) (Mes
 
 func (s *Store) UpsertTask(ctx context.Context, task Task) error {
 	now := nowText(time.Time{})
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=CASE WHEN excluded.last_turn_id='' THEN tasks.last_turn_id ELSE excluded.last_turn_id END,source_message_id=excluded.source_message_id,last_seen_revision=CASE WHEN excluded.last_seen_revision='' THEN tasks.last_seen_revision ELSE excluded.last_seen_revision END,last_summary=CASE WHEN excluded.last_summary='' THEN tasks.last_summary ELSE excluded.last_summary END,updated_at=excluded.updated_at
-        WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, defaultJSON(task.RiskTags, "[]"), task.CreatedBy, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(task_id,assistant_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,source_message_id,last_seen_revision,last_summary,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET device_id=excluded.device_id,cwd=excluded.cwd,native_thread_id=excluded.native_thread_id,goal=excluded.goal,status=excluded.status,last_turn_id=CASE WHEN excluded.last_turn_id='' THEN tasks.last_turn_id ELSE excluded.last_turn_id END,source_message_id=excluded.source_message_id,last_seen_revision=CASE WHEN excluded.last_seen_revision='' THEN tasks.last_seen_revision ELSE excluded.last_seen_revision END,last_summary=CASE WHEN excluded.last_summary='' THEN tasks.last_summary ELSE excluded.last_summary END,updated_at=excluded.updated_at
+        WHERE tasks.assistant_id=excluded.assistant_id`, task.ID, task.AssistantID, task.DeviceID, task.CWD, task.NativeThreadID, task.Goal, task.Status, task.LastTurnID, task.SourceMessageID, task.LastSeenRevision, task.LastSummary, now, now)
 	return s.changed(err)
 }
 
 func (s *Store) Task(ctx context.Context, assistantID, taskID string) (Task, error) {
 	var task Task
-	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND task_id=?`, assistantID, taskID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
+	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND task_id=?`, assistantID, taskID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
 	return task, err
 }
 
 func (s *Store) TaskBySourceMessage(ctx context.Context, assistantID, sourceMessageID string) (Task, error) {
 	var task Task
-	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND source_message_id=?`, assistantID, sourceMessageID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
+	err := s.db.QueryRowContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? AND source_message_id=?`, assistantID, sourceMessageID).Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary)
 	return task, err
 }
 
 func (s *Store) TasksByActivity(ctx context.Context, assistantID string) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary,updated_at FROM tasks WHERE assistant_id=? ORDER BY updated_at DESC, task_id DESC`, assistantID)
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,last_seen_revision,last_summary,updated_at FROM tasks WHERE assistant_id=? ORDER BY updated_at DESC, task_id DESC`, assistantID)
 	if err != nil {
 		return nil, err
 	}
@@ -634,7 +708,7 @@ func (s *Store) TasksByActivity(ctx context.Context, assistantID string) ([]Task
 	for rows.Next() {
 		var task Task
 		var updated string
-		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary, &updated); err != nil {
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary, &updated); err != nil {
 			return nil, err
 		}
 		task.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
@@ -644,7 +718,7 @@ func (s *Store) TasksByActivity(ctx context.Context, assistantID string) ([]Task
 }
 
 func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,risk_tags,created_by,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? ORDER BY created_at,task_id`, assistantID)
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id,assistant_id,source_message_id,device_id,cwd,native_thread_id,goal,status,last_turn_id,last_seen_revision,last_summary FROM tasks WHERE assistant_id=? ORDER BY created_at,task_id`, assistantID)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +726,7 @@ func (s *Store) Tasks(ctx context.Context, assistantID string) ([]Task, error) {
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.RiskTags, &task.CreatedBy, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
+		if err := rows.Scan(&task.ID, &task.AssistantID, &task.SourceMessageID, &task.DeviceID, &task.CWD, &task.NativeThreadID, &task.Goal, &task.Status, &task.LastTurnID, &task.LastSeenRevision, &task.LastSummary); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, task)
@@ -900,6 +974,18 @@ func (s *Store) UpsertGroupMessage(ctx context.Context, m GroupMessage) error {
 		ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,text=excluded.text
 		WHERE group_messages.group_id=excluded.group_id`, m.ID, m.GroupID, m.Role, m.AuthorAssistantID, m.Kind, m.Text, nowText(m.CreatedAt))
 	return s.changed(err)
+}
+
+func (s *Store) AcknowledgeGroupMessage(ctx context.Context, groupID, messageID, text string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE group_messages SET kind='acknowledged',text=? WHERE group_id=? AND id=? AND kind IN ('processing','acknowledged')`, text, groupID, messageID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected > 0 {
+		s.markChanged()
+	}
+	return nil
 }
 
 func (s *Store) DeleteGroupMessage(ctx context.Context, groupID, messageID string) error {

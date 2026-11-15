@@ -9,20 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wu8685/Ariel/internal/puck/toolcontract"
 )
 
 type options struct {
-	Root    string
-	Binary  string
-	Socket  string
-	Only    map[string]bool
-	Retries int
-	Timeout time.Duration
-	Keep    bool
-	UI      bool
-	Fake    bool
-	WebRoot string
-	WebDist string
+	Root     string
+	Binary   string
+	Socket   string
+	Only     map[string]bool
+	Retries  int
+	Timeout  time.Duration
+	Keep     bool
+	UI       bool
+	Fake     bool
+	WebRoot  string
+	WebDist  string
+	JSONPath string
 }
 
 type metrics struct {
@@ -51,6 +54,8 @@ type runner struct {
 	seen          map[string]struct{}
 	retries       int
 	step          time.Duration
+	fake          bool
+	brainTurns    map[string]struct{}
 }
 
 func execute(ctx context.Context, opt options) (Report, error) {
@@ -62,6 +67,17 @@ func execute(ctx context.Context, opt options) (Report, error) {
 			return Report{}, err
 		}
 	}
+	var stack *stack
+	report := Report{}
+	defer func() {
+		writeReportFiles(root, opt.JSONPath, report)
+		if stack != nil {
+			stack.close()
+		}
+		if !opt.Keep {
+			_ = os.RemoveAll(root)
+		}
+	}()
 	if opt.Socket != "" {
 		return Report{}, fmt.Errorf("refusing Desktop IPC: puck-e2e is headless and will not attach to Codex Desktop")
 	}
@@ -83,12 +99,6 @@ func execute(ctx context.Context, opt options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	defer func() {
-		stack.close()
-		if !opt.Keep {
-			_ = os.RemoveAll(root)
-		}
-	}()
 	if opt.UI {
 		stack.webDist = opt.WebDist
 	}
@@ -102,9 +112,9 @@ func execute(ctx context.Context, opt options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	run := &runner{ctx: ctx, stack: stack, client: owner, marker: "FIXTURE-MARKER-" + stack.token[:8], retries: opt.Retries, step: 6 * time.Minute, seen: map[string]struct{}{}}
+	run := &runner{ctx: ctx, stack: stack, client: owner, marker: "FIXTURE-MARKER-" + stack.token[:8], retries: opt.Retries, step: 6 * time.Minute, seen: map[string]struct{}{}, fake: opt.Fake, brainTurns: map[string]struct{}{}}
 	defer func() { run.client.Close() }()
-	report := Report{OK: true, Listen: stack.listen, Isolation: iso}
+	report = Report{OK: true, Listen: stack.listen, Isolation: iso}
 	if err := run.boot(); err != nil {
 		report.add(ScenarioResult{ID: "boot", Name: "owner and brain", Status: "fail", Checks: []Check{{Name: "boot", Detail: err.Error()}}})
 		return report, nil
@@ -121,12 +131,16 @@ func execute(ctx context.Context, opt options) (Report, error) {
 		{"D", "semantic merge", false, run.scenarioD},
 		{"E", "completion cleanup", true, run.scenarioE},
 		{"G", "ux metrics", true, run.scenarioG},
+		{"H", "memory tools", true, run.scenarioH},
+		{"I", "memory recall", true, run.scenarioI},
 		{"UI", "headless browser", true, func() ScenarioResult {
 			if !opt.UI {
 				return ScenarioResult{ID: "UI", Name: "headless browser", Status: "skipped"}
 			}
 			return run.scenarioUI(opt.WebRoot)
 		}},
+		{"J", "memory delete", true, run.scenarioJ},
+		{"K", "remember choice", false, run.scenarioK},
 		{"F", "unlink and delete", true, run.scenarioF},
 	}
 	for _, scenario := range order {
@@ -265,12 +279,24 @@ func (r *runner) scenarioB() ScenarioResult {
 		Check{Name: "picked-up", Pass: attached == len(ids), Detail: fmt.Sprintf("attached=%d skips=%s", attached, strings.Join(r.wakeSkipReasons(), ","))},
 		Check{Name: "one-pending-wake", Pass: r.metrics.MaxQueueWakes <= 1, Detail: fmt.Sprintf("maxQueue=%d", r.metrics.MaxQueueWakes)},
 	)
+	result := queueWhileBusyResult(checks, ids, r.brainTurnReceived)
+	result.WakeSkips = r.wakeSkipReasons()
+	result.ToolCalls = r.toolNames()
+	return result
+}
+
+func queueWhileBusyResult(checks []Check, ids []string, brainTurnReceived func(string) bool) ScenarioResult {
+	brainTurns := 0
+	for _, id := range ids {
+		if brainTurnReceived(id) {
+			brainTurns++
+		}
+	}
+	checks = append(checks, Check{Name: "brain-turns-started", Pass: brainTurns == len(ids), Detail: fmt.Sprintf("started=%d", brainTurns)})
 	result := passResult("B", "queue while busy", checks)
 	if result.Status == "fail" && onlyFailed(result, "picked-up") {
 		result.Status = "observed"
 	}
-	result.WakeSkips = r.wakeSkipReasons()
-	result.ToolCalls = r.toolNames()
 	return result
 }
 
@@ -444,6 +470,18 @@ func (r *runner) send(id, text string) (map[string]any, error) {
 	return response, nil
 }
 
+func (r *runner) collectBrainTurns() {
+	for _, id := range r.stack.drainBrainTurns() {
+		r.brainTurns[id] = struct{}{}
+	}
+}
+
+func (r *runner) brainTurnReceived(clientMessageID string) bool {
+	r.collectBrainTurns()
+	_, ok := r.brainTurns[clientMessageID]
+	return ok
+}
+
 func (r *runner) waitDevice() error {
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
@@ -472,8 +510,12 @@ func (r *runner) waitDevice() error {
 func (r *runner) waitIdle() error {
 	deadline := time.Now().Add(r.step)
 	for time.Now().Before(deadline) {
+		r.collectBrainTurns()
 		r.collectMetrics()
 		r.sampleQueue()
+		if r.failed() {
+			return fmt.Errorf("brain turn ended with an error")
+		}
 		if !r.busy() {
 			timer := time.NewTimer(400 * time.Millisecond)
 			select {
@@ -512,16 +554,50 @@ func (r *runner) busy() bool {
 	if err != nil {
 		return true
 	}
-	for _, message := range messagesOf(history) {
+	return messagesBusy(messagesOf(history))
+}
+
+func messagesBusy(messages []map[string]any) bool {
+	busy := false
+	for _, message := range messages {
+		role, _ := message["role"].(string)
+		if role == "user" {
+			busy = false
+			continue
+		}
+		if role != "assistant" {
+			continue
+		}
 		kind, _ := message["kind"].(string)
-		if kind == "processing" || kind == "greeting_processing" || kind == "acknowledged" {
-			return true
+		if kind == "processing" || kind == "acknowledged" || kind == "greeting_processing" {
+			busy = true
 		}
 	}
-	return false
+	return busy
+}
+
+func messagesFailed(messages []map[string]any) bool {
+	failed := false
+	for _, message := range messages {
+		role, _ := message["role"].(string)
+		if role == "user" {
+			failed = false
+			continue
+		}
+		if role == "assistant" && message["kind"] == "error" {
+			failed = true
+		}
+	}
+	return failed
+}
+
+func (r *runner) failed() bool {
+	history, err := r.history()
+	return err == nil && messagesFailed(messagesOf(history))
 }
 
 func (r *runner) history() (map[string]any, error) {
+	r.collectBrainTurns()
 	return r.client.call(r.ctx, "puck.history", "relay", map[string]any{"assistantId": r.assistantID}, 20*time.Second)
 }
 
@@ -820,6 +896,52 @@ func (r *runner) toolNames() []string {
 	return tools
 }
 
+func (r *runner) toolNamesForTurn(turnID string) []string {
+	history, err := r.history()
+	if err != nil || outcomeCode(history) != "accepted" {
+		return nil
+	}
+	calls, _ := dataOf(history)["toolCalls"].([]any)
+	return toolNamesForTurn(calls, turnID)
+}
+
+func toolNamesForTurn(calls []any, turnID string) []string {
+	var names []string
+	for _, raw := range calls {
+		call, _ := raw.(map[string]any)
+		if call["turnId"] != turnID {
+			continue
+		}
+		name, _ := call["tool"].(string)
+		if name == "" {
+			continue
+		}
+		if call["success"] == false {
+			code, _ := call["code"].(string)
+			if code == "" {
+				code = "failed"
+			}
+			name += "=" + code
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func (r *runner) brainTurnForResponse(responseID string) string {
+	history, err := r.history()
+	if err != nil || outcomeCode(history) != "accepted" {
+		return ""
+	}
+	for _, message := range messagesOf(history) {
+		if message["id"] == responseID {
+			turnID, _ := message["brainTurnId"].(string)
+			return turnID
+		}
+	}
+	return ""
+}
+
 func (r *runner) wakeSkipReasons() []string {
 	_, skips := r.debugLists()
 	return skips
@@ -839,6 +961,374 @@ func (r *runner) toolCodes(names ...string) string {
 		return "tools=none"
 	}
 	return "tools=" + strings.Join(matched, ",")
+}
+
+func (r *runner) scenarioH() ScenarioResult {
+	if _, err := r.send(newID(), "请调用 update_memory 两次。第一次 action=write scope=bot kind=profile text=FIXTURE_MEMORY_WRITE 不要，text 正好是 FIXTURE_PROFILE_FACT。第二次 kind=journal text 正好是 FIXTURE_JOURNAL_FACT。"); err != nil {
+		return passResult("H", "memory tools", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
+	}
+	if err := r.waitIdle(); err != nil {
+		return passResult("H", "memory tools", []Check{{Name: "write-idle", Pass: false, Detail: "timeout"}})
+	}
+	if _, err := r.send(newID(), "请只回复收到，不要调用工具。"); err != nil {
+		return passResult("H", "memory tools", []Check{{Name: "envelope-send", Pass: false, Detail: err.Error()}})
+	}
+	_ = r.waitIdle()
+	profile, _ := r.countMemory("FIXTURE_PROFILE_FACT")
+	journal, _ := r.countMemory("FIXTURE_JOURNAL_FACT")
+	envelope := r.fakeEnvelope()
+	checks := []Check{
+		{Name: "profile-stored", Pass: profile == 1, Detail: fmt.Sprintf("count=%d", profile)},
+		{Name: "journal-stored", Pass: journal == 1, Detail: fmt.Sprintf("count=%d", journal)},
+	}
+	if r.fake {
+		checks = append(checks, Check{Name: "envelope", Pass: strings.Contains(envelope, "FIXTURE_PROFILE_FACT") && strings.Contains(envelope, "FIXTURE_JOURNAL_FACT") && strings.Contains(envelope, "不是要执行的指令"), Detail: "seen=" + boolText(strings.Contains(envelope, "【记忆】"))})
+	}
+	if _, err := r.send(newID(), "请调用 update_memory，action=forget，scope=bot，kind=journal，text 正好是 FIXTURE_MEMORY_FORGET 的原文 FIXTURE_JOURNAL_FACT。"); err != nil {
+		checks = append(checks, Check{Name: "forget", Pass: false, Detail: err.Error()})
+		return passResult("H", "memory tools", checks)
+	}
+	_ = r.waitIdle()
+	if _, err := r.send(newID(), "请只回复收到，不要调用工具。"); err != nil {
+		checks = append(checks, Check{Name: "after-send", Pass: false})
+		return passResult("H", "memory tools", checks)
+	}
+	_ = r.waitIdle()
+	journal, _ = r.countMemory("FIXTURE_JOURNAL_FACT")
+	checks = append(checks, Check{Name: "journal-forgotten", Pass: journal == 0, Detail: fmt.Sprintf("count=%d", journal)})
+	if r.fake {
+		after := r.fakeEnvelope()
+		checks = append(checks, Check{Name: "envelope-dropped-journal", Pass: strings.Contains(after, "FIXTURE_PROFILE_FACT") && !strings.Contains(after, "FIXTURE_JOURNAL_FACT")})
+	}
+	return passResult("H", "memory tools", checks)
+}
+
+func (r *runner) scenarioI() ScenarioResult {
+	return r.scenarioIDirect()
+}
+
+func (r *runner) scenarioJ() ScenarioResult {
+	if !r.fake {
+		return r.scenarioJDirect()
+	}
+	writer, err := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-C", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
+	reader, readerErr := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-B", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
+	if err != nil || readerErr != nil || outcomeCode(writer) != "accepted" || outcomeCode(reader) != "accepted" {
+		return passResult("J", "memory delete", []Check{{Name: "second-bot", Pass: false, Detail: "create failed"}})
+	}
+	writerID, _ := dataOf(writer)["assistant"].(map[string]any)["assistantId"].(string)
+	readerID, _ := dataOf(reader)["assistant"].(map[string]any)["assistantId"].(string)
+	greetingsDone, greetingDetail := r.waitAuxiliaryGreetings(r.ctx, []string{writerID, readerID})
+	readerTransient, readerTransientErr := transientMessageCount(r.ctx, r.stack.iso.DBPath, readerID)
+	if _, err := r.sendTo(writerID, newID(), "请写下两条记忆。标记 FIXTURE_MEMORY_SHARED。"); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
+	}
+	if err := r.waitAssistant(writerID); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "write-idle", Pass: false, Detail: "timeout"}})
+	}
+	if _, err := r.sendTo(readerID, newID(), "请查找记忆。标记 FIXTURE_MEMORY_RECALL_SHARED。"); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "recall", Pass: false, Detail: err.Error()}})
+	}
+	if err := r.waitAssistant(readerID); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "recall-idle", Pass: false, Detail: "timeout"}})
+	}
+	shared := r.fakeRecall("shared")
+	private := r.fakeRecall("private")
+	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": writerID}, r.step)
+	privateLeft, _ := r.countMemory("FIXTURE_PRIVATE_FACT")
+	sharedLeft, _ := r.countMemory("FIXTURE_SHARED_FACT")
+	writerGone, writerGoneDetail, writerGoneErr := assistantGone(r.ctx, r.stack.iso.DBPath, writerID)
+	checks := []Check{
+		{Name: "shared-visible", Pass: recallHas(shared, "memories", "text", "FIXTURE_SHARED_FACT")},
+		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
+		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
+		{Name: "deleted-transient-cleanup", Pass: writerGoneErr == nil && writerGone, Detail: writerGoneDetail},
+		{Name: "auxiliary-greetings-finished", Pass: greetingsDone, Detail: greetingDetail},
+		{Name: "reader-transient-cleanup", Pass: readerTransientErr == nil && readerTransient == 0, Detail: fmt.Sprintf("count=%d", readerTransient)},
+		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
+		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
+	}
+	return passResult("J", "memory delete", checks)
+}
+
+func (r *runner) scenarioIDirect() ScenarioResult {
+	for _, text := range []string{"机主习惯早上发版", "请看 PR-1842"} {
+		if _, err := r.stack.module.UpdateMemory(r.ctx, r.assistantID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "bot", Kind: "journal", Text: text}); err != nil {
+			return passResult("I", "memory recall", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
+		}
+	}
+	exact := r.recallOnce(r.assistantID, "PR-1842")
+	keyword := r.recallOnce(r.assistantID, "早上发版")
+	if err := r.stack.module.RecordBotTask(r.ctx, r.assistantID, "PR-1842", "看工单", "跟进 PR-1842 的工单"); err != nil {
+		return passResult("I", "memory recall", []Check{{Name: "task", Pass: false, Detail: err.Error()}})
+	}
+	choices, err := r.stack.module.ListTaskChoices(r.ctx, r.assistantID, "PR-1842")
+	if err != nil {
+		return passResult("I", "memory recall", []Check{{Name: "list", Pass: false, Detail: err.Error()}})
+	}
+	choiceList := jsonObject(choices)
+	taskID := firstRecall(choiceList, "tasks", "id")
+	full, fullErr := r.stack.module.ReadTaskContext(r.ctx, r.assistantID, taskID)
+	fullTask, _ := jsonObject(full)["task"].(map[string]any)
+	checks := []Check{
+		{Name: "fts-keyword", Pass: recallHas(keyword, "memories", "text", "机主习惯早上发版")},
+		{Name: "exact-memory", Pass: firstRecall(exact, "memories", "text") == "请看 PR-1842"},
+		{Name: "choice", Pass: firstRecall(choiceList, "tasks", "description") == "跟进 PR-1842 的工单" && firstRecall(choiceList, "tasks", "id") != ""},
+		{Name: "full-context", Pass: fullErr == nil && fullTask["goal"] == "看工单" && fullTask["description"] == "跟进 PR-1842 的工单"},
+	}
+	return passResult("I", "memory recall", checks)
+}
+
+func (r *runner) scenarioJDirect() ScenarioResult {
+	writer, err := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-C", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
+	reader, readerErr := r.client.call(r.ctx, "puck.create", "relay", map[string]any{"name": "E2E-B", "brainDeviceId": r.stack.deviceID, "permissionMode": "full"}, r.step)
+	if err != nil || readerErr != nil || outcomeCode(writer) != "accepted" || outcomeCode(reader) != "accepted" {
+		return passResult("J", "memory delete", []Check{{Name: "second-bot", Pass: false, Detail: "create failed"}})
+	}
+	writerID, _ := dataOf(writer)["assistant"].(map[string]any)["assistantId"].(string)
+	readerID, _ := dataOf(reader)["assistant"].(map[string]any)["assistantId"].(string)
+	greetingsDone, greetingDetail := r.waitAuxiliaryGreetings(r.ctx, []string{writerID, readerID})
+	readerTransient, readerTransientErr := transientMessageCount(r.ctx, r.stack.iso.DBPath, readerID)
+	if _, err := r.stack.module.UpdateMemory(r.ctx, writerID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "shared", Kind: "profile", Text: "FIXTURE_SHARED_FACT"}); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "write", Pass: false, Detail: err.Error()}})
+	}
+	if _, err := r.stack.module.UpdateMemory(r.ctx, writerID, toolcontract.UpdateMemoryRequest{Action: "write", Scope: "bot", Kind: "profile", Text: "FIXTURE_PRIVATE_FACT"}); err != nil {
+		return passResult("J", "memory delete", []Check{{Name: "write-private", Pass: false, Detail: err.Error()}})
+	}
+	shared := r.recallOnce(readerID, "FIXTURE_SHARED_FACT")
+	private := r.recallOnce(readerID, "FIXTURE_PRIVATE_FACT")
+	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": writerID}, r.step)
+	privateLeft, _ := r.countMemory("FIXTURE_PRIVATE_FACT")
+	sharedLeft, _ := r.countMemory("FIXTURE_SHARED_FACT")
+	writerGone, writerGoneDetail, writerGoneErr := assistantGone(r.ctx, r.stack.iso.DBPath, writerID)
+	return passResult("J", "memory delete", []Check{
+		{Name: "shared-visible", Pass: recallHas(shared, "memories", "text", "FIXTURE_SHARED_FACT")},
+		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
+		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
+		{Name: "deleted-transient-cleanup", Pass: writerGoneErr == nil && writerGone, Detail: writerGoneDetail},
+		{Name: "auxiliary-greetings-finished", Pass: greetingsDone, Detail: greetingDetail},
+		{Name: "reader-transient-cleanup", Pass: readerTransientErr == nil && readerTransient == 0, Detail: fmt.Sprintf("count=%d", readerTransient)},
+		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
+		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
+	})
+}
+
+func (r *runner) recallOnce(assistantID, query string) map[string]any {
+	payload, err := r.stack.module.RecallMemory(r.ctx, assistantID, toolcontract.RecallMemoryRequest{
+		Query: query, Scope: "all", Kind: "any", Sources: []string{"memory", "tasks", "messages"}, Limit: 8,
+	})
+	if err != nil {
+		return map[string]any{}
+	}
+	return jsonObject(payload)
+}
+
+func jsonObject(value map[string]any) map[string]any {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if json.Unmarshal(body, &out) != nil {
+		return nil
+	}
+	return out
+}
+
+func (r *runner) scenarioK() ScenarioResult {
+	if r.fake {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "skipped"}
+	}
+	messageID := newID()
+	if _, err := r.send(messageID, "记住：我以后都希望你先给结论，再用很短的中文。这是长期偏好。"); err != nil {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-started", Detail: "send rejected"}}}
+	}
+	if !r.brainTurnReceived(messageID) {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-started", Detail: "no accepted turn for prompt"}}}
+	}
+	if err := r.waitIdle(); err != nil {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-completed", Detail: "timeout"}}}
+	}
+	called := false
+	for _, name := range r.toolNamesForTurn(r.brainTurnForResponse(messageID + "-processing")) {
+		if strings.Contains(name, "update_memory") {
+			called = true
+		}
+	}
+	return ScenarioResult{ID: "K", Name: "remember choice", Status: "observed", Checks: []Check{{Name: "brain-turn-started", Pass: true}, {Name: "called-update-memory", Pass: true, Detail: fmt.Sprintf("observed=%t", called)}}}
+}
+
+func (r *runner) waitAssistant(id string) error {
+	deadline := time.Now().Add(r.step)
+	for time.Now().Before(deadline) {
+		history, err := r.client.call(r.ctx, "puck.history", "relay", map[string]any{"assistantId": id}, 20*time.Second)
+		r.collectBrainTurns()
+		if err == nil {
+			if !messagesBusy(messagesOf(history)) {
+				return nil
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("brain stayed busy")
+}
+
+func (r *runner) waitAuxiliaryGreetings(ctx context.Context, assistantIDs []string) (bool, string) {
+	ready := func() (bool, string, error) {
+		for _, id := range assistantIDs {
+			response, err := r.client.call(ctx, "puck.history", "relay", map[string]any{"assistantId": id}, 20*time.Second)
+			if err != nil {
+				return false, "history unavailable", err
+			}
+			if outcomeCode(response) != "accepted" {
+				return false, "history rejected", fmt.Errorf("history rejected")
+			}
+			messages := messagesOf(response)
+			if messagesBusy(messages) || messagesFailed(messages) {
+				return false, "active or lost greeting", nil
+			}
+		}
+		return true, "finished", nil
+	}
+	deadline := time.Now().Add(r.step)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		done, _, err := ready()
+		if err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		lastErr = nil
+		if done {
+			for _, id := range assistantIDs {
+				count, err := transientMessageCount(ctx, r.stack.iso.DBPath, id)
+				if err != nil || count != 0 {
+					return false, fmt.Sprintf("transient rows=%d", count)
+				}
+			}
+			return true, "finished; transient rows=0"
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	_, detail, err := ready()
+	if err != nil {
+		if lastErr != nil {
+			return false, lastErr.Error()
+		}
+		return false, err.Error()
+	}
+	for _, id := range assistantIDs {
+		count, err := transientMessageCount(ctx, r.stack.iso.DBPath, id)
+		if err != nil {
+			return false, err.Error()
+		}
+		if count != 0 {
+			return false, fmt.Sprintf("%s; transient rows=%d", detail, count)
+		}
+	}
+	return false, detail
+}
+
+func (r *runner) sendTo(assistantID, id, text string) (map[string]any, error) {
+	response, err := r.client.call(r.ctx, "puck.message.send", "relay", map[string]any{
+		"assistantId": assistantID, "clientMessageId": id, "text": text,
+	}, time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	if outcomeCode(response) != "accepted" {
+		return response, fmt.Errorf("%s", outcomeCode(response))
+	}
+	return response, nil
+}
+
+func (r *runner) countMemory(text string) (int, error) {
+	db, err := openStateDB(r.stack.iso.DBPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM bot_memories WHERE text=?`, text).Scan(&count)
+	return count, err
+}
+
+func (r *runner) fakeEnvelope() string {
+	var envelope string
+	body, err := os.ReadFile(os.Getenv("PUCK_E2E_FAKE_STATE"))
+	if err != nil {
+		return ""
+	}
+	var state struct {
+		Envelope string `json:"envelope"`
+	}
+	if json.Unmarshal(body, &state) == nil {
+		envelope = state.Envelope
+	}
+	return envelope
+}
+
+func (r *runner) fakeRecall(name string) map[string]any {
+	body, err := os.ReadFile(os.Getenv("PUCK_E2E_FAKE_STATE"))
+	if err != nil {
+		return nil
+	}
+	var state struct {
+		Recalls map[string]string `json:"recalls"`
+	}
+	if json.Unmarshal(body, &state) != nil {
+		return nil
+	}
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(state.Recalls[name]), &payload)
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return payload
+	}
+	return data
+}
+
+func recallValue(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
+}
+
+func recallHas(payload map[string]any, list, field, text string) bool {
+	items, _ := payload[list].([]any)
+	for _, item := range items {
+		row, _ := item.(map[string]any)
+		if row[field] == text {
+			return true
+		}
+	}
+	return false
+}
+
+func firstRecall(payload map[string]any, list, field string) string {
+	items, _ := payload[list].([]any)
+	if len(items) == 0 {
+		return ""
+	}
+	row, _ := items[0].(map[string]any)
+	value, _ := row[field].(string)
+	return value
+}
+
+func boolText(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func containsText(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func combinePacks(views []PackView) PackView {

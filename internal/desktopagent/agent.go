@@ -49,6 +49,7 @@ type Config struct {
 	OnNotReady                                                         func()
 	PuckBrain                                                          bool
 	PuckRoot                                                           string
+	BrainTurnStarted                                                   func(string)
 	// Headless uses a private codex app-server stdio process. It never dials
 	// the Desktop IPC socket and never activates the Desktop GUI.
 	Headless bool
@@ -322,7 +323,7 @@ func RunWithService(ctx context.Context, cfg Config, service *Service) error {
 	}
 	a := &agent{conn: conn, deviceID: cfg.DeviceID, agentEpoch: agentEpoch, service: service, fileContext: cfg.FileContext, cacheSubs: map[string]*cacheSubscription{}, cacheWarmGrace: cacheWarmGrace, cachePublishInterval: cachePublishInterval, cacheRecoveryGuardDelay: cacheRecoveryGuardDelay, cacheEntryMaxBytes: cacheEntryMaxBytes, cacheLoad: make(chan struct{}, 1), cachePending: map[string]cacheOutbound{}, cacheWake: make(chan struct{}, 1)}
 	if cfg.PuckBrain {
-		a.brain = NewBrainHost(BrainHostConfig{Enabled: true, Binary: cfg.Binary, Root: cfg.PuckRoot, Emit: a.emitBrainEvent})
+		a.brain = NewBrainHost(BrainHostConfig{Enabled: true, Binary: cfg.Binary, Root: cfg.PuckRoot, Emit: a.emitBrainEvent, TurnStarted: cfg.BrainTurnStarted})
 		defer a.brain.Close()
 	}
 	defer a.releaseCacheSubscriptions()

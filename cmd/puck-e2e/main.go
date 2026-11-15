@@ -26,7 +26,7 @@ func main() {
 	flag.BoolVar(&ui, "ui", false, "after the chat scenarios, open the isolated Relay in headless Chromium")
 	flag.BoolVar(&fake, "fake", false, "use the deterministic fake codex app-server instead of a real Codex CLI")
 	flag.StringVar(&webDist, "web-dist", "web/dist", "built web assets served when -ui is set")
-	flag.StringVar(&jsonPath, "json", "", "write the JSON report to this path in addition to stdout")
+	flag.StringVar(&jsonPath, "json", "report.json", "write the JSON report here before shutdown, in addition to stdout")
 	flag.Parse()
 	if socket != "" || os.Getenv("ARIEL_IPC_SOCKET") != "" {
 		fmt.Fprintln(os.Stderr, "refusing Desktop IPC: puck-e2e is headless and will not attach to Codex Desktop. Unset ARIEL_IPC_SOCKET and do not pass -ipc-socket.")
@@ -49,7 +49,7 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	report, err := execute(ctx, options{Root: root, Binary: binary, Only: selected, Retries: retries, Timeout: timeout, Keep: keep, UI: ui, Fake: fake, WebRoot: "web", WebDist: webDist})
+	report, err := execute(ctx, options{Root: root, Binary: binary, Only: selected, Retries: retries, Timeout: timeout, Keep: keep, UI: ui, Fake: fake, WebRoot: "web", WebDist: webDist, JSONPath: jsonPath})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
