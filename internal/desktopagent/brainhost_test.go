@@ -262,6 +262,25 @@ func TestBrainHostLogsSanitizedPhaseLatency(t *testing.T) {
 	}
 }
 
+func TestBrainHostReportsSuccessfulTurnClientMessage(t *testing.T) {
+	process := newFakeBrainProcess()
+	var reported string
+	host := NewBrainHost(BrainHostConfig{Enabled: true, Binary: "codex", Root: t.TempDir(), Start: func(context.Context, string, string) (brainProcess, error) {
+		return process, nil
+	}, TurnStarted: func(clientMessageID string) { reported = clientMessageID }})
+	defer host.Close()
+	threadID, err := host.Ensure(context.Background(), BrainEnsure{AssistantID: "assistant-a", Name: "A", DeveloperInstructions: "guard", ToolsetVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Turn(context.Background(), threadID, "client-message-a", "hello", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if reported != "client-message-a" {
+		t.Fatalf("reported client message=%q", reported)
+	}
+}
+
 func TestBrainHostTurnsFailedCompletionIntoSafeTerminalMessage(t *testing.T) {
 	capture := &capturedPhases{}
 	restore := SetPhaseLogger(slog.New(capture))

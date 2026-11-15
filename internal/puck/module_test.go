@@ -2,7 +2,9 @@ package puck
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -831,6 +833,29 @@ func (f *fakeModuleBridge) BrainFailures() <-chan relay.BrainDeliveryFailure {
 	return f.failures
 }
 
+func TestDeleteRemovesTransientResponse(t *testing.T) {
+	module, err := NewModule(t.TempDir(), &fakeModuleBridge{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	greetingID := created.Data["greeting"].(map[string]any)["messageId"].(string)
+	deleted := module.Handle(ctx, "puck.delete", mustJSON(map[string]any{"assistantId": id}))
+	if deleted.Error != nil {
+		t.Fatal(deleted.Error)
+	}
+	var count int
+	if err := module.store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversation_messages WHERE assistant_id=? AND id=? AND kind IN ('processing','acknowledged','greeting_processing')`, id, greetingID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("deleted assistant retained its transient greeting")
+	}
+}
+
 func TestModuleMakesBrainDeliveryFailureVisible(t *testing.T) {
 	bridge := &fakeModuleBridge{events: make(chan relay.BrainEvent, 1), failures: make(chan relay.BrainDeliveryFailure, 1)}
 	module, err := NewModule(t.TempDir(), bridge)
@@ -1513,6 +1538,158 @@ func TestModulePersistsAcknowledgementAndInterruptsBrainTurn(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("durable acknowledgement missing")
+}
+
+func TestDelayedAcknowledgementCannotReviveCompletedResponse(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	if _, err := module.store.db.ExecContext(ctx, `DELETE FROM conversation_messages WHERE assistant_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := module.store.Assistant(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := module.now()
+	responseID := "message-a-processing"
+	if err := module.store.AppendMessage(ctx, Message{ID: responseID, AssistantID: id, Role: "assistant", Kind: "processing", Text: "正在处理…", BrainTurnID: "brain-turn-a", CreatedAt: started}); err != nil {
+		t.Fatal(err)
+	}
+	module.ackDelay = time.Millisecond
+	writeStarted := make(chan struct{})
+	allowWrite := make(chan struct{})
+	module.acknowledge = func(ctx context.Context, assistantID, responseID, turnID, text, summary string) error {
+		close(writeStarted)
+		<-allowWrite
+		return module.store.AcknowledgeMessage(ctx, assistantID, responseID, turnID, text, summary)
+	}
+	module.setPending(assistant, "brain-turn-a", "message-a", responseID, started, true, "")
+	pending := module.pendingTurn(id)
+	if pending.timer == nil {
+		t.Fatal("ack timer was not armed")
+	}
+	<-writeStarted
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		module.finishBrainTurnMessage(ctx, id, "brain-turn-a", "最终回复", "text")
+	}()
+	close(allowWrite)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("completion did not release the durable write")
+	}
+	response, err := module.store.Message(ctx, id, responseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Kind != "text" || response.Text != "最终回复" {
+		t.Fatalf("delayed ack replaced the completed response: kind=%s text=%q", response.Kind, response.Text)
+	}
+}
+
+func TestNextUserMessageSchedulesAfterPreviousCompletion(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	module.clearPending(id)
+	bridge.mu.Lock()
+	bridge.calls, bridge.params, bridge.origins = nil, nil, nil
+	bridge.mu.Unlock()
+	first := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "say one"}))
+	if first.Error != nil {
+		t.Fatal(first.Error)
+	}
+	if _, err := module.store.db.ExecContext(ctx, `DELETE FROM bot_inbox WHERE assistant_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	module.finishBrainTurnMessage(ctx, id, "brain-turn-a", "first done", "text")
+	second := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-b", "text": "say two"}))
+	if second.Error != nil || second.Data["state"] != "processing" {
+		t.Fatalf("next message did not schedule: %+v", second)
+	}
+	if pending := module.pendingTurn(id); pending.messageID != "message-b" || pending.responseID != "message-b-processing" || pending.turnID == "" {
+		t.Fatalf("next turn is not pending: %+v", pending)
+	}
+	bridge.mu.Lock()
+	starts := 0
+	interrupted := false
+	for index, method := range bridge.calls {
+		if method == "puck.brain.turn.start" {
+			starts++
+		}
+		if method == "puck.brain.turn.interrupt" && strings.Contains(string(bridge.params[index]), "brain-turn-a") {
+			interrupted = true
+		}
+	}
+	bridge.mu.Unlock()
+	if starts != 2 || interrupted {
+		t.Fatalf("turn starts=%d unexpected interrupt=%v", starts, interrupted)
+	}
+	response, err := module.store.Message(ctx, id, "message-b-processing")
+	if err != nil || response.Kind != "processing" {
+		t.Fatalf("next response=%+v err=%v", response, err)
+	}
+}
+
+func TestNextUserMessageClearsOnlyRecoveredTransientResponses(t *testing.T) {
+	bridge := &fakeModuleBridge{}
+	module, err := NewModule(t.TempDir(), bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer module.Close()
+	ctx := context.Background()
+	created := module.Handle(ctx, "puck.create", json.RawMessage(`{"name":"Helper","brainDeviceId":"brain-a"}`))
+	id := created.Data["assistant"].(map[string]any)["assistantId"].(string)
+	assistant, err := module.store.Assistant(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	greetingID := created.Data["greeting"].(map[string]any)["messageId"].(string)
+	module.clearPending(id) // the in-memory turn is lost when Relay restarts
+	result := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": id, "clientMessageId": "message-a", "text": "say one"}))
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if _, err := module.store.Message(ctx, id, greetingID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("recovered transient response survived: %v", err)
+	}
+	response, err := module.store.Message(ctx, id, "message-a-processing")
+	if err != nil || response.Kind != "processing" {
+		t.Fatalf("current response=%+v err=%v", response, err)
+	}
+	if err := module.store.DeleteMessage(ctx, id, "message-a-processing"); err != nil {
+		t.Fatal(err)
+	}
+	module.setPending(assistant, "brain-turn-a", "message-a", "message-a-processing", module.now(), false, "")
+	if err := module.discardRecoveredTransientResponses(ctx, id, module.pendingTurn(id)); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := module.store.Messages(ctx, id, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if message.Kind == "processing" || message.Kind == "acknowledged" || message.Kind == "greeting_processing" {
+			t.Fatalf("active pending response was treated as recovered: %+v", message)
+		}
+	}
 }
 
 func TestModuleUpdatesAvatar(t *testing.T) {

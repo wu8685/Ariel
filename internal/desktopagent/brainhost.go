@@ -37,6 +37,7 @@ type BrainHostConfig struct {
 	RestartBackoff time.Duration
 	Start          func(context.Context, string, string) (brainProcess, error)
 	Emit           func(BrainHostEvent)
+	TurnStarted    func(string)
 }
 
 type BrainEnsure struct {
@@ -208,6 +209,9 @@ func (h *BrainHost) Turn(ctx context.Context, threadID, clientMessageID, text st
 	h.turnStarted[started.Turn.ID] = startedAt
 	h.mu.Unlock()
 	logPhase("brain-turn-start", threadID, "durationMs", time.Since(startedAt).Milliseconds(), "ok", true, "effort", effort, "model", model, "promptBytes", len(text))
+	if h.cfg.TurnStarted != nil {
+		h.cfg.TurnStarted(clientMessageID)
+	}
 	return started.Turn.ID, nil
 }
 

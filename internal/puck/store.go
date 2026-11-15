@@ -476,6 +476,18 @@ func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
 	return s.changed(err)
 }
 
+func (s *Store) AcknowledgeMessage(ctx context.Context, assistantID, messageID, turnID, text, summary string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE conversation_messages SET kind='acknowledged',text=?,work_summary=? WHERE assistant_id=? AND id=? AND brain_turn_id=? AND kind IN ('processing','acknowledged','greeting_processing')`, text, summary, assistantID, messageID, turnID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return nil
+	}
+	return s.changed(s.updateAssistantMessageState(ctx, Message{ID: messageID, AssistantID: assistantID, Role: "assistant", Kind: "acknowledged", Text: text}, false))
+}
+
 func (s *Store) SoftDeleteAssistant(ctx context.Context, assistantID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -595,6 +607,11 @@ func (s *Store) DeleteMessage(ctx context.Context, assistantID, messageID string
 	}
 	s.markChanged()
 	return nil
+}
+
+func (s *Store) DeleteTransientMessages(ctx context.Context, assistantID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM conversation_messages WHERE assistant_id=? AND role='assistant' AND kind IN ('processing','acknowledged','greeting_processing')`, assistantID)
+	return s.changed(err)
 }
 
 func (s *Store) UpdateMessageReaction(ctx context.Context, assistantID, messageID, actor, emoji string) (string, error) {
@@ -957,6 +974,18 @@ func (s *Store) UpsertGroupMessage(ctx context.Context, m GroupMessage) error {
 		ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,text=excluded.text
 		WHERE group_messages.group_id=excluded.group_id`, m.ID, m.GroupID, m.Role, m.AuthorAssistantID, m.Kind, m.Text, nowText(m.CreatedAt))
 	return s.changed(err)
+}
+
+func (s *Store) AcknowledgeGroupMessage(ctx context.Context, groupID, messageID, text string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE group_messages SET kind='acknowledged',text=? WHERE group_id=? AND id=? AND kind IN ('processing','acknowledged')`, text, groupID, messageID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected > 0 {
+		s.markChanged()
+	}
+	return nil
 }
 
 func (s *Store) DeleteGroupMessage(ctx context.Context, groupID, messageID string) error {

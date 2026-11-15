@@ -54,6 +54,8 @@ type Module struct {
 	wakeSkips          map[string][]observedWakeSkip
 	lifecycle          sync.RWMutex
 	ackDelay           time.Duration
+	acknowledge        func(context.Context, string, string, string, string, string) error
+	acknowledgeGroup   func(context.Context, string, string, string) error
 	now                func() time.Time
 	watchSnapshotReads atomic.Uint64
 }
@@ -89,6 +91,8 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
+	m.acknowledge = store.AcknowledgeMessage
+	m.acknowledgeGroup = store.AcknowledgeGroupMessage
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
 	m.wg.Add(2)
@@ -1336,13 +1340,19 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if err != nil {
 		return notFound()
 	}
+	pending := m.clearPending(a.ID)
+	if err := m.discardRecoveredTransientResponses(ctx, a.ID, pending); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if err := m.deletePendingResponse(ctx, a.ID, pending); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
 	if err := m.store.SoftDeleteAssistant(ctx, a.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return notFound()
 		}
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
-	m.clearPending(a.ID)
 	m.releaseAssistant(a.ID)
 	m.syncBrainThreads(ctx)
 	if a.BrainThreadID != "" {
@@ -1383,6 +1393,9 @@ func (m *Module) message(ctx context.Context, raw json.RawMessage) relay.PuckRes
 		_ = m.bridge.Forward(ctx, relay.Origin{Kind: "puck", AssistantID: a.ID, Trigger: "user_message"}, a.BrainDeviceID, "puck.brain.turn.interrupt", mustJSON(map[string]any{"threadId": previous.threadID, "expectedTurnId": previous.turnID}))
 	}
 	if err := m.deletePendingResponse(ctx, a.ID, previous); err != nil {
+		return moduleError("PUCK_UNAVAILABLE", err.Error())
+	}
+	if err := m.discardRecoveredTransientResponses(ctx, a.ID, previous); err != nil {
 		return moduleError("PUCK_UNAVAILABLE", err.Error())
 	}
 	cardJSON := ""
@@ -1487,20 +1500,19 @@ func (m *Module) setPending(a Assistant, turnID, messageID, responseID string, s
 	}
 	pending.timer = time.AfterFunc(m.ackDelay, func() {
 		m.pendingMu.Lock()
+		defer m.pendingMu.Unlock()
 		current, ok := m.pending[a.ID]
-		if ok && current.messageID == messageID {
-			current.timer = nil
-			m.pending[a.ID] = current
+		if !ok || current.messageID != messageID || current.turnID != turnID || current.responseID != responseID {
+			return
 		}
-		m.pendingMu.Unlock()
-		if ok && current.messageID == messageID {
-			if current.groupID != "" {
-				_ = m.store.UpsertGroupMessage(context.Background(), GroupMessage{ID: responseID, GroupID: current.groupID, Role: "assistant", AuthorAssistantID: a.ID, Kind: "acknowledged", Text: "收到，我正在处理。", CreatedAt: startedAt})
-				return
-			}
-			summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
-			_ = m.store.UpsertMessage(context.Background(), Message{ID: responseID, AssistantID: a.ID, Role: "assistant", Kind: "acknowledged", Text: "收到，我正在处理。", WorkSummary: string(summary), BrainTurnID: turnID})
+		current.timer = nil
+		m.pending[a.ID] = current
+		if current.groupID != "" {
+			_ = m.acknowledgeGroup(context.Background(), current.groupID, responseID, "收到，我正在处理。")
+			return
 		}
+		summary, _ := json.Marshal(map[string]any{"startedAt": startedAt.UTC(), "state": "running"})
+		_ = m.acknowledge(context.Background(), a.ID, responseID, turnID, "收到，我正在处理。", string(summary))
 	})
 	m.pendingMu.Lock()
 	m.pending[a.ID] = pending
@@ -1521,6 +1533,13 @@ func (m *Module) deletePendingResponse(ctx context.Context, assistantID string, 
 		return nil
 	}
 	return err
+}
+
+func (m *Module) discardRecoveredTransientResponses(ctx context.Context, assistantID string, pending pendingBrainTurn) error {
+	if pending.turnID != "" {
+		return nil
+	}
+	return m.store.DeleteTransientMessages(ctx, assistantID)
 }
 
 func (m *Module) clearPending(assistantID string) pendingBrainTurn {

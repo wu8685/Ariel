@@ -451,3 +451,42 @@ func TestStorePersistsAvatarAndUpdatesCardInPlace(t *testing.T) {
 		t.Fatalf("messages=%+v err=%v", messages, err)
 	}
 }
+
+func TestAcknowledgeOnlyUpdatesCurrentTransientResponse(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "puck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateAssistant(ctx, Assistant{ID: "assistant-a", Name: "Puck", BrainDeviceID: "brain", BrainCWD: "/brain", Status: "ready", ToolsetVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(ctx, Message{ID: "response-a", AssistantID: "assistant-a", Role: "assistant", Kind: "text", Text: "final", BrainTurnID: "turn-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeMessage(ctx, "assistant-a", "response-a", "turn-a", "working", "running"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := store.Message(ctx, "assistant-a", "response-a")
+	if err != nil || response.Kind != "text" || response.Text != "final" {
+		t.Fatalf("completed response changed: %+v err=%v", response, err)
+	}
+	if err := store.UpsertMessage(ctx, Message{ID: "response-a", AssistantID: "assistant-a", Role: "assistant", Kind: "processing", Text: "working", BrainTurnID: "turn-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeMessage(ctx, "assistant-a", "response-a", "turn-b", "working", "running"); err != nil {
+		t.Fatal(err)
+	}
+	response, err = store.Message(ctx, "assistant-a", "response-a")
+	if err != nil || response.Kind != "processing" {
+		t.Fatalf("different turn changed active response: %+v err=%v", response, err)
+	}
+	if err := store.AcknowledgeMessage(ctx, "assistant-a", "response-a", "turn-a", "working", "running"); err != nil {
+		t.Fatal(err)
+	}
+	response, err = store.Message(ctx, "assistant-a", "response-a")
+	if err != nil || response.Kind != "acknowledged" {
+		t.Fatalf("active response not acknowledged: %+v err=%v", response, err)
+	}
+}

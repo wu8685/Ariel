@@ -55,6 +55,7 @@ type runner struct {
 	retries       int
 	step          time.Duration
 	fake          bool
+	brainTurns    map[string]struct{}
 }
 
 func execute(ctx context.Context, opt options) (Report, error) {
@@ -111,7 +112,7 @@ func execute(ctx context.Context, opt options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	run := &runner{ctx: ctx, stack: stack, client: owner, marker: "FIXTURE-MARKER-" + stack.token[:8], retries: opt.Retries, step: 6 * time.Minute, seen: map[string]struct{}{}, fake: opt.Fake}
+	run := &runner{ctx: ctx, stack: stack, client: owner, marker: "FIXTURE-MARKER-" + stack.token[:8], retries: opt.Retries, step: 6 * time.Minute, seen: map[string]struct{}{}, fake: opt.Fake, brainTurns: map[string]struct{}{}}
 	defer func() { run.client.Close() }()
 	report = Report{OK: true, Listen: stack.listen, Isolation: iso}
 	if err := run.boot(); err != nil {
@@ -279,6 +280,13 @@ func (r *runner) scenarioB() ScenarioResult {
 		Check{Name: "one-pending-wake", Pass: r.metrics.MaxQueueWakes <= 1, Detail: fmt.Sprintf("maxQueue=%d", r.metrics.MaxQueueWakes)},
 	)
 	result := passResult("B", "queue while busy", checks)
+	brainTurns := 0
+	for _, id := range ids {
+		if r.brainTurnReceived(id) {
+			brainTurns++
+		}
+	}
+	result.Checks = append(result.Checks, Check{Name: "brain-turns-started", Pass: brainTurns == len(ids), Detail: fmt.Sprintf("started=%d", brainTurns)})
 	if result.Status == "fail" && onlyFailed(result, "picked-up") {
 		result.Status = "observed"
 	}
@@ -457,6 +465,18 @@ func (r *runner) send(id, text string) (map[string]any, error) {
 	return response, nil
 }
 
+func (r *runner) collectBrainTurns() {
+	for _, id := range r.stack.drainBrainTurns() {
+		r.brainTurns[id] = struct{}{}
+	}
+}
+
+func (r *runner) brainTurnReceived(clientMessageID string) bool {
+	r.collectBrainTurns()
+	_, ok := r.brainTurns[clientMessageID]
+	return ok
+}
+
 func (r *runner) waitDevice() error {
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
@@ -485,6 +505,7 @@ func (r *runner) waitDevice() error {
 func (r *runner) waitIdle() error {
 	deadline := time.Now().Add(r.step)
 	for time.Now().Before(deadline) {
+		r.collectBrainTurns()
 		r.collectMetrics()
 		r.sampleQueue()
 		if !r.busy() {
@@ -525,16 +546,30 @@ func (r *runner) busy() bool {
 	if err != nil {
 		return true
 	}
-	for _, message := range messagesOf(history) {
+	return messagesBusy(messagesOf(history))
+}
+
+func messagesBusy(messages []map[string]any) bool {
+	busy := false
+	for _, message := range messages {
+		role, _ := message["role"].(string)
+		if role == "user" {
+			busy = false
+			continue
+		}
+		if role != "assistant" {
+			continue
+		}
 		kind, _ := message["kind"].(string)
-		if kind == "processing" || kind == "greeting_processing" || kind == "acknowledged" {
-			return true
+		if kind == "processing" || kind == "acknowledged" || kind == "greeting_processing" {
+			busy = true
 		}
 	}
-	return false
+	return busy
 }
 
 func (r *runner) history() (map[string]any, error) {
+	r.collectBrainTurns()
 	return r.client.call(r.ctx, "puck.history", "relay", map[string]any{"assistantId": r.assistantID}, 20*time.Second)
 }
 
@@ -926,10 +961,12 @@ func (r *runner) scenarioJ() ScenarioResult {
 	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": writerID}, r.step)
 	privateLeft, _ := r.countMemory("FIXTURE_PRIVATE_FACT")
 	sharedLeft, _ := r.countMemory("FIXTURE_SHARED_FACT")
+	writerGone, writerGoneDetail, writerGoneErr := assistantGone(r.ctx, r.stack.iso.DBPath, writerID)
 	checks := []Check{
 		{Name: "shared-visible", Pass: recallHas(shared, "memories", "text", "FIXTURE_SHARED_FACT")},
 		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
 		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
+		{Name: "deleted-transient-cleanup", Pass: writerGoneErr == nil && writerGone, Detail: writerGoneDetail},
 		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
 		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
 	}
@@ -983,10 +1020,12 @@ func (r *runner) scenarioJDirect() ScenarioResult {
 	deleted, err := r.client.call(r.ctx, "puck.delete", "relay", map[string]any{"assistantId": writerID}, r.step)
 	privateLeft, _ := r.countMemory("FIXTURE_PRIVATE_FACT")
 	sharedLeft, _ := r.countMemory("FIXTURE_SHARED_FACT")
+	writerGone, writerGoneDetail, writerGoneErr := assistantGone(r.ctx, r.stack.iso.DBPath, writerID)
 	return passResult("J", "memory delete", []Check{
 		{Name: "shared-visible", Pass: recallHas(shared, "memories", "text", "FIXTURE_SHARED_FACT")},
 		{Name: "private-hidden", Pass: !recallHas(private, "memories", "text", "FIXTURE_PRIVATE_FACT")},
 		{Name: "deleted", Pass: err == nil && outcomeCode(deleted) == "accepted"},
+		{Name: "deleted-transient-cleanup", Pass: writerGoneErr == nil && writerGone, Detail: writerGoneDetail},
 		{Name: "private-gone", Pass: privateLeft == 0, Detail: fmt.Sprintf("count=%d", privateLeft)},
 		{Name: "shared-kept", Pass: sharedLeft == 1, Detail: fmt.Sprintf("count=%d", sharedLeft)},
 	})
@@ -1019,30 +1058,32 @@ func (r *runner) scenarioK() ScenarioResult {
 		return ScenarioResult{ID: "K", Name: "remember choice", Status: "skipped"}
 	}
 	before := r.toolNames()
-	_, _ = r.send(newID(), "记住：我以后都希望你先给结论，再用很短的中文。这是长期偏好。")
-	_ = r.waitIdle()
+	messageID := newID()
+	if _, err := r.send(messageID, "记住：我以后都希望你先给结论，再用很短的中文。这是长期偏好。"); err != nil {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-started", Detail: "send rejected"}}}
+	}
+	if !r.brainTurnReceived(messageID) {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-started", Detail: "no accepted turn for prompt"}}}
+	}
+	if err := r.waitIdle(); err != nil {
+		return ScenarioResult{ID: "K", Name: "remember choice", Status: "fail", Checks: []Check{{Name: "brain-turn-completed", Detail: "timeout"}}}
+	}
 	called := false
 	for _, name := range r.toolNames() {
 		if strings.Contains(name, "update_memory") && !containsText(before, name) {
 			called = true
 		}
 	}
-	return ScenarioResult{ID: "K", Name: "remember choice", Status: "observed", Checks: []Check{{Name: "called-update-memory", Pass: true, Detail: fmt.Sprintf("observed=%t", called)}}}
+	return ScenarioResult{ID: "K", Name: "remember choice", Status: "observed", Checks: []Check{{Name: "brain-turn-started", Pass: true}, {Name: "called-update-memory", Pass: true, Detail: fmt.Sprintf("observed=%t", called)}}}
 }
 
 func (r *runner) waitAssistant(id string) error {
 	deadline := time.Now().Add(r.step)
 	for time.Now().Before(deadline) {
 		history, err := r.client.call(r.ctx, "puck.history", "relay", map[string]any{"assistantId": id}, 20*time.Second)
+		r.collectBrainTurns()
 		if err == nil {
-			busy := false
-			for _, message := range messagesOf(history) {
-				kind, _ := message["kind"].(string)
-				if kind == "processing" || kind == "greeting_processing" || kind == "acknowledged" {
-					busy = true
-				}
-			}
-			if !busy {
+			if !messagesBusy(messagesOf(history)) {
 				return nil
 			}
 		}

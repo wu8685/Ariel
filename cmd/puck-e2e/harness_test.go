@@ -173,6 +173,37 @@ func TestObservedScenariosDoNotFailTheRun(t *testing.T) {
 	}
 }
 
+func TestBusyOnlyFollowsTransientRowsAfterLatestUserMessage(t *testing.T) {
+	history := map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "old-user", "role": "user", "kind": "text"},
+		{"id": "old-response", "role": "assistant", "kind": "acknowledged"},
+		{"id": "new-user", "role": "user", "kind": "text"},
+	}}}
+	if messagesBusy(messagesOf(history)) {
+		t.Fatal("historical acknowledgement kept a completed conversation busy")
+	}
+	history = map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "new-user", "role": "user", "kind": "text"},
+		{"id": "new-response", "role": "assistant", "kind": "processing"},
+	}}}
+	if !messagesBusy(messagesOf(history)) {
+		t.Fatal("current processing response was ignored")
+	}
+	history = map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "greeting", "role": "assistant", "kind": "greeting_processing"},
+	}}}
+	if !messagesBusy(messagesOf(history)) {
+		t.Fatal("processing greeting did not establish initial busy state")
+	}
+	history = map[string]any{"outcome": "accepted", "data": map[string]any{"messages": []map[string]any{
+		{"id": "new-user", "role": "user", "kind": "text"},
+		{"id": "greeting", "role": "assistant", "kind": "greeting_processing"},
+	}}}
+	if !messagesBusy(messagesOf(history)) {
+		t.Fatal("active greeting after the latest user message was ignored")
+	}
+}
+
 func TestRedactKeepsErrorText(t *testing.T) {
 	raw := "request-failed: context deadline exceeded\n[puck-handoff]\nthread 11111111-1111-4111-8111-111111111111\n\nnext line\ngoroutine 1 [running]\nat main.boom"
 	got := redact(raw)
