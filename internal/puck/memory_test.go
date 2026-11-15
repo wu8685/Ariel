@@ -3,7 +3,6 @@ package puck
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,9 +28,9 @@ func TestMemorySchemaMigratesFromV11(t *testing.T) {
 	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 12 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
-	var vec string
-	if err := store.db.QueryRow(`SELECT vec_version()`).Scan(&vec); err != nil || vec == "" {
-		t.Fatalf("vec=%q err=%v", vec, err)
+	var descriptionColumn int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('bot_tasks') WHERE name='description'`).Scan(&descriptionColumn); err != nil || descriptionColumn != 1 {
+		t.Fatalf("description column=%d err=%v", descriptionColumn, err)
 	}
 	if _, err := store.db.Exec(`INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at, updated_at) VALUES ('m1','bot','a','Helper','journal','机主啊','t','t')`); err != nil {
 		t.Fatal(err)
@@ -201,57 +200,34 @@ func TestMemoryInjectionAndToolsetLine(t *testing.T) {
 	}
 }
 
-func TestMemoryRecallRanksSemanticAndExact(t *testing.T) {
+func TestMemoryRecallUsesFTSAndExactText(t *testing.T) {
 	module, id := newQueueModule(t)
-	ctx := context.Background()
-	module.embedder = &scriptedEmbedder{}
 	writeMemory(t, module, id, "journal", "bot", "机主习惯早上发版")
 	writeMemory(t, module, id, "journal", "bot", "今天下雨了")
 	writeMemory(t, module, id, "journal", "bot", "请看 PR-1842")
-	near := recallMemory(t, module, id, "早晨发布")
-	memories := objectList(near.Data["memories"])
-	if near.Data["embedder"] != "ready" || len(memories) == 0 || memories[0]["text"] != "机主习惯早上发版" {
-		t.Fatalf("semantic=%+v", near)
-	}
 	exact := recallMemory(t, module, id, "PR-1842")
-	found := false
 	exactList := objectList(exact.Data["memories"])
-	for _, item := range exactList {
-		if item["text"] == "请看 PR-1842" {
-			found = true
-			if exactList[0]["text"] != "请看 PR-1842" {
-				t.Fatalf("exact rank=%v", exact.Data["memories"])
-			}
-		}
+	if len(exactList) == 0 || exactList[0]["text"] != "请看 PR-1842" {
+		t.Fatalf("exact=%+v", exact.Data["memories"])
 	}
-	if !found {
-		t.Fatalf("exact=%+v", exact)
+	keyword := recallMemory(t, module, id, "早上发版")
+	if len(objectList(keyword.Data["memories"])) == 0 || objectList(keyword.Data["memories"])[0]["text"] != "机主习惯早上发版" {
+		t.Fatalf("fts=%+v", keyword.Data["memories"])
 	}
-	if _, err := module.store.db.Exec(`INSERT INTO bot_tasks(id, assistant_id, title, goal, status, merged_into, created_at, updated_at) VALUES ('task-pr', ?, 'PR-1842', '看工单', 'accepted', '', 't', 't')`, id); err != nil {
-		t.Fatal(err)
+	saved := module.tools.Execute(context.Background(), pucktools.Call{AssistantID: id, Tool: "save_bot_task", Arguments: mustJSON(map[string]any{"title": "PR-1842", "goal": "看工单", "description": "跟进 PR-1842 的工单", "status": "accepted"})})
+	if !saved.Success {
+		t.Fatal(saved)
 	}
-	if err := module.store.AppendMessage(ctx, Message{ID: "msg-pr", AssistantID: id, Role: "user", Kind: "text", Text: "请处理 PR-1842"}); err != nil {
-		t.Fatal(err)
+	taskID, _ := saved.Data["task"].(map[string]any)["id"].(string)
+	listed := module.tools.Execute(context.Background(), pucktools.Call{AssistantID: id, Tool: "list_bot_tasks", Arguments: mustJSON(map[string]any{"query": "PR-1842"})})
+	choices := objectList(listed.Data["tasks"])
+	if len(choices) != 1 || choices[0]["id"] != taskID || choices[0]["description"] != "跟进 PR-1842 的工单" || choices[0]["goal"] != nil {
+		t.Fatalf("choices=%+v", listed.Data["tasks"])
 	}
-	withTask := recallMemory(t, module, id, "PR-1842")
-	tasks := objectList(withTask.Data["tasks"])
-	messages := objectList(withTask.Data["messages"])
-	if len(tasks) != 1 || tasks[0]["title"] != "PR-1842" || len(messages) != 1 {
-		t.Fatalf("joined=%+v", withTask)
-	}
-	module.embedder = &scriptedEmbedder{failQuery: true}
-	fallback := recallMemory(t, module, id, "PR-1842")
-	if !fallback.Success || fallback.Data["embedder"] != "unavailable" {
-		t.Fatalf("fallback=%+v", fallback)
-	}
-	hit := false
-	for _, item := range objectList(fallback.Data["memories"]) {
-		if item["text"] == "请看 PR-1842" {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Fatalf("fts fallback=%+v", fallback)
+	full := module.tools.Execute(context.Background(), pucktools.Call{AssistantID: id, Tool: "get_bot_task", Arguments: mustJSON(map[string]any{"taskId": taskID})})
+	got, _ := full.Data["task"].(map[string]any)
+	if !full.Success || got["description"] != "跟进 PR-1842 的工单" || got["goal"] != "看工单" {
+		t.Fatalf("full=%+v", full)
 	}
 }
 
@@ -262,21 +238,13 @@ func TestDeleteBotKeepsSharedMemory(t *testing.T) {
 	if err := module.store.CreateAssistant(ctx, other); err != nil {
 		t.Fatal(err)
 	}
-	module.embedder = &scriptedEmbedder{}
 	writeMemory(t, module, id, "profile", "bot", "只属于这个助手")
 	writeMemory(t, module, id, "profile", "shared", "大家都该知道")
 	writeMemory(t, module, other.ID, "profile", "bot", "只属于别的")
-	var rowID int64
-	if err := module.store.db.QueryRow(`SELECT rowid FROM bot_memories WHERE text='只属于这个助手'`).Scan(&rowID); err != nil {
-		t.Fatal(err)
-	}
-	if err := module.store.SaveMemoryVector(ctx, mustMemoryID(t, module, "只属于这个助手"), embedderModelID, scriptedVector("只属于这个助手", false), time.Now()); err != nil {
-		t.Fatal(err)
-	}
 	if err := module.store.SoftDeleteAssistant(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	var privateCount, sharedCount, otherCount, vecCount, ftsCount int
+	var privateCount, sharedCount, otherCount, ftsCount int
 	if err := module.store.db.QueryRow(`SELECT COUNT(*) FROM bot_memories WHERE scope='bot' AND assistant_id=?`, id).Scan(&privateCount); err != nil || privateCount != 0 {
 		t.Fatalf("private=%d err=%v", privateCount, err)
 	}
@@ -285,9 +253,6 @@ func TestDeleteBotKeepsSharedMemory(t *testing.T) {
 	}
 	if err := module.store.db.QueryRow(`SELECT COUNT(*) FROM bot_memories WHERE text='只属于别的'`).Scan(&otherCount); err != nil || otherCount != 1 {
 		t.Fatalf("other=%d err=%v", otherCount, err)
-	}
-	if err := module.store.db.QueryRow(`SELECT COUNT(*) FROM bot_memory_vec WHERE memory_rowid=?`, rowID).Scan(&vecCount); err != nil || vecCount != 0 {
-		t.Fatalf("vec=%d err=%v", vecCount, err)
 	}
 	if err := module.store.db.QueryRow(`SELECT COUNT(*) FROM bot_memories_fts WHERE bot_memories_fts MATCH '只属于这个助手'`).Scan(&ftsCount); err != nil || ftsCount != 0 {
 		t.Fatalf("fts=%d err=%v", ftsCount, err)
@@ -344,41 +309,4 @@ func objectList(value any) []map[string]any {
 	var items []map[string]any
 	_ = json.Unmarshal(raw, &items)
 	return items
-}
-
-type scriptedEmbedder struct{ failQuery bool }
-
-func (s *scriptedEmbedder) ModelID() string             { return embedderModelID }
-func (s *scriptedEmbedder) Dim() int                    { return embedderDim }
-func (s *scriptedEmbedder) Available() bool             { return true }
-func (s *scriptedEmbedder) Probe(context.Context) error { return nil }
-func (s *scriptedEmbedder) Close()                      {}
-func (s *scriptedEmbedder) EmbedDocuments(_ context.Context, texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, text := range texts {
-		out[i] = scriptedVector(text, false)
-	}
-	return out, nil
-}
-func (s *scriptedEmbedder) EmbedQuery(_ context.Context, query string) ([]float32, error) {
-	if s.failQuery {
-		return nil, errors.New("embedder down")
-	}
-	return scriptedVector(query, true), nil
-}
-
-func scriptedVector(text string, query bool) []float32 {
-	vector := make([]float32, embedderDim)
-	switch {
-	case query && strings.Contains(text, "PR-1842"):
-		vector[5] = 1
-	case strings.Contains(text, "PR-1842"):
-		vector[2] = 1
-	case strings.Contains(text, "早晨"), strings.Contains(text, "早上"):
-		vector[0] = 1
-	default:
-		vector[1] = 1
-	}
-	_ = normalize(vector)
-	return vector
 }

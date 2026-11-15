@@ -112,7 +112,7 @@ func TestCustomContextStaysBelowSystemSafetyRules(t *testing.T) {
 
 func TestHandoffPromptAddsOneLineOnlyOnTheCurrentToolset(t *testing.T) {
 	line := "交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。"
-	taskLine := "要记住的事用 save_bot_task 新建。"
+	taskLine := "description 写这件任务的内容"
 	current := brainInstructions("assistant-a", "小帕", "开发助理", "", currentToolsetVersion)
 	previous := brainInstructions("assistant-a", "小帕", "开发助理", "", botTaskToolset-1)
 	older := brainInstructions("assistant-a", "小帕", "开发助理", "", handoffToolset-1)

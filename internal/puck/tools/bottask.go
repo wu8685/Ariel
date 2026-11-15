@@ -15,6 +15,7 @@ type BotTaskSession struct {
 
 type BotWork interface {
 	ListBotTasks(context.Context, string, toolcontract.ListBotTasksRequest) (map[string]any, error)
+	GetBotTask(context.Context, string, string) (map[string]any, error)
 	SearchMessages(context.Context, string, toolcontract.SearchMessagesRequest) (map[string]any, error)
 	SaveBotTask(context.Context, string, toolcontract.SaveBotTaskRequest) (map[string]any, error)
 	AttachBotTask(context.Context, string, toolcontract.AttachBotTaskRequest) (map[string]any, error)
@@ -31,6 +32,19 @@ func (h *Handler) listBotTasks(ctx context.Context, call Call) ToolResult {
 		return result
 	}
 	data, err := work.ListBotTasks(ctx, call.AssistantID, value)
+	return botWorkResult(data, err)
+}
+
+func (h *Handler) getBotTask(ctx context.Context, call Call) ToolResult {
+	value, details := toolcontract.DecodeGetBotTask(call.Arguments)
+	if len(details) != 0 {
+		return invalidArguments("invalid get_bot_task arguments", details)
+	}
+	work, result := h.botWork()
+	if result.Code != "" {
+		return result
+	}
+	data, err := work.GetBotTask(ctx, call.AssistantID, value.TaskID)
 	return botWorkResult(data, err)
 }
 

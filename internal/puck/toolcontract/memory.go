@@ -31,7 +31,7 @@ func memoryDefinition(name string) (Definition, bool) {
 	case "update_memory":
 		return Definition{Name: name, Description: "记下或忘掉一条长期事实。action 是 write 或 forget。scope 省略时是 bot；大家的 Bot 都该知道的用 shared。kind 是 profile（稳定的习惯和做法）或 journal（带日期的经过）。text 是原文。forget 必须传入当初记下的原文。改一条要先 forget 再 write。不要记密码、token 或密钥。", InputSchema: updateMemorySchema()}, true
 	case "recall_memory":
-		return Definition{Name: name, Description: "查找没有出现在本回合里的记忆，并按关键词带出这个 Bot 自己的任务和对话。开口问机主之前先查。query 必填。scope 省略时是 all。kind 省略时是 any。sources 省略时同时查 memory、tasks、messages。", InputSchema: recallMemorySchema()}, true
+		return Definition{Name: name, Description: "用关键词查找没有出现在本回合里的记忆原文。任务上下文不要靠它挑选：先 list_bot_tasks 看每条的 id 和 description，自己选定后再 get_bot_task。query 必填。scope 省略时是 all。kind 省略时是 any。", InputSchema: recallMemorySchema()}, true
 	default:
 		return Definition{}, false
 	}

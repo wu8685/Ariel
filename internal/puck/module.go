@@ -56,9 +56,6 @@ type Module struct {
 	ackDelay           time.Duration
 	now                func() time.Time
 	watchSnapshotReads atomic.Uint64
-	embedder           Embedder
-	embedMu            sync.Mutex
-	embedderReady      bool
 }
 
 type observedToolCall struct {
@@ -92,13 +89,11 @@ func NewModule(dataDir string, bridge Orchestrator) (*Module, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Module{store: store, bridge: bridge, supervisor: NewSupervisor(3, time.Minute), rootCtx: ctx, cancel: cancel, watchCancel: map[string]context.CancelFunc{}, pending: map[string]pendingBrainTurn{}, toolCalls: map[string][]observedToolCall{}, wakeSkips: map[string][]observedWakeSkip{}, ackDelay: 3 * time.Second, now: time.Now}
-	m.embedder = newEmbedder(dataDir)
 	m.tools = pucktools.New(toolOrchestrator{bridge}, toolBackend{module: m})
 	m.syncBrainThreads(context.Background())
-	m.wg.Add(3)
+	m.wg.Add(2)
 	go m.runBrainEvents(ctx)
 	go m.runTaskWatches(ctx)
-	go m.runMemoryBackfill(ctx)
 	return m, nil
 }
 
@@ -118,9 +113,6 @@ func (m *Module) Close() error {
 	m.pendingMu.Unlock()
 	m.wg.Wait()
 	m.watchWg.Wait()
-	if m.embedder != nil {
-		m.embedder.Close()
-	}
 	return m.store.Close()
 }
 

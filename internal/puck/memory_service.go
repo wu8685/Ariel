@@ -3,7 +3,6 @@ package puck
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
@@ -18,105 +17,6 @@ func (m *Module) memoryBlock(ctx context.Context, assistant Assistant) string {
 		return ""
 	}
 	return formatMemoryBlock(botProfile, sharedProfile, botJournal, sharedJournal)
-}
-
-func (m *Module) syncEmbedderModel(ctx context.Context) {
-	embedder := m.embedder
-	if embedder == nil || !embedder.Available() {
-		return
-	}
-	m.embedMu.Lock()
-	defer m.embedMu.Unlock()
-	if m.embedderReady {
-		return
-	}
-	if err := embedder.Probe(ctx); err != nil {
-		return
-	}
-	current, _, err := m.store.EmbedderRecord(ctx)
-	if err != nil {
-		return
-	}
-	if current != "" && current != embedder.ModelID() {
-		if err := m.store.ClearMemoryVectors(ctx); err != nil {
-			return
-		}
-	}
-	if err := m.store.SetEmbedderRecord(ctx, embedder.ModelID(), embedder.Dim()); err != nil {
-		return
-	}
-	m.embedderReady = true
-}
-
-// embedMemorySoon returns as soon as the vector is stored, or after the warm
-// embed budget. A cold llama-server start keeps running and the row is filled
-// by that goroutine or the backfill loop.
-func (m *Module) embedMemorySoon(entry Memory) {
-	if m.embedder == nil || !m.embedder.Available() {
-		return
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		m.embedMemory(m.rootCtx, entry)
-	}()
-	select {
-	case <-done:
-	case <-time.After(defaultEmbedBudget):
-	}
-}
-
-func (m *Module) embedMemory(ctx context.Context, entry Memory) {
-	embedder := m.embedder
-	if embedder == nil || !embedder.Available() {
-		return
-	}
-	m.syncEmbedderModel(ctx)
-	vectors, err := embedder.EmbedDocuments(ctx, []string{entry.Text})
-	if err != nil || len(vectors) != 1 {
-		return
-	}
-	_ = m.store.SaveMemoryVector(ctx, entry.ID, embedder.ModelID(), vectors[0], time.Now())
-}
-
-func (m *Module) runMemoryBackfill(ctx context.Context) {
-	defer m.wg.Done()
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.backfillMemories(ctx)
-		}
-	}
-}
-
-func (m *Module) backfillMemories(ctx context.Context) {
-	embedder := m.embedder
-	if embedder == nil || !embedder.Available() {
-		return
-	}
-	m.syncEmbedderModel(ctx)
-	if !m.embedderReady {
-		return
-	}
-	entries, err := m.store.MemoriesMissingVector(ctx, embedder.ModelID(), 16)
-	if err != nil || len(entries) == 0 {
-		return
-	}
-	texts := make([]string, len(entries))
-	for i, entry := range entries {
-		texts[i] = entry.Text
-	}
-	vectors, err := embedder.EmbedDocuments(ctx, texts)
-	if err != nil || len(vectors) != len(entries) {
-		return
-	}
-	for i, entry := range entries {
-		_ = m.store.SaveMemoryVector(ctx, entry.ID, embedder.ModelID(), vectors[i], time.Now())
-	}
 }
 
 func (m *Module) updateMemory(ctx context.Context, assistantID string, request toolcontract.UpdateMemoryRequest) (map[string]any, error) {
@@ -134,9 +34,6 @@ func (m *Module) updateMemory(ctx context.Context, assistantID string, request t
 	entry, deduped, err := m.store.WriteMemory(ctx, assistantID, assistant.Name, request.Scope, request.Kind, request.Text)
 	if err != nil {
 		return nil, err
-	}
-	if !deduped {
-		m.embedMemorySoon(entry)
 	}
 	return memoryToolJSON("write", entry, deduped), nil
 }
@@ -164,10 +61,9 @@ func (m *Module) recallMemory(ctx context.Context, assistantID string, request t
 	for _, source := range request.Sources {
 		sources[source] = true
 	}
-	payload := map[string]any{"embedder": "unavailable"}
-	if sources["memory"] {
-		memories, status := m.recallMemoryEntries(ctx, assistantID, request)
-		payload["embedder"] = status
+	payload := map[string]any{}
+	if sources["memory"] || len(sources) == 0 {
+		memories := m.recallMemoryEntries(ctx, assistantID, request)
 		items := make([]map[string]any, 0, len(memories))
 		for _, entry := range memories {
 			name := entry.DisplayName
@@ -185,18 +81,11 @@ func (m *Module) recallMemory(ctx context.Context, assistantID string, request t
 		if err != nil {
 			return nil, err
 		}
-		snippets := m.taskSnippets(ctx, assistantID, page.Tasks)
 		tasks := make([]map[string]any, 0, len(page.Tasks))
 		for _, task := range page.Tasks {
-			item := map[string]any{"id": task.ID, "title": task.Title, "goal": task.Goal, "status": task.Status, "updatedAt": task.UpdatedAt.UTC().Format(time.RFC3339Nano)}
-			if snippet := strings.TrimSpace(snippets[task.ID]); snippet != "" {
-				item["lastUserMessage"] = snippet
-			}
-			tasks = append(tasks, item)
+			tasks = append(tasks, botTaskChoiceJSON(task))
 		}
 		payload["tasks"] = tasks
-	} else {
-		payload["tasks"] = []any{}
 	}
 	if sources["messages"] {
 		messages, err := m.store.SearchMessagesRecent(ctx, assistantID, request.Query, request.Limit)
@@ -208,37 +97,11 @@ func (m *Module) recallMemory(ctx context.Context, assistantID string, request t
 			items = append(items, map[string]any{"id": message.ID, "role": message.Role, "text": message.Text, "createdAt": message.CreatedAt.UTC().Format(time.RFC3339Nano)})
 		}
 		payload["messages"] = items
-	} else {
-		payload["messages"] = []any{}
 	}
 	return fitRecallPayload(payload), nil
 }
 
-func (m *Module) recallMemoryEntries(ctx context.Context, assistantID string, request toolcontract.RecallMemoryRequest) ([]Memory, string) {
-	status := "unavailable"
-	distance := map[string]float64{}
-	var semantic []Memory
-	embedder := m.embedder
-	if embedder != nil && embedder.Available() {
-		m.syncEmbedderModel(ctx)
-		if vector, err := embedder.EmbedQuery(ctx, request.Query); err == nil {
-			encoded, encErr := json.Marshal(vector)
-			if encErr == nil {
-				hits, err := m.store.MemoryKNN(ctx, assistantID, request.Scope, request.Kind, embedder.ModelID(), string(encoded), 40)
-				if err == nil {
-					status = "ready"
-					for _, hit := range hits {
-						entry, err := m.store.MemoryByRowID(ctx, hit.RowID)
-						if err != nil {
-							continue
-						}
-						distance[entry.ID] = hit.Distance
-						semantic = append(semantic, entry)
-					}
-				}
-			}
-		}
-	}
+func (m *Module) recallMemoryEntries(ctx context.Context, assistantID string, request toolcontract.RecallMemoryRequest) []Memory {
 	keywordIDs, err := m.store.SearchMemoryIDs(ctx, assistantID, request.Scope, request.Kind, request.Query, 20)
 	if err != nil {
 		keywordIDs = nil
@@ -246,7 +109,6 @@ func (m *Module) recallMemoryEntries(ctx context.Context, assistantID string, re
 	keyword := map[string]bool{}
 	exact := map[string]bool{}
 	var pool []Memory
-	pool = append(pool, semantic...)
 	for _, id := range keywordIDs {
 		keyword[id] = true
 		if entry, err := m.store.memoryByID(ctx, id); err == nil {
@@ -265,11 +127,11 @@ func (m *Module) recallMemoryEntries(ctx context.Context, assistantID string, re
 			}
 		}
 	}
-	ranked := rankMemories(pool, distance, keyword, exact)
+	ranked := rankMemories(pool, nil, keyword, exact)
 	if len(ranked) > request.Limit {
 		ranked = ranked[:request.Limit]
 	}
-	return ranked, status
+	return ranked
 }
 
 func fitRecallPayload(payload map[string]any) map[string]any {
@@ -300,12 +162,20 @@ func (m *Module) RecallMemory(ctx context.Context, assistantID string, request t
 	return m.recallMemory(ctx, assistantID, request)
 }
 
-func (m *Module) RecordBotTask(ctx context.Context, assistantID, title, goal string) error {
+func (m *Module) RecordBotTask(ctx context.Context, assistantID, title, goal, description string) error {
 	if _, err := m.store.Assistant(ctx, assistantID); err != nil {
 		return err
 	}
-	_, err := m.store.SaveBotTask(ctx, BotTask{AssistantID: assistantID, Title: title, Goal: goal, Status: botTaskAccepted})
+	_, err := m.store.SaveBotTask(ctx, BotTask{AssistantID: assistantID, Title: title, Goal: goal, Description: description, DescriptionSet: true, Status: botTaskAccepted})
 	return err
+}
+
+func (m *Module) ListTaskChoices(ctx context.Context, assistantID, query string) (map[string]any, error) {
+	return toolBackend{module: m}.ListBotTasks(ctx, assistantID, toolcontract.ListBotTasksRequest{Query: query, Limit: 8})
+}
+
+func (m *Module) ReadTaskContext(ctx context.Context, assistantID, taskID string) (map[string]any, error) {
+	return toolBackend{module: m}.GetBotTask(ctx, assistantID, taskID)
 }
 
 func (b toolBackend) UpdateMemory(ctx context.Context, assistantID string, request toolcontract.UpdateMemoryRequest) (map[string]any, error) {

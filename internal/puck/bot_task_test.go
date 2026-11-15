@@ -343,7 +343,7 @@ func TestToolset11RotatesOnNextUserMessage(t *testing.T) {
 			instructions, _ = params["developerInstructions"].(string)
 		}
 	}
-	if strings.Count(instructions, "要记住的事用 save_bot_task 新建。") != 1 || !strings.Contains(instructions, "merge_bot_tasks") || !strings.Contains(instructions, "search_messages") || !strings.Contains(instructions, "attach_bot_task") {
+	if strings.Count(instructions, "description 写这件任务的内容") != 1 || !strings.Contains(instructions, "get_bot_task") || !strings.Contains(instructions, "merge_bot_tasks") {
 		t.Fatalf("instructions=%s", instructions)
 	}
 }

@@ -200,6 +200,8 @@ func (h *Handler) execute(ctx context.Context, call Call, authorized bool) ToolR
 		result = h.sendMessage(ctx, call)
 	case "list_bot_tasks":
 		result = h.listBotTasks(ctx, call)
+	case "get_bot_task":
+		result = h.getBotTask(ctx, call)
 	case "search_messages":
 		result = h.searchMessages(ctx, call)
 	case "save_bot_task":

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
-	_ "modernc.org/sqlite/vec"
 )
 
 const storeSchemaVersion = 12
@@ -269,6 +268,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		)
 	}
 	if version < 12 {
+		var descriptionColumn int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('bot_tasks') WHERE name='description'`).Scan(&descriptionColumn); err != nil {
+			return err
+		}
+		if descriptionColumn == 0 {
+			statements = append(statements, `ALTER TABLE bot_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
+		}
 		statements = append(statements, memorySchemaSQL()...)
 	}
 	for _, statement := range statements {

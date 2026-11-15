@@ -108,7 +108,7 @@ func toolsetPromptLines(toolset int) string {
 		lines = append(lines, "- 交接时 Puck 会附上被引用会话的链接；需要时自己去读，并写下你的目标和判断。")
 	}
 	if toolset >= botTaskToolset {
-		lines = append(lines, "- 要记住的事用 save_bot_task 新建。延续已有任务时把那个 taskId 传给 save_bot_task，当前消息会挂上去。只想挂上当前消息时调用 attach_bot_task，可以只传 taskId。确认是不是旧事用 list_bot_tasks 或 search_messages。两条任务是同一件才用 merge_bot_tasks。")
+		lines = append(lines, "- 每件要跟进的事用 save_bot_task 记下。description 写这件任务的内容，由你写原文。list_bot_tasks 只给出每条的 id、title 和 description，由你选择；选定后用 get_bot_task 读取完整上下文，包括已挂上的消息原文和 Codex 会话的 deviceId、threadId。系统不会替你新建任务，也不会替你摘要。延续已有任务时把 taskId 传给 save_bot_task。只想挂上当前消息时调用 attach_bot_task。两条任务是同一件才用 merge_bot_tasks。")
 	}
 	if toolset >= memoryToolset {
 		lines = append(lines, "- "+memoryToolLine)

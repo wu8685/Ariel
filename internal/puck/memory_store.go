@@ -3,7 +3,6 @@ package puck
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -75,24 +74,10 @@ func memorySchemaSQL() []string {
 		`CREATE TRIGGER IF NOT EXISTS bot_memories_ad AFTER DELETE ON bot_memories BEGIN
             INSERT INTO bot_memories_fts(bot_memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
         END`,
-		`CREATE TABLE IF NOT EXISTS bot_memory_vectors (
-            memory_id TEXT PRIMARY KEY REFERENCES bot_memories(id) ON DELETE CASCADE,
-            model_id TEXT NOT NULL,
-            dim INTEGER NOT NULL,
-            embedded_at TEXT NOT NULL)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS bot_memory_vec USING vec0(memory_rowid INTEGER PRIMARY KEY, embedding float[1024] distance_metric=cosine)`,
-		`CREATE TABLE IF NOT EXISTS bot_memory_embedder (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            model_id TEXT NOT NULL,
-            dim INTEGER NOT NULL)`,
 	}
 }
 
 func probeMemoryCapabilities(ctx context.Context, tx sqlContext) error {
-	var version string
-	if err := tx.QueryRowContext(ctx, `SELECT vec_version()`).Scan(&version); err != nil || strings.TrimSpace(version) == "" {
-		return fmt.Errorf("sqlite-vec %s is unavailable: %w", "v0.1.9", err)
-	}
 	if _, err := tx.ExecContext(ctx, `CREATE VIRTUAL TABLE temp.memory_trigram_probe USING fts5(text, tokenize="trigram case_sensitive 0")`); err != nil {
 		return err
 	}
@@ -177,7 +162,7 @@ func (s *Store) ForgetMemory(ctx context.Context, assistantID, scope, kind, text
 	if !ok {
 		return Memory{}, &MemoryFailure{Code: "MEMORY_NOT_FOUND", Message: "没有找到这条原文", Text: text}
 	}
-	if err := deleteMemoryRow(ctx, tx, existing.RowID, existing.ID); err != nil {
+	if err := deleteMemoryRow(ctx, tx, existing.ID); err != nil {
 		return Memory{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -245,7 +230,7 @@ func (s *Store) DeleteVisibleMemory(ctx context.Context, assistantID, memoryID s
 	if !memoryVisible(entry, assistantID) {
 		return Memory{}, &MemoryFailure{Code: "PUCK_ASSISTANT_NOT_FOUND", Message: "memory not found"}
 	}
-	if err := deleteMemoryRow(ctx, tx, entry.RowID, entry.ID); err != nil {
+	if err := deleteMemoryRow(ctx, tx, entry.ID); err != nil {
 		return Memory{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -376,122 +361,6 @@ func (s *Store) ExactMemoryIDs(ctx context.Context, assistantID, scope, kind, to
 	return ids, rows.Err()
 }
 
-func (s *Store) MemoryKNN(ctx context.Context, assistantID, scope, kind, modelID, vectorJSON string, limit int) ([]MemoryNeighbor, error) {
-	if limit < 1 {
-		limit = 40
-	}
-	where, args := visibleMemoryWhere(assistantID, scope, kind)
-	query := `SELECT v.memory_rowid, v.distance FROM bot_memory_vec v WHERE v.embedding MATCH ? AND k = ? AND v.memory_rowid IN (
-        SELECT m.rowid FROM bot_memories m JOIN bot_memory_vectors mv ON mv.memory_id = m.id WHERE mv.model_id = ? AND ` + where + `)`
-	args = append([]any{vectorJSON, limit, modelID}, args...)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var hits []MemoryNeighbor
-	for rows.Next() {
-		var hit MemoryNeighbor
-		if err := rows.Scan(&hit.RowID, &hit.Distance); err != nil {
-			return nil, err
-		}
-		hits = append(hits, hit)
-	}
-	return hits, rows.Err()
-}
-
-type MemoryNeighbor struct {
-	RowID    int64
-	Distance float64
-}
-
-func (s *Store) MemoryByRowID(ctx context.Context, rowID int64) (Memory, error) {
-	row := s.db.QueryRowContext(ctx, memorySelect+` WHERE m.rowid=?`, rowID)
-	entry, err := scanMemoryRow(row)
-	if err != nil {
-		return Memory{}, err
-	}
-	entry.DisplayName = s.memoryDisplayName(ctx, entry.AssistantID, entry.WriterName)
-	return entry, nil
-}
-
-func (s *Store) SaveMemoryVector(ctx context.Context, memoryID, modelID string, vector []float32, at time.Time) error {
-	encoded, err := json.Marshal(vector)
-	if err != nil {
-		return err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var rowID int64
-	if err := tx.QueryRowContext(ctx, `SELECT rowid FROM bot_memories WHERE id=?`, memoryID).Scan(&rowID); err != nil {
-		return err
-	}
-	now := nowText(at)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO bot_memory_vectors(memory_id, model_id, dim, embedded_at) VALUES (?,?,?,?) ON CONFLICT(memory_id) DO UPDATE SET model_id=excluded.model_id, dim=excluded.dim, embedded_at=excluded.embedded_at`, memoryID, modelID, len(vector), now); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_memory_vec WHERE memory_rowid=?`, rowID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO bot_memory_vec(memory_rowid, embedding) VALUES (?, ?)`, rowID, string(encoded)); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) MemoriesMissingVector(ctx context.Context, modelID string, limit int) ([]Memory, error) {
-	if limit < 1 {
-		limit = 16
-	}
-	rows, err := s.db.QueryContext(ctx, memorySelect+` WHERE NOT EXISTS (SELECT 1 FROM bot_memory_vectors v WHERE v.memory_id=m.id AND v.model_id=?) ORDER BY m.created_at, m.id LIMIT ?`, modelID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var entries []Memory
-	for rows.Next() {
-		entry, err := scanMemory(rows)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, entry)
-	}
-	return entries, rows.Err()
-}
-
-func (s *Store) EmbedderRecord(ctx context.Context) (string, int, error) {
-	var modelID string
-	var dim int
-	err := s.db.QueryRowContext(ctx, `SELECT model_id, dim FROM bot_memory_embedder WHERE id=1`).Scan(&modelID, &dim)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", 0, nil
-	}
-	return modelID, dim, err
-}
-
-func (s *Store) SetEmbedderRecord(ctx context.Context, modelID string, dim int) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO bot_memory_embedder(id, model_id, dim) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id, dim=excluded.dim`, modelID, dim)
-	return err
-}
-
-func (s *Store) ClearMemoryVectors(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_memory_vec`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_memory_vectors`); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func (s *Store) SearchMessagesRecent(ctx context.Context, assistantID, query string, limit int) ([]Message, error) {
 	if limit < 1 {
 		limit = 8
@@ -541,21 +410,16 @@ func deletePrivateMemories(ctx context.Context, tx sqlContext, assistantID strin
 		return err
 	}
 	for _, item := range pairs {
-		if err := deleteMemoryRow(ctx, tx, item.row, item.id); err != nil {
+		if err := deleteMemoryRow(ctx, tx, item.id); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func deleteMemoryRow(ctx context.Context, tx sqlContext, rowID int64, id string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_memory_vec WHERE memory_rowid=?`, rowID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM bot_memories WHERE id=?`, id); err != nil {
-		return err
-	}
-	return nil
+func deleteMemoryRow(ctx context.Context, tx sqlContext, id string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM bot_memories WHERE id=?`, id)
+	return err
 }
 
 func findMemory(ctx context.Context, tx sqlContext, assistantID, scope, kind, text string) (Memory, bool, error) {

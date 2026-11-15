@@ -22,10 +22,11 @@ const (
 var botTaskOpenStatuses = []string{botTaskAccepted, botTaskInProgress, botTaskWaitingUser}
 
 type BotTask struct {
-	ID, AssistantID, Title, Goal, Status, MergedInto string
-	MessageIDs                                       []string
-	Sessions                                         []BotTaskSession
-	CreatedAt, UpdatedAt                             time.Time
+	ID, AssistantID, Title, Goal, Description, Status, MergedInto string
+	DescriptionSet                                                bool
+	MessageIDs                                                    []string
+	Sessions                                                      []BotTaskSession
+	CreatedAt, UpdatedAt                                          time.Time
 }
 
 type BotTaskSession struct {
@@ -107,6 +108,9 @@ func (s *Store) SaveBotTask(ctx context.Context, task BotTask) (BotTask, error) 
 		if task.Status == "" {
 			task.Status = existing.Status
 		}
+		if !task.DescriptionSet {
+			task.Description = existing.Description
+		}
 	}
 	if !validBotTaskStatus(task.Status) {
 		return BotTask{}, errors.New("invalid bot task")
@@ -114,7 +118,7 @@ func (s *Store) SaveBotTask(ctx context.Context, task BotTask) (BotTask, error) 
 	now := nowText(time.Time{})
 	if task.ID == "" {
 		task.ID = randomID("btask")
-		_, err := s.db.ExecContext(ctx, `INSERT INTO bot_tasks(id, assistant_id, title, goal, status, merged_into, created_at, updated_at) VALUES(?,?,?,?,?,'',?,?)`, task.ID, task.AssistantID, task.Title, task.Goal, task.Status, now, now)
+		_, err := s.db.ExecContext(ctx, `INSERT INTO bot_tasks(id, assistant_id, title, goal, description, status, merged_into, created_at, updated_at) VALUES(?,?,?,?,?,?,'',?,?)`, task.ID, task.AssistantID, task.Title, task.Goal, task.Description, task.Status, now, now)
 		if err != nil {
 			return BotTask{}, err
 		}
@@ -123,7 +127,7 @@ func (s *Store) SaveBotTask(ctx context.Context, task BotTask) (BotTask, error) 
 	}
 	existing, err := s.BotTask(ctx, task.AssistantID, task.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		_, err = s.db.ExecContext(ctx, `INSERT INTO bot_tasks(id, assistant_id, title, goal, status, merged_into, created_at, updated_at) VALUES(?,?,?,?,?,'',?,?)`, task.ID, task.AssistantID, task.Title, task.Goal, task.Status, now, now)
+		_, err = s.db.ExecContext(ctx, `INSERT INTO bot_tasks(id, assistant_id, title, goal, description, status, merged_into, created_at, updated_at) VALUES(?,?,?,?,?,?,'',?,?)`, task.ID, task.AssistantID, task.Title, task.Goal, task.Description, task.Status, now, now)
 		if err != nil {
 			return BotTask{}, err
 		}
@@ -136,7 +140,10 @@ func (s *Store) SaveBotTask(ctx context.Context, task BotTask) (BotTask, error) 
 	if existing.Status == botTaskMerged {
 		return BotTask{}, errors.New("merged task cannot be updated")
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE bot_tasks SET title=?, goal=?, status=?, updated_at=? WHERE assistant_id=? AND id=?`, task.Title, task.Goal, task.Status, now, task.AssistantID, task.ID)
+	if !task.DescriptionSet {
+		task.Description = existing.Description
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE bot_tasks SET title=?, goal=?, description=?, status=?, updated_at=? WHERE assistant_id=? AND id=?`, task.Title, task.Goal, task.Description, task.Status, now, task.AssistantID, task.ID)
 	if err != nil {
 		return BotTask{}, err
 	}
@@ -147,7 +154,7 @@ func (s *Store) SaveBotTask(ctx context.Context, task BotTask) (BotTask, error) 
 func (s *Store) BotTask(ctx context.Context, assistantID, id string) (BotTask, error) {
 	var task BotTask
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id, assistant_id, title, goal, status, merged_into, created_at, updated_at FROM bot_tasks WHERE assistant_id=? AND id=?`, assistantID, id).Scan(&task.ID, &task.AssistantID, &task.Title, &task.Goal, &task.Status, &task.MergedInto, &created, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT id, assistant_id, title, goal, description, status, merged_into, created_at, updated_at FROM bot_tasks WHERE assistant_id=? AND id=?`, assistantID, id).Scan(&task.ID, &task.AssistantID, &task.Title, &task.Goal, &task.Description, &task.Status, &task.MergedInto, &created, &updated)
 	if err != nil {
 		return BotTask{}, err
 	}
@@ -230,9 +237,9 @@ func (s *Store) ListBotTasks(ctx context.Context, assistantID, query, status str
 		args = append(args, status)
 	}
 	if strings.TrimSpace(query) != "" {
-		where += ` AND (title LIKE ? ESCAPE '\' OR goal LIKE ? ESCAPE '\')`
+		where += ` AND (title LIKE ? ESCAPE '\' OR goal LIKE ? ESCAPE '\' OR description LIKE ? ESCAPE '\')`
 		pattern := likePattern(query)
-		args = append(args, pattern, pattern)
+		args = append(args, pattern, pattern, pattern)
 	}
 	args = append(args, limit+1, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM bot_tasks WHERE `+where+` ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`, args...)

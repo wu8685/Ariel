@@ -28,7 +28,7 @@ func killHarnessProcesses(self int, root string) {
 		if proc.cwd == "" {
 			proc.cwd = processCWD(proc.pid)
 		}
-		if strings.Contains(proc.command, "app-server") || strings.Contains(proc.command, "llama-server") || pathUnder(proc.cwd, root) {
+		if strings.Contains(proc.command, "app-server") || pathUnder(proc.cwd, root) {
 			victims = append(victims, proc.pid)
 		}
 	}

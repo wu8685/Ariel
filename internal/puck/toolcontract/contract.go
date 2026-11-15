@@ -137,6 +137,11 @@ func DefinitionFor(version int, name string) (Definition, bool) {
 			return Definition{}, false
 		}
 		return Definition{Name: name, Description: "把一句你决定要告诉用户的话写进这个 Bot 的 Ariel 对话，并触发页内通知。只用于被唤醒、定时、automation 或你自己发起的工作。回答带 PUCK_ENVELOPE 的用户消息时直接写回复，不要为同一句话再调用本工具。不能指定别的助理。", InputSchema: sendMessageSchema()}, true
+	case "get_bot_task":
+		if version < 13 {
+			return Definition{}, false
+		}
+		return botTaskDefinition(name)
 	case "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks":
 		if version < 11 {
 			return Definition{}, false
@@ -164,7 +169,7 @@ func DynamicTools(version int) []map[string]any {
 		names = append(names, "list_bot_tasks", "search_messages", "save_bot_task", "attach_bot_task", "merge_bot_tasks")
 	}
 	if version >= 13 {
-		names = append(names, "update_memory", "recall_memory")
+		names = append(names, "get_bot_task", "update_memory", "recall_memory")
 	}
 	tools := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -215,6 +220,9 @@ func Decode(tool string, raw json.RawMessage) (any, []FieldError) {
 		return value, details
 	case "merge_bot_tasks":
 		value, details := DecodeMergeBotTasks(raw)
+		return value, details
+	case "get_bot_task":
+		value, details := DecodeGetBotTask(raw)
 		return value, details
 	case "update_memory":
 		value, details := DecodeUpdateMemory(raw)
