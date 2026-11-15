@@ -45,11 +45,31 @@ func TestProcessCWDFollowsChildDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	if got := processCWD(cmd.Process.Pid); got != root {
+	if got := processCWD(cmd.Process.Pid); canonicalPath(got) != canonicalPath(root) {
 		t.Fatalf("cwd=%q want %s", got, root)
 	}
-	if got := lsofCWD(cmd.Process.Pid); got != root {
+	if got := lsofCWD(cmd.Process.Pid); canonicalPath(got) != canonicalPath(root) {
 		t.Fatalf("lsof cwd=%q want %s", got, root)
+	}
+}
+
+func TestPathUnderResolvesMacOSPrivateVar(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == filepath.Clean(root) {
+		t.Skip("temp dir is not behind a symlink")
+	}
+	if !pathUnder(resolved, root) {
+		t.Fatalf("resolved cwd %q should be under temp root %q", resolved, root)
+	}
+	if !pathUnder(filepath.Join(resolved, "child"), root) {
+		t.Fatalf("resolved child should be under temp root")
+	}
+	if pathUnder("/tmp", root) {
+		t.Fatal("unrelated path was treated as under the temp root")
 	}
 }
 

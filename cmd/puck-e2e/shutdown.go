@@ -76,8 +76,17 @@ func pathUnder(path, root string) bool {
 	if path == "" || root == "" {
 		return false
 	}
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	rel, err := filepath.Rel(canonicalPath(root), canonicalPath(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// canonicalPath resolves symlinks so macOS /var vs /private/var compares as the same tree.
+func canonicalPath(path string) string {
+	cleaned := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved
+	}
+	return cleaned
 }
 
 func listHarnessProcesses() []harnessProc {
