@@ -22,7 +22,7 @@ func seedWatchAssistant(t *testing.T, module *Module) string {
 }
 
 func runningTask(assistantID, taskID, threadID string) Task {
-	return Task{ID: taskID, AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/ariel", NativeThreadID: threadID, Goal: "发布", Status: "running", CreatedBy: "puck", LastTurnID: "turn-start"}
+	return Task{ID: taskID, AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/ariel", NativeThreadID: threadID, Goal: "发布", Status: "running", LastTurnID: "turn-start"}
 }
 
 func freshThread(turnID, runtime, status, text string, blocked bool) map[string]any {
@@ -278,7 +278,7 @@ func TestWatchOfUnownedThreadCannotSendTurns(t *testing.T) {
 	if err := module.store.CreateAssistant(ctx, Assistant{ID: "assistant-other", Name: "Other", BrainDeviceID: "brain-a", BrainCWD: "agent-managed", BrainThreadID: "brain-thread-other", ToolsetVersion: currentToolsetVersion, Status: "ready"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-foreign", AssistantID: "assistant-other", DeviceID: "exec-a", CWD: "/work/other", NativeThreadID: "foreign-thread", Goal: "别人的", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-foreign", AssistantID: "assistant-other", DeviceID: "exec-a", CWD: "/work/other", NativeThreadID: "foreign-thread", Goal: "别人的", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	brain := module.tools.Execute(ctx, pucktools.Call{AssistantID: assistantID, Tool: "watch_thread", Arguments: json.RawMessage(`{"deviceId":"brain-a","threadId":"brain-thread-a"}`)})

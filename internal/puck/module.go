@@ -667,7 +667,7 @@ func (b toolBackend) PermissionMode(ctx context.Context, assistantID string) str
 	return permissionMode(a)
 }
 func (b toolBackend) SaveTask(ctx context.Context, task pucktools.Task) error {
-	if err := b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, SourceMessageID: task.SourceMessageID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, CreatedBy: "puck", LastTurnID: task.LastTurnID}); err != nil {
+	if err := b.module.store.UpsertTask(ctx, Task{ID: task.ID, AssistantID: task.AssistantID, SourceMessageID: task.SourceMessageID, DeviceID: task.DeviceID, CWD: task.CWD, NativeThreadID: task.NativeThreadID, Goal: task.Goal, Status: task.Status, LastTurnID: task.LastTurnID}); err != nil {
 		return err
 	}
 	card, _ := json.Marshal(map[string]any{"taskId": task.ID, "status": task.Status, "cardState": task.Status, "threadId": task.NativeThreadID, "deviceId": task.DeviceID, "cwd": task.CWD})
@@ -1069,7 +1069,7 @@ func (m *Module) create(ctx context.Context, raw json.RawMessage) relay.PuckResp
 	if contextErr != nil {
 		return moduleError("INVALID_ARGUMENT", contextErr.Error())
 	}
-	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, Persona: input.Description, CustomContext: customContext, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: m.toolsetForHost(input.BrainDeviceID), AllowedScope: string(scope), Status: "provisioning"}
+	a := Assistant{ID: id, Name: input.Name, Avatar: avatar, Description: input.Description, CustomContext: customContext, BrainDeviceID: input.BrainDeviceID, BrainCWD: "agent-managed", ToolsetVersion: m.toolsetForHost(input.BrainDeviceID), AllowedScope: string(scope), Status: "provisioning"}
 	a.Policy = policyWithPermissionMode(a.Policy, input.PermissionMode)
 	if err := m.store.CreateAssistantLimited(ctx, a, MaxActiveAssistants); errors.Is(err, ErrAssistantLimitReached) {
 		return moduleError("OVERLOADED", fmt.Sprintf("active assistant limit reached (%d)", MaxActiveAssistants))
@@ -1144,7 +1144,7 @@ func (m *Module) update(ctx context.Context, raw json.RawMessage) relay.PuckResp
 		a.Name = *input.Name
 	}
 	if input.Description != nil {
-		a.Description, a.Persona = *input.Description, *input.Description
+		a.Description = *input.Description
 	}
 	if input.CustomContext != nil {
 		customContext, contextErr := normalizeCustomContext(*input.CustomContext)

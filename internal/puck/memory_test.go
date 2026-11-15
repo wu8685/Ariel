@@ -25,21 +25,21 @@ func TestMemorySchemaMigratesFromV11(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 12 {
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != storeSchemaVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	var descriptionColumn int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('bot_tasks') WHERE name='description'`).Scan(&descriptionColumn); err != nil || descriptionColumn != 1 {
 		t.Fatalf("description column=%d err=%v", descriptionColumn, err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at, updated_at) VALUES ('m1','bot','a','Helper','journal','机主啊','t','t')`); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at) VALUES ('m1','bot','a','Helper','journal','机主啊','t')`); err != nil {
 		t.Fatal(err)
 	}
 	var count int
 	if err := store.db.QueryRow(`SELECT count(*) FROM bot_memories_fts WHERE bot_memories_fts MATCH '机主啊'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("fts=%d err=%v", count, err)
 	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 13`); err != nil {
+	if _, err := store.db.Exec(`PRAGMA user_version = 14`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.migrate(context.Background()); err == nil || !strings.Contains(err.Error(), "newer") {
@@ -266,7 +266,7 @@ func TestDeleteBotKeepsSharedMemory(t *testing.T) {
 
 func insertMemoryAt(module *Module, assistantID, scope, kind, text string, at time.Time) error {
 	stamp := nowText(at)
-	_, err := module.store.db.Exec(`INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`, newUUID(), scope, assistantID, "Helper", kind, text, stamp, stamp)
+	_, err := module.store.db.Exec(`INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at) VALUES (?,?,?,?,?,?,?)`, newUUID(), scope, assistantID, "Helper", kind, text, stamp)
 	return err
 }
 

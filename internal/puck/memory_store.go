@@ -20,7 +20,7 @@ const (
 type Memory struct {
 	ID, Scope, AssistantID, WriterName, Kind, Text, DisplayName string
 	RowID                                                       int64
-	CreatedAt, UpdatedAt                                        time.Time
+	CreatedAt                                                   time.Time
 }
 
 type MemoryPage struct {
@@ -53,7 +53,7 @@ type sqlContext interface {
 }
 
 func memorySchemaSQL() []string {
-	return []string{
+	statements := []string{
 		`CREATE TABLE IF NOT EXISTS bot_memories (
             id TEXT PRIMARY KEY,
             scope TEXT NOT NULL CHECK (scope IN ('bot', 'shared')),
@@ -61,12 +61,17 @@ func memorySchemaSQL() []string {
             writer_name TEXT NOT NULL,
             kind TEXT NOT NULL CHECK (kind IN ('profile', 'journal')),
             text TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL)`,
+            created_at TEXT NOT NULL)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_bot_text ON bot_memories(assistant_id, kind, text) WHERE scope = 'bot'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_shared_text ON bot_memories(kind, text) WHERE scope = 'shared'`,
 		`CREATE INDEX IF NOT EXISTS bot_memories_bot_recent ON bot_memories(assistant_id, kind, created_at) WHERE scope = 'bot'`,
 		`CREATE INDEX IF NOT EXISTS bot_memories_shared_recent ON bot_memories(kind, created_at) WHERE scope = 'shared'`,
+	}
+	return append(statements, memoryFTSSQL()...)
+}
+
+func memoryFTSSQL() []string {
+	return []string{
 		`CREATE VIRTUAL TABLE IF NOT EXISTS bot_memories_fts USING fts5(text, content='bot_memories', content_rowid='rowid', tokenize="trigram case_sensitive 0")`,
 		`CREATE TRIGGER IF NOT EXISTS bot_memories_ai AFTER INSERT ON bot_memories BEGIN
             INSERT INTO bot_memories_fts(rowid, text) VALUES (new.rowid, new.text);
@@ -135,7 +140,7 @@ func (s *Store) WriteMemory(ctx context.Context, assistantID, writerName, scope,
 	now := nowText(time.Time{})
 	id := newUUID()
 	owner := assistantID
-	if _, err := tx.ExecContext(ctx, `INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`, id, scope, owner, writerName, kind, text, now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at) VALUES (?,?,?,?,?,?,?)`, id, scope, owner, writerName, kind, text, now); err != nil {
 		return Memory{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -241,20 +246,19 @@ func (s *Store) DeleteVisibleMemory(ctx context.Context, assistantID, memoryID s
 }
 
 func (s *Store) InjectionMemories(ctx context.Context, assistantID string) (botProfile, sharedProfile, botJournal, sharedJournal []Memory, err error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT m.rowid, m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at, m.updated_at, COALESCE(NULLIF(a.name, ''), m.writer_name) FROM bot_memories m LEFT JOIN assistants a ON a.id = m.assistant_id WHERE (m.scope='bot' AND m.assistant_id=?) OR m.scope='shared' ORDER BY m.created_at, m.id`, assistantID)
+	rows, err := s.db.QueryContext(ctx, `SELECT m.rowid, m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at, COALESCE(NULLIF(a.name, ''), m.writer_name) FROM bot_memories m LEFT JOIN assistants a ON a.id = m.assistant_id WHERE (m.scope='bot' AND m.assistant_id=?) OR m.scope='shared' ORDER BY m.created_at, m.id`, assistantID)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	var all []Memory
 	for rows.Next() {
 		var entry Memory
-		var created, updated, display string
-		if err := rows.Scan(&entry.RowID, &entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created, &updated, &display); err != nil {
+		var created, display string
+		if err := rows.Scan(&entry.RowID, &entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created, &display); err != nil {
 			rows.Close()
 			return nil, nil, nil, nil, err
 		}
 		entry.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-		entry.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 		entry.DisplayName = display
 		all = append(all, entry)
 	}
@@ -512,7 +516,7 @@ func ftsMatchQuery(query string) string {
 	return `"` + strings.ReplaceAll(strings.TrimSpace(query), `"`, `""`) + `"`
 }
 
-const memorySelect = `SELECT m.rowid, m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at, m.updated_at FROM bot_memories m`
+const memorySelect = `SELECT m.rowid, m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at FROM bot_memories m`
 
 func (s *Store) memoryByID(ctx context.Context, id string) (Memory, error) {
 	entry, err := memoryByID(ctx, s.db, id)
@@ -549,12 +553,11 @@ func scanMemory(rows interface{ Scan(...any) error }) (Memory, error) {
 
 func scanMemoryRow(row memoryScanner) (Memory, error) {
 	var entry Memory
-	var created, updated string
-	if err := row.Scan(&entry.RowID, &entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created, &updated); err != nil {
+	var created string
+	if err := row.Scan(&entry.RowID, &entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created); err != nil {
 		return Memory{}, err
 	}
 	entry.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	entry.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	entry.DisplayName = entry.WriterName
 	return entry, nil
 }

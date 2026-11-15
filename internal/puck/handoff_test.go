@@ -101,7 +101,7 @@ func TestIncludeMessagesAttachesSessionWithoutDumpingTheMessage(t *testing.T) {
 	ctx := context.Background()
 	assistantID := seedWatchAssistant(t, module)
 	const threadID = "44444444-4444-4444-8444-444444444444"
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-cited", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/cited", NativeThreadID: threadID, Goal: "被点名的会话", Status: "review", CreatedBy: "puck", LastSummary: "INCLUDE_CONCLUSION"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-cited", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/cited", NativeThreadID: threadID, Goal: "被点名的会话", Status: "review", LastSummary: "INCLUDE_CONCLUSION"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := module.store.AppendMessage(ctx, Message{ID: "cite-message", AssistantID: assistantID, Role: "user", Kind: "text", Text: "UNIQUE_MESSAGE_BODY " + threadID}); err != nil {
@@ -139,10 +139,10 @@ func TestSendTurnHandoffUsesTheTriggerMessage(t *testing.T) {
 	assistantID := seedWatchAssistant(t, module)
 	const referenced = "55555555-5555-4555-8555-555555555555"
 	const target = "66666666-6666-4666-8666-666666666666"
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: target, Goal: "续投", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: target, Goal: "续投", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-ref", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/ref", NativeThreadID: referenced, Goal: "被引用", Status: "review", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-ref", AssistantID: assistantID, DeviceID: "exec-a", CWD: "/work/ref", NativeThreadID: referenced, Goal: "被引用", Status: "review"}); err != nil {
 		t.Fatal(err)
 	}
 	sent := module.Handle(ctx, "puck.message.send", mustJSON(map[string]any{"assistantId": assistantID, "clientMessageId": "user-follow", "text": "请看会话 " + referenced + "，这句话不要抄进子会话。"}))
@@ -261,7 +261,7 @@ func TestSendTurnRetryKeepsThePackWithoutRepeatingTheThread(t *testing.T) {
 	if err := module.store.SaveThreadWatch(ctx, ThreadWatch{ID: "watch-ref", AssistantID: assistantID, DeviceID: "exec-a", ThreadID: referenced}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, SourceMessageID: "origin-msg", DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: target, Goal: "续投", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "task-live", AssistantID: assistantID, SourceMessageID: "origin-msg", DeviceID: "exec-a", CWD: "/work/live", NativeThreadID: target, Goal: "续投", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	rejected := module.tools.Execute(ctx, pucktools.Call{AssistantID: assistantID, Tool: "send_turn", Arguments: mustJSON(map[string]any{

@@ -65,7 +65,7 @@ func TestBotTaskMergeKeepsHistoryAndSearchReturnsFullText(t *testing.T) {
 	if err := module.store.AppendMessage(ctx, Message{ID: "msg-long", AssistantID: id, Role: "user", Kind: "text", Text: "关键词 UNIQUE-BODY " + strings.Repeat("原", 800)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "exec-task", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-exec", Goal: "执行", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "exec-task", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-exec", Goal: "执行", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	first := module.tools.Execute(ctx, pucktools.Call{AssistantID: id, Tool: "save_bot_task", Arguments: mustJSON(map[string]any{"id": "task-from", "title": "旧需求", "goal": "先做 A", "status": "in_progress"})})
@@ -272,7 +272,7 @@ func TestDeleteBotAndSubsessionCleanBotTasks(t *testing.T) {
 	if _, err := module.store.SaveBotTask(ctx, BotTask{ID: "gone-task", AssistantID: id, Title: "会删", Goal: "删", Status: "accepted"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := module.store.UpsertTask(ctx, Task{ID: "sub-task", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-sub", Goal: "子会话", Status: "running", CreatedBy: "puck"}); err != nil {
+	if err := module.store.UpsertTask(ctx, Task{ID: "sub-task", AssistantID: id, DeviceID: "exec-a", CWD: "/work", NativeThreadID: "thread-sub", Goal: "子会话", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := module.store.AttachBotTask(ctx, id, "gone-task", []string{"keep-msg"}, []BotTaskSession{{Kind: "task", RefID: "sub-task"}}); err != nil {

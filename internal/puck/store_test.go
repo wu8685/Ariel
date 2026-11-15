@@ -235,6 +235,96 @@ func TestStoreSchemaMigratesV1ToCurrent(t *testing.T) {
 	}
 }
 
+func TestStoreDropsDeadColumns(t *testing.T) {
+	t.Run("v11", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "puck-v11.db")
+		db, err := sql.Open("sqlite", "file:"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Exec(`
+			CREATE TABLE assistants (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', persona TEXT NOT NULL DEFAULT '', limits TEXT NOT NULL DEFAULT '{}');
+			INSERT INTO assistants(id, name, description, persona, limits) VALUES ('a', 'Puck', '说明', '说明', '{}');
+			CREATE TABLE tasks (task_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, goal TEXT NOT NULL, status TEXT NOT NULL, risk_tags TEXT NOT NULL DEFAULT '[]', created_by TEXT NOT NULL DEFAULT 'puck');
+			INSERT INTO tasks(task_id, assistant_id, goal, status, risk_tags, created_by) VALUES ('t', 'a', '目标', 'running', '[]', 'puck');
+			CREATE TABLE bot_tasks (id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, merged_into TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+			PRAGMA user_version = 11`); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenStore(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		for _, column := range []struct{ table, name string }{
+			{"assistants", "persona"}, {"assistants", "limits"},
+			{"tasks", "created_by"}, {"tasks", "risk_tags"},
+			{"bot_memories", "updated_at"},
+		} {
+			var count int
+			if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, column.table, column.name).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("%s.%s count=%d err=%v", column.table, column.name, count, err)
+			}
+		}
+		var name, description, goal string
+		if err := store.db.QueryRow(`SELECT name, description FROM assistants WHERE id='a'`).Scan(&name, &description); err != nil || name != "Puck" || description != "说明" {
+			t.Fatalf("assistant=%s %s err=%v", name, description, err)
+		}
+		if err := store.db.QueryRow(`SELECT goal FROM tasks WHERE task_id='t'`).Scan(&goal); err != nil || goal != "目标" {
+			t.Fatalf("goal=%s err=%v", goal, err)
+		}
+	})
+	t.Run("v12 memory updated_at", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "puck-v12.db")
+		db, err := sql.Open("sqlite", "file:"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Exec(`
+			CREATE TABLE assistants (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+			CREATE TABLE tasks (task_id TEXT PRIMARY KEY);
+			CREATE TABLE bot_memories (
+				id TEXT PRIMARY KEY, scope TEXT NOT NULL, assistant_id TEXT NOT NULL, writer_name TEXT NOT NULL,
+				kind TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+			INSERT INTO bot_memories(id, scope, assistant_id, writer_name, kind, text, created_at, updated_at)
+				VALUES ('m1', 'bot', 'a', 'Helper', 'journal', '机主啊', 't', 't');
+			CREATE VIRTUAL TABLE bot_memories_fts USING fts5(text, content='bot_memories', content_rowid='rowid', tokenize="trigram case_sensitive 0");
+			CREATE TRIGGER bot_memories_ai AFTER INSERT ON bot_memories BEGIN
+				INSERT INTO bot_memories_fts(rowid, text) VALUES (new.rowid, new.text);
+			END;
+			CREATE TRIGGER bot_memories_ad AFTER DELETE ON bot_memories BEGIN
+				INSERT INTO bot_memories_fts(bot_memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+			END;
+			INSERT INTO bot_memories_fts(rowid, text) SELECT rowid, text FROM bot_memories;
+			PRAGMA user_version = 12`); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenStore(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		var updatedAt int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('bot_memories') WHERE name='updated_at'`).Scan(&updatedAt); err != nil || updatedAt != 0 {
+			t.Fatalf("updated_at=%d err=%v", updatedAt, err)
+		}
+		var text string
+		if err := store.db.QueryRow(`SELECT text FROM bot_memories WHERE id='m1'`).Scan(&text); err != nil || text != "机主啊" {
+			t.Fatalf("text=%s err=%v", text, err)
+		}
+		var count int
+		if err := store.db.QueryRow(`SELECT count(*) FROM bot_memories_fts WHERE bot_memories_fts MATCH '机主啊'`).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("fts=%d err=%v", count, err)
+		}
+	})
+}
+
 func TestStoreMigratesCustomContextFromV9(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "puck-v9.db")
 	db, err := sql.Open("sqlite", "file:"+path)
