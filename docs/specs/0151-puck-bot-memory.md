@@ -63,11 +63,11 @@ Ariel 只做这些事：
 
 关系表是事实来源。FTS5 可以删掉重建。记忆原文只出现在 `bot_memories` 和它的 FTS 索引里，不写入 `audit_log`、访问日志或 crash 附件。没有向量表。
 
-## 3. Schema 与迁移（user_version 12）
+## 3. Schema 与迁移（user_version 13）
 
-当前 `storeSchemaVersion` 是 11，`toolcontract.Version` 是 12。这是两个计数。本稿把库升到 12，把工具集升到 13。
+当前已发布的 `storeSchemaVersion` 是 11，`toolcontract.Version` 是 12。这是两个计数。本稿把工具集升到 13。库先在 12 建记忆表和 `bot_tasks.description`，再在 13 删掉没有独立读取的列，最终 `user_version` 是 13。
 
-沿用 `internal/puck/store.go`：高于本二进制的 `user_version` 拒绝打开；等于 12 则不动；从 11 升级在一个事务里建表、建触发器、探针通过后再 `PRAGMA user_version = 12`。探针失败则回滚，版本号保持 11。
+沿用 `internal/puck/store.go`：高于本二进制的 `user_version` 拒绝打开。从 11 升级在一个事务里建表、建触发器，探针通过后再继续 13。探针失败则回滚，版本号保持 11。13 只做 `DROP COLUMN`：`assistants.persona`（写入时永远等于 `description`，没有任何读取）、`assistants.limits`（只写 `{}`）、`tasks.created_by`（只写 `puck`）、`tasks.risk_tags`（任务行只写 `[]`；真正的风险标签来自工具参数，不读这一列）、`bot_memories.updated_at`（原文不可改，写入时永远等于 `created_at`）。已有的 11 或 12 库都会跑这段前进迁移。新库的建表语句里不再出现这些列。记忆原文仍只留 `created_at`。共享记忆没有指向 `assistants` 的级联删除。
 
 探针只做 FTS5 trigram：用内存里的临时表插入「机主啊」再 MATCH 成功。不导入 sqlite-vec，不建向量表。Puck 继续用 `modernc.org/sqlite`。不换成 CGO 的 `mattn/go-sqlite3`。
 
@@ -81,8 +81,7 @@ CREATE TABLE bot_memories (
   writer_name TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('profile', 'journal')),
   text TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  created_at TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX bot_memories_bot_text
@@ -262,11 +261,11 @@ Web 方法：
 
 ## 9. 发布与回滚
 
-1. 先对 Puck SQLite 做一次在线备份，再启动带本次迁移的 Relay。旧二进制遇到 `user_version` 12 会拒绝打开，这是现有行为。
+1. 先对 Puck SQLite 做一次在线备份，再启动带本次迁移的 Relay。旧二进制遇到 `user_version` 13 会拒绝打开，这是现有行为。
 2. Agent 与 Relay 一起发。Agent 广告的工具集不到 13 时不轮换 Brain，不注入记忆块，表可以已经存在。
 3. 不部署嵌入模型，不设置 `ARIEL_PUCK_EMBEDDER` 或 `ARIEL_LLAMA_SERVER`。这些变量不再被记忆功能读取。
 
-回滚：停掉新 Relay，用升级前的备份恢复数据库文件，再跑旧二进制。不要让旧二进制打开已经升到 12 的文件。升级之后写下的记忆随备份点之后的文件一起回到升级前。不做就地降级迁移。
+回滚：停掉新 Relay，用升级前的备份恢复数据库文件，再跑旧二进制。不要让旧二进制打开已经升到 13 的文件。升级之后写下的记忆随备份点之后的文件一起回到升级前。不做就地降级迁移。
 
 ## 10. 测试
 
@@ -274,7 +273,7 @@ Web 方法：
 
 Go：
 
-1. user_version 11 的库打开后变为 12，记忆表、trigram 和 `bot_tasks.description` 可用；高于 12 的库拒绝打开。没有 `vec_version()` 依赖。
+1. user_version 11 的库打开后变为 13，记忆表、trigram 和 `bot_tasks.description` 可用，且没有 `persona`、`limits`、`created_by`、`risk_tags`、`bot_memories.updated_at`。已有 12 的库删掉 `updated_at` 后仍能用原文重建 FTS。高于 13 的库拒绝打开。没有 `vec_version()` 依赖。
 2. `write` 原样入库；第二次相同原文 `deduped` 且 `createdAt` 不变；只差首尾空白视为同一条；profile 与 journal 互不挤占。
 3. 第 17 条 profile，或合计超过 2400 码位，返回 `MEMORY_PROFILE_FULL`，原文没有被截断，旧行还在。301 个码位被拒绝。journal 第 2001 条同理。
 4. `forget` 只删字面相同的那一条；差一个字返回 `MEMORY_NOT_FOUND` 且行还在。Bot A 读不到、删不掉 Bot B 的私有行。共享行两边都读得到，第二位写入去重。Bot B 可以用原文 `forget` 掉 Bot A 写下的共享行。形如 token 的原文会被原样收下。
