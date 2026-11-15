@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 var exactTokenPattern = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9._/#-]{2,}`)
@@ -14,7 +13,7 @@ func exactTokens(query string) []string {
 	var tokens []string
 	for _, token := range exactTokenPattern.FindAllString(query, -1) {
 		token = strings.ToLower(token)
-		if seen[token] || utf8.RuneCountInString(token) < 3 {
+		if seen[token] {
 			continue
 		}
 		seen[token] = true
@@ -26,7 +25,7 @@ func exactTokens(query string) []string {
 	return tokens
 }
 
-func rankMemories(entries []Memory, distance map[string]float64, keyword, exact map[string]bool) []Memory {
+func rankMemories(entries []Memory, keyword, exact map[string]bool) []Memory {
 	type scored struct {
 		entry Memory
 		score float64
@@ -39,15 +38,6 @@ func rankMemories(entries []Memory, distance map[string]float64, keyword, exact 
 		}
 		seen[entry.ID] = true
 		item := scored{entry: entry}
-		if value, ok := distance[entry.ID]; ok {
-			if value > 1 {
-				value = 1
-			}
-			if value < 0 {
-				value = 0
-			}
-			item.score += 5 * (1 - value)
-		}
 		if keyword[entry.ID] {
 			item.score += 10
 		}

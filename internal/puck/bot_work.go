@@ -2,8 +2,6 @@ package puck
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"strings"
 
 	"github.com/wu8685/Ariel/internal/puck/toolcontract"
@@ -54,7 +52,7 @@ func (b toolBackend) GetBotTask(ctx context.Context, assistantID, taskID string)
 	if err != nil {
 		return nil, err
 	}
-	payload := botTaskJSON(task, "")
+	payload := botTaskJSON(task)
 	messages := make([]map[string]any, 0, len(task.MessageIDs))
 	for _, id := range task.MessageIDs {
 		message, err := b.module.store.Message(ctx, assistantID, id)
@@ -73,7 +71,7 @@ func (b toolBackend) SaveBotTask(ctx context.Context, assistantID string, reques
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"task": botTaskJSON(task, "")}, nil
+	return map[string]any{"task": botTaskJSON(task)}, nil
 }
 
 func (b toolBackend) AttachBotTask(ctx context.Context, assistantID string, request toolcontract.AttachBotTaskRequest) (map[string]any, error) {
@@ -83,12 +81,9 @@ func (b toolBackend) AttachBotTask(ctx context.Context, assistantID string, requ
 	}
 	task, err := b.module.store.AttachBotTask(ctx, assistantID, request.TaskID, request.MessageIDs, sessions)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
 		return nil, err
 	}
-	return map[string]any{"task": botTaskJSON(task, "")}, nil
+	return map[string]any{"task": botTaskJSON(task)}, nil
 }
 
 func (b toolBackend) MergeBotTasks(ctx context.Context, assistantID string, request toolcontract.MergeBotTasksRequest) (map[string]any, error) {
@@ -96,7 +91,7 @@ func (b toolBackend) MergeBotTasks(ctx context.Context, assistantID string, requ
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"task": botTaskJSON(task, "")}, nil
+	return map[string]any{"task": botTaskJSON(task)}, nil
 }
 
 func botTaskChoiceJSON(task BotTask) map[string]any {
@@ -112,7 +107,7 @@ func storedSnippet(text string) string {
 	return text
 }
 
-func botTaskJSON(task BotTask, snippet string) map[string]any {
+func botTaskJSON(task BotTask) map[string]any {
 	messages := task.MessageIDs
 	if messages == nil {
 		messages = []string{}
@@ -121,12 +116,8 @@ func botTaskJSON(task BotTask, snippet string) map[string]any {
 	for _, session := range task.Sessions {
 		sessions = append(sessions, map[string]any{"kind": session.Kind, "id": session.RefID, "deviceId": session.DeviceID, "threadId": session.ThreadID})
 	}
-	payload := map[string]any{
+	return map[string]any{
 		"id": task.ID, "title": task.Title, "goal": task.Goal, "description": task.Description, "status": task.Status, "mergedInto": task.MergedInto,
 		"messageIds": messages, "sessions": sessions, "createdAt": task.CreatedAt, "updatedAt": task.UpdatedAt,
 	}
-	if strings.TrimSpace(snippet) != "" {
-		payload["lastUserMessage"] = storedSnippet(snippet)
-	}
-	return payload
 }

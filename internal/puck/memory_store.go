@@ -19,7 +19,6 @@ const (
 
 type Memory struct {
 	ID, Scope, AssistantID, WriterName, Kind, Text, DisplayName string
-	RowID                                                       int64
 	CreatedAt                                                   time.Time
 }
 
@@ -246,7 +245,7 @@ func (s *Store) DeleteVisibleMemory(ctx context.Context, assistantID, memoryID s
 }
 
 func (s *Store) InjectionMemories(ctx context.Context, assistantID string) (botProfile, sharedProfile, botJournal, sharedJournal []Memory, err error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT m.rowid, m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at, COALESCE(NULLIF(a.name, ''), m.writer_name) FROM bot_memories m LEFT JOIN assistants a ON a.id = m.assistant_id WHERE (m.scope='bot' AND m.assistant_id=?) OR m.scope='shared' ORDER BY m.created_at, m.id`, assistantID)
+	rows, err := s.db.QueryContext(ctx, `SELECT m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at, COALESCE(NULLIF(a.name, ''), m.writer_name) FROM bot_memories m LEFT JOIN assistants a ON a.id = m.assistant_id WHERE (m.scope='bot' AND m.assistant_id=?) OR m.scope='shared' ORDER BY m.created_at, m.id`, assistantID)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -254,7 +253,7 @@ func (s *Store) InjectionMemories(ctx context.Context, assistantID string) (botP
 	for rows.Next() {
 		var entry Memory
 		var created, display string
-		if err := rows.Scan(&entry.RowID, &entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created, &display); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created, &display); err != nil {
 			rows.Close()
 			return nil, nil, nil, nil, err
 		}
@@ -389,22 +388,18 @@ func (s *Store) SearchMessagesRecent(ctx context.Context, assistantID, query str
 }
 
 func deletePrivateMemories(ctx context.Context, tx sqlContext, assistantID string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT rowid, id FROM bot_memories WHERE scope='bot' AND assistant_id=?`, assistantID)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM bot_memories WHERE scope='bot' AND assistant_id=?`, assistantID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	type pair struct {
-		row int64
-		id  string
-	}
-	var pairs []pair
+	var ids []string
 	for rows.Next() {
-		var item pair
-		if err := rows.Scan(&item.row, &item.id); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return err
 		}
-		pairs = append(pairs, item)
+		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -413,8 +408,8 @@ func deletePrivateMemories(ctx context.Context, tx sqlContext, assistantID strin
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	for _, item := range pairs {
-		if err := deleteMemoryRow(ctx, tx, item.id); err != nil {
+	for _, id := range ids {
+		if err := deleteMemoryRow(ctx, tx, id); err != nil {
 			return err
 		}
 	}
@@ -516,7 +511,7 @@ func ftsMatchQuery(query string) string {
 	return `"` + strings.ReplaceAll(strings.TrimSpace(query), `"`, `""`) + `"`
 }
 
-const memorySelect = `SELECT m.rowid, m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at FROM bot_memories m`
+const memorySelect = `SELECT m.id, m.scope, m.assistant_id, m.writer_name, m.kind, m.text, m.created_at FROM bot_memories m`
 
 func (s *Store) memoryByID(ctx context.Context, id string) (Memory, error) {
 	entry, err := memoryByID(ctx, s.db, id)
@@ -547,14 +542,10 @@ type memoryScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanMemory(rows interface{ Scan(...any) error }) (Memory, error) {
-	return scanMemoryRow(rows)
-}
-
 func scanMemoryRow(row memoryScanner) (Memory, error) {
 	var entry Memory
 	var created string
-	if err := row.Scan(&entry.RowID, &entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created); err != nil {
+	if err := row.Scan(&entry.ID, &entry.Scope, &entry.AssistantID, &entry.WriterName, &entry.Kind, &entry.Text, &created); err != nil {
 		return Memory{}, err
 	}
 	entry.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)

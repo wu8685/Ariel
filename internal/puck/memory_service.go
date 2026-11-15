@@ -127,7 +127,7 @@ func (m *Module) recallMemoryEntries(ctx context.Context, assistantID string, re
 			}
 		}
 	}
-	ranked := rankMemories(pool, nil, keyword, exact)
+	ranked := rankMemories(pool, keyword, exact)
 	if len(ranked) > request.Limit {
 		ranked = ranked[:request.Limit]
 	}
