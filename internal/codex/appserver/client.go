@@ -11,6 +11,8 @@ import (
 	"io"
 	"os/exec"
 	"regexp"
+	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -341,7 +343,23 @@ func startCommand(cmd *exec.Cmd) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.Setpgid = true
+	// macOS SIGKILLs a Go child about 150ms after Go's posix_spawn starts it
+	// with a new process group and stdio pipes. The same binary stays up when
+	// a shell execs it. The shell inherits the pipes, directory, and group;
+	// exec keeps that pid, so the later group kill still reaches the binary.
+	if runtime.GOOS == "darwin" {
+		script := "exec " + shellQuote(cmd.Path)
+		for _, arg := range cmd.Args[1:] {
+			script += " " + shellQuote(arg)
+		}
+		cmd.Path = "/bin/sh"
+		cmd.Args = []string{"sh", "-c", script}
+	}
 	return cmd.Start()
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func stopCommand(cmd *exec.Cmd, exited <-chan struct{}) {

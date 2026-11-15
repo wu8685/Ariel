@@ -115,7 +115,25 @@ func processCWD(pid int) string {
 	if target, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/cwd"); err == nil {
 		return target
 	}
-	return ""
+	return lsofCWD(pid)
+}
+
+func lsofCWD(pid int) string {
+	body, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	if err != nil {
+		return ""
+	}
+	return parseLsofCWD(string(body))
+}
+
+func parseLsofCWD(body string) string {
+	var cwd string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "n") && len(line) > 1 {
+			cwd = line[1:]
+		}
+	}
+	return cwd
 }
 
 func listProcessesPS() []harnessProc {
